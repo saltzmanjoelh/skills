@@ -63,9 +63,10 @@ its ideas are copied, not its code.
    way to Claude Code's survey (`hasSurvey`). It has two rows.
 10. **The first row is the progress bar,** shown once a stage has been
     reported or the watched pull request has merged or closed. It carries
-    the title, the stage label with the note, the done count out of nine, the
-    percentage, and beside it the agent-count button, whose press opens the
-    pane, or closes it when it is open. The button's label leads with how
+    the title, the stage label with the note, the done count out of nine and
+    the percentage. Directly under the bar, on a line of its own that still
+    belongs to this first row, is the agent-count button, whose press opens
+    the pane, or closes it when it is open. The button's label leads with how
     many agents run now, then how many are planned when any are, then how
     many have finished when any have: `1 agent running`,
     `7 agents running · 52 finished`, `0 agents running · 2 planned ·
@@ -228,6 +229,9 @@ Tests in `mods/pilot/tests`, each failing if its rule is removed:
   in a `Text` row (the pull request, counsel and next-step lines stay `Text`,
   as item 19 says); on the terminal there is no `Svg`; text with `<`, `&` and
   quotes is escaped in the SVG source;
+- the agent-count button reads the running count, then the planned count
+  when any are planned, then the finished count when any have finished, and
+  an agent the engine no longer lists counts as finished;
 - the agent-count button and the line open the pane; the fold folds finished
   agents; the `output` button opens the output pane with the agent's
   messages, and a refused read shows the reason;
