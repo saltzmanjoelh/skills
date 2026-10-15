@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { agentSvg } from '../hooks/art'
 import { snapshotOf } from '../hooks/github'
-import { abovePromptLine, agentLines, agentRowOf, backgroundLines, counselLines, messageLines, messagesReadOf, NAMED_AFTER_MS, nextStep, secondRow, STALE_WARNING, timeUntil, type View } from '../hooks/pane'
+import { abovePromptLine, agentCount, agentLines, agentRowOf, backgroundLines, counselLines, messageLines, messagesReadOf, NAMED_AFTER_MS, nextStep, secondRow, STALE_WARNING, timeUntil, type View } from '../hooks/pane'
 import { resumePrompt, stuckPrompt } from '../hooks/prompts'
 import { clockTime, printable, timeOfDay } from '../hooks/text'
 import type { AgentCard, BackgroundTask, CounselQuestion, CounselVote, ForegroundCall, NextLook, Progress, Question } from '../types'
@@ -268,6 +268,21 @@ test('one running agent is one agent, never one agents, on the line and in the n
   // The line names the agents in its running part, so the next step does not count them again.
   expect(nextStep(v, true)).toBe('next look in 7m')
   expect(nextStep(view({ agents: [agent('a'), agent('b')] }), false)).toBe('2 agents running · next look in 7m')
+})
+
+test('the agent-count button counts the agents running now, then the planned ones, then every agent the pane lists', () => {
+  const done = (id: string): AgentCard => ({ ...agent(id), status: 'completed' })
+  const finished = Array.from({ length: 52 }, (_, i) => done(`f${i}`))
+  const runningNow = Array.from({ length: 7 }, (_, i) => agent(`r${i}`))
+  // Seven reviewers running among fifty-nine agents the session has had: the
+  // label leads with the seven, never the fifty-nine alone.
+  expect(agentCount(view({ agents: [...finished, ...runningNow] }))).toBe('7 agents running · 59 in all')
+  expect(agentCount(view({ agents: [agent('a')] }))).toBe('1 agent running')
+  expect(agentCount(view({ agents: [done('a'), done('b')] }))).toBe('0 agents running · 2 in all')
+  expect(agentCount(view({ agents: [done('a')], planned: ['pilot:spec-reviewer', 'pilot:adversarial-reviewer'] }))).toBe('0 agents running · 2 planned · 1 in all')
+  // A card the engine has dropped from its list no longer counts as running.
+  expect(agentCount(view({ agents: [{ ...agent('a'), isListed: false }] }))).toBe('0 agents running · 1 in all')
+  expect(agentCount(view())).toBe('0 agents running')
 })
 
 test('with nothing watched the line names what runs, and there is no line when nothing does', () => {

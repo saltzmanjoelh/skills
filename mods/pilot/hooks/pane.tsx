@@ -253,10 +253,17 @@ function barRow(ui: Elements, bar: Bar, columns: number | undefined, key: string
   return <Text key={key}>{fitBar(bar, columns ?? Infinity)}</Text>
 }
 
-// How many agents the pane lists: every agent card and every planned type.
+// The agent-count button's label: how many agents run now, then how many are
+// planned when any are, then how many agent cards the pane lists in all,
+// finished ones included. The running count comes first because it is what
+// the person looks for; the total alone read as if every agent the session
+// had ever started were still running.
 export function agentCount(v: View): string {
-  const count = v.agents.length + v.planned.length
-  return count === 1 ? '1 agent' : `${count} agents`
+  const running = v.agents.filter(isRunning).length
+  const parts = [running === 1 ? '1 agent running' : `${running} agents running`]
+  if (v.planned.length > 0) parts.push(`${v.planned.length} planned`)
+  if (v.agents.length > running) parts.push(`${v.agents.length} in all`)
+  return parts.join(' · ')
 }
 
 export type BandPresses = { agents: () => void; line: () => void }
