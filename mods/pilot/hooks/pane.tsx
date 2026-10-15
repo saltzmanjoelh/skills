@@ -260,14 +260,15 @@ function barRow(ui: Elements, bar: Bar, columns: number | undefined, key: string
 }
 
 // The agent-count button's label: how many agents run now, then how many are
-// planned when any are, then how many agent cards the pane lists in all,
-// finished ones included. The running count comes first because it is what
-// the person looks for; the total alone read as if every agent the session
-// had ever started were still running.
+// planned when any are, then how many have finished when any have. The
+// running count comes first because it is what the person looks for; a single
+// total read as if every agent the session had ever started were still
+// running. An agent the engine no longer lists counts as finished.
 export function agentCount(v: View): string {
   const parts = [runningAgents(v)]
   if (v.planned.length > 0) parts.push(`${v.planned.length} planned`)
-  if (v.agents.some(card => !isRunning(card))) parts.push(`${v.agents.length} in all`)
+  const finished = v.agents.filter(card => !isRunning(card)).length
+  if (finished > 0) parts.push(`${finished} finished`)
   return parts.join(' · ')
 }
 

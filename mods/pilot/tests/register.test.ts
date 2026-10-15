@@ -5818,7 +5818,7 @@ test('the agent-count button counts the running agents and opens the pane, also 
   listed.push({ id: 'agent-2', type: 'Plan', description: 'Plan', status: 'completed' })
   await $.turn.start({ text: 'go', turnId: 't2' } as never)
   await clock.settle()
-  expect(await agents()).toBe('1 agent running · 2 in all')
+  expect(await agents()).toBe('1 agent running · 1 finished')
 
   // The person closes the pane open_pane opened.
   panes.listed = []
