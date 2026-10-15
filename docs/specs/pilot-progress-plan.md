@@ -243,7 +243,8 @@ card without `model`) each draw without throwing.
   band.
 - Moving the redraw from five seconds to one changes the timing several
   existing tests assume.
-- Counting planned rows in the agent-count button is a reading of "the number
-  of agents the pane lists".
+- The agent-count button once counted planned rows as part of "the number of
+  agents the pane lists". The spec has since replaced that label with running,
+  planned and finished counts shown apart, so this assumption no longer holds.
 - No gate reads `skills/` or the README, so their changes are checked by the
   reviewers only.

@@ -95,6 +95,13 @@ function runningOrHold(v: View, names: number): string | null {
   return parts.length === 0 ? null : parts.join(' · ')
 }
 
+// How many agents run now, in words, for the next step and the agent-count
+// button alike, so the two never disagree on the count or its wording.
+function runningAgents(v: View): string {
+  const running = v.agents.filter(isRunning).length
+  return running === 1 ? '1 agent running' : `${running} agents running`
+}
+
 // What the mod will do next and when, for the line above the prompt and the
 // pane alike: the first of these that applies, starting with a usage-limit
 // hold. When the line already shows its running part (`isRunningShown`), the
@@ -106,10 +113,9 @@ export function nextStep(v: View, isRunningShown = false): string {
   if (at === null) return 'not polling'
   const when = timeUntil(at, v.now)
   if (v.nextLook?.isNewHead === true) return when === null ? 'new head, handing over now' : `new head, handing over in ${when}`
-  const running = v.agents.filter(isRunning).length
   const waiting: Record<WaitingOn, string> = {
     owner: 'waiting on your answer',
-    agents: running === 1 ? '1 agent running' : `${running} agents running`,
+    agents: runningAgents(v),
     ci: 'waiting on checks',
     fix: 'waiting on a fix',
     merge: 'waiting on the merge',
@@ -253,10 +259,17 @@ function barRow(ui: Elements, bar: Bar, columns: number | undefined, key: string
   return <Text key={key}>{fitBar(bar, columns ?? Infinity)}</Text>
 }
 
-// How many agents the pane lists: every agent card and every planned type.
+// The agent-count button's label: how many agents run now, then how many are
+// planned when any are, then how many have finished when any have. The
+// running count comes first because it is what the person looks for; a single
+// total read as if every agent the session had ever started were still
+// running. An agent the engine no longer lists counts as finished.
 export function agentCount(v: View): string {
-  const count = v.agents.length + v.planned.length
-  return count === 1 ? '1 agent' : `${count} agents`
+  const parts = [runningAgents(v)]
+  if (v.planned.length > 0) parts.push(`${v.planned.length} planned`)
+  const finished = v.agents.filter(card => !isRunning(card)).length
+  if (finished > 0) parts.push(`${finished} finished`)
+  return parts.join(' · ')
 }
 
 export type BandPresses = { agents: () => void; line: () => void }

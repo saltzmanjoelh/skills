@@ -5799,7 +5799,7 @@ test('on the desktop the band is one drawing and two buttons with no text rows, 
   expect(row).toContain('░')
 })
 
-test('the agent-count button counts the agents and opens the pane, also when the engine cannot list the panes, or closes it when it is open; the line only opens it', async ($, on) => {
+test('the agent-count button counts the running agents and opens the pane, also when the engine cannot list the panes, or closes it when it is open; the line only opens it', async ($, on) => {
   const clock = mock.clock(on)
   mock.store(on)
   engine(on)
@@ -5814,11 +5814,11 @@ test('the agent-count button counts the agents and opens the pane, also when the
   listed.push({ id: 'agent-1', type: 'Explore', description: 'Look', status: 'running' })
   await $.turn.start({ text: 'go', turnId: 't1' } as never)
   await clock.settle()
-  expect(await agents()).toBe('1 agent')
+  expect(await agents()).toBe('1 agent running')
   listed.push({ id: 'agent-2', type: 'Plan', description: 'Plan', status: 'completed' })
   await $.turn.start({ text: 'go', turnId: 't2' } as never)
   await clock.settle()
-  expect(await agents()).toBe('2 agents')
+  expect(await agents()).toBe('1 agent running · 1 finished')
 
   // The person closes the pane open_pane opened.
   panes.listed = []

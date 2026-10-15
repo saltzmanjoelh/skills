@@ -64,9 +64,17 @@ its ideas are copied, not its code.
 10. **The first row is the progress bar,** shown once a stage has been
     reported or the watched pull request has merged or closed. It carries
     the title, the stage label with the note, the done count out of nine, the
-    percentage, and beside it a button labelled with the number of agents
-    the pane lists (`1 agent`, `4 agents`), whose press opens the pane, or
-    closes it when it is open.
+    percentage, and beside it the agent-count button, whose press opens the
+    pane, or closes it when it is open. The button's label leads with how
+    many agents run now, then how many are planned when any are, then how
+    many have finished when any have: `1 agent running`,
+    `7 agents running · 52 finished`, `0 agents running · 2 planned ·
+    1 finished`. An agent counts as running by the same test the rest of the
+    mod uses, and one the engine no longer lists counts as finished. The
+    label first showed only the number of agents the pane lists, finished
+    ones included, and a session deep in its review rounds showed `59 agents`
+    while seven reviewers ran, which read as if all of them were still at
+    work.
 11. **The second row is SAL-160's line,** unchanged once a pull request is
     watched: `pilot: #<n> <state> · checks <ci> · …`, with its fitting rule
     (agent names dropped from the end first, then the line cut with `…`).
