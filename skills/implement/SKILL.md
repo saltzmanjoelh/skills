@@ -222,7 +222,9 @@ waits on is real; if the wait is real, the session ends the turn.
    - **Rounds:** the round the mod reports ("Round N") is past
      `Max rounds`.
 4. **Conflicting.** Merge the base in (never rebase), rerun the gates the
-   merge could move, push.
+   merge could move, push. This step also covers a merge command that
+   refused a head which does not contain the base's tip, as the step
+   **Both verdicts approve at this head** describes.
 5. **A check or a workflow run failed at the head.** What counts as a
    failed run is defined in the step **Both verdicts approve at this
    head**; a run can fail without registering any check. Read it with
@@ -341,7 +343,14 @@ waits on is real; if the wait is real, the session ends the turn.
    To merge, set `ready-to-merge` and run the merge command with the pull
    request's number and the head the verdicts approved. Never merge any
    other way: a project that names a gate means no session merges around
-   it. If the command refuses, say why and wait.
+   it. If the command refuses, fetch the base with `git fetch origin <base>`
+   and ask git whether the head contains its tip:
+   `git merge-base --is-ancestor origin/<base> <head>`. When it does not,
+   do what **Conflicting** says and go on as **When a turn ends** says,
+   because waiting cannot clear that refusal and a new head can. When it
+   does, or the fetch or the check fails, say why the command refused and
+   wait. Decide from git and never from the refusal's wording, so the rule
+   holds for any project's merge command.
 
 **When a turn ends.** After any push, what follows depends on `Checks:`,
 and either way **Over a limit** is checked after every push:
