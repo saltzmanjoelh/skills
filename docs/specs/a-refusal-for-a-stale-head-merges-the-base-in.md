@@ -37,7 +37,9 @@ runs the project's merge command, and the command refuses.
 1. **The session checks the head itself.** On a refusal, it fetches the base
    and asks whether the head contains the base's tip:
    `git fetch origin <base>` and then
-   `git merge-base --is-ancestor origin/<base> <head>`. It decides from git,
+   `git merge-base --is-ancestor origin/<base> <head>`, whose exit status 0
+   means the head contains the tip, 1 means it does not, and anything else
+   means git could not answer. It decides from git,
    not from the wording of the refusal, so the rule holds for any project's
    merge command.
 2. **A stale head is handled like a conflict.** When the head does not contain
@@ -86,7 +88,8 @@ runs the project's merge command, and the command refuses.
   to **Conflicting**.
 - The **Conflicting** step says that the merge step, not the list, sends a
   stale head to it.
-- The merge step lists its cases in order, the failed check first.
+- The merge step lists its cases in order, the failed check first, and names
+  the exit status of each, so that status 1 is never read as a failure.
 - No gate reads `skills/`, so the reviewers check this text against the spec.
 
 ## Decided by the counsel

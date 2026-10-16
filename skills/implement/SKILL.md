@@ -349,12 +349,15 @@ waits on is real; if the wait is real, the session ends the turn.
    `git merge-base --is-ancestor origin/<base> <head>`. Decide from git and
    never from the refusal's wording, so the rule holds for any project's
    merge command. Take the first of these cases that applies:
-   - **The fetch or the check failed:** say why the command refused and
+   - **The fetch failed, or the check exited with a status other than 0
+     or 1:** git could not answer, so say why the command refused and
      wait. Never merge the base in on a guess.
-   - **The head does not contain the base's tip:** do what
-     **Conflicting** says and go on as **When a turn ends** says, because
-     waiting cannot clear that refusal and a new head can.
-   - **Otherwise:** say why the command refused and wait.
+   - **The check exited with status 1,** which means the head does not
+     contain the base's tip: do what **Conflicting** says and go on as
+     **When a turn ends** says, because waiting cannot clear that refusal
+     and a new head can.
+   - **Otherwise,** the check exited with status 0 and the head contains
+     the base's tip: say why the command refused and wait.
 
 **When a turn ends.** After any push, what follows depends on `Checks:`,
 and either way **Over a limit** is checked after every push:
