@@ -47,9 +47,11 @@ runs the project's merge command, and the command refuses.
 3. **Any other refusal still waits.** When the head does contain the base's
    tip, or the fetch or the check fails, the session says why the command
    refused and waits, as before.
-4. **The Conflicting step names the case.** Its text says it also covers a
-   merge command that refused a head behind the base, so a session resumed
-   after the refusal reaches the same action.
+4. **The Conflicting step names the case.** Its text says the list never
+   chooses it for a head that is merely behind, and that the merge step sends
+   such a head there after a refusal, so nobody reads the list as routing a
+   stale head on its own. A session resumed after a refusal reaches the merge
+   step again, is refused again, and takes the same path.
 
 ## Edge cases
 
@@ -82,7 +84,9 @@ runs the project's merge command, and the command refuses.
 - `skills/implement/SKILL.md`'s merge step no longer ends a refusal with "say
   why and wait" unconditionally; it names the git check and sends a stale head
   to **Conflicting**.
-- The **Conflicting** step names a refusal for a head behind the base.
+- The **Conflicting** step says that the merge step, not the list, sends a
+  stale head to it.
+- The merge step lists its cases in order, the failed check first.
 - No gate reads `skills/`, so the reviewers check this text against the spec.
 
 ## Decided by the counsel

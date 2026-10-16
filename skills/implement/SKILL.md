@@ -222,9 +222,10 @@ waits on is real; if the wait is real, the session ends the turn.
    - **Rounds:** the round the mod reports ("Round N") is past
      `Max rounds`.
 4. **Conflicting.** Merge the base in (never rebase), rerun the gates the
-   merge could move, push. This step also covers a merge command that
-   refused a head which does not contain the base's tip, as the step
-   **Both verdicts approve at this head** describes.
+   merge could move, push. The list never chooses this step for a head
+   that is merely behind the base, because such a head does not conflict;
+   the merge paragraph of **Both verdicts approve at this head** sends a
+   head here after the merge command refused it for that reason.
 5. **A check or a workflow run failed at the head.** What counts as a
    failed run is defined in the step **Both verdicts approve at this
    head**; a run can fail without registering any check. Read it with
@@ -344,13 +345,16 @@ waits on is real; if the wait is real, the session ends the turn.
    request's number and the head the verdicts approved. Never merge any
    other way: a project that names a gate means no session merges around
    it. If the command refuses, fetch the base with `git fetch origin <base>`
-   and ask git whether the head contains its tip:
-   `git merge-base --is-ancestor origin/<base> <head>`. When it does not,
-   do what **Conflicting** says and go on as **When a turn ends** says,
-   because waiting cannot clear that refusal and a new head can. When it
-   does, or the fetch or the check fails, say why the command refused and
-   wait. Decide from git and never from the refusal's wording, so the rule
-   holds for any project's merge command.
+   and ask git whether the head contains its tip with
+   `git merge-base --is-ancestor origin/<base> <head>`. Decide from git and
+   never from the refusal's wording, so the rule holds for any project's
+   merge command. Take the first of these cases that applies:
+   - **The fetch or the check failed:** say why the command refused and
+     wait. Never merge the base in on a guess.
+   - **The head does not contain the base's tip:** do what
+     **Conflicting** says and go on as **When a turn ends** says, because
+     waiting cannot clear that refusal and a new head can.
+   - **Otherwise:** say why the command refused and wait.
 
 **When a turn ends.** After any push, what follows depends on `Checks:`,
 and either way **Over a limit** is checked after every push:
