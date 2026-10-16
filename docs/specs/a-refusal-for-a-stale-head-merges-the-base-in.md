@@ -43,9 +43,10 @@ runs the project's merge command, and the command refuses.
    not from the wording of the refusal, so the rule holds for any project's
    merge command.
 2. **A stale head is handled like a conflict.** When the head does not contain
-   the base's tip, the session does what **Conflicting** says: merge the base
-   in (never rebase), rerun the gates the merge could move, push, and go on as
-   **When a turn ends** says.
+   the base's tip, the session sets `in-review`, because the pull request is
+   no longer ready while a new head is reviewed, and does what **Conflicting**
+   says: merge the base in (never rebase), rerun the gates the merge could
+   move, push, and go on as **When a turn ends** says.
 3. **Any other refusal still waits.** When the head does contain the base's
    tip, or the fetch or the check fails, the session says why the command
    refused and waits, as before.

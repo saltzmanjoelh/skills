@@ -353,9 +353,9 @@ waits on is real; if the wait is real, the session ends the turn.
      or 1:** git could not answer, so say why the command refused and
      wait. Never merge the base in on a guess.
    - **The check exited with status 1,** which means the head does not
-     contain the base's tip: do what **Conflicting** says and go on as
-     **When a turn ends** says, because waiting cannot clear that refusal
-     and a new head can.
+     contain the base's tip: set `in-review`, do what **Conflicting**
+     says, and go on as **When a turn ends** says, because waiting cannot
+     clear that refusal and a new head can.
    - **Otherwise,** the check exited with status 0 and the head contains
      the base's tip: say why the command refused and wait.
 
