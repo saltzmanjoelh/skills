@@ -30,7 +30,7 @@ export function clockTime(ms: number): string {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`
 }
 
-// A moment as the mod writes it on the line and in `/pilot wakes`: the UTC
+// A moment as the mod writes it on the line and in `/builder wakes`: the UTC
 // time as HH:MM:SS, with the UTC date (YYYY-MM-DD) and a space before it when
 // `at` is not on the same UTC day as `now`.
 export function timeOfDay(at: number, now: number): string {

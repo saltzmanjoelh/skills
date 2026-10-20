@@ -75,7 +75,7 @@ test('the next step names the first thing that applies, in the order the spec gi
 
 test('a failed check reads as waiting on a fix, in the next step and the line above the prompt', () => {
   expect(nextStep(view({ pr: pullRequest(failed) }))).toBe('waiting on a fix · next look in 7m')
-  expect(abovePromptLine(view({ pr: pullRequest(failed) }))).toBe('pilot: #7 open · checks failed · waiting on a fix · next look in 7m')
+  expect(abovePromptLine(view({ pr: pullRequest(failed) }))).toBe('builder: #7 open · checks failed · waiting on a fix · next look in 7m')
 })
 
 test('once the time of the look has passed, the next step says it is due now rather than in now', () => {
@@ -95,11 +95,11 @@ test('with no look scheduled, or a due time that cannot be read, the next step i
 })
 
 test('the line above the prompt reads the pull request, its checks and the next step, and never says waiting on nothing', () => {
-  expect(abovePromptLine(view())).toBe('pilot: #7 open · checks passed · nothing to hand over · next look in 7m')
-  expect(abovePromptLine(view({ nextLook: { at: NOW + 30_000, isNewHead: false } }))).toBe('pilot: #7 open · checks passed · nothing to hand over · next look in under a minute')
-  expect(abovePromptLine(view({ nextLook: { at: NOW - 1, isNewHead: true } }))).toBe('pilot: #7 open · checks passed · new head, handing over now')
+  expect(abovePromptLine(view())).toBe('builder: #7 open · checks passed · nothing to hand over · next look in 7m')
+  expect(abovePromptLine(view({ nextLook: { at: NOW + 30_000, isNewHead: false } }))).toBe('builder: #7 open · checks passed · nothing to hand over · next look in under a minute')
+  expect(abovePromptLine(view({ nextLook: { at: NOW - 1, isNewHead: true } }))).toBe('builder: #7 open · checks passed · new head, handing over now')
   const merged = { ...pullRequest(passed), state: 'MERGED' as const }
-  expect(abovePromptLine(view({ pr: merged, nextLook: null }))).toBe('pilot: #7 merged · checks passed · not polling')
+  expect(abovePromptLine(view({ pr: merged, nextLook: null }))).toBe('builder: #7 merged · checks passed · not polling')
   for (const v of [view(), view({ nextLook: null }), view({ pr: merged })]) {
     expect(abovePromptLine(v)).not.toContain('waiting on nothing')
   }
@@ -112,7 +112,7 @@ const MEMBERS = ['spec', 'adversarial', 'security', 'maintainability', 'performa
 // given number of none votes; members past those were left out.
 const ballots = (counts: number[], none = 0): CounselVote[] => {
   const choices: CounselVote['vote'][] = [...counts.flatMap((count, i) => Array<number>(count).fill(i + 1)), ...Array<'none'>(none).fill('none')]
-  return choices.map((vote, i) => ({ member: `pilot:${MEMBERS[i]}-reviewer`, vote, reason: `reason ${i}` }))
+  return choices.map((vote, i) => ({ member: `builder:${MEMBERS[i]}-reviewer`, vote, reason: `reason ${i}` }))
 }
 
 // A counsel question as the mod records it, decided 4 of 6 for its second
@@ -126,7 +126,7 @@ function counselQuestion(n: number, over: Partial<CounselQuestion> = {}): Counse
     background: '',
     paths: [],
     lean: `lean ${n}`,
-    folder: `/repo/.git/pilot/counsel/c${n}`,
+    folder: `/repo/.git/builder/counsel/c${n}`,
     round: 1,
     tallies: [{ round: 1, votes: ballots([1, 4], 1), counts: [1, 4], outcome: 'decided', chosen: 2, proposed: [] }],
     ...over,
@@ -163,7 +163,7 @@ test('the counsel lines show the newest twenty of twenty-two questions, newest f
 test('the counsel lines count against the members who took part and list an old tally\'s abstainers apart under Without a vote, with the first line of each reason', () => {
   const votes: CounselVote[] = [
     ...ballots([1, 2]),
-    { member: 'pilot:maintainability-reviewer', vote: 'abstain', reason: 'outside my angle\nsecond line' },
+    { member: 'builder:maintainability-reviewer', vote: 'abstain', reason: 'outside my angle\nsecond line' },
   ]
   const text = counselLines([counselQuestion(1, { tallies: [{ round: 1, votes, counts: [1, 2], outcome: 'decided', chosen: 2, proposed: [] }] })]).join('\n')
   expect(text).toContain('Tally: 1. first way 1, 2. second way 2, no option 0, of 3 who took part')
@@ -171,13 +171,13 @@ test('the counsel lines count against the members who took part and list an old 
   expect(text).not.toContain('Abstained:')
   expect(text).not.toContain('second line')
 
-  const nobody = ballots([]).concat(MEMBERS.map(m => ({ member: `pilot:${m}-reviewer`, vote: 'abstain' as const, reason: 'not mine' })))
+  const nobody = ballots([]).concat(MEMBERS.map(m => ({ member: `builder:${m}-reviewer`, vote: 'abstain' as const, reason: 'not mine' })))
   const empty = counselLines([counselQuestion(2, { tallies: [{ round: 1, votes: nobody, counts: [0, 0], outcome: 'ask', proposed: [] }] })]).join('\n')
   expect(empty).toContain('Tally: no member took part')
 })
 
 test('the pane lists a follow-ups question with each follow-up\'s tally and decision, and the members without a vote', () => {
-  const members = [...MEMBERS.map(m => `pilot:${m}-reviewer`), 'pilot:owners-advocate']
+  const members = [...MEMBERS.map(m => `builder:${m}-reviewer`), 'builder:owners-advocate']
   // Each follow-up's votes, member i voting choice i; undefined leaves it out.
   const votesOf = (choices: (CounselVote['vote'] | undefined)[]): CounselVote[] =>
     choices.flatMap((vote, i) => (vote === undefined ? [] : [{ member: members[i]!, vote, reason: `reason ${i}` }]))
@@ -222,7 +222,7 @@ const rerunQuestion = (votes: CounselVote[], counts: number[], options: string[]
 test('a question in round 2 after a rerun shows round 1\'s tally over round 1\'s options, its members without a vote, and the added options as new with no count', () => {
   const votes: CounselVote[] = [
     ...ballots([2, 2]),
-    { member: 'pilot:performance-reviewer', vote: 'abstain', reason: 'outside my angle' },
+    { member: 'builder:performance-reviewer', vote: 'abstain', reason: 'outside my angle' },
   ]
   const lines = counselLines([rerunQuestion(votes, [2, 2], ['first way', 'second way', 'third way'])])
   expect(lines).toEqual([
@@ -237,7 +237,7 @@ test('a question in round 2 after a rerun shows round 1\'s tally over round 1\'s
 })
 
 test('round 1 of a rerun has no line of members without a vote when every member voted', () => {
-  const votes: CounselVote[] = [...ballots([3, 3]), { member: 'pilot:owners-advocate', vote: 2, reason: 'reason 6' }]
+  const votes: CounselVote[] = [...ballots([3, 3]), { member: 'builder:owners-advocate', vote: 2, reason: 'reason 6' }]
   const lines = counselLines([rerunQuestion(votes, [3, 4], ['first way', 'second way', 'third way'])])
   expect(lines).toEqual([
     'c22 · round 2 · voting · Question 22?',
@@ -261,8 +261,8 @@ const shell = (id: string): BackgroundTask => ({ id, type: 'shell', status: 'run
 const call = (id: string, startedAt: number, label = `label ${id}`): ForegroundCall => ({ id, tool: 'Bash', label, startedAt })
 
 test('one running agent is one agent, never one agents, on the line and in the next step', () => {
-  const v = view({ agents: [typed('a', 'pilot:spec-reviewer', NOW)] })
-  expect(abovePromptLine(v)).toBe('pilot: #7 open · checks passed · 1 agent: spec-reviewer · next look in 7m')
+  const v = view({ agents: [typed('a', 'builder:spec-reviewer', NOW)] })
+  expect(abovePromptLine(v)).toBe('builder: #7 open · checks passed · 1 agent: spec-reviewer · next look in 7m')
   expect(abovePromptLine(v)).not.toContain('1 agents')
   expect(nextStep(v)).toBe('1 agent running · next look in 7m')
   // The line names the agents in its running part, so the next step does not count them again.
@@ -279,54 +279,54 @@ test('the agent-count button counts the agents running now, then the planned one
   expect(agentCount(view({ agents: [...finished, ...runningNow] }))).toBe('7 agents running · 52 finished')
   expect(agentCount(view({ agents: [agent('a')] }))).toBe('1 agent running')
   expect(agentCount(view({ agents: [done('a'), done('b')] }))).toBe('0 agents running · 2 finished')
-  expect(agentCount(view({ agents: [done('a')], planned: ['pilot:spec-reviewer', 'pilot:adversarial-reviewer'] }))).toBe('0 agents running · 2 planned · 1 finished')
+  expect(agentCount(view({ agents: [done('a')], planned: ['builder:spec-reviewer', 'builder:adversarial-reviewer'] }))).toBe('0 agents running · 2 planned · 1 finished')
   // A card the engine has dropped from its list counts as finished, not running.
   expect(agentCount(view({ agents: [{ ...agent('a'), isListed: false }] }))).toBe('0 agents running · 1 finished')
   expect(agentCount(view())).toBe('0 agents running')
 })
 
 test('with nothing watched the line names what runs, and there is no line when nothing does', () => {
-  const agents = [typed('a', 'Explore', NOW - 3), typed('b', 'pilot:spec-reviewer', NOW - 2), typed('c', 'pilot:data-reviewer', NOW - 1)]
-  expect(abovePromptLine(view({ pr: null, nextLook: null, agents }))).toBe('pilot: no pull request yet · 3 agents: Explore, spec-reviewer, data-reviewer')
+  const agents = [typed('a', 'Explore', NOW - 3), typed('b', 'builder:spec-reviewer', NOW - 2), typed('c', 'builder:data-reviewer', NOW - 1)]
+  expect(abovePromptLine(view({ pr: null, nextLook: null, agents }))).toBe('builder: no pull request yet · 3 agents: Explore, spec-reviewer, data-reviewer')
   expect(abovePromptLine(view({ pr: null, nextLook: null }))).toBeNull()
   // Finished agents, and words an older build saved, are not running.
   const finished = [typed('d', 'Explore', 0, { status: 'completed' }), typed('e', 'Explore', 0, { status: 'done' as AgentCard['status'] }), typed('f', 'Explore', 0, { isListed: false })]
   expect(abovePromptLine(view({ pr: null, nextLook: null, agents: finished }))).toBeNull()
-  expect(abovePromptLine(view({ pr: null, nextLook: null, background: [shell('x')] }))).toBe('pilot: no pull request yet · 1 background command')
+  expect(abovePromptLine(view({ pr: null, nextLook: null, background: [shell('x')] }))).toBe('builder: no pull request yet · 1 background command')
 })
 
 test('background work is counted as commands when every task is a shell command, and as tasks otherwise', () => {
   const none = { pr: null, nextLook: null }
-  expect(abovePromptLine(view({ ...none, background: [shell('x'), shell('y')] }))).toBe('pilot: no pull request yet · 2 background commands')
+  expect(abovePromptLine(view({ ...none, background: [shell('x'), shell('y')] }))).toBe('builder: no pull request yet · 2 background commands')
   const monitor: BackgroundTask = { id: 'm', type: 'monitor', status: 'running', description: 'ci' }
-  expect(abovePromptLine(view({ ...none, background: [monitor] }))).toBe('pilot: no pull request yet · 1 background task')
-  expect(abovePromptLine(view({ ...none, background: [monitor, shell('x')] }))).toBe('pilot: no pull request yet · 2 background tasks')
+  expect(abovePromptLine(view({ ...none, background: [monitor] }))).toBe('builder: no pull request yet · 1 background task')
+  expect(abovePromptLine(view({ ...none, background: [monitor, shell('x')] }))).toBe('builder: no pull request yet · 2 background tasks')
   expect(abovePromptLine(view({ agents: [typed('a', 'Explore', NOW)], background: [shell('x')] })))
-    .toBe('pilot: #7 open · checks passed · 1 agent: Explore · 1 background command · next look in 7m')
+    .toBe('builder: #7 open · checks passed · 1 agent: Explore · 1 background command · next look in 7m')
 })
 
 test('a foreground call is named once it has run ten seconds, the earliest first, and not before', () => {
   expect(NAMED_AFTER_MS).toBe(10_000)
   const none = { pr: null, nextLook: null }
   expect(abovePromptLine(view({ ...none, calls: [call('x', NOW - 9_999)] }))).toBeNull()
-  expect(abovePromptLine(view({ ...none, calls: [call('x', NOW - 10_000, 'Run the gates')] }))).toBe('pilot: no pull request yet · running: Run the gates (10s)')
+  expect(abovePromptLine(view({ ...none, calls: [call('x', NOW - 10_000, 'Run the gates')] }))).toBe('builder: no pull request yet · running: Run the gates (10s)')
   const two = [call('late', NOW - 20_000), call('early', NOW - 67_000)]
-  expect(abovePromptLine(view({ calls: two }))).toBe('pilot: #7 open · checks passed · running: label early (1m 7s) · nothing to hand over · next look in 7m')
+  expect(abovePromptLine(view({ calls: two }))).toBe('builder: #7 open · checks passed · running: label early (1m 7s) · nothing to hand over · next look in 7m')
   // The call comes first, then the agents, then the background work.
   expect(abovePromptLine(view({ ...none, calls: [call('x', NOW - 10_000)], agents: [typed('a', 'Explore', NOW)], background: [shell('y')] })))
-    .toBe('pilot: no pull request yet · running: label x (10s) · 1 agent: Explore · 1 background command')
+    .toBe('builder: no pull request yet · running: label x (10s) · 1 agent: Explore · 1 background command')
 })
 
 test('a long line drops agent names from the end first, then is cut, to the width the band gives', () => {
-  const agents = ['Explore', 'pilot:spec-reviewer', 'pilot:data-reviewer', 'pilot:security-reviewer', 'general-purpose']
+  const agents = ['Explore', 'builder:spec-reviewer', 'builder:data-reviewer', 'builder:security-reviewer', 'general-purpose']
     .map((type, i) => typed(`a${i}`, type, NOW - 10 + i))
-  const fitted = abovePromptLine(view({ pr: null, nextLook: null, agents }), 50)!
-  expect(fitted.length).toBeLessThanOrEqual(50)
-  expect(fitted).toBe('pilot: no pull request yet · 5 agents: Explore, …')
-  expect(abovePromptLine(view({ pr: null, nextLook: null, agents }), 20)).toBe('pilot: no pull requ…')
-  expect(abovePromptLine(view({ pr: null, nextLook: null, agents }))).toBe('pilot: no pull request yet · 5 agents: Explore, spec-reviewer, data-reviewer, security-reviewer, general-purpose')
+  const fitted = abovePromptLine(view({ pr: null, nextLook: null, agents }), 52)!
+  expect(fitted.length).toBeLessThanOrEqual(52)
+  expect(fitted).toBe('builder: no pull request yet · 5 agents: Explore, …')
+  expect(abovePromptLine(view({ pr: null, nextLook: null, agents }), 22)).toBe('builder: no pull requ…')
+  expect(abovePromptLine(view({ pr: null, nextLook: null, agents }))).toBe('builder: no pull request yet · 5 agents: Explore, spec-reviewer, data-reviewer, security-reviewer, general-purpose')
   expect(abovePromptLine(view({ pr: null, nextLook: null, agents }), Number.NaN)).toContain('general-purpose')
-  expect(abovePromptLine(view(), 30)).toBe('pilot: #7 open · checks passe…')
+  expect(abovePromptLine(view(), 32)).toBe('builder: #7 open · checks passe…')
 })
 
 test('text a model supplies loses its escape sequences and control characters and is cut to a fixed length', () => {
@@ -339,7 +339,7 @@ test('text a model supplies loses its escape sequences and control characters an
   expect(printable('x'.repeat(30), 10)).toBe(`${'x'.repeat(9)}…`)
   expect(printable(undefined as unknown as string)).toBe('')
   // On the line, a call's label is cleaned too.
-  expect(abovePromptLine(view({ pr: null, nextLook: null, calls: [call('x', NOW - 10_000, 'gates\n\u001b[2Jnow')] }))).toBe('pilot: no pull request yet · running: gates now (10s)')
+  expect(abovePromptLine(view({ pr: null, nextLook: null, calls: [call('x', NOW - 10_000, 'gates\n\u001b[2Jnow')] }))).toBe('builder: no pull request yet · running: gates now (10s)')
 })
 
 test('a clock time is seconds, minutes and seconds, or hours and minutes', () => {
@@ -369,44 +369,44 @@ test('while a usage-limit hold is on, the next step waits on the usage limit unt
   expect(nextStep(view({ usageHold: hold, questions: [question], agents: [agent('a')] }), true)).toBe(until)
   // A resume on another UTC day carries its date.
   expect(nextStep(view({ usageHold: NOW + 2 * 24 * 60 * 60_000 }))).toBe('waiting on the usage limit until 1970-01-03 00:16:40')
-  expect(abovePromptLine(view({ usageHold: hold, nextLook: null }))).toBe(`pilot: #7 open · checks passed · ${until}`)
+  expect(abovePromptLine(view({ usageHold: hold, nextLook: null }))).toBe(`builder: #7 open · checks passed · ${until}`)
 })
 
 test('the stuck prompt names the pull request and the whole minutes, and asks the session to check its wait with gh', () => {
   expect(stuckPrompt(7, 45 * 60_000 + 59_999)).toBe([
-    'pilot: nothing has happened on pull request #7 for 45 minutes.',
+    'builder: nothing has happened on pull request #7 for 45 minutes.',
     'Check with gh whether what you are waiting on is real.',
     'Then take the first step of the list in /implement that applies, or end the turn if the wait is real.',
   ].join('\n'))
-  expect(stuckPrompt(12, 360 * 60_000).split('\n')[0]).toBe('pilot: nothing has happened on pull request #12 for 360 minutes.')
+  expect(stuckPrompt(12, 360 * 60_000).split('\n')[0]).toBe('builder: nothing has happened on pull request #12 for 360 minutes.')
 })
 
 test('the resume prompt says the usage limit has reset and names the stage, or no stage when none was reported', () => {
-  expect(resumePrompt('build')).toBe('pilot: the usage limit has reset; carry on /implement from the stage you were in (build).')
-  expect(resumePrompt(null)).toBe('pilot: the usage limit has reset; carry on /implement from the stage you were in.')
+  expect(resumePrompt('build')).toBe('builder: the usage limit has reset; carry on /implement from the stage you were in (build).')
+  expect(resumePrompt(null)).toBe('builder: the usage limit has reset; carry on /implement from the stage you were in.')
 })
 
 test('with no pull request watched, a hold shows in place of idle on the second row and on the line', () => {
   const hold = NOW + 15 * 60_000
   const until = `waiting on the usage limit until ${timeOfDay(hold, NOW)}`
   const none = { pr: null, nextLook: null, usageHold: hold }
-  expect(secondRow(view({ ...none, started: true }))).toBe(`pilot: started · ${until}`)
-  expect(secondRow(view({ ...none, started: true, progress: reported() }))).toBe(`pilot: spec · ${until}`)
-  // Before pilot is started, the line shows the hold even when nothing runs.
-  expect(abovePromptLine(view(none))).toBe(`pilot: no pull request yet · ${until}`)
-  expect(secondRow(view(none))).toBe(`pilot: no pull request yet · ${until}`)
+  expect(secondRow(view({ ...none, started: true }))).toBe(`builder: started · ${until}`)
+  expect(secondRow(view({ ...none, started: true, progress: reported() }))).toBe(`builder: spec · ${until}`)
+  // Before builder is started, the line shows the hold even when nothing runs.
+  expect(abovePromptLine(view(none))).toBe(`builder: no pull request yet · ${until}`)
+  expect(secondRow(view(none))).toBe(`builder: no pull request yet · ${until}`)
   // What still runs is named before the hold.
-  expect(secondRow(view({ ...none, started: true, agents: [typed('a', 'Explore', NOW)] }))).toBe(`pilot: started · 1 agent: Explore · ${until}`)
-  expect(abovePromptLine(view({ ...none, agents: [typed('a', 'Explore', NOW)] }))).toBe(`pilot: no pull request yet · 1 agent: Explore · ${until}`)
+  expect(secondRow(view({ ...none, started: true, agents: [typed('a', 'Explore', NOW)] }))).toBe(`builder: started · 1 agent: Explore · ${until}`)
+  expect(abovePromptLine(view({ ...none, agents: [typed('a', 'Explore', NOW)] }))).toBe(`builder: no pull request yet · 1 agent: Explore · ${until}`)
   // With no hold, the rows read as before.
-  expect(secondRow(view({ ...none, usageHold: null, started: true }))).toBe('pilot: started · idle')
+  expect(secondRow(view({ ...none, usageHold: null, started: true }))).toBe('builder: started · idle')
   expect(abovePromptLine(view({ ...none, usageHold: null }))).toBeNull()
 })
 
 test('the pane lists running agents first and finished ones below, newest first in each group, with every agent', () => {
   const agents = [
     typed('old-done', 'Explore', NOW - 50_000, { status: 'completed', durationMs: 4_000, summary: 'VERDICT: APPROVE x' }),
-    typed('old-run', 'pilot:spec-reviewer', NOW - 40_000, { model: 'claude-opus-5-5' }),
+    typed('old-run', 'builder:spec-reviewer', NOW - 40_000, { model: 'claude-opus-5-5' }),
     typed('new-done', 'Explore', NOW - 30_000, { status: 'failed', endedAt: NOW - 10_000 }),
     typed('new-run', 'general-purpose', NOW - 20_000, { description: 'build\u001b[2J it' }),
     typed('dropped', 'Explore', NOW - 60_000, { isListed: false, lastSeenAt: NOW - 55_000 }),
@@ -445,10 +445,10 @@ test('the pane lists background tasks with their status and description, else th
 })
 
 const reported = (over: Partial<Progress> = {}): Progress =>
-  ({ title: 'ABC-123 pilot progress', stage: 'spec', furthest: 'spec', note: '', since: 0, autoOpened: true, ...over })
+  ({ title: 'ABC-123 builder progress', stage: 'spec', furthest: 'spec', note: '', since: 0, autoOpened: true, ...over })
 
 test('with a pull request watched, the second row is the line above the prompt, at every width, started or not', () => {
-  const agents = ['Explore', 'pilot:spec-reviewer', 'pilot:data-reviewer', 'pilot:security-reviewer']
+  const agents = ['Explore', 'builder:spec-reviewer', 'builder:data-reviewer', 'builder:security-reviewer']
     .map((type, i) => typed(`a${i}`, type, NOW - 10 + i))
   const views = [view(), view({ agents }), view({ agents, calls: [call('x', NOW - 20_000)] }), view({ pr: { ...pullRequest(failed), state: 'MERGED' }, nextLook: null })]
   for (const v of views) {
@@ -461,41 +461,41 @@ test('with a pull request watched, the second row is the line above the prompt, 
   }
 })
 
-test('once pilot is started with no pull request watched, the second row names the stage, or started, and what runs, or idle', () => {
+test('once builder is started with no pull request watched, the second row names the stage, or started, and what runs, or idle', () => {
   const none = { pr: null, nextLook: null, started: true }
-  expect(secondRow(view(none))).toBe('pilot: started · idle')
-  expect(secondRow(view({ ...none, progress: reported() }))).toBe('pilot: spec · idle')
-  expect(secondRow(view({ ...none, progress: reported({ stage: 'plan', furthest: 'plan', note: 'round 2' }) }))).toBe('pilot: plan tournament · idle')
-  expect(secondRow(view({ ...none, agents: [typed('a', 'pilot:spec-reviewer', NOW)] }))).toBe('pilot: started · 1 agent: spec-reviewer')
+  expect(secondRow(view(none))).toBe('builder: started · idle')
+  expect(secondRow(view({ ...none, progress: reported() }))).toBe('builder: spec · idle')
+  expect(secondRow(view({ ...none, progress: reported({ stage: 'plan', furthest: 'plan', note: 'round 2' }) }))).toBe('builder: plan tournament · idle')
+  expect(secondRow(view({ ...none, agents: [typed('a', 'builder:spec-reviewer', NOW)] }))).toBe('builder: started · 1 agent: spec-reviewer')
   // Fitted as the line is: agent names go from the end first, then the row is cut.
-  const agents = ['Explore', 'pilot:spec-reviewer', 'pilot:data-reviewer'].map((type, i) => typed(`a${i}`, type, NOW - 10 + i))
-  expect(secondRow(view({ ...none, progress: reported(), agents }), 40)).toBe('pilot: spec · 3 agents: Explore, …')
-  expect(secondRow(view({ ...none, progress: reported(), agents }), 15)).toBe('pilot: spec · …')
-  expect(secondRow(view({ ...none, progress: reported() }), 10)).toBe('pilot: sp…')
+  const agents = ['Explore', 'builder:spec-reviewer', 'builder:data-reviewer'].map((type, i) => typed(`a${i}`, type, NOW - 10 + i))
+  expect(secondRow(view({ ...none, progress: reported(), agents }), 42)).toBe('builder: spec · 3 agents: Explore, …')
+  expect(secondRow(view({ ...none, progress: reported(), agents }), 17)).toBe('builder: spec · …')
+  expect(secondRow(view({ ...none, progress: reported() }), 12)).toBe('builder: sp…')
 })
 
-test('before pilot is started the second row is the line as before: none while nothing runs and no hold is on, whatever was reported', () => {
+test('before builder is started the second row is the line as before: none while nothing runs and no hold is on, whatever was reported', () => {
   const none = { pr: null, nextLook: null }
   expect(secondRow(view(none))).toBeNull()
   expect(secondRow(view({ ...none, progress: reported() }))).toBeNull()
-  expect(secondRow(view({ ...none, agents: [typed('a', 'Explore', NOW)] }))).toBe('pilot: no pull request yet · 1 agent: Explore')
+  expect(secondRow(view({ ...none, agents: [typed('a', 'Explore', NOW)] }))).toBe('builder: no pull request yet · 1 agent: Explore')
 })
 
 test('the stale warning says the mod changed on disk and asks for a restart, without saying which way it moved', () => {
-  expect(STALE_WARNING).toBe('pilot changed on disk since this session loaded it; restart this session to load it')
+  expect(STALE_WARNING).toBe('builder changed on disk since this session loaded it; restart this session to load it')
 })
 
 test('a stale session leads the line with the warning, and the rest of the line follows without its prefix', () => {
-  const agents = [typed('a', 'pilot:spec-reviewer', NOW)]
+  const agents = [typed('a', 'builder:spec-reviewer', NOW)]
   expect(abovePromptLine(view({ stale: true, agents })))
     .toBe(`${STALE_WARNING} · #7 open · checks passed · 1 agent: spec-reviewer · next look in 7m`)
   expect(secondRow(view({ stale: true, agents, started: true }))).toBe(abovePromptLine(view({ stale: true, agents })))
-  // With nothing watched, once pilot is started, the stage follows the warning.
+  // With nothing watched, once builder is started, the stage follows the warning.
   expect(secondRow(view({ stale: true, pr: null, nextLook: null, started: true, progress: reported() })))
     .toBe(`${STALE_WARNING} · spec · idle`)
 })
 
-test('with nothing else to say, a stale session\'s line is the warning alone, before pilot is started too', () => {
+test('with nothing else to say, a stale session\'s line is the warning alone, before builder is started too', () => {
   const none = { pr: null, nextLook: null, stale: true }
   expect(abovePromptLine(view(none))).toBe(STALE_WARNING)
   expect(secondRow(view(none))).toBe(STALE_WARNING)
@@ -503,7 +503,7 @@ test('with nothing else to say, a stale session\'s line is the warning alone, be
 })
 
 test('the rest of a stale line is fitted to the width the warning leaves, and the warning itself is never cut', () => {
-  const agents = ['Explore', 'pilot:spec-reviewer', 'pilot:data-reviewer'].map((type, i) => typed(`a${i}`, type, NOW - 10 + i))
+  const agents = ['Explore', 'builder:spec-reviewer', 'builder:data-reviewer'].map((type, i) => typed(`a${i}`, type, NOW - 10 + i))
   const v = view({ stale: true, agents })
   for (const width of [200, 150, 120, 100, 90]) {
     const line = abovePromptLine(v, width)!
@@ -511,7 +511,7 @@ test('the rest of a stale line is fitted to the width the warning leaves, and th
     expect(line.length).toBeLessThanOrEqual(width)
   }
   const room = 120 - STALE_WARNING.length - ' · '.length
-  expect(abovePromptLine(v, 120)).toBe(`${STALE_WARNING} · ${abovePromptLine(view({ agents }), room + 'pilot: '.length)!.slice('pilot: '.length)}`)
+  expect(abovePromptLine(v, 120)).toBe(`${STALE_WARNING} · ${abovePromptLine(view({ agents }), room + 'builder: '.length)!.slice('builder: '.length)}`)
   // At or below the warning's own width the line is the warning alone, whole.
   for (const width of [STALE_WARNING.length + 3, STALE_WARNING.length, 60, 20, 0]) {
     expect(abovePromptLine(v, width)).toBe(STALE_WARNING)
@@ -522,7 +522,7 @@ test('the rest of a stale line is fitted to the width the warning leaves, and th
 })
 
 test('a session that is not stale draws its line as before', () => {
-  expect(abovePromptLine(view())).toBe('pilot: #7 open · checks passed · nothing to hand over · next look in 7m')
+  expect(abovePromptLine(view())).toBe('builder: #7 open · checks passed · nothing to hand over · next look in 7m')
   expect(abovePromptLine(view({ pr: null, nextLook: null }))).toBeNull()
 })
 
@@ -532,7 +532,7 @@ test('an agent\'s messages are its assistant text and its tool uses, the last fo
     { role: 'assistant', text: 'Looking \u001b[2Jnow', toolUses: [
       { tool_use_id: 'a', tool: 'Bash', input: { command: 'npm test', description: 'Run the suite' } },
       { tool_use_id: 'b', tool: 'Grep', input: { pattern: 'x\ny' } },
-      { tool_use_id: 'c', tool: 'mcp__pilot__watch', input: { number: 7 } },
+      { tool_use_id: 'c', tool: 'mcp__builder__watch', input: { number: 7 } },
     ] },
     { role: 'assistant', text: '', toolUses: [] },
     'not a message',
@@ -542,7 +542,7 @@ test('an agent\'s messages are its assistant text and its tool uses, the last fo
     'Looking now',
     'Bash: Run the suite',
     'Grep: x y',
-    'mcp__pilot__watch: {"number":7}',
+    'mcp__builder__watch: {"number":7}',
     `${'x'.repeat(199)}…`,
   ])
   const many = Array.from({ length: 41 }, (_, i) => ({ role: 'assistant', text: `m${i}`, toolUses: [] }))

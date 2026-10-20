@@ -18,7 +18,7 @@ function question(over: Partial<CounselQuestion> = {}): CounselQuestion {
     background: 'The pane goes stale between polls.',
     paths: ['docs/specs/poll.md'],
     lean: LEAN,
-    folder: '/repo/.git/pilot/counsel/c1',
+    folder: '/repo/.git/builder/counsel/c1',
     round: 1,
     tallies: [],
     ...over,
@@ -28,8 +28,8 @@ function question(over: Partial<CounselQuestion> = {}): CounselQuestion {
 // The members by short name, in the counsel's order: the six reviewers, then
 // the owner's advocate.
 const MEMBERS = ['spec', 'adversarial', 'security', 'maintainability', 'performance', 'data', 'owners-advocate']
-const fullName = (short: string) => (short === 'owners-advocate' ? `pilot:${short}` : `pilot:${short}-reviewer`)
-const ADVOCATE = 'pilot:owners-advocate'
+const fullName = (short: string) => (short === 'owners-advocate' ? `builder:${short}` : `builder:${short}-reviewer`)
+const ADVOCATE = 'builder:owners-advocate'
 type Choice = CounselVote['vote']
 const vote = (i: number, choice: Choice, newOption?: string): CounselVote => ({
   member: fullName(MEMBERS[i]!), vote: choice, reason: `reason of ${MEMBERS[i]}`, ...(newOption ? { newOption } : {}),
@@ -162,7 +162,7 @@ test('the ask answer states the options in order, the tally, one line of reason 
 })
 
 test('a reason is cut at a Unicode line separator, the way a vote is', () => {
-  expect(abstainerReason({ member: 'pilot:data-reviewer', reason: 'first part\u2028second part' })).toBe('first part')
+  expect(abstainerReason({ member: 'builder:data-reviewer', reason: 'first part\u2028second part' })).toBe('first part')
 })
 
 test('the decided answer names the option and the count, tells the session to use those words, and gives the spec line to record', () => {
@@ -178,7 +178,7 @@ test('the rerun answer says to launch all seven again with the brief, for round 
   const q = question()
   const t = tally(q, [vote(0, 1), vote(1, N, 'hourly'), vote(2, 2), vote(3, 2), vote(4, 3), vote(5, 1), vote(6, 3)])
   const text = counselAnswer(afterTally(q, t), t)
-  expect(text).toContain('Counsel brief: /repo/.git/pilot/counsel/c1.')
+  expect(text).toContain('Counsel brief: /repo/.git/builder/counsel/c1.')
   expect(text).toContain('round 2')
   expect(text).toContain('launch all seven members')
   for (const member of MEMBERS) expect(text).toContain(fullName(member))
@@ -199,13 +199,13 @@ test('a brief with fewer than two options, more than four, an empty question or 
 test('a tally naming an unknown member or one member twice is refused', () => {
   const q = question()
   const raw = (member: string, v = '1') => ({ member, vote: v, reason: 'r' })
-  expect('refusal' in votesOf(q, 1, [raw('pilot:release-reviewer')])).toBe(true)
-  expect('refusal' in votesOf(q, 1, [raw('pilot:spec-reviewer'), raw('spec-reviewer')])).toBe(true)
+  expect('refusal' in votesOf(q, 1, [raw('builder:release-reviewer')])).toBe(true)
+  expect('refusal' in votesOf(q, 1, [raw('builder:spec-reviewer'), raw('spec-reviewer')])).toBe(true)
   // The prefix may be left off.
-  const read = votesOf(q, 1, [raw('spec-reviewer'), raw('pilot:data-reviewer', 'none')])
+  const read = votesOf(q, 1, [raw('spec-reviewer'), raw('builder:data-reviewer', 'none')])
   expect(read).toEqual({ votes: [
-    { member: 'pilot:spec-reviewer', vote: 1, reason: 'r' },
-    { member: 'pilot:data-reviewer', vote: 'none', reason: 'r' },
+    { member: 'builder:spec-reviewer', vote: 1, reason: 'r' },
+    { member: 'builder:data-reviewer', vote: 'none', reason: 'r' },
   ], unreadable: [] })
 })
 
@@ -216,19 +216,19 @@ test('a tally with more than seven votes is refused', () => {
 
 test('a vote naming option 0 or one past the last is refused', () => {
   const q = question()
-  expect('refusal' in votesOf(q, 1, [{ member: 'pilot:spec-reviewer', vote: '0', reason: 'r' }])).toBe(true)
-  expect('refusal' in votesOf(q, 1, [{ member: 'pilot:spec-reviewer', vote: '4', reason: 'r' }])).toBe(true)
+  expect('refusal' in votesOf(q, 1, [{ member: 'builder:spec-reviewer', vote: '0', reason: 'r' }])).toBe(true)
+  expect('refusal' in votesOf(q, 1, [{ member: 'builder:spec-reviewer', vote: '4', reason: 'r' }])).toBe(true)
   expect(readVote('4', 3)).toHaveProperty('refusal')
 })
 
 test('an option that does not exist is refused when it comes with a remark or is written as option N', () => {
   expect(readVote('7 (a remark)', 3)).toEqual({ refusal: 'option 7 does not exist; this round has options 1 to 3.' })
   expect(readVote('option 7', 3)).toEqual({ refusal: 'option 7 does not exist; this round has options 1 to 3.' })
-  expect('refusal' in votesOf(question(), 1, [{ member: 'pilot:spec-reviewer', vote: '**option 4**', reason: 'r' }])).toBe(true)
+  expect('refusal' in votesOf(question(), 1, [{ member: 'builder:spec-reviewer', vote: '**option 4**', reason: 'r' }])).toBe(true)
 })
 
 test('a tally for a round the question does not wait on, or one already tallied, is refused', () => {
-  const raw = [{ member: 'pilot:spec-reviewer', vote: '1', reason: 'r' }]
+  const raw = [{ member: 'builder:spec-reviewer', vote: '1', reason: 'r' }]
   expect(votesOf(question(), 2, raw)).toHaveProperty('refusal')
   const q = question()
   const t = tally(q, [vote(0, 1), vote(1, N, 'hourly'), vote(2, 2), vote(3, 2), vote(4, 3), vote(5, 1), vote(6, 3)])
@@ -294,8 +294,8 @@ test('an unreadable vote is left out of the votes, like a member the session lef
   const q = question()
   const votes = read(q, 1, [raw(0, '1'), raw(1, 'abstain'), raw(2, 'two, I think'), raw(3, '')])
   expect(votes).toEqual([
-    { member: 'pilot:spec-reviewer', vote: 1, reason: 'reason of spec' },
-    { member: 'pilot:adversarial-reviewer', vote: 'abstain', reason: 'reason of adversarial' },
+    { member: 'builder:spec-reviewer', vote: 1, reason: 'reason of spec' },
+    { member: 'builder:adversarial-reviewer', vote: 'abstain', reason: 'reason of adversarial' },
   ])
   // An unreadable vote is still checked: naming its member twice is refused.
   expect(votesOf(q, 1, [raw(2, 'maybe'), raw(2, '1')])).toHaveProperty('refusal')
@@ -376,7 +376,7 @@ test('the decision sentence puts the option after a colon as written, ending in 
 })
 
 test('the ask answer lists the members without a vote apart from the votes, with their reasons or no readable vote', () => {
-  const q = question({ askedAgain: ['pilot:maintainability-reviewer', 'pilot:performance-reviewer', 'pilot:data-reviewer'] })
+  const q = question({ askedAgain: ['builder:maintainability-reviewer', 'builder:performance-reviewer', 'builder:data-reviewer'] })
   const votes = read(q, 1, [
     { ...raw(0, '2'), reason: 'A whole sentence.' }, raw(1, '1'), raw(2, 'none'), { ...raw(3, 'abstain'), reason: 'Outside my angle.\nsecond line' },
     { ...raw(4, 'abstain'), reason: '' }, { ...raw(5, '??'), reason: 'UNREAD-MARKER' },
@@ -384,32 +384,32 @@ test('the ask answer lists the members without a vote apart from the votes, with
   const t = tally(q, votes)
   expect(t.outcome).toBe('ask')
   const text = counselAnswer(afterTally(q, t), t)
-  expect(text).toContain('pilot:maintainability-reviewer, pilot:performance-reviewer and pilot:data-reviewer gave no vote in round 1 after being asked twice')
+  expect(text).toContain('builder:maintainability-reviewer, builder:performance-reviewer and builder:data-reviewer gave no vote in round 1 after being asked twice')
   expect(text).toContain('Tally: a 90-second poll 1 of 3, a 5-minute poll 1 of 3, only on events 0 of 3, no option 1 of 3.')
   const [took, without] = text.split('Without a vote:')
   // Each reason ends in one full stop, whether or not the member wrote one.
-  expect(took).toContain('- pilot:spec-reviewer, for a 5-minute poll: A whole sentence.\n')
-  expect(took).toContain('- pilot:adversarial-reviewer, for a 90-second poll: reason of adversarial.\n')
-  expect(took).toContain('- pilot:security-reviewer, for no option: reason of security')
-  expect(took).not.toContain('- pilot:maintainability')
-  expect(without).toContain('- pilot:maintainability-reviewer: Outside my angle.\n')
+  expect(took).toContain('- builder:spec-reviewer, for a 5-minute poll: A whole sentence.\n')
+  expect(took).toContain('- builder:adversarial-reviewer, for a 90-second poll: reason of adversarial.\n')
+  expect(took).toContain('- builder:security-reviewer, for no option: reason of security')
+  expect(took).not.toContain('- builder:maintainability')
+  expect(without).toContain('- builder:maintainability-reviewer: Outside my angle.\n')
   // An abstention with no reason is still told apart from no readable vote.
-  expect(without).toContain('- pilot:performance-reviewer: no reason given.')
-  expect(without).toContain('- pilot:data-reviewer: no readable vote.')
+  expect(without).toContain('- builder:performance-reviewer: no reason given.')
+  expect(without).toContain('- builder:data-reviewer: no readable vote.')
   expect(text).not.toContain('second line')
   expect(text).not.toContain('UNREAD-MARKER')
 })
 
 test('turnout lists both groups in member order, and a null kept from before abstentions reads as none', () => {
-  const old = { member: 'pilot:security-reviewer', vote: null, reason: 'old none' } as unknown as CounselVote
+  const old = { member: 'builder:security-reviewer', vote: null, reason: 'old none' } as unknown as CounselVote
   const t = { votes: [vote(6, N), vote(5, 2), old, vote(1, N), vote(0, 1), vote(3, A)] }
   const { took, abstained } = turnoutOf(t)
   expect(took.map(v => [v.member, v.vote])).toEqual([
-    ['pilot:spec-reviewer', 1], ['pilot:adversarial-reviewer', 'none'], ['pilot:security-reviewer', 'none'], ['pilot:data-reviewer', 2], [ADVOCATE, 'none'],
+    ['builder:spec-reviewer', 1], ['builder:adversarial-reviewer', 'none'], ['builder:security-reviewer', 'none'], ['builder:data-reviewer', 2], [ADVOCATE, 'none'],
   ])
   expect(abstained).toEqual([
-    { member: 'pilot:maintainability-reviewer', reason: 'reason of maintainability' },
-    { member: 'pilot:performance-reviewer', reason: null },
+    { member: 'builder:maintainability-reviewer', reason: 'reason of maintainability' },
+    { member: 'builder:performance-reviewer', reason: null },
   ])
   expect(noOptionCount({ votes: t.votes })).toBe(3)
 })
@@ -418,7 +418,7 @@ test('turnout lists both groups in member order, and a null kept from before abs
 // in each round, and a second time without a vote sends the question to the
 // person.
 
-const DATA = 'pilot:data-reviewer'
+const DATA = 'builder:data-reviewer'
 // Every member but the data reviewer, each voting for option 1.
 const othersFor1 = [raw(0, '1'), raw(1, '1'), raw(2, '1'), raw(3, '1'), raw(4, '1'), raw(6, '1')]
 const stepFor = (q: CounselQuestion, input: unknown[]) => stepOf(q, read(q, q.round, input))
@@ -440,7 +440,7 @@ test('the owner\'s advocate is a member: the six reviewers alone are not counted
 
 test('every member without a vote is asked again together, in member order', () => {
   expect(stepFor(question(), [raw(5, '1'), raw(0, 'abstain'), raw(1, '1'), raw(2, '1'), raw(6, '1')])).toEqual({
-    askAgain: ['pilot:spec-reviewer', 'pilot:maintainability-reviewer', 'pilot:performance-reviewer'],
+    askAgain: ['builder:spec-reviewer', 'builder:maintainability-reviewer', 'builder:performance-reviewer'],
   })
 })
 
@@ -458,8 +458,8 @@ test('a member asked again that still has no vote sends the question to the pers
   expect(step.tally.outcome).toBe('ask')
   expect(step.tally.chosen).toBeUndefined()
   const text = counselAnswer(afterTally(q, step.tally), step.tally)
-  expect(text).toContain('Ask the person: pilot:data-reviewer gave no vote in round 1 after being asked twice, so the counsel cannot decide.')
-  expect(text).toContain('Without a vote:\n- pilot:data-reviewer: no readable vote.')
+  expect(text).toContain('Ask the person: builder:data-reviewer gave no vote in round 1 after being asked twice, so the counsel cannot decide.')
+  expect(text).toContain('Without a vote:\n- builder:data-reviewer: no readable vote.')
 })
 
 test('a member asked again that still has no vote sends the question to the person even when a none voter proposed an option', () => {
@@ -477,14 +477,14 @@ test('when one member misses its second chance and another misses its first, onl
   expect(step.tally.outcome).toBe('ask')
   const text = counselAnswer(afterTally(q, step.tally), step.tally)
   const [first, rest] = [text.split('\n')[0], text.split('Without a vote:')[1] ?? '']
-  expect(first).toBe('Ask the person: pilot:data-reviewer gave no vote in round 1 after being asked twice, so the counsel cannot decide.')
-  expect(rest).toContain('- pilot:security-reviewer: no readable vote.')
-  expect(rest).toContain('- pilot:data-reviewer: no readable vote.')
+  expect(first).toBe('Ask the person: builder:data-reviewer gave no vote in round 1 after being asked twice, so the counsel cannot decide.')
+  expect(rest).toContain('- builder:security-reviewer: no readable vote.')
+  expect(rest).toContain('- builder:data-reviewer: no readable vote.')
 })
 
 test('a different member without a vote on the second tally is asked again, not sent to the person', () => {
   const step = stepFor(question({ askedAgain: [DATA] }), [raw(0, '1'), raw(1, '1'), raw(2, '1'), raw(3, '1'), raw(5, '1'), raw(6, '1')])
-  expect(step).toEqual({ askAgain: ['pilot:performance-reviewer'] })
+  expect(step).toEqual({ askAgain: ['builder:performance-reviewer'] })
 })
 
 test('a rerun empties the members asked again, so round two gives each member a second chance of its own', () => {
@@ -498,10 +498,10 @@ test('a rerun empties the members asked again, so round two gives each member a 
 })
 
 test('the refusal names the members, says to launch exactly them again with the same brief and to tally with every vote', () => {
-  const text = askAgainAnswer(question(), ['pilot:security-reviewer', DATA])
-  expect(text).toContain('Refused: round 1 of c1 is not counted, because every member votes and pilot:security-reviewer and pilot:data-reviewer gave no vote.')
-  expect(text).toContain('launch exactly these members again, each with the prompt "Counsel brief: /repo/.git/pilot/counsel/c1.": pilot:security-reviewer, pilot:data-reviewer.')
-  expect(text).not.toContain('pilot:spec-reviewer')
+  const text = askAgainAnswer(question(), ['builder:security-reviewer', DATA])
+  expect(text).toContain('Refused: round 1 of c1 is not counted, because every member votes and builder:security-reviewer and builder:data-reviewer gave no vote.')
+  expect(text).toContain('launch exactly these members again, each with the prompt "Counsel brief: /repo/.git/builder/counsel/c1.": builder:security-reviewer, builder:data-reviewer.')
+  expect(text).not.toContain('builder:spec-reviewer')
   expect(text).toContain('call counsel_tally again with id c1, round 1,')
   expect(text).toContain('asked twice')
   expect(text).not.toContain('Nothing was recorded')
@@ -535,13 +535,13 @@ test('asking members again adds them to the members asked again, starting from n
   const once = afterAskAgain(question(), [DATA])
   expect(once.askedAgain).toEqual([DATA])
   expect(once.tallies).toEqual([])
-  expect(afterAskAgain(once, ['pilot:security-reviewer']).askedAgain).toEqual([DATA, 'pilot:security-reviewer'])
+  expect(afterAskAgain(once, ['builder:security-reviewer']).askedAgain).toEqual([DATA, 'builder:security-reviewer'])
 })
 
 // How a vote that cannot be read is shown. Its text is quoted in the answer
 // the tally writes and is kept nowhere else.
 
-const SECURITY = 'pilot:security-reviewer'
+const SECURITY = 'builder:security-reviewer'
 const unreadableOf = (q: CounselQuestion, input: unknown[]) => {
   const result = votesOf(q, q.round, input)
   if ('refusal' in result) throw new Error(result.refusal)
@@ -550,7 +550,7 @@ const unreadableOf = (q: CounselQuestion, input: unknown[]) => {
 
 test('votesOf keeps the raw text of each unreadable vote that is not empty, with its case, and nothing for a readable one', () => {
   const input = [raw(0, '1'), raw(1, ' UNREAD-Marker 2 or 3 '), raw(2, ''), raw(3, ' . '), raw(4, 'abstain')]
-  expect(unreadableOf(question(), input)).toEqual([{ member: 'pilot:adversarial-reviewer', text: ' UNREAD-Marker 2 or 3 ' }])
+  expect(unreadableOf(question(), input)).toEqual([{ member: 'builder:adversarial-reviewer', text: ' UNREAD-Marker 2 or 3 ' }])
 })
 
 test('a vote is quoted by its first line, trimmed, in double quotation marks, and cut to eighty characters with the ellipsis', () => {
@@ -579,7 +579,7 @@ test('the refusal quotes each unreadable vote in member order and says once what
   expect(READABLE_VOTE).toBe('A readable vote is an option\'s number, alone or as option N, optionally followed by one remark in brackets, or none.')
   const q = question()
   const unreadable = unreadableOf(q, [raw(0, '1'), raw(1, '1'), raw(2, 'UNREAD-MARKER 2 or 3'), raw(3, ''), raw(5, 'two')])
-  const text = askAgainAnswer(q, [SECURITY, 'pilot:maintainability-reviewer', 'pilot:performance-reviewer', DATA], unreadable)
+  const text = askAgainAnswer(q, [SECURITY, 'builder:maintainability-reviewer', 'builder:performance-reviewer', DATA], unreadable)
   const lines = text.split('\n')
   const start = lines.indexOf('These votes could not be read:')
   expect(start).toBe(1)
@@ -587,7 +587,7 @@ test('the refusal quotes each unreadable vote in member order and says once what
   expect(text.split(READABLE_VOTE).length).toBe(2)
   // An empty vote and a member left out are named as before, with no quote.
   expect(text).not.toMatch(/maintainability-reviewer: "|performance-reviewer: "/)
-  expect(lines[0]).toContain('pilot:maintainability-reviewer, pilot:performance-reviewer')
+  expect(lines[0]).toContain('builder:maintainability-reviewer, builder:performance-reviewer')
 })
 
 test('the answer that asks the person quotes an unreadable vote in place of no readable vote, and keeps it for a member left out', () => {
@@ -597,7 +597,7 @@ test('the answer that asks the person quotes an unreadable vote in place of no r
   const text = counselAnswer(afterTally(q, t), t, unreadableOf(q, input))
   const without = text.split('Without a vote:')[1] ?? ''
   expect(without).toContain(`- ${SECURITY}: "SECOND-MARKER 2 or 3".`)
-  expect(without).toContain('- pilot:performance-reviewer: Outside my angle.')
+  expect(without).toContain('- builder:performance-reviewer: Outside my angle.')
   expect(without).toContain(`- ${DATA}: no readable vote.`)
   // The same tally without the quotes is the answer as it was.
   expect(counselAnswer(afterTally(q, t), t)).toContain(`- ${SECURITY}: no readable vote.`)
@@ -897,7 +897,7 @@ test('the follow-ups answer gives each decision, its count of seven and the reas
   expect(outcomes.map(o => o.reason)).toEqual(['reason of adversarial on 1', 'reason of spec on 2', 'reason of spec on 3'])
   expect(outcomes.map(o => o.count)).toEqual([4, 4, 7])
 
-  const blank = input.map(entry => entry.member === 'pilot:spec-reviewer'
+  const blank = input.map(entry => entry.member === 'builder:spec-reviewer'
     ? { ...entry, follow_ups: entry.follow_ups.map(f => (f.number === 2 ? { ...f, reason: '  ' } : f)) }
     : entry)
   const blankStep = followUpStepOf(q, followUpRead(q, blank).followUps)
@@ -990,10 +990,10 @@ test('a follow-up with 3 votes to file and 2 to drop, with two members still wit
     ['fix', 'fix', 'fix', 'fix', 'fix', 'fix', 'fix'],
   ]
   const first = followUpRead(q, followUpRaws(rows))
-  expect(followUpStepOf(q, first.followUps)).toEqual({ askAgain: ['pilot:performance-reviewer', DATA] })
+  expect(followUpStepOf(q, first.followUps)).toEqual({ askAgain: ['builder:performance-reviewer', DATA] })
 
   // Asked again, both still give no vote on the first follow-up.
-  const again = afterAskAgain(q, ['pilot:performance-reviewer', DATA])
+  const again = afterAskAgain(q, ['builder:performance-reviewer', DATA])
   const second = followUpRead(again, followUpRaws(rows))
   const counted = followUpStepOf(again, second.followUps)
   if (!('tally' in counted)) throw new Error('the round was not counted')
@@ -1013,13 +1013,13 @@ test('a member with no follow-up votes at all is asked again, and every member m
     ['file', 'file', 'file', 'file', 'drop', 'drop', 'drop'],
     ['drop', 'drop', 'drop', 'file', 'file', 'file', 'file'],
     ['fix', 'fix', 'abstain', 'fix', 'drop', 'drop', 'drop'],
-  ]).filter(entry => entry.member !== 'pilot:spec-reviewer')
+  ]).filter(entry => entry.member !== 'builder:spec-reviewer')
   const read = followUpRead(q, input)
   const step = followUpStepOf(q, read.followUps)
-  expect(step).toEqual({ askAgain: ['pilot:spec-reviewer', SECURITY] })
+  expect(step).toEqual({ askAgain: ['builder:spec-reviewer', SECURITY] })
   // No vote here was unreadable, so the answer does not say what a readable one is.
   expect(read.unreadable).toEqual([])
-  expect(followUpAskAgainAnswer(q, ['pilot:spec-reviewer', SECURITY], read.followUps, read.unreadable)).not.toContain(READABLE_FOLLOW_UP_VOTE)
+  expect(followUpAskAgainAnswer(q, ['builder:spec-reviewer', SECURITY], read.followUps, read.unreadable)).not.toContain(READABLE_FOLLOW_UP_VOTE)
 })
 
 test('a follow-ups question never reruns, a NEW OPTION on it is ignored, and a tally for round 2 or one already tallied is refused', () => {
@@ -1045,7 +1045,7 @@ test('a follow-ups question never reruns, a NEW OPTION on it is ignored, and a t
 
 test('a follow-up number out of range or given twice refuses the tally, and so do a top-level vote on a follow-ups question and follow-ups on an ordinary one', () => {
   const q = followUpsQuestion()
-  const entry = (follow_ups: unknown, extra: object = {}) => [{ member: 'pilot:spec-reviewer', follow_ups, ...extra }]
+  const entry = (follow_ups: unknown, extra: object = {}) => [{ member: 'builder:spec-reviewer', follow_ups, ...extra }]
   const refused = (input: unknown[]) => 'refusal' in followUpVotesOf(q, 1, input)
   expect(refused(entry([{ number: 0, vote: 'fix', reason: '' }]))).toBe(true)
   expect(refused(entry([{ number: 4, vote: 'fix', reason: '' }]))).toBe(true)
@@ -1054,15 +1054,15 @@ test('a follow-up number out of range or given twice refuses the tally, and so d
   expect(refused(entry([{ number: 1, vote: '4', reason: '' }]))).toBe(true)
   expect(refused(entry('fix'))).toBe(true)
   expect(refused(entry([{ number: 1, vote: 'fix', reason: '' }], { vote: '1' }))).toBe(true)
-  expect(refused([{ member: 'pilot:nobody', follow_ups: [] }])).toBe(true)
+  expect(refused([{ member: 'builder:nobody', follow_ups: [] }])).toBe(true)
   expect(refused([...entry([]), ...entry([])])).toBe(true)
   expect(refused(entry([{ number: 1, vote: 'fix', reason: '' }]))).toBe(false)
   // A member with no follow_ups at all is not refused, nor one reported with
   // an empty vote as a member that failed; neither has a vote.
-  expect(refused([{ member: 'pilot:spec-reviewer' }])).toBe(false)
-  expect(refused([{ member: 'pilot:spec-reviewer', vote: ' ', reason: '' }])).toBe(false)
+  expect(refused([{ member: 'builder:spec-reviewer' }])).toBe(false)
+  expect(refused([{ member: 'builder:spec-reviewer', vote: ' ', reason: '' }])).toBe(false)
 
-  const ordinary = votesOf(question(), 1, [{ member: 'pilot:spec-reviewer', vote: '1', reason: '', follow_ups: [{ number: 1, vote: 'fix', reason: '' }] }])
+  const ordinary = votesOf(question(), 1, [{ member: 'builder:spec-reviewer', vote: '1', reason: '', follow_ups: [{ number: 1, vote: 'fix', reason: '' }] }])
   expect('refusal' in ordinary).toBe(true)
 })
 

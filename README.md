@@ -7,7 +7,9 @@ The skills are `spec`, `plan-tournament`, `implement`, `verify-loop`,
 `pr-comments`, `storypr`, `summarize` and `cleanup`, which is a generic
 teardown of a finished worktree.
 
-The review agents live in the pilot mod, in `mods/pilot/agents`.
+The review agents live in the builder mod, in `mods/builder/agents`. The
+builder mod used to be called pilot. Its README says how to replace an old
+link or install, and that builder starts with an empty store.
 
 ## Project facts
 

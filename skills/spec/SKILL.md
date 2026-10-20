@@ -25,16 +25,16 @@ trailing slash, so that no path contains `//`.
 ## Interview rules
 
 1. **One question at a time, and the counsel hears it first.** Put each
-   question, with two to four concrete options, to the pilot mod's counsel:
-   call `mcp__pilot__counsel`, then launch all seven counsel members (the
-   six pilot reviewers and `pilot:owners-advocate`) in one message, each
+   question, with two to four concrete options, to the builder mod's counsel:
+   call `mcp__builder__counsel`, then launch all seven counsel members (the
+   six builder reviewers and `builder:owners-advocate`) in one message, each
    with "Counsel brief: <folder>.", wait for all seven, and call
-   `mcp__pilot__counsel_tally` with their votes. Follow what the tally
+   `mcp__builder__counsel_tally` with their votes. Follow what the tally
    answers. Only a question the counsel does not decide reaches the person,
    through AskUserQuestion with a single question per call and the vote
    attached as the tool's answer gives it. If the counsel tool says the
-   counsel cannot sit, or the pilot mod is not loaded, so that
-   `mcp__pilot__counsel` or the `pilot:` agent types do not exist, ask the
+   counsel cannot sit, or the builder mod is not loaded, so that
+   `mcp__builder__counsel` or the `builder:` agent types do not exist, ask the
    person directly and say so. The tool may be deferred, so look for it with
    ToolSearch before deciding it is missing. The interview
    never passes `pull_request` to the counsel tool, so its decisions always

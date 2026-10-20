@@ -237,7 +237,7 @@ function engine(on: On, schemas?: Record<string, unknown>) {
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('tool.register', ($, e) => {
     if (schemas) schemas[e.name] = e.inputSchema
-    return { value: { tool: `mcp__pilot__${e.name}` } }
+    return { value: { tool: `mcp__builder__${e.name}` } }
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.id', () => ({ value: 'session-1' }))
@@ -247,7 +247,7 @@ function engine(on: On, schemas?: Record<string, unknown>) {
 async function watch($: Engine) {
   const call = $.tool.call as unknown as (input: object) => Promise<unknown>
   await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
-  await call({ tool: 'mcp__pilot__watch', number: 7 })
+  await call({ tool: 'mcp__builder__watch', number: 7 })
 }
 
 function recordPrompts(on: On) {
@@ -347,9 +347,9 @@ test('the watch tool starts watching the named pull request and answers with its
   // Called through a looser signature: the typed one on an MCP tool name
   // sends the type checker into an endless instantiation.
   const call = $.tool.call as unknown as (input: object) => Promise<{ result?: unknown }>
-  const ran = await call({ tool: 'mcp__pilot__watch', number: 7 })
+  const ran = await call({ tool: 'mcp__builder__watch', number: 7 })
 
-  expect(String(ran.result)).toContain('pilot: Watching this pull request.')
+  expect(String(ran.result)).toContain('builder: Watching this pull request.')
   expect(String(ran.result)).toContain('Checks: passed.')
 })
 
@@ -361,7 +361,7 @@ test('the watch tool answers that gh could not read the pull request when the re
   world.readsThrow = true
 
   const call = $.tool.call as unknown as (input: object) => Promise<{ result?: unknown }>
-  const ran = await call({ tool: 'mcp__pilot__watch', number: 7 })
+  const ran = await call({ tool: 'mcp__builder__watch', number: 7 })
 
   expect(String(ran.result)).toContain('gh could not read o/r#7')
 })
@@ -374,7 +374,7 @@ test('the watch tool answers that it could not read the gh login when the read t
   world.loginThrows = true
 
   const call = $.tool.call as unknown as (input: object) => Promise<{ result?: unknown }>
-  const ran = await call({ tool: 'mcp__pilot__watch', number: 7 })
+  const ran = await call({ tool: 'mcp__builder__watch', number: 7 })
 
   expect(String(ran.result)).toContain('Could not read the repository or the gh login from this folder.')
 })
@@ -408,7 +408,7 @@ test('a reviewer may only read and report back: an edit and a skill are refused,
     reached.push(`${String(e.agentId)} ${String(e.tool)}`)
     return { result: 'ran' }
   })
-  await spawnAgents($, on, ['pilot:security-reviewer', 'pilot:claim-checker'])
+  await spawnAgents($, on, ['builder:security-reviewer', 'builder:claim-checker'])
 
   const reviewerEdit = await loose($)({ ...edit, agentId: 'agent-1' })
   const reviewerSkill = await loose($)({ tool: 'Skill', skill: 'anything', agentId: 'agent-1' })
@@ -432,14 +432,14 @@ test('the owner\'s advocate is fenced as a reviewer is: an edit is refused, a re
     reached.push(`${String(e.agentId)} ${String(e.tool)}`)
     return { result: 'ran' }
   })
-  await spawnAgents($, on, ['pilot:owners-advocate'])
+  await spawnAgents($, on, ['builder:owners-advocate'])
 
   const advocateEdit = await loose($)({ ...edit, agentId: 'agent-1' })
   await loose($)({ tool: 'Read', file_path: '/repo/a.ts', agentId: 'agent-1' })
   await loose($)({ tool: 'SubagentHandback', report: 'VOTE: 1', agentId: 'agent-1' })
 
   expect(reached).toEqual(['agent-1 Read', 'agent-1 SubagentHandback'])
-  expect(String(advocateEdit.deny)).toContain('pilot:owners-advocate only reads')
+  expect(String(advocateEdit.deny)).toContain('builder:owners-advocate only reads')
 })
 
 test('when the fence cannot look an agent up, a subagent\'s edit is refused rather than let through', async ($, on) => {
@@ -466,7 +466,7 @@ test('a subagent cannot choose which pull request the session watches', async ($
   engine(on)
   const world = fakeGitHub(on)
 
-  const ran = await loose($)({ tool: 'mcp__pilot__watch', number: 7, agentId: 'agent-1' })
+  const ran = await loose($)({ tool: 'mcp__builder__watch', number: 7, agentId: 'agent-1' })
 
   expect(String(ran.deny)).toContain('only the session')
   expect(world.calls).toEqual([])
@@ -496,7 +496,7 @@ test('a change found while the session\'s turn runs is held, then handed over wi
   expect(prompts[0]).toContain('The checks went from passed to failed.')
 })
 
-test('/pilot poll shows the state without swallowing a change the session has not been told', async ($, on) => {
+test('/builder poll shows the state without swallowing a change the session has not been told', async ($, on) => {
   const clock = mock.clock(on)
   mock.store(on)
   engine(on)
@@ -508,7 +508,7 @@ test('/pilot poll shows the state without swallowing a change the session has no
   world.pr = openPullRequest({
     statusCheckRollup: [{ __typename: 'CheckRun', name: 'tests', status: 'COMPLETED', conclusion: 'FAILURE' }],
   })
-  const shown = await $.command.run({ command: 'pilot', args: 'poll' } as never)
+  const shown = await $.command.run({ command: 'builder', args: 'poll' } as never)
   expect(JSON.stringify(shown)).toContain('Checks: failed')
   await clock.advance(10 * 60_000)
 
@@ -523,8 +523,8 @@ test('a mistyped pull request number leaves the watched one in place', async ($,
   const world = fakeGitHub(on)
 
   await watch($)
-  const bad = await loose($)({ tool: 'mcp__pilot__watch', number: 0 })
-  const missing = await loose($)({ tool: 'mcp__pilot__watch', number: 99 })
+  const bad = await loose($)({ tool: 'mcp__builder__watch', number: 0 })
+  const missing = await loose($)({ tool: 'mcp__builder__watch', number: 99 })
   world.calls = []
   await clock.advance(10 * 60_000)
 
@@ -548,11 +548,11 @@ test('a read that throws leaves the pull request watched before still watched', 
   world.pr = openPullRequest({ number: 8 })
   world.otherNumber = 8
   await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
-  const first = await loose($)({ tool: 'mcp__pilot__watch', number: 8 })
+  const first = await loose($)({ tool: 'mcp__builder__watch', number: 8 })
   expect(String(first.result)).toContain('Pull request: o/r#8')
 
   world.readsThrow = true
-  const ran = await loose($)({ tool: 'mcp__pilot__watch', number: 7 })
+  const ran = await loose($)({ tool: 'mcp__builder__watch', number: 7 })
   world.calls = []
   await clock.advance(10 * 60_000)
 
@@ -560,9 +560,9 @@ test('a read that throws leaves the pull request watched before still watched', 
   expect(world.calls.some(call => call.startsWith('gh pr view 8 '))).toBe(true)
   expect(world.calls.some(call => call.startsWith('gh pr view 7'))).toBe(false)
 
-  // /pilot poll reads #8 itself, so it runs only after the timed polls have
+  // /builder poll reads #8 itself, so it runs only after the timed polls have
   // been checked, or its own read would hide a timed poll that never ran.
-  const shown = await $.command.run({ command: 'pilot', args: 'poll' } as never)
+  const shown = await $.command.run({ command: 'builder', args: 'poll' } as never)
   expect(JSON.stringify(shown)).toContain('Pull request: o/r#8')
 })
 
@@ -636,7 +636,7 @@ test('a label the repository lacks is created, without --force, and then added',
   ])
 })
 
-test('/pilot watch starts watching through the same path as the watch tool, and refuses a bad number', async ($, on) => {
+test('/builder watch starts watching through the same path as the watch tool, and refuses a bad number', async ($, on) => {
   mock.clock(on)
   mock.store(on)
   engine(on)
@@ -644,11 +644,11 @@ test('/pilot watch starts watching through the same path as the watch tool, and 
   on('command.run', () => ({ text: '' }))
   await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
 
-  const good = await $.command.run({ command: 'pilot', args: 'watch 7' } as never)
-  const bad = await $.command.run({ command: 'pilot', args: 'watch seven' } as never)
+  const good = await $.command.run({ command: 'builder', args: 'watch 7' } as never)
+  const bad = await $.command.run({ command: 'builder', args: 'watch seven' } as never)
 
   expect(JSON.stringify(good)).toContain('Watching this pull request.')
-  expect(JSON.stringify(good)).not.toContain('pilot:')
+  expect(JSON.stringify(good)).not.toContain('builder:')
   expect(JSON.stringify(bad)).toContain('is not a pull request number')
 })
 
@@ -668,7 +668,7 @@ test('a poll begun before a new watch of the same pull request never hands over 
 
   // Meanwhile the branch goes back to C and the session watches #7 afresh.
   world.pr = openPullRequest()
-  await loose($)({ tool: 'mcp__pilot__watch', number: 7 })
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
   release()
   await clock.settle()
 
@@ -825,7 +825,7 @@ test('the package tool refuses when the checkout is not at the pull request\'s h
   fakeFiles(on)
   await watch($)
 
-  const ran = await loose($)({ tool: 'mcp__pilot__package', issue: 'Do it.' })
+  const ran = await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
 
   expect(String(ran.result)).toContain(`The checkout is at ${D.slice(0, 8)} but the pull request's head is ${C.slice(0, 8)}`)
 })
@@ -840,15 +840,15 @@ test('the package tool writes the package and the diff for the head, with the ro
   // The review lands after the watch, so only a live read sees round 2.
   world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
 
-  const ran = await loose($)({ tool: 'mcp__pilot__package', issue: 'Do it.', tests: '3 pass' })
-  const text = files.get('/repo/.git/pilot/cccccccc/package.md') ?? ''
+  const ran = await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.', tests: '3 pass' })
+  const text = files.get('/repo/.git/builder/cccccccc/package.md') ?? ''
 
   expect(String(ran.result)).toContain(`Head: ${C}`)
   expect(text).toContain('- Round: 2')
   expect(text).toContain('### At aaaaaaaa')
   expect(text).toContain('- Architecture document: docs/arch.md')
   expect(text).toContain('- Gotchas document: none in this project')
-  expect(files.get('/repo/.git/pilot/cccccccc/diff.patch')).toContain('diff --git a/a.ts b/a.ts')
+  expect(files.get('/repo/.git/builder/cccccccc/diff.patch')).toContain('diff --git a/a.ts b/a.ts')
 })
 
 test('the package tool writes no package when git fetch throws', async ($, on) => {
@@ -860,10 +860,10 @@ test('the package tool writes no package when git fetch throws', async ($, on) =
   await watch($)
   world.fetchesThrow = true
 
-  const ran = await loose($)({ tool: 'mcp__pilot__package', issue: 'Do it.' })
+  const ran = await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
 
   expect(String(ran.result)).toContain('git could not fetch the base')
-  expect(files.has('/repo/.git/pilot/cccccccc/package.md')).toBe(false)
+  expect(files.has('/repo/.git/builder/cccccccc/package.md')).toBe(false)
 })
 
 test('the review tool posts one comment review at the reviewed head, with the verdicts line first', async ($, on) => {
@@ -875,13 +875,13 @@ test('the review tool posts one comment review at the reviewed head, with the ve
   const files = fakeFiles(on)
   await watch($)
 
-  const ran = await loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'APPROVE', adversarial: 'REQUEST_CHANGES', body: 'Findings.' })
+  const ran = await loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'REQUEST_CHANGES', body: 'Findings.' })
 
   const post = world.calls.find(call => call.startsWith('gh api repos/o/r/pulls/7/reviews')) ?? ''
   expect(post).toContain(`-f commit_id=${C}`)
   expect(post).toContain('-f event=COMMENT')
-  expect(post).toContain('-F body=@/repo/.git/pilot/cccccccc/review.md')
-  expect(files.get('/repo/.git/pilot/cccccccc/review.md')).toBe('VERDICTS cccccccc spec=APPROVE adversarial=REQUEST_CHANGES\n\nFindings.\n')
+  expect(post).toContain('-F body=@/repo/.git/builder/cccccccc/review.md')
+  expect(files.get('/repo/.git/builder/cccccccc/review.md')).toBe('VERDICTS cccccccc spec=APPROVE adversarial=REQUEST_CHANGES\n\nFindings.\n')
   // The answer carries the state, so recording it as told hides nothing.
   expect(String(ran.result)).toContain('Posted the review: https://github.com/o/r/pull/7#pullrequestreview-1')
   expect(String(ran.result)).toContain('Checks: passed.')
@@ -896,9 +896,9 @@ test('the review tool refuses a moved head, a second verdict at the head, and a 
   fakeFiles(on)
   await watch($)
 
-  const moved = await loose($)({ tool: 'mcp__pilot__post_review', head: D, spec: 'APPROVE', adversarial: 'APPROVE', body: 'x' })
-  const twice = await loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'x' })
-  const secret = await loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: `ghp_${'a'.repeat(36)}` })
+  const moved = await loose($)({ tool: 'mcp__builder__post_review', head: D, spec: 'APPROVE', adversarial: 'APPROVE', body: 'x' })
+  const twice = await loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'x' })
+  const secret = await loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: `ghp_${'a'.repeat(36)}` })
 
   expect(String(moved.result)).toContain('not the reviewed')
   expect(String(twice.result)).toContain('already posted')
@@ -930,12 +930,12 @@ test('the package tool builds the package in the worktree that has the head bran
   sessionInMainCheckout(world, files)
   await watch($)
 
-  const ran = await loose($)({ tool: 'mcp__pilot__package', issue: 'Do it.' })
+  const ran = await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
 
   // Before the fix this is the refusal of 2026-10-12, from comparing /repo.
   expect(String(ran.result)).toContain(`Head: ${C}`)
-  expect(files.get('/repo/.git/worktrees/wt/pilot/cccccccc/package.md') ?? '').toContain('- Architecture document: docs/only-here.md')
-  expect(files.get('/repo/.git/worktrees/wt/pilot/cccccccc/diff.patch')).toContain('diff --git a/a.ts b/a.ts')
+  expect(files.get('/repo/.git/worktrees/wt/builder/cccccccc/package.md') ?? '').toContain('- Architecture document: docs/only-here.md')
+  expect(files.get('/repo/.git/worktrees/wt/builder/cccccccc/diff.patch')).toContain('diff --git a/a.ts b/a.ts')
   const folderOf = (prefix: string) => world.ran.filter(r => r.argv.startsWith(prefix)).map(r => r.cwd)
   expect(folderOf('git worktree list')).toEqual(['/repo'])
   expect(folderOf('git rev-parse HEAD')).toEqual(['/wt'])
@@ -953,11 +953,11 @@ test('the review tool stages its body in the git folder of the worktree that has
   sessionInMainCheckout(world, files)
   await watch($)
 
-  await loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
+  await loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
 
   const post = world.calls.find(call => call.startsWith('gh api repos/o/r/pulls/7/reviews')) ?? ''
-  expect(post).toContain('-F body=@/repo/.git/worktrees/wt/pilot/cccccccc/review.md')
-  expect(files.get('/repo/.git/worktrees/wt/pilot/cccccccc/review.md')).toBe('VERDICTS cccccccc spec=APPROVE adversarial=APPROVE\n\nFindings.\n')
+  expect(post).toContain('-F body=@/repo/.git/worktrees/wt/builder/cccccccc/review.md')
+  expect(files.get('/repo/.git/worktrees/wt/builder/cccccccc/review.md')).toBe('VERDICTS cccccccc spec=APPROVE adversarial=APPROVE\n\nFindings.\n')
 })
 
 test('when the worktree that has the head branch is behind the head, the refusal names that worktree, even though the session\'s folder is at the head', async ($, on) => {
@@ -971,10 +971,10 @@ test('when the worktree that has the head branch is behind the head, the refusal
   world.heads['/wt'] = D
   await watch($)
 
-  const ran = await loose($)({ tool: 'mcp__pilot__package', issue: 'Do it.' })
+  const ran = await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
 
   expect(String(ran.result)).toContain(`${NOT_AT_HEAD} It compared /wt, the worktree that has feature checked out.`)
-  expect(files.has('/repo/.git/pilot/cccccccc/package.md')).toBe(false)
+  expect(files.has('/repo/.git/builder/cccccccc/package.md')).toBe(false)
 })
 
 test('when no worktree has the head branch checked out, the refusal names the session\'s folder and says so', async ($, on) => {
@@ -989,7 +989,7 @@ test('when no worktree has the head branch checked out, the refusal names the se
   world.worktrees = [{ path: '/repo', branch: 'main' }, { path: '/wt', branch: 'feature-2' }, { path: '/loose', head: C }]
   await watch($)
 
-  const ran = await loose($)({ tool: 'mcp__pilot__package', issue: 'Do it.' })
+  const ran = await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
 
   expect(String(ran.result)).toContain(`${NOT_AT_HEAD} It compared /repo, the session's folder, because no worktree has feature checked out.`)
 })
@@ -1005,7 +1005,7 @@ test('when git cannot list the worktrees, because it fails, throws or is cut off
 
   for (const fail of ['exit', 'throw', 'cut'] as const) {
     world.worktreesFail = fail
-    const ran = await loose($)({ tool: 'mcp__pilot__package', issue: 'Do it.' })
+    const ran = await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
 
     expect(String(ran.result)).toContain(`${NOT_AT_HEAD} It compared /repo, the session's folder, because git could not list the worktrees.`)
     expect(String(ran.result)).not.toContain('no worktree has')
@@ -1024,7 +1024,7 @@ test('a prunable worktree whose folder is gone still has the head branch, and th
   world.throwsIn = ['/gone']
   await watch($)
 
-  const ran = await loose($)({ tool: 'mcp__pilot__package', issue: 'Do it.' })
+  const ran = await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
 
   expect(String(ran.result)).toContain(`The checkout is at an unknown commit but the pull request's head is ${C.slice(0, 8)}; push or pull first. It compared /gone, the worktree that has feature checked out.`)
 })
@@ -1039,8 +1039,8 @@ test('a subagent cannot build a package or post a review', async ($, on) => {
   await watch($)
   world.calls = []
 
-  const pkg = await loose($)({ tool: 'mcp__pilot__package', issue: 'x', agentId: 'agent-1' })
-  const post = await loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'x', agentId: 'agent-1' })
+  const pkg = await loose($)({ tool: 'mcp__builder__package', issue: 'x', agentId: 'agent-1' })
+  const post = await loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'x', agentId: 'agent-1' })
 
   expect(String(pkg.deny)).toContain('only the session')
   expect(String(post.deny)).toContain('only the session')
@@ -1055,8 +1055,8 @@ test('a workflow cannot start a reviewer, where the fence could not see it', asy
   fakeGitHub(on)
   on('agent.spawn', () => ({ model: 'test', agentId: 'agent-1' }))
 
-  const ran = await $.agent.spawn({ subagentType: 'pilot:security-reviewer', prompt: 'x', description: 'x', workflow: { id: 'w' } } as never)
-  const advocate = await $.agent.spawn({ subagentType: 'pilot:owners-advocate', prompt: 'x', description: 'x', workflow: { id: 'w' } } as never)
+  const ran = await $.agent.spawn({ subagentType: 'builder:security-reviewer', prompt: 'x', description: 'x', workflow: { id: 'w' } } as never)
+  const advocate = await $.agent.spawn({ subagentType: 'builder:owners-advocate', prompt: 'x', description: 'x', workflow: { id: 'w' } } as never)
 
   expect(JSON.stringify(ran)).toContain('runs only from the session')
   expect(JSON.stringify(advocate)).toContain('runs only from the session')
@@ -1071,10 +1071,10 @@ test('a diff the engine cut off at 4 MiB is refused, not written as if whole', a
   const files = fakeFiles(on)
   await watch($)
 
-  const ran = await loose($)({ tool: 'mcp__pilot__package', issue: 'Do it.' })
+  const ran = await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
 
   expect(String(ran.result)).toContain('cut off')
-  expect(files.has('/repo/.git/pilot/cccccccc/diff.patch')).toBe(false)
+  expect(files.has('/repo/.git/builder/cccccccc/diff.patch')).toBe(false)
 })
 
 test('the review tool refuses a verdict that is not APPROVE or REQUEST_CHANGES', async ($, on) => {
@@ -1085,7 +1085,7 @@ test('the review tool refuses a verdict that is not APPROVE or REQUEST_CHANGES',
   fakeFiles(on)
   await watch($)
 
-  const ran = await loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'approve', adversarial: 'APPROVE', body: 'x' })
+  const ran = await loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'approve', adversarial: 'APPROVE', body: 'x' })
 
   expect(String(ran.result)).toContain('must be APPROVE or REQUEST_CHANGES')
   expect(world.calls.some(call => call.startsWith('gh api repos/o/r/pulls/7/reviews'))).toBe(false)
@@ -1101,8 +1101,8 @@ test('a document path in CLAUDE.md that leaves the checkout is not named in the 
   files.set('/.env', 'secret')
   await watch($)
 
-  await loose($)({ tool: 'mcp__pilot__package', issue: 'Do it.' })
-  const text = files.get('/repo/.git/pilot/cccccccc/package.md') ?? ''
+  await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
+  const text = files.get('/repo/.git/builder/cccccccc/package.md') ?? ''
 
   expect(text).toContain('- Architecture document: none in this project')
   expect(text).toContain('- Gotchas document: none in this project')
@@ -1127,7 +1127,7 @@ test('a quiet session keeps its record fresh, so another session starting two we
 
   // The record survived, so nothing unchanged is handed over as news. The
   // stuck prompts the quiet days draw say nothing about the pull request.
-  expect(prompts.filter(text => !text.startsWith('pilot: nothing has happened'))).toEqual([])
+  expect(prompts.filter(text => !text.startsWith('builder: nothing has happened'))).toEqual([])
 })
 
 test('a document committed as a link to a file outside the checkout is not named in the package', async ($, on) => {
@@ -1139,9 +1139,9 @@ test('a document committed as a link to a file outside the checkout is not named
   files.links.set('/repo/docs/arch.md', '/home/someone/.secrets')
   await watch($)
 
-  await loose($)({ tool: 'mcp__pilot__package', issue: 'Do it.' })
+  await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
 
-  expect(files.get('/repo/.git/pilot/cccccccc/package.md') ?? '').toContain('- Architecture document: none in this project')
+  expect(files.get('/repo/.git/builder/cccccccc/package.md') ?? '').toContain('- Architecture document: none in this project')
 })
 
 test('switching pull requests drops what the session was told about the previous one', async ($, on) => {
@@ -1154,7 +1154,7 @@ test('switching pull requests drops what the session was told about the previous
 
   world.pr = openPullRequest({ number: 8 })
   world.otherNumber = 8
-  await loose($)({ tool: 'mcp__pilot__watch', number: 8 })
+  await loose($)({ tool: 'mcp__builder__watch', number: 8 })
 
   expect(stored.has('prompted:session-1:o/r#7')).toBe(false)
   expect(stored.has('seen:session-1:o/r#7')).toBe(false)
@@ -1271,7 +1271,7 @@ test('a switch of pull requests while the CI event\'s prompt is held leaves no r
   const event = $.prompt.submit({ text: CI_EVENT, origin: { kind: 'sdk' } } as never)
   await clock.settle()
   world.otherNumber = 8
-  await loose($)({ tool: 'mcp__pilot__watch', number: 8 })
+  await loose($)({ tool: 'mcp__builder__watch', number: 8 })
   held.release()
   await event
 
@@ -1291,12 +1291,12 @@ function freshWatchReads(on: On) {
   let latest: unknown
   let isArmed = false
   on('state.set', ($, e, next) => {
-    if (e.plugin === 'pilot' && e.key === 'run') latest = e.value
+    if (e.plugin === 'builder' && e.key === 'run') latest = e.value
     return next(e)
   })
   on('state.get', async ($, e, next) => {
     const answer = await next(e)
-    if (!isArmed || e.plugin !== 'pilot' || e.key !== 'run') return answer
+    if (!isArmed || e.plugin !== 'builder' || e.key !== 'run') return answer
     // The version the kit reported is kept, so a later write of the watch is
     // not refused as if another write had landed in between.
     const { value: read } = answer as { value: { version: number } }
@@ -1323,7 +1323,7 @@ test('a switch of pull requests between the CI event\'s first read of the watch 
   const event = $.prompt.submit({ text: CI_EVENT, origin: { kind: 'sdk' } } as never)
   await clock.settle()
   world.otherNumber = 8
-  await loose($)({ tool: 'mcp__pilot__watch', number: 8 })
+  await loose($)({ tool: 'mcp__builder__watch', number: 8 })
   const toldForEight = stored.get('prompted:session-1:o/r#8')
   expect(toldForEight).toBeDefined()
   // The event's look then reads the watch of #8, and #8 failing.
@@ -1388,7 +1388,7 @@ test('a change confined to in-review draws no prompt at a poll or at a held turn
   await clock.advance(10 * 60_000)
   expect(prompts.length).toBe(1)
   // The change lines, before the state lines, name only do-not-merge.
-  expect(prompts[0]?.split('\n\n')[0]).toBe('pilot: pull request #7 changed.\nLabels added: "do-not-merge".')
+  expect(prompts[0]?.split('\n\n')[0]).toBe('builder: pull request #7 changed.\nLabels added: "do-not-merge".')
 })
 
 test('a told record whose stored fingerprint no rule produces draws no prompt against an unchanged pull request', async ($, on) => {
@@ -1443,7 +1443,7 @@ test('a CI event read under an earlier watch is not recorded after the session w
   const event = $.prompt.submit({ text: CI_EVENT, origin: { kind: 'sdk' } } as never)
   await clock.settle()
   world.pr = openPullRequest()
-  await loose($)({ tool: 'mcp__pilot__watch', number: 7 })
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
   held.release()
   await event
   await clock.advance(10 * 60_000)
@@ -1458,7 +1458,7 @@ test('the fence passes through whatever the call beneath it settled to, instead 
   mock.store(on)
   engine(on)
   fakeGitHub(on)
-  await spawnAgents($, on, ['pilot:claim-checker'])
+  await spawnAgents($, on, ['builder:claim-checker'])
 
   // Nothing beneath the fence answers tool.call, so the call the fence let
   // through settles as "no implementation"; that, not the fence's refusal,
@@ -1497,13 +1497,13 @@ function olderBuildState(on: On, seeded: Record<string, unknown>, refused?: stri
   on('state.get', ($, e, next) => {
     const denial = refuses(e)
     if (denial !== undefined) return denial
-    if (e.plugin !== 'pilot' || !left.has(e.key)) return next(e)
+    if (e.plugin !== 'builder' || !left.has(e.key)) return next(e)
     // Version 0 is where the kit's own value stands, so the mod's write after
     // this read is not refused as a write that another one beat.
     return { value: { value: left.get(e.key), version: 0 } } as never
   })
   on('state.set', ($, e, next) => {
-    if (e.plugin === 'pilot') left.delete(e.key)
+    if (e.plugin === 'builder') left.delete(e.key)
     return next(e)
   })
   return refusal
@@ -1519,8 +1519,8 @@ test('the line above the prompt draws nothing of its own over a snapshot an olde
   // What the host draws when the mod passes the band on.
   on('ui.render', ($, e) => ($.ui.resolve(e) as unknown as { Text: (props: object) => never }).Text({ children: 'host line' }))
 
-  const band = await $.ui.mount({ plugin: 'pilot', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false } as never })
-  expect(await band.find({ text: 'pilot:' })).toBeUndefined()
+  const band = await $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false } as never })
+  expect(await band.find({ text: 'builder:' })).toBeUndefined()
   expect(await band.find({ text: 'host line' })).toBeDefined()
 
   // The session start reads the watched pull request at once, which replaces
@@ -1531,7 +1531,7 @@ test('the line above the prompt draws nothing of its own over a snapshot an olde
   // the kit, so the kit never subscribed the band to the mod's later write.
   await band.redraw()
 
-  expect((await band.find({ text: 'pilot:' }))?.text).toContain('pilot: #7 open · checks passed')
+  expect((await band.find({ text: 'builder:' }))?.text).toContain('builder: #7 open · checks passed')
 })
 
 // Mounts the line above the prompt and reads what the mod draws there,
@@ -1540,10 +1540,10 @@ test('the line above the prompt draws nothing of its own over a snapshot an olde
 // Called after the test's other hooks, since it is the first call on `$`.
 async function abovePrompt($: Engine, on: On) {
   on('ui.render', ($, e) => ($.ui.resolve(e) as unknown as { Text: (props: object) => never }).Text({ children: 'host line' }))
-  const band = await $.ui.mount({ plugin: 'pilot', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false } as never })
+  const band = await $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false } as never })
   return async () => {
     await band.redraw()
-    return (await band.find({ key: 'pilot-line' }))?.text ?? ''
+    return (await band.find({ key: 'builder-line' }))?.text ?? ''
   }
 }
 
@@ -1571,11 +1571,11 @@ test('a turn that ends after a push is followed by a look about 10 seconds on, w
   world.pr = pushedD()
   await turnEnds($, 't1')
   await clock.settle()
-  expect(await line()).toBe('pilot: #7 open · checks passed · nothing to hand over · next look in 10m')
+  expect(await line()).toBe('builder: #7 open · checks passed · nothing to hand over · next look in 10m')
 
   // GitHub has had time to show the push; the mod looks once and sees it.
   await clock.advance(10_000)
-  expect(await line()).toBe('pilot: #7 open · checks passed · new head, handing over in 2m')
+  expect(await line()).toBe('builder: #7 open · checks passed · new head, handing over in 2m')
 
   await clock.advance(89_000)
   expect(prompts).toEqual([])
@@ -1604,7 +1604,7 @@ test('once the poll hands the new head over, its look puts the next one ten minu
   await clock.advance(90_000)
 
   expect(prompts.length).toBe(1)
-  expect(await line()).toBe('pilot: #7 open · checks passed · nothing to hand over · next look in 10m')
+  expect(await line()).toBe('builder: #7 open · checks passed · nothing to hand over · next look in 10m')
 })
 
 test('once the desktop app\'s CI event hands the new head over, the next look is ten minutes out again', async ($, on) => {
@@ -1626,7 +1626,7 @@ test('once the desktop app\'s CI event hands the new head over, the next look is
   await $.prompt.submit({ text: CI_EVENT, origin: { kind: 'sdk' } } as never)
   await clock.settle()
 
-  expect(await line()).toBe('pilot: #7 open · checks passed · nothing to hand over · next look in 10m')
+  expect(await line()).toBe('builder: #7 open · checks passed · nothing to hand over · next look in 10m')
   // The event's own prompt was the handover; the poll does not repeat it.
   await clock.advance(10 * 60_000)
   expect(prompts.filter(text => text.includes('pull request #7 changed'))).toEqual([])
@@ -1654,7 +1654,7 @@ test('a redraw is asked for every 30 seconds while a look is scheduled, and stop
 
   world.pr = openPullRequest({ state: 'MERGED' })
   await clock.advance(10 * 60_000)
-  expect(await line()).toBe('pilot: #7 merged · checks passed · not polling')
+  expect(await line()).toBe('builder: #7 merged · checks passed · not polling')
   redraws.length = 0
   await clock.advance(5 * 60_000)
   expect(redraws).toEqual([])
@@ -1677,9 +1677,9 @@ test('two overlapping reschedules leave one poll, due when the newer one said', 
   stored.hold.skip = 1
   stored.hold.until = new Promise<void>(resolve => { release = resolve })
   await clock.advance(10 * 60_000)
-  // Meanwhile /pilot poll reschedules in full, ten minutes on; five minutes
+  // Meanwhile /builder poll reschedules in full, ten minutes on; five minutes
   // later the poll's older reschedule goes on.
-  await $.command.run({ command: 'pilot', args: 'poll' } as never)
+  await $.command.run({ command: 'builder', args: 'poll' } as never)
   await clock.advance(5 * 60_000)
   release()
   await clock.settle()
@@ -1733,7 +1733,7 @@ test('while a subagent runs the next look is ten minutes out, and the look after
   // The checks run when the session watches, and a turn starts a reviewer.
   world.pr = checksRunning()
   await watch($)
-  listed.push({ id: 'agent-1', type: 'pilot:spec-reviewer', description: 'Review the spec', status: 'running' })
+  listed.push({ id: 'agent-1', type: 'builder:spec-reviewer', description: 'Review the spec', status: 'running' })
   await $.turn.start({ text: 'review round 1', turnId: 't1' } as never)
   await turnEnds($, 't1')
 
@@ -1774,23 +1774,23 @@ test('a look that read the pull request under a watch since replaced does not sc
   await watch($)
   await clock.settle()
 
-  // /pilot poll reads #7 merged and is held as it marks the pull request seen.
+  // /builder poll reads #7 merged and is held as it marks the pull request seen.
   world.pr = openPullRequest({ state: 'MERGED' })
   let release = () => {}
   stored.hold.prefix = 'seen:'
   stored.hold.until = new Promise<void>(resolve => { release = resolve })
-  const poll = $.command.run({ command: 'pilot', args: 'poll' } as never)
+  const poll = $.command.run({ command: 'builder', args: 'poll' } as never)
   await clock.settle()
   // Meanwhile the session watches #8, which is open.
   world.pr = openPullRequest({ number: 8 })
   world.otherNumber = 8
-  await $.command.run({ command: 'pilot', args: 'watch 8' } as never)
+  await $.command.run({ command: 'builder', args: 'watch 8' } as never)
   release()
   await poll
   await clock.settle()
 
   // The merged read of #7 belongs to the old watch, so #8 is still polled.
-  expect(await line()).toBe('pilot: #8 open · checks passed · nothing to hand over · next look in 10m')
+  expect(await line()).toBe('builder: #8 open · checks passed · nothing to hand over · next look in 10m')
   world.calls = []
   await clock.advance(10 * 60_000)
   expect(world.calls.filter(call => call.startsWith('gh pr view 8')).length).toBe(1)
@@ -1801,7 +1801,7 @@ test('the pane shows the next step in place of what the session waits on', async
   mock.store(on)
   engine(on)
   fakeGitHub(on)
-  const pane = await $.ui.mount({ plugin: 'pilot', surface: 'terminal', component: 'Pane', requestId: 'pilot', props: {} as never })
+  const pane = await $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'Pane', requestId: 'builder', props: {} as never })
   await watch($)
   await clock.settle()
   await pane.redraw()
@@ -1820,7 +1820,7 @@ test('a rerun that fails the same way is handed over at the next 90-second poll,
   const prompts = recordPrompts(on)
   const run = (completedAt: string) => ({ __typename: 'CheckRun', name: 'tests', status: 'COMPLETED', conclusion: 'FAILURE', completedAt })
   world.pr = openPullRequest({ statusCheckRollup: [run('2026-10-07T10:00:00Z')] })
-  const pane = await $.ui.mount({ plugin: 'pilot', surface: 'terminal', component: 'Pane', requestId: 'pilot', props: {} as never })
+  const pane = await $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'Pane', requestId: 'builder', props: {} as never })
   await watch($)
   await clock.settle()
   await pane.redraw()
@@ -1848,13 +1848,13 @@ test('an error while scheduling leaves no look scheduled and the line saying so,
   await watch($)
   await clock.settle()
 
-  // The record of what the session was told cannot be read while /pilot poll
+  // The record of what the session was told cannot be read while /builder poll
   // reschedules.
   stored.hold.refused = 'prompted:'
-  await $.command.run({ command: 'pilot', args: 'poll' } as never)
+  await $.command.run({ command: 'builder', args: 'poll' } as never)
   await clock.settle()
   stored.hold.refused = null
-  expect(await line()).toBe('pilot: #7 open · checks passed · not polling')
+  expect(await line()).toBe('builder: #7 open · checks passed · not polling')
 
   // Neither the poll nor the redraw runs any more.
   world.calls = []
@@ -1866,7 +1866,7 @@ test('an error while scheduling leaves no look scheduled and the line saying so,
   // The next hook arms the poll again.
   await $.prompt.submit({ text: 'go on', origin: { kind: 'user' } } as never)
   await clock.settle()
-  expect(await line()).toBe('pilot: #7 open · checks passed · nothing to hand over · next look in 10m')
+  expect(await line()).toBe('builder: #7 open · checks passed · nothing to hand over · next look in 10m')
 })
 
 test('when the look that hands a held change over at the end of a turn fails, the look 10 seconds on still runs', async ($, on) => {
@@ -1893,7 +1893,7 @@ test('when the look that hands a held change over at the end of a turn fails, th
   expect(prompts).toEqual([])
 
   await clock.advance(10_000)
-  expect(await line()).toBe('pilot: #7 open · checks failed · new head, handing over in 2m')
+  expect(await line()).toBe('builder: #7 open · checks failed · new head, handing over in 2m')
 })
 
 // Records each prompt, and refuses every one while `refusing` is set, as the
@@ -1957,9 +1957,9 @@ test('when the held change is handed over at the end of a turn, no look follows 
   expect(state.wakesFrom('turn-end')).toEqual([end])
 })
 
-const COUNSEL = 'mcp__pilot__counsel'
-const TALLY = 'mcp__pilot__counsel_tally'
-const MEMBERS = [...['spec', 'adversarial', 'security', 'maintainability', 'performance', 'data'].map(m => `pilot:${m}-reviewer`), 'pilot:owners-advocate']
+const COUNSEL = 'mcp__builder__counsel'
+const TALLY = 'mcp__builder__counsel_tally'
+const MEMBERS = [...['spec', 'adversarial', 'security', 'maintainability', 'performance', 'data'].map(m => `builder:${m}-reviewer`), 'builder:owners-advocate']
 const brief = {
   tool: COUNSEL,
   question: 'How often should the mod poll?',
@@ -1985,14 +1985,14 @@ test('with nothing watched, the counsel tool writes the brief in the git folder 
   engine(on)
   fakeGitHub(on)
   const files = fakeFiles(on)
-  const pane = await $.ui.mount({ plugin: 'pilot', surface: 'terminal', component: 'Pane', requestId: 'pilot', props: {} as never })
+  const pane = await $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'Pane', requestId: 'builder', props: {} as never })
   await startOnly($)
 
   const ran = await loose($)(brief)
-  const text = files.get('/repo/.git/pilot/counsel/session-1/c1/brief.md') ?? ''
+  const text = files.get('/repo/.git/builder/counsel/session-1/c1/brief.md') ?? ''
 
   expect(String(ran.result)).toContain('c1')
-  expect(String(ran.result)).toContain('Counsel brief: /repo/.git/pilot/counsel/session-1/c1.')
+  expect(String(ran.result)).toContain('Counsel brief: /repo/.git/builder/counsel/session-1/c1.')
   expect(text).toContain('1. a 90-second poll')
   expect(text).toContain('- docs/arch.md\n')
   expect(text).toContain('- docs/specs/poll.md (not written yet)')
@@ -2042,7 +2042,7 @@ test('after a restart that began the ids again, the counsel tool takes the next 
   fakeGitHub(on)
   const files = fakeFiles(on)
   // A brief from before the restart, still waiting on its votes.
-  files.set('/repo/.git/pilot/counsel/session-1/c1/brief.md', 'EARLIER-BRIEF')
+  files.set('/repo/.git/builder/counsel/session-1/c1/brief.md', 'EARLIER-BRIEF')
   await startOnly($)
 
   const ran = await loose($)(brief)
@@ -2050,10 +2050,10 @@ test('after a restart that began the ids again, the counsel tool takes the next 
   const next = await loose($)(brief)
   const later = await loose($)({ tool: TALLY, id: 'c1', round: 1, votes: ballots(['1', '1', '1', '1']) })
 
-  expect(String(ran.result)).toContain('Counsel brief: /repo/.git/pilot/counsel/session-1/c2.')
-  expect(String(next.result)).toContain('Counsel brief: /repo/.git/pilot/counsel/session-1/c3.')
-  expect(files.get('/repo/.git/pilot/counsel/session-1/c1/brief.md')).toBe('EARLIER-BRIEF')
-  expect(files.get('/repo/.git/pilot/counsel/session-1/c2/brief.md') ?? '').toContain('How often should the mod poll?')
+  expect(String(ran.result)).toContain('Counsel brief: /repo/.git/builder/counsel/session-1/c2.')
+  expect(String(next.result)).toContain('Counsel brief: /repo/.git/builder/counsel/session-1/c3.')
+  expect(files.get('/repo/.git/builder/counsel/session-1/c1/brief.md')).toBe('EARLIER-BRIEF')
+  expect(files.get('/repo/.git/builder/counsel/session-1/c2/brief.md') ?? '').toContain('How often should the mod poll?')
   expect(String(later.result)).toContain('no counsel question c1')
 })
 
@@ -2063,14 +2063,14 @@ test('when every id the counsel tool tries already holds a brief, the counsel co
   engine(on)
   fakeGitHub(on)
   const files = fakeFiles(on)
-  for (let n = 1; n <= 1000; n += 1) files.set(`/repo/.git/pilot/counsel/session-1/c${n}/brief.md`, `EARLIER-${n}`)
+  for (let n = 1; n <= 1000; n += 1) files.set(`/repo/.git/builder/counsel/session-1/c${n}/brief.md`, `EARLIER-${n}`)
   await startOnly($)
 
   const ran = await loose($)(brief)
 
   expect(String(ran.result)).toContain('could not sit')
   expect(String(ran.result)).toContain('Ask the person directly')
-  expect(files.get('/repo/.git/pilot/counsel/session-1/c1/brief.md')).toBe('EARLIER-1')
+  expect(files.get('/repo/.git/builder/counsel/session-1/c1/brief.md')).toBe('EARLIER-1')
 })
 
 test('the tally refuses an unknown id and a round already tallied, and records nothing', async ($, on) => {
@@ -2079,7 +2079,7 @@ test('the tally refuses an unknown id and a round already tallied, and records n
   engine(on)
   fakeGitHub(on)
   fakeFiles(on)
-  const pane = await $.ui.mount({ plugin: 'pilot', surface: 'terminal', component: 'Pane', requestId: 'pilot', props: {} as never })
+  const pane = await $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'Pane', requestId: 'builder', props: {} as never })
   await startOnly($)
   await loose($)(brief)
 
@@ -2112,7 +2112,7 @@ test('a rerun rewrites the brief as round two with the proposed option added', a
   await loose($)(brief)
 
   const ran = await loose($)({ tool: TALLY, id: 'c1', round: 1, votes: ballots(['1', '2', 'none', '2', '1', '2', '1'], 'only on events') })
-  const text = files.get('/repo/.git/pilot/counsel/session-1/c1/brief.md') ?? ''
+  const text = files.get('/repo/.git/builder/counsel/session-1/c1/brief.md') ?? ''
 
   expect(String(ran.result)).toContain('round 2')
   expect(text).toContain('round 2')
@@ -2154,16 +2154,16 @@ test('a decision tallied while a pull request is watched appears once in the nex
 
   // A post that gh could not make leaves the decision to report.
   world.postsToFail = 1
-  const failed = await loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
+  const failed = await loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
   expect(String(failed.result)).toContain('could not post')
 
-  await loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
-  const first = files.get('/repo/.git/pilot/cccccccc/review.md') ?? ''
+  await loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
+  const first = files.get('/repo/.git/builder/cccccccc/review.md') ?? ''
   expect(first).toContain('Decided by the counsel')
   expect(first).toContain('- How often should the mod poll? The counsel chose: a 90-second poll. 4 of 7 members voted for it.')
 
-  await loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Second.' })
-  const second = files.get('/repo/.git/pilot/cccccccc/review.md') ?? ''
+  await loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Second.' })
+  const second = files.get('/repo/.git/builder/cccccccc/review.md') ?? ''
   expect(second).toContain('Second.')
   expect(second).not.toContain('Decided by the counsel')
 })
@@ -2180,8 +2180,8 @@ test('a decision reached after a member is asked again reaches the next review a
   await loose($)({ tool: TALLY, id: 'c1', round: 1, votes: ballots(['1', '1', '1', 'abstain', '2', 'none', 'none']) })
   const decided = await loose($)({ tool: TALLY, id: 'c1', round: 1, votes: ballots(['1', '1', '1', '1', '2', 'none', 'none']) })
   expect(String(decided.result)).toContain('Decided:')
-  await loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
-  const review = files.get('/repo/.git/pilot/cccccccc/review.md') ?? ''
+  await loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
+  const review = files.get('/repo/.git/builder/cccccccc/review.md') ?? ''
   expect(review).toContain('- How often should the mod poll? The counsel chose: a 90-second poll. 4 of 7 members voted for it.')
   expect(review).not.toContain('reason 3')
 })
@@ -2199,18 +2199,18 @@ test('a review lists only the decisions made while its own pull request was watc
   // The session moves to #8 and posts a review there; the decision on #7 is not its to list.
   world.pr = openPullRequest({ number: 8 })
   world.otherNumber = 8
-  await loose($)({ tool: 'mcp__pilot__watch', number: 8 })
-  const onOther = await loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'On eight.' })
+  await loose($)({ tool: 'mcp__builder__watch', number: 8 })
+  const onOther = await loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'On eight.' })
   expect(String(onOther.result)).toContain('Posted the review')
-  const other = files.get('/repo/.git/pilot/cccccccc/review.md') ?? ''
+  const other = files.get('/repo/.git/builder/cccccccc/review.md') ?? ''
   expect(other).toContain('On eight.')
   expect(other).not.toContain('Decided by the counsel')
 
   // Back on #7, the next review there lists it.
   world.pr = openPullRequest()
-  await loose($)({ tool: 'mcp__pilot__watch', number: 7 })
-  await loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'On seven.' })
-  const own = files.get('/repo/.git/pilot/cccccccc/review.md') ?? ''
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'On seven.' })
+  const own = files.get('/repo/.git/builder/cccccccc/review.md') ?? ''
   expect(own).toContain('On seven.')
   expect(own).toContain('- How often should the mod poll? The counsel chose: a 90-second poll. 4 of 7 members voted for it.')
 })
@@ -2255,7 +2255,7 @@ test('a decided round owed to a pull request that merged or closed before the ta
 
     expect([id, world.calls.includes(STATE_READ_7)]).toEqual([id, true])
     expect([id, decided]).toEqual([id, [
-      'pilot: Decided: The counsel chose: a 90-second poll. 4 of 7 members voted for it. Go with that option, and tell the person in those words.',
+      'builder: Decided: The counsel chose: a 90-second poll. 4 of 7 members voted for it. Go with that option, and tell the person in those words.',
       `o/r#7 ${word} before the tally, so no review will list this decision.`,
       SPEC_INSTRUCTION,
       SPEC_LINE,
@@ -2308,7 +2308,7 @@ test('the tally reads the pull request the question was owed to, even after the 
   // The session moves to #8, which has merged; #7 is still open.
   world.pr = openPullRequest({ number: 8 })
   world.otherNumber = 8
-  await loose($)({ tool: 'mcp__pilot__watch', number: 8 })
+  await loose($)({ tool: 'mcp__builder__watch', number: 8 })
   world.states = { 7: 'OPEN', 8: 'MERGED' }
   world.calls.length = 0
   const decided = String((await loose($)({ tool: TALLY, id: 'c1', round: 1, votes: ballots(DECIDING) })).result)
@@ -2398,7 +2398,7 @@ test('a refused change prompt deletes no owed decision, and the watch tool\'s an
   expect(record.prompts).toEqual([])
   expect(stored.has(OWED_7)).toBe(true)
 
-  const answer = String((await loose($)({ tool: 'mcp__pilot__watch', number: 7 })).result)
+  const answer = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
   expect(answer).toContain([ENDED_ONE_MERGED, SPEC_INSTRUCTION, SPEC_LINE, LEAVE_OUT].join('\n'))
   expect(stored.has(OWED_7)).toBe(false)
 })
@@ -2430,7 +2430,7 @@ test('a decision owed while the change prompt reads the owed list is neither lis
   expect(prompts[0]).not.toContain(later)
   expect(owedKeys(stored)).toEqual(['counsel-owed:o/r#7:session-3:c2'])
 
-  const answer = String((await loose($)({ tool: 'mcp__pilot__watch', number: 7 })).result)
+  const answer = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
   expect(answer).toContain(later)
   expect(answer).not.toContain(SPEC_LINE)
   expect(owedKeys(stored)).toEqual([])
@@ -2448,13 +2448,13 @@ test('a merged read that another look stores while the handover reads busy is ha
   await oweOnSeven($)
 
   // The poll reads a new head on the open pull request and is held reading
-  // busy. Meanwhile #7 merges and /pilot poll stores that read, which the
+  // busy. Meanwhile #7 merges and /builder poll stores that read, which the
   // held handover then chooses.
   world.pr = pushedD()
   busyRead.arm()
   await clock.advance(10 * 60_000)
   world.pr = { ...pushedD(), state: 'MERGED' } as GhPullRequest
-  await $.command.run({ command: 'pilot', args: 'poll' } as never)
+  await $.command.run({ command: 'builder', args: 'poll' } as never)
   expect(prompts).toEqual([])
   busyRead.release()
   await clock.settle()
@@ -2484,7 +2484,7 @@ test('a refused delete still submits the change prompt with the decisions and re
   expect(stored.has(OWED_7)).toBe(true)
 
   stored.hold.deletesRefused = false
-  const answer = String((await loose($)({ tool: 'mcp__pilot__watch', number: 7 })).result)
+  const answer = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
   expect(answer).toContain(SPEC_LINE)
   expect(stored.has(OWED_7)).toBe(false)
 })
@@ -2526,7 +2526,7 @@ test('a change on an open pull request lists no owed decision and keeps it, and 
   expect(stored.has(OWED_7)).toBe(true)
 
   // The next review lists it, and #7 then merges with nothing owed.
-  await loose($)({ tool: 'mcp__pilot__post_review', head: D, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
+  await loose($)({ tool: 'mcp__builder__post_review', head: D, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
   expect(stored.has(OWED_7)).toBe(false)
   world.pr = { ...pushedD(), state: 'MERGED' } as GhPullRequest
   await clock.advance(10 * 60_000)
@@ -2545,18 +2545,18 @@ test('the watch tool\'s answer on a merged pull request lists the owed decisions
   await oweOnSeven($)
 
   const listingsBefore = stored.hold.listings
-  const open = String((await loose($)({ tool: 'mcp__pilot__watch', number: 7 })).result)
+  const open = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
   expect(open).not.toContain('Decided by the counsel')
   expect(stored.hold.listings).toBe(listingsBefore)
   expect(stored.has(OWED_7)).toBe(true)
 
   world.pr = openPullRequest({ state: 'MERGED' })
-  const merged = String((await loose($)({ tool: 'mcp__pilot__watch', number: 7 })).result)
+  const merged = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
   expect(merged).toContain('Watching this pull request.')
   expect(merged).toContain([ENDED_ONE_MERGED, SPEC_INSTRUCTION, SPEC_LINE, LEAVE_OUT].join('\n'))
   expect(stored.has(OWED_7)).toBe(false)
 
-  const again = String((await loose($)({ tool: 'mcp__pilot__watch', number: 7 })).result)
+  const again = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
   expect(again).not.toContain('Decided by the counsel')
 })
 
@@ -2569,7 +2569,7 @@ test('the watch tool\'s answer on a closed pull request lists the decisions owed
   world.pr = openPullRequest({ state: 'CLOSED' })
 
   await startOnly($)
-  const closed = String((await loose($)({ tool: 'mcp__pilot__watch', number: 7 })).result)
+  const closed = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
   expect(closed).toContain('This counsel decision was owed to the next review on o/r#7, which closed before a review listed it, so no review will list it.')
   expect(owedKeys(stored)).toEqual([])
 })
@@ -2587,7 +2587,7 @@ test('after a restart, a watch on the pull request that merged meanwhile lists a
   restart()
   world.pr = openPullRequest({ state: 'MERGED' })
   await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
-  const answer = String((await loose($)({ tool: 'mcp__pilot__watch', number: 7 })).result)
+  const answer = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
 
   expect(answer).toContain([ENDED_ONE_MERGED, SPEC_INSTRUCTION, SPEC_LINE, LEAVE_OUT].join('\n'))
   expect(stored.has(OWED_7)).toBe(false)
@@ -2632,8 +2632,8 @@ test('with a pull request open and watched, a question put without pull_request 
   expect(String(decided.result)).toContain('Record it in the spec')
   expect(String(decided.result)).not.toContain('The mod lists this decision')
   expect([...stored.keys()].filter(key => key.startsWith('counsel-owed:'))).toEqual([])
-  await loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
-  const review = files.get('/repo/.git/pilot/cccccccc/review.md') ?? ''
+  await loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
+  const review = files.get('/repo/.git/builder/cccccccc/review.md') ?? ''
   expect(review).toContain('Findings.')
   expect(review).not.toContain('Decided by the counsel')
 })
@@ -2643,7 +2643,7 @@ test('with a pull request open and watched, a question put without pull_request 
 // and the next valid question still gets c1.
 async function expectRefusedPullRequest($: Engine, files: ReturnType<typeof fakeFiles>, named: unknown, what: string) {
   const ran = String((await loose($)({ ...brief, pull_request: named })).result)
-  expect([named, ran.startsWith('pilot: Refused: ')]).toEqual([named, true])
+  expect([named, ran.startsWith('builder: Refused: ')]).toEqual([named, true])
   expect([named, ran.includes(what)]).toEqual([named, true])
   expect([named, ran.includes('No brief was written and nothing was recorded.')]).toEqual([named, true])
   expect([named, [...files.keys()].some(path => path.includes('/counsel/'))]).toEqual([named, false])
@@ -2663,7 +2663,7 @@ test('pull_request naming another number, or a value that is not a whole number 
     await expectRefusedPullRequest($, files, named, 'o/r#7 is watched, and its last known state is open.')
   }
   const valid = String((await loose($)({ ...brief, pull_request: 7 })).result)
-  expect(valid).toContain('Counsel brief: /repo/.git/pilot/counsel/session-1/c1.')
+  expect(valid).toContain('Counsel brief: /repo/.git/builder/counsel/session-1/c1.')
 })
 
 test('pull_request is refused when the watched pull request has closed, and when nothing is watched', async ($, on) => {
@@ -2675,14 +2675,14 @@ test('pull_request is refused when the watched pull request has closed, and when
   await startOnly($)
   await expectRefusedPullRequest($, files, 7, 'Nothing is watched.')
 
-  await $.tool.call({ tool: 'mcp__pilot__watch', number: 7 } as never)
+  await $.tool.call({ tool: 'mcp__builder__watch', number: 7 } as never)
   await clock.settle()
   world.pr = openPullRequest({ state: 'CLOSED' })
   await clock.advance(10 * 60_000)
   await expectRefusedPullRequest($, files, 7, 'o/r#7 is watched, and its last known state is closed.')
 
   const valid = String((await loose($)(brief)).result)
-  expect(valid).toContain('Counsel brief: /repo/.git/pilot/counsel/session-1/c1.')
+  expect(valid).toContain('Counsel brief: /repo/.git/builder/counsel/session-1/c1.')
 })
 
 test('a snapshot of another pull request than the one watched counts as a state not known yet, so naming the watched one is refused', async ($, on) => {
@@ -2697,7 +2697,7 @@ test('a snapshot of another pull request than the one watched counts as a state 
   let isArmed = false
   on('state.get', async ($, e, next) => {
     const answer = await next(e)
-    if (!isArmed || e.plugin !== 'pilot' || e.key !== 'pr') return answer
+    if (!isArmed || e.plugin !== 'builder' || e.key !== 'pr') return answer
     const held = answer as { value: { value: { number: number } | null; version: number } | null }
     if (held.value?.value == null) return answer
     return { value: { ...held.value, value: { ...held.value.value, number: 8 } } } as never
@@ -2736,7 +2736,7 @@ test('a question put while one pull request is watched and tallied after the wat
 
   world.pr = openPullRequest({ number: 8 })
   world.otherNumber = 8
-  await loose($)({ tool: 'mcp__pilot__watch', number: 8 })
+  await loose($)({ tool: 'mcp__builder__watch', number: 8 })
   const decided = await loose($)({ tool: TALLY, id: 'c1', round: 1, votes: ballots(['1', '1', '1', '1', '2', 'none', 'none']) })
 
   expect(String(decided.result)).toContain('The mod lists this decision in the next review it posts on o/r#7.')
@@ -2759,7 +2759,7 @@ test('when the brief cannot be rewritten for a rerun, the question goes to the p
   expect(String(ran.result)).toContain('could not be rewritten')
   expect(String(ran.result)).toContain('AskUserQuestion')
   expect(String(ran.result)).toContain('only on events')
-  expect(files.get('/repo/.git/pilot/counsel/session-1/c1/brief.md') ?? '').toContain('round 1')
+  expect(files.get('/repo/.git/builder/counsel/session-1/c1/brief.md') ?? '').toContain('round 1')
   expect(String(again.result)).toContain('Refused')
 })
 
@@ -2774,15 +2774,15 @@ test('a decision whose question looks like it holds a secret is left out of the 
   await loose($)({ ...brief, pull_request: 7, question: `Should the mod rotate ${key}?` })
   await loose($)({ tool: TALLY, id: 'c1', round: 1, votes: ballots(['1', '1', '1', '1', '2', 'none', 'none']) })
 
-  const posted = await loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
-  const first = files.get('/repo/.git/pilot/cccccccc/review.md') ?? ''
+  const posted = await loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
+  const first = files.get('/repo/.git/builder/cccccccc/review.md') ?? ''
   expect(String(posted.result)).toContain('Posted the review')
   expect(first).not.toContain(key)
   expect(first).toContain('Decided by the counsel')
   expect(first).toContain('- A decision was left out because its question looked like it held a secret.\n')
 
-  await loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Second.' })
-  const second = files.get('/repo/.git/pilot/cccccccc/review.md') ?? ''
+  await loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Second.' })
+  const second = files.get('/repo/.git/builder/cccccccc/review.md') ?? ''
   expect(second).toContain('Second.')
   expect(second).not.toContain('Decided by the counsel')
   expect(second).not.toContain('left out')
@@ -2796,7 +2796,7 @@ test('the session\'s own body is still refused when it looks like it holds a sec
   fakeFiles(on)
   await watch($)
 
-  const refused = await loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: `Key ${'AKIA' + 'ABCDEFGHIJKLMNOP'}.` })
+  const refused = await loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: `Key ${'AKIA' + 'ABCDEFGHIJKLMNOP'}.` })
 
   expect(String(refused.result)).toContain('Refused: the body looks like it holds an AWS access key id.')
   expect(world.calls.some(call => call.startsWith('gh api repos/o/r/pulls/7/reviews'))).toBe(false)
@@ -2819,14 +2819,14 @@ function restartable(on: On, keys: readonly string[]) {
   const restarted = new Set<string>()
   on('state.get', async ($, e, next) => {
     const held = await next(e)
-    if (e.plugin !== 'pilot' || !restarted.has(e.key)) return held
+    if (e.plugin !== 'builder' || !restarted.has(e.key)) return held
     // A key never written has no version yet, and stands at version 0, as in
     // olderBuildState.
     const version = (held as { value?: { version?: number } | null }).value?.version ?? 0
     return { value: { value: INITIAL_STATE[e.key], version } } as never
   })
   on('state.set', ($, e, next) => {
-    if (e.plugin === 'pilot') restarted.delete(e.key)
+    if (e.plugin === 'builder') restarted.delete(e.key)
     return next(e)
   })
   return () => {
@@ -2851,13 +2851,13 @@ test('a decision tallied while a pull request is watched is still listed once in
   restart()
   await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
 
-  await loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
-  const first = files.get('/repo/.git/pilot/cccccccc/review.md') ?? ''
+  await loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
+  const first = files.get('/repo/.git/builder/cccccccc/review.md') ?? ''
   expect(first.split('- How often should the mod poll? The counsel chose: a 90-second poll. 4 of 7 members voted for it.').length).toBe(2)
   expect(stored.has('counsel-owed:o/r#7:session-1:c1')).toBe(false)
 
-  await loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Second.' })
-  const second = files.get('/repo/.git/pilot/cccccccc/review.md') ?? ''
+  await loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Second.' })
+  const second = files.get('/repo/.git/builder/cccccccc/review.md') ?? ''
   expect(second).toContain('Second.')
   expect(second).not.toContain('Decided by the counsel')
 })
@@ -2912,8 +2912,8 @@ test('each session\'s decision owed to the pull request is listed in its review,
     },
   } as Promise<void>
 
-  await loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
-  const first = files.get('/repo/.git/pilot/cccccccc/review.md') ?? ''
+  await loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
+  const first = files.get('/repo/.git/builder/cccccccc/review.md') ?? ''
   expect(first).toContain(other)
   expect(first).toContain('- How often should the mod poll? The counsel chose: a 90-second poll. 4 of 7 members voted for it.')
   expect(first).not.toContain(seventy)
@@ -2923,8 +2923,8 @@ test('each session\'s decision owed to the pull request is listed in its review,
     'counsel-owed:o/r#7:session-3:c2',
   ])
 
-  await loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Second.' })
-  const second = files.get('/repo/.git/pilot/cccccccc/review.md') ?? ''
+  await loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Second.' })
+  const second = files.get('/repo/.git/builder/cccccccc/review.md') ?? ''
   expect(second).toContain(later)
   expect(second).not.toContain(other)
   expect(second).not.toContain(seventy)
@@ -2955,7 +2955,7 @@ test('each decision owed to a pull request is pruned ninety days after it was ma
 // Every member votes.
 
 async function counselPane($: Engine) {
-  return $.ui.mount({ plugin: 'pilot', surface: 'terminal', component: 'Pane', requestId: 'pilot', props: {} as never })
+  return $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'Pane', requestId: 'builder', props: {} as never })
 }
 const drawnOf = async (pane: Awaited<ReturnType<typeof counselPane>>) => {
   await pane.redraw()
@@ -2975,14 +2975,14 @@ test('an abstention, an unreadable vote and a member left out each refuse the ro
     await loose($)(brief)
     const ran = String((await loose($)({ tool: TALLY, id, round: 1, votes: ballots(['1', '1', '1', '1', '1', data, '1']) })).result)
     expect(ran).toContain('Refused:')
-    expect(ran).toContain('pilot:data-reviewer gave no vote')
-    expect(ran).toContain(`Launch exactly this member again, with the prompt "Counsel brief: /repo/.git/pilot/counsel/session-1/${id}.": pilot:data-reviewer.`)
+    expect(ran).toContain('builder:data-reviewer gave no vote')
+    expect(ran).toContain(`Launch exactly this member again, with the prompt "Counsel brief: /repo/.git/builder/counsel/session-1/${id}.": builder:data-reviewer.`)
   }
   const drawn = await drawnOf(pane)
   for (const id of ['c1', 'c2', 'c3']) expect(drawn).toContain(`${id} · round 1 · voting ·`)
 
   const again = String((await loose($)({ tool: TALLY, id: 'c3', round: 1, votes: ballots(['1', '1', '1', '1', '1', undefined, '1']) })).result)
-  expect(again).toContain('Ask the person: pilot:data-reviewer gave no vote in round 1 after being asked twice')
+  expect(again).toContain('Ask the person: builder:data-reviewer gave no vote in round 1 after being asked twice')
   const after = await drawnOf(pane)
   expect(after).toContain('c3 · round 1 · asked the person')
   expect(after).toContain('Without a vote: data-reviewer (no readable vote)')
@@ -3009,24 +3009,24 @@ test('an unreadable vote is quoted in the refusal, and the answer that asks the 
 
   const { first, second } = await unreadableTwice($)
 
-  expect(first).toContain('These votes could not be read:\n- pilot:data-reviewer: "FIRST-MARKER 2 or 3".')
+  expect(first).toContain('These votes could not be read:\n- builder:data-reviewer: "FIRST-MARKER 2 or 3".')
   expect(first).toContain('A readable vote is an option\'s number')
-  expect(first).not.toContain('pilot:performance-reviewer: "')
+  expect(first).not.toContain('builder:performance-reviewer: "')
   expect(second).toContain('Ask the person:')
-  expect(second).toContain('- pilot:data-reviewer: "SECOND-MARKER 2 or 3".')
+  expect(second).toContain('- builder:data-reviewer: "SECOND-MARKER 2 or 3".')
   expect(second).not.toContain('FIRST-MARKER')
   // No agent was launched in this test, so the member left out twice never
   // started, while the member whose vote could not be read did start.
-  expect(second).toContain('- pilot:performance-reviewer: never started in this session.')
-  expect(second).toContain('Open the question with this sentence: pilot:performance-reviewer never started in this session')
-  expect(second).not.toContain('pilot:data-reviewer never started')
-  expect(second).not.toContain('- pilot:data-reviewer: never started')
+  expect(second).toContain('- builder:performance-reviewer: never started in this session.')
+  expect(second).toContain('Open the question with this sentence: builder:performance-reviewer never started in this session')
+  expect(second).not.toContain('builder:data-reviewer never started')
+  expect(second).not.toContain('- builder:data-reviewer: never started')
 })
 
 // A member that never started: the session launches members through the
 // spawn hook, and the clock moves between the steps so that an agent started
 // before the members were asked again is told apart from one started after.
-const ADVOCATE_LINE = 'Open the question with this sentence: pilot:owners-advocate never started in this session, even after being asked again.'
+const ADVOCATE_LINE = 'Open the question with this sentence: builder:owners-advocate never started in this session, even after being asked again.'
 const sixFor1 = ['1', '1', '1', '1', '1', '1']
 async function tallyOnce($: Engine, choices: (string | undefined)[]) {
   return String((await loose($)({ tool: TALLY, id: 'c1', round: 1, votes: ballots(choices) })).result)
@@ -3051,11 +3051,11 @@ test('an advocate that was never launched is named as never started once it is a
 
   expect(first).toContain('Refused:')
   expect(first).not.toMatch(/never started|restart/i)
-  expect(second).toContain('Ask the person: pilot:owners-advocate gave no vote in round 1 after being asked twice')
+  expect(second).toContain('Ask the person: builder:owners-advocate gave no vote in round 1 after being asked twice')
   expect(second).toContain(ADVOCATE_LINE)
-  expect(second).toContain('"A session started before pilot:owners-advocate joined the counsel cannot launch it, and restarting the session lets the counsel decide again."')
-  expect(second).toContain('- pilot:owners-advocate: never started in this session.')
-  expect(second).not.toContain('pilot:owners-advocate: no readable vote')
+  expect(second).toContain('"A session started before builder:owners-advocate joined the counsel cannot launch it, and restarting the session lets the counsel decide again."')
+  expect(second).toContain('- builder:owners-advocate: never started in this session.')
+  expect(second).not.toContain('builder:owners-advocate: no readable vote')
 })
 
 test('an advocate launched only before it was asked again is still named as never started', async ($, on) => {
@@ -3076,7 +3076,7 @@ test('an advocate launched only before it was asked again is still named as neve
   const second = await tallyOnce($, sixFor1)
 
   expect(second).toContain(ADVOCATE_LINE)
-  expect(second).toContain('- pilot:owners-advocate: never started in this session.')
+  expect(second).toContain('- builder:owners-advocate: never started in this session.')
 })
 
 test('an advocate launched after it was asked again, with an empty vote, is not named as never started', async ($, on) => {
@@ -3094,13 +3094,13 @@ test('an advocate launched after it was asked again, with an empty vote, is not 
   await clock.advance(1_000)
   await tallyOnce($, sixFor1)
   await clock.advance(1_000)
-  await spawn($, 'pilot:owners-advocate')
+  await spawn($, 'builder:owners-advocate')
   await clock.advance(1_000)
   const second = await tallyOnce($, [...sixFor1, ''])
 
-  expect(second).toContain('Ask the person: pilot:owners-advocate gave no vote in round 1 after being asked twice')
+  expect(second).toContain('Ask the person: builder:owners-advocate gave no vote in round 1 after being asked twice')
   expect(second).not.toMatch(/never started|restart/i)
-  expect(second).toContain('- pilot:owners-advocate: no readable vote.')
+  expect(second).toContain('- builder:owners-advocate: no readable vote.')
 })
 
 // The mod missed the advocate's spawn, as it does while its hooks reload, so
@@ -3123,14 +3123,14 @@ test('an advocate whose spawn the mod missed, and which the engine lists, is not
   await clock.advance(1_000)
   await tallyOnce($, sixFor1)
   await clock.advance(5_000)
-  listed.push({ id: 'agent-missed', type: 'pilot:owners-advocate', description: 'owners-advocate work', status: 'running' })
+  listed.push({ id: 'agent-missed', type: 'builder:owners-advocate', description: 'owners-advocate work', status: 'running' })
   await finish($, listed, 'agent-missed')
   await clock.advance(1_000)
   const second = await tallyOnce($, sixFor1)
 
-  expect(second).toContain('Ask the person: pilot:owners-advocate gave no vote in round 1 after being asked twice')
+  expect(second).toContain('Ask the person: builder:owners-advocate gave no vote in round 1 after being asked twice')
   expect(second).not.toMatch(/never started|restart/i)
-  expect(second).toContain('- pilot:owners-advocate: no readable vote.')
+  expect(second).toContain('- builder:owners-advocate: no readable vote.')
 })
 
 // The read of the record of agents is refused only at the second tally, so
@@ -3155,8 +3155,8 @@ test('a refused read of the record of agents at the tally names no member as nev
   refusal.reads = 100
   const second = await tallyOnce($, sixFor1)
 
-  expect(second).toContain('Ask the person: pilot:owners-advocate gave no vote in round 1 after being asked twice')
-  expect(second).toContain('- pilot:owners-advocate: no readable vote.')
+  expect(second).toContain('Ask the person: builder:owners-advocate gave no vote in round 1 after being asked twice')
+  expect(second).toContain('- builder:owners-advocate: no readable vote.')
   expect(second).not.toMatch(/never started|restart/i)
 })
 
@@ -3181,7 +3181,7 @@ test('the text of an unreadable vote is never written to the state or the store,
   expect(second).toContain('SECOND-MARKER')
   // The interceptor saw the tallies being recorded, so its silence on the
   // markers means something.
-  expect(written.some(value => value.includes('pilot:data-reviewer'))).toBe(true)
+  expect(written.some(value => value.includes('builder:data-reviewer'))).toBe(true)
   expect(written.filter(value => /FIRST-MARKER|SECOND-MARKER/.test(value))).toEqual([])
   // This question has no pull request, so nothing is owed and the store may
   // hold nothing at all. The next test covers a store that is written to.
@@ -3216,7 +3216,7 @@ test('the text of an unreadable vote is not in the decision owed to a watched pu
   // its silence on the marker means something.
   expect([...stored.keys()].filter(key => key.startsWith('counsel-owed:'))).toEqual(['counsel-owed:o/r#7:session-1:c1'])
   expect([...stored.values()].map(value => JSON.stringify(value)).filter(value => value.includes('OWED-MARKER'))).toEqual([])
-  expect(written.some(value => value.includes('pilot:data-reviewer'))).toBe(true)
+  expect(written.some(value => value.includes('builder:data-reviewer'))).toBe(true)
   expect(written.filter(value => value.includes('OWED-MARKER'))).toEqual([])
 })
 
@@ -3314,12 +3314,12 @@ test('a follow-ups call writes a brief that numbers the follow-ups without the l
   engine(on)
   fakeGitHub(on)
   const files = fakeFiles(on)
-  const pane = await $.ui.mount({ plugin: 'pilot', surface: 'terminal', component: 'Pane', requestId: 'pilot', props: {} as never })
+  const pane = await $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'Pane', requestId: 'builder', props: {} as never })
   await startOnly($)
 
   const asked = String((await loose($)(followUpsBrief)).result)
-  const text = files.get('/repo/.git/pilot/counsel/session-1/c1/brief.md') ?? ''
-  expect(asked).toContain('Counsel brief: /repo/.git/pilot/counsel/session-1/c1.')
+  const text = files.get('/repo/.git/builder/counsel/session-1/c1/brief.md') ?? ''
+  expect(asked).toContain('Counsel brief: /repo/.git/builder/counsel/session-1/c1.')
   expect(asked).toContain('follow_ups')
   expect(text).toContain('1. The pane cuts long agent names.\n2. The poll logs every look twice.\n3. A retry message has a typo.')
   expect(text).toContain('VOTE 3: <fix|file|drop|none>')
@@ -3367,8 +3367,8 @@ test('a follow-ups call with options, an empty list, twenty-one follow-ups, two 
   expect([...files.keys()].some(path => path.includes('/counsel/'))).toBe(false)
 
   const accepted = String((await loose($)({ ...followUpsBrief, follow_ups: many(20) })).result)
-  expect(accepted).toContain('Counsel brief: /repo/.git/pilot/counsel/session-1/c1.')
-  expect(files.get('/repo/.git/pilot/counsel/session-1/c1/brief.md') ?? '').toContain('VOTE 20: <fix|file|drop|none>')
+  expect(accepted).toContain('Counsel brief: /repo/.git/builder/counsel/session-1/c1.')
+  expect(files.get('/repo/.git/builder/counsel/session-1/c1/brief.md') ?? '').toContain('VOTE 20: <fix|file|drop|none>')
 })
 
 test('with a pull request watched, a follow-ups tally owes nothing, and the next review has no paragraph of counsel decisions', async ($, on) => {
@@ -3384,8 +3384,8 @@ test('with a pull request watched, a follow-ups tally owes nothing, and the next
   expect(counted).not.toContain('The mod lists this decision')
   expect([...stored.keys()].filter(key => key.startsWith('counsel-owed:'))).toEqual([])
 
-  await loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
-  const review = files.get('/repo/.git/pilot/cccccccc/review.md') ?? ''
+  await loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
+  const review = files.get('/repo/.git/builder/cccccccc/review.md') ?? ''
   expect(review).toContain('Findings.')
   expect(review).not.toContain('Decided by the counsel')
 })
@@ -3407,7 +3407,7 @@ test('a member lacking one follow-up\'s vote is asked again, and still lacking i
 
   const first = String((await loose($)({ tool: TALLY, id: 'c1', round: 1, votes: followUpBallots(rows) })).result)
   expect(first).toContain('Refused: round 1 of c1 is not counted')
-  expect(first).toContain('- pilot:data-reviewer: no vote on follow-up 3.')
+  expect(first).toContain('- builder:data-reviewer: no vote on follow-up 3.')
   expect(first).toContain('Launch exactly this member again')
 
   const second = String((await loose($)({ tool: TALLY, id: 'c1', round: 1, votes: followUpBallots(rows) })).result)
@@ -3415,7 +3415,7 @@ test('a member lacking one follow-up\'s vote is asked again, and still lacking i
   expect(second).toContain('the counsel decided to drop it, 4 of 7')
   // 3 of the 6 votes that exist does not decide.
   expect(second).toContain('Follow-up 3, "A retry message has a typo.": the counsel did not decide, so drop it.')
-  expect(second).toContain('Without a vote: pilot:data-reviewer (no readable vote).')
+  expect(second).toContain('Without a vote: builder:data-reviewer (no readable vote).')
   expect(second).not.toContain('Ask the person:')
 })
 
@@ -3502,17 +3502,17 @@ function fakePanes(on: On) {
 
 const NARROW = 'The terminal is 100 columns wide, under the 144 a pane opened unasked needs.'
 
-test('the open_pane tool opens the pilot pane and says it is open when the engine places it', async ($, on) => {
+test('the open_pane tool opens the builder pane and says it is open when the engine places it', async ($, on) => {
   mock.clock(on)
   mock.store(on)
   engine(on)
   const panes = fakePanes(on)
   await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
 
-  const ran = await loose($)({ tool: 'mcp__pilot__open_pane' })
+  const ran = await loose($)({ tool: 'mcp__builder__open_pane' })
 
-  expect(panes.opened).toEqual([{ id: 'pilot', title: 'pilot' }])
-  expect(String(ran.result)).toBe('pilot: The pane is open.')
+  expect(panes.opened).toEqual([{ id: 'builder', title: 'builder' }])
+  expect(String(ran.result)).toBe('builder: The pane is open.')
 })
 
 test('the open_pane tool says the pane waits, with the engine\'s reason exactly, when the engine does not place it', async ($, on) => {
@@ -3523,14 +3523,14 @@ test('the open_pane tool says the pane waits, with the engine\'s reason exactly,
   panes.answer = { isPlaced: false, reason: NARROW }
   await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
 
-  const ran = await loose($)({ tool: 'mcp__pilot__open_pane' })
+  const ran = await loose($)({ tool: 'mcp__builder__open_pane' })
 
-  expect(String(ran.result)).toContain('pilot: The pane waits and is not drawn yet.')
+  expect(String(ran.result)).toContain('builder: The pane waits and is not drawn yet.')
   expect(String(ran.result)).toContain(`"${NARROW}"`)
   expect(String(ran.result)).not.toContain('is open')
 })
 
-test('/pilot and the open_pane tool both say the pane is open when the engine places it', async ($, on) => {
+test('/builder and the open_pane tool both say the pane is open when the engine places it', async ($, on) => {
   mock.clock(on)
   mock.store(on)
   engine(on)
@@ -3538,15 +3538,15 @@ test('/pilot and the open_pane tool both say the pane is open when the engine pl
   on('command.run', () => ({ text: '' }))
   await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
 
-  const tool = await loose($)({ tool: 'mcp__pilot__open_pane' })
-  const command = await $.command.run({ command: 'pilot', args: '' } as never) as { text: string }
+  const tool = await loose($)({ tool: 'mcp__builder__open_pane' })
+  const command = await $.command.run({ command: 'builder', args: '' } as never) as { text: string }
 
-  expect(String(tool.result)).toBe('pilot: The pane is open.')
+  expect(String(tool.result)).toBe('builder: The pane is open.')
   expect(command.text).toBe('The pane is open.')
-  expect(panes.opened).toEqual(Array(2).fill({ id: 'pilot', title: 'pilot' }))
+  expect(panes.opened).toEqual(Array(2).fill({ id: 'builder', title: 'builder' }))
 })
 
-test('when the pane waits, both replies quote the engine\'s reason, and only the tool\'s tells the person to type /pilot', async ($, on) => {
+test('when the pane waits, both replies quote the engine\'s reason, and only the tool\'s tells the person to type /builder', async ($, on) => {
   mock.clock(on)
   mock.store(on)
   engine(on)
@@ -3555,8 +3555,8 @@ test('when the pane waits, both replies quote the engine\'s reason, and only the
   on('command.run', () => ({ text: '' }))
   await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
 
-  const tool = String((await loose($)({ tool: 'mcp__pilot__open_pane' })).result)
-  const command = (await $.command.run({ command: 'pilot', args: '' } as never) as { text: string }).text
+  const tool = String((await loose($)({ tool: 'mcp__builder__open_pane' })).result)
+  const command = (await $.command.run({ command: 'builder', args: '' } as never) as { text: string }).text
 
   for (const reply of [tool, command]) {
     expect(reply).toContain('The pane waits and is not drawn yet.')
@@ -3564,9 +3564,9 @@ test('when the pane waits, both replies quote the engine\'s reason, and only the
     expect(reply).toContain('widening the terminal')
     expect(reply).not.toContain('is open')
   }
-  expect(tool).toContain('typing /pilot')
-  // The person has just typed /pilot, so the command's reply does not tell them to.
-  expect(command).not.toContain('/pilot')
+  expect(tool).toContain('typing /builder')
+  // The person has just typed /builder, so the command's reply does not tell them to.
+  expect(command).not.toContain('/builder')
 })
 
 test('calling the open_pane tool again answers the same as the first time', async ($, on) => {
@@ -3576,21 +3576,21 @@ test('calling the open_pane tool again answers the same as the first time', asyn
   const panes = fakePanes(on)
   await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
 
-  const first = await loose($)({ tool: 'mcp__pilot__open_pane' })
-  const second = await loose($)({ tool: 'mcp__pilot__open_pane' })
+  const first = await loose($)({ tool: 'mcp__builder__open_pane' })
+  const second = await loose($)({ tool: 'mcp__builder__open_pane' })
 
   expect(String(second.result)).toBe(String(first.result))
   expect(panes.opened).toHaveLength(2)
 })
 
-test('a subagent cannot open the pilot pane', async ($, on) => {
+test('a subagent cannot open the builder pane', async ($, on) => {
   mock.clock(on)
   mock.store(on)
   engine(on)
   const panes = fakePanes(on)
   await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
 
-  const ran = await loose($)({ tool: 'mcp__pilot__open_pane', agentId: 'agent-1' })
+  const ran = await loose($)({ tool: 'mcp__builder__open_pane', agentId: 'agent-1' })
 
   expect(String(ran.deny)).toContain('only the session')
   expect(panes.opened).toEqual([])
@@ -3611,10 +3611,10 @@ function engineAgents(on: On) {
 // Called after the test's other hooks, since it is the first call on `$`.
 async function liveBand($: Engine, on: On, props: object = {}) {
   on('ui.render', ($, e) => ($.ui.resolve(e) as unknown as { Text: (props: object) => never }).Text({ children: 'host line' }))
-  const band = await $.ui.mount({ plugin: 'pilot', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, ...props } as never })
+  const band = await $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, ...props } as never })
   return {
     band,
-    shown: async () => (await band.find({ key: 'pilot-line' }))?.text ?? '',
+    shown: async () => (await band.find({ key: 'builder-line' }))?.text ?? '',
     isHost: async () => (await band.find({ text: 'host line' })) !== undefined,
   }
 }
@@ -3624,7 +3624,7 @@ async function liveBand($: Engine, on: On, props: object = {}) {
 function writtenState(on: On) {
   const written = new Map<string, unknown>()
   on('state.set', ($, e, next) => {
-    if (e.plugin === 'pilot') written.set(e.key, e.value)
+    if (e.plugin === 'builder') written.set(e.key, e.value)
     return next(e)
   })
   return {
@@ -3668,15 +3668,15 @@ test('an agent the mod never saw spawn is counted and named once a turn starts, 
   await startOnly($)
 
   // Resumed with SendMessage: the engine lists it, and no spawn reached the mod.
-  listed.push({ id: 'agent-9', type: 'pilot:spec-reviewer', description: 'Review the spec', status: 'running' })
+  listed.push({ id: 'agent-9', type: 'builder:spec-reviewer', description: 'Review the spec', status: 'running' })
   await $.turn.start({ text: 'go on', turnId: 't1' } as never)
   await clock.settle()
-  expect(await line()).toBe('pilot: no pull request yet · 1 agent: spec-reviewer')
+  expect(await line()).toBe('builder: no pull request yet · 1 agent: spec-reviewer')
 
   listed[0]!.status = 'waiting'
   await $.turn.start({ text: 'go on', turnId: 't2' } as never)
   await clock.settle()
-  expect(await line()).toBe('pilot: no pull request yet · 1 agent: spec-reviewer')
+  expect(await line()).toBe('builder: no pull request yet · 1 agent: spec-reviewer')
 })
 
 test('an agent that finishes leaves the line at the next 5-second read, with no turn.complete and no redraw by hand', async ($, on) => {
@@ -3695,7 +3695,7 @@ test('an agent that finishes leaves the line at the next 5-second read, with no 
   listed.push({ id: 'agent-1', type: 'Explore', description: 'Look around', status: 'running' }, { id: 'agent-2', type: 'Plan', description: 'Plan it', status: 'running' })
   await $.turn.start({ text: 'go', turnId: 't1' } as never)
   await clock.settle()
-  expect(await shown()).toBe('pilot: no pull request yet · 2 agents: Explore, Plan')
+  expect(await shown()).toBe('builder: no pull request yet · 2 agents: Explore, Plan')
 
   // One finishes, and the engine drops the other while it still says running.
   listed[0]!.status = 'completed'
@@ -3726,7 +3726,7 @@ test('the line is shown with nothing watched while an agent runs, and hidden whe
   listed.push({ id: 'agent-1', type: 'general-purpose', description: 'Build it', status: 'running' })
   await $.agent.spawn({ subagentType: 'general-purpose', prompt: 'go', description: 'Build it' } as never).catch(() => undefined)
   await clock.advance(5000)
-  expect(await shown()).toBe('pilot: no pull request yet · 1 agent: general-purpose')
+  expect(await shown()).toBe('builder: no pull request yet · 1 agent: general-purpose')
 })
 
 test('an agent the mod sees spawn is on the line at the next second', async ($, on) => {
@@ -3745,7 +3745,7 @@ test('an agent the mod sees spawn is on the line at the next second', async ($, 
   listed.push({ id: 'agent-1', type: 'general-purpose', description: 'Build it', status: 'running' })
   await $.agent.spawn({ subagentType: 'general-purpose', prompt: 'go', description: 'Build it' } as never)
   await clock.advance(1000)
-  expect(await shown()).toBe('pilot: no pull request yet · 1 agent: general-purpose')
+  expect(await shown()).toBe('builder: no pull request yet · 1 agent: general-purpose')
 })
 
 test('the Stop hook\'s background work is named, a background subagent is not counted twice, and the next turn end without it clears it', async ($, on) => {
@@ -3759,14 +3759,14 @@ test('the Stop hook\'s background work is named, a background subagent is not co
 
   await $.classic.Stop({ stop_hook_active: false, background_tasks: [shellTask, agentTask] } as never)
   await clock.settle()
-  expect(await line()).toBe('pilot: no pull request yet · 1 background command')
+  expect(await line()).toBe('builder: no pull request yet · 1 background command')
 
   await $.classic.Stop({ stop_hook_active: false, background_tasks: [monitorTask, shellTask] } as never)
-  expect(await line()).toBe('pilot: no pull request yet · 2 background tasks')
+  expect(await line()).toBe('builder: no pull request yet · 2 background tasks')
 
   // A subagent's own Stop says nothing about the session's work.
   await $.classic.Stop({ stop_hook_active: false, background_tasks: [], agent_id: 'agent-1' } as never)
-  expect(await line()).toBe('pilot: no pull request yet · 2 background tasks')
+  expect(await line()).toBe('builder: no pull request yet · 2 background tasks')
 
   await $.classic.Stop({ stop_hook_active: false, background_tasks: [] } as never)
   expect(await line()).toBe('')
@@ -3794,13 +3794,13 @@ test('a subagent\'s end replaces the background work with the session-wide list 
 
   await $.classic.Stop({ stop_hook_active: false, background_tasks: [shellTask] } as never)
   await clock.settle()
-  expect(await line()).toBe('pilot: no pull request yet · 1 background command')
+  expect(await line()).toBe('builder: no pull request yet · 1 background command')
 
   // An older engine sends no list, and a field that is not a list says nothing either.
   await subagentStop($, {})
-  expect(await line()).toBe('pilot: no pull request yet · 1 background command')
+  expect(await line()).toBe('builder: no pull request yet · 1 background command')
   await subagentStop($, { background_tasks: 'not a list' })
-  expect(await line()).toBe('pilot: no pull request yet · 1 background command')
+  expect(await line()).toBe('builder: no pull request yet · 1 background command')
 
   await subagentStop($, { background_tasks: [] })
   expect(await line()).toBe('')
@@ -3808,7 +3808,7 @@ test('a subagent\'s end replaces the background work with the session-wide list 
   // The list is filtered as the Stop's is, so a background subagent is not counted twice.
   await subagentStop($, { background_tasks: [monitorTask, shellTask, agentTask] })
   await clock.settle()
-  expect(await line()).toBe('pilot: no pull request yet · 2 background tasks')
+  expect(await line()).toBe('builder: no pull request yet · 2 background tasks')
 })
 
 // The origin the engine stamps on a background task's notification row.
@@ -3829,14 +3829,14 @@ function rowHost(on: On) {
 
 // Mounts a transcript row as the engine draws a user message.
 async function transcriptRow($: Engine, props: { origin: object; task?: object }) {
-  return $.ui.mount({ plugin: 'pilot', surface: 'terminal', component: 'UserMessage', props: { text: 'the task ended', isExpanded: true, ...props } as never })
+  return $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'UserMessage', props: { text: 'the task ended', isExpanded: true, ...props } as never })
 }
 
 // Counts the mod's writes of its background list.
 function backgroundWrites(on: On) {
   const writes = { count: 0 }
   on('state.set', ($, e, next) => {
-    if (e.plugin === 'pilot' && e.key === 'background') writes.count += 1
+    if (e.plugin === 'builder' && e.key === 'background') writes.count += 1
     return next(e)
   })
   return writes
@@ -3855,7 +3855,7 @@ for (const status of ['completed', 'failed', 'killed']) {
     await startOnly($)
     await $.classic.Stop({ stop_hook_active: false, background_tasks: [shellTask] } as never)
     await clock.settle()
-    expect(await line()).toBe('pilot: no pull request yet · 1 background command')
+    expect(await line()).toBe('builder: no pull request yet · 1 background command')
     writes.count = 0
 
     // Mounting the row is its first draw.
@@ -3900,7 +3900,7 @@ for (const [what, props] of leftAlone) {
     await clock.settle()
 
     expect(await notice.find({ text: 'the task ended' })).toBeDefined()
-    expect(await line()).toBe('pilot: no pull request yet · 1 background command')
+    expect(await line()).toBe('builder: no pull request yet · 1 background command')
     expect(writes.count).toBe(0)
   })
 }
@@ -3951,7 +3951,7 @@ for (const fault of ['get', 'set'] as const) {
     expect(await notice.find({ text: 'the task ended' })).toBeDefined()
     expect('reads' in refusal ? refusal.reads : refusal.writes).toBe(0)
     // Nothing was removed, so the line still names the command until the next turn end.
-    expect(await line()).toBe('pilot: no pull request yet · 1 background command')
+    expect(await line()).toBe('builder: no pull request yet · 1 background command')
   })
 }
 
@@ -3959,7 +3959,7 @@ for (const fault of ['get', 'set'] as const) {
 function backgroundReads(on: On) {
   const reads = { count: 0 }
   on('state.get', ($, e, next) => {
-    if (e.plugin === 'pilot' && e.key === 'background') reads.count += 1
+    if (e.plugin === 'builder' && e.key === 'background') reads.count += 1
     return next(e)
   })
   return reads
@@ -4012,7 +4012,7 @@ test('a task that a later subagent\'s list puts back after its notification remo
 
   await subagentStop($, { background_tasks: [shellTask] })
   await clock.settle()
-  expect(await line()).toBe('pilot: no pull request yet · 1 background command')
+  expect(await line()).toBe('builder: no pull request yet · 1 background command')
   await notice.redraw()
   await clock.settle()
 
@@ -4031,7 +4031,7 @@ test('a notification row drawn before this module has written or read the list, 
   const line = await abovePrompt($, on)
   await startOnly($)
   await clock.settle()
-  expect(await line()).toBe('pilot: no pull request yet · 1 background command')
+  expect(await line()).toBe('builder: no pull request yet · 1 background command')
 
   const notice = await transcriptRow($, { origin: NOTIFIED, task: { id: shellTask.id, status: 'completed' } })
   await clock.settle()
@@ -4063,7 +4063,7 @@ test('a turn end that replaces the list while a removal waits on a late read is 
   await subagentStop($, { background_tasks: [monitorTask] })
   late.release()
   await clock.settle()
-  expect(await line()).toBe('pilot: no pull request yet · 1 background task')
+  expect(await line()).toBe('builder: no pull request yet · 1 background task')
 
   // The monitor's own row still takes it off.
   await transcriptRow($, { origin: NOTIFIED, task: { id: monitorTask.id, status: 'completed' } })
@@ -4118,7 +4118,7 @@ test('ids that a removal\'s late answer left behind after a subagent\'s end are 
   await subagentStop($, { background_tasks: [monitorTask] })
   late.release()
   await clock.settle()
-  expect(await line()).toBe('pilot: no pull request yet · 1 background task')
+  expect(await line()).toBe('builder: no pull request yet · 1 background task')
 
   await transcriptRow($, { origin: NOTIFIED, task: { id: monitorTask.id, status: 'completed' } })
   await clock.advance(2_000)
@@ -4184,7 +4184,7 @@ test('a tick whose read of the background list a turn end\'s write overtakes nei
   redraws.length = 0
   await clock.advance(1000)
   expect(redraws).toContain('ui.render')
-  expect(await line()).toBe('pilot: no pull request yet · 1 background task')
+  expect(await line()).toBe('builder: no pull request yet · 1 background task')
   await transcriptRow($, { origin: NOTIFIED, task: { id: monitorTask.id, status: 'completed' } })
   await clock.settle()
   expect(await line()).toBe('')
@@ -4289,7 +4289,7 @@ test('the band mounted with the width it is given fits the line to it', async ($
   sessionTurns(on)
   const { band, shown } = await liveBand($, on, { bodyColumns: 50 })
   await startOnly($)
-  for (const type of ['Explore', 'pilot:spec-reviewer', 'pilot:adversarial-reviewer', 'pilot:security-reviewer', 'Plan']) {
+  for (const type of ['Explore', 'builder:spec-reviewer', 'builder:adversarial-reviewer', 'builder:security-reviewer', 'Plan']) {
     listed.push({ id: `agent-${listed.length + 1}`, type, description: type, status: 'running' })
   }
   await $.turn.start({ text: 'go', turnId: 't1' } as never)
@@ -4297,12 +4297,12 @@ test('the band mounted with the width it is given fits the line to it', async ($
   await band.redraw()
 
   const text = await shown()
-  expect(text.startsWith('pilot: no pull request yet · 5 agents:')).toBe(true)
+  expect(text.startsWith('builder: no pull request yet · 5 agents:')).toBe(true)
   expect(text.length).toBeLessThanOrEqual(50)
   expect(text.endsWith('…')).toBe(true)
 })
 
-test('pressing the line opens the pilot pane', async ($, on) => {
+test('pressing the line opens the builder pane', async ($, on) => {
   const clock = mock.clock(on)
   mock.store(on)
   engine(on)
@@ -4317,9 +4317,9 @@ test('pressing the line opens the pilot pane', async ($, on) => {
   await clock.settle()
   await band.redraw()
 
-  await band.press({ key: 'pilot-line' })
+  await band.press({ key: 'builder-line' })
 
-  expect(panes.opened).toEqual([{ id: 'pilot', title: 'pilot' }])
+  expect(panes.opened).toEqual([{ id: 'builder', title: 'builder' }])
 })
 
 test('the session\'s own call is named once it has run 10 seconds, with no keystroke, and not before', async ($, on) => {
@@ -4338,7 +4338,7 @@ test('the session\'s own call is named once it has run 10 seconds, with no keyst
   await clock.advance(9999)
   expect(await shown()).toBe('')
   await clock.advance(1)
-  expect(await shown()).toBe('pilot: no pull request yet · running: Run the gates (10s)')
+  expect(await shown()).toBe('builder: no pull request yet · running: Run the gates (10s)')
 
   tools.get('u1')!.finish()
   await call
@@ -4361,14 +4361,14 @@ test('a call that throws is no longer recorded, and of two overlapping calls the
   await clock.advance(2000)
   const second = loose($)({ tool: 'Grep', tool_use_id: 'u2', pattern: 'x' })
   await clock.advance(10_000)
-  expect(await line()).toBe('pilot: no pull request yet · running: npm test (12s)')
+  expect(await line()).toBe('builder: no pull request yet · running: npm test (12s)')
   expect(idsOf(state.of('calls', []))).toEqual(['u1', 'u2'])
 
   tools.get('u1')!.fail()
   await first
   await clock.settle()
   expect(idsOf(state.of('calls', []))).toEqual(['u2'])
-  expect(await line()).toBe('pilot: no pull request yet · running: Grep (10s)')
+  expect(await line()).toBe('builder: no pull request yet · running: Grep (10s)')
 
   tools.get('u2')!.finish()
   await second
@@ -4449,7 +4449,7 @@ test('a gh pr merge in the middle of a turn is followed by looks 10 and 40 secon
   world.pr = openPullRequest({ state: 'MERGED' })
   await loose($)({ tool: 'Bash', command: 'gh pr merge 7 --merge --match-head-commit cccccccc', description: 'Merge the pull request' })
   await clock.advance(10_000)
-  expect(await line()).toBe('pilot: #7 merged · checks passed · not polling')
+  expect(await line()).toBe('builder: #7 merged · checks passed · not polling')
   await clock.advance(30_000)
 
   expect(state.wakesFrom('after-command')).toEqual([at + 10_000, at + 40_000])
@@ -4528,16 +4528,16 @@ test('a look whose read lands after a newer look\'s result was stored is dropped
   // The older look reads the pull request open and is held there.
   let release = () => {}
   world.hold = new Promise<void>(resolve => { release = resolve })
-  const older = $.command.run({ command: 'pilot', args: 'poll' } as never)
+  const older = $.command.run({ command: 'builder', args: 'poll' } as never)
   await clock.settle()
   // A newer look reads it merged and stores that.
   world.pr = openPullRequest({ state: 'MERGED' })
-  await $.command.run({ command: 'pilot', args: 'poll' } as never)
+  await $.command.run({ command: 'builder', args: 'poll' } as never)
   release()
   await older
   await clock.settle()
 
-  expect(await line()).toBe('pilot: #7 merged · checks passed · not polling')
+  expect(await line()).toBe('builder: #7 merged · checks passed · not polling')
 })
 
 test('the look after posting a review that a newer look overtakes still records the review as told, so no poll hands it back', async ($, on) => {
@@ -4558,10 +4558,10 @@ test('the look after posting a review that a newer look overtakes still records 
   await watch($)
   await clock.settle()
 
-  const post = loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
+  const post = loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
   await clock.settle()
   // A newer look, which only observes, reads the review and stores it first.
-  await $.command.run({ command: 'pilot', args: 'poll' } as never)
+  await $.command.run({ command: 'builder', args: 'poll' } as never)
   release()
   await post
   await clock.advance(10 * 60_000)
@@ -4587,17 +4587,17 @@ test('the look after posting a review still records the review as told when two 
   await watch($)
   await clock.settle()
 
-  const post = loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
+  const post = loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
   await clock.settle()
   // A newer look, which only observes, reads the review and stores it first.
-  await $.command.run({ command: 'pilot', args: 'poll' } as never)
+  await $.command.run({ command: 'builder', args: 'poll' } as never)
   // The next read of the pull request is held too, whichever look makes it,
   // while a third look, which only observes, stores the review once more.
   const releaseFirst = release
   world.hold = new Promise<void>(resolve => { release = resolve })
   releaseFirst()
   await clock.settle()
-  const third = $.command.run({ command: 'pilot', args: 'poll' } as never)
+  const third = $.command.run({ command: 'builder', args: 'poll' } as never)
   await clock.settle()
   release()
   await third
@@ -4629,7 +4629,7 @@ test('a held change is still handed over at the end of the turn when a newer loo
   world.hold = new Promise<void>(resolve => { release = resolve })
   await turnEnds($, 't1')
   await clock.settle()
-  await $.command.run({ command: 'pilot', args: 'poll' } as never)
+  await $.command.run({ command: 'builder', args: 'poll' } as never)
   release()
   await clock.settle()
 
@@ -4658,7 +4658,7 @@ test('the desktop app\'s CI event still carries the pull request\'s state when a
   world.hold = new Promise<void>(resolve => { release = resolve })
   const event = $.prompt.submit({ text: CI_EVENT, origin: { kind: 'sdk' } } as never)
   await clock.settle()
-  await $.command.run({ command: 'pilot', args: 'poll' } as never)
+  await $.command.run({ command: 'builder', args: 'poll' } as never)
   release()
   await event
   await clock.advance(10 * 60_000)
@@ -4749,7 +4749,7 @@ test('an overtaken poll hands over the newer stored read: a rerun that passed, n
   await clock.advance(90_000)
   // The rerun passes, and a newer look, which only observes, stores that.
   world.pr = testsRun('SUCCESS', RUN_3)
-  await $.command.run({ command: 'pilot', args: 'poll' } as never)
+  await $.command.run({ command: 'builder', args: 'poll' } as never)
   release()
   await clock.settle()
 
@@ -4778,7 +4778,7 @@ test('an overtaken poll whose newer stored read is what the session was told sen
   world.hold = new Promise<void>(resolve => { release = resolve })
   await clock.advance(10 * 60_000)
   world.pr = testsRun('SUCCESS', RUN_1)
-  await $.command.run({ command: 'pilot', args: 'poll' } as never)
+  await $.command.run({ command: 'builder', args: 'poll' } as never)
   release()
   await clock.settle()
   await clock.advance(10 * 60_000)
@@ -4810,7 +4810,7 @@ test('the look after posting a review, overtaken by the desktop app\'s CI event,
   await clock.settle()
 
   await $.turn.start({ text: 'review it', turnId: 't1' } as never)
-  const post = loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
+  const post = loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
   await clock.settle()
   // The checks fail, and the CI event's look reads the failure, passes it
   // in the event's context and records it as told.
@@ -4834,7 +4834,7 @@ function holdBusyRead(on: On, world: ReturnType<typeof fakeGitHub>) {
   on('state.get', async ($, e, next) => {
     const answer = await next(e)
     const isAfterRead = world.calls.slice(gate.mark).some(call => call.startsWith('gh pr view 7'))
-    if (gate.isArmed && e.plugin === 'pilot' && e.key === 'busy' && isAfterRead) {
+    if (gate.isArmed && e.plugin === 'builder' && e.key === 'busy' && isAfterRead) {
       gate.isArmed = false
       await new Promise<void>(resolve => { gate.release = resolve })
     }
@@ -4948,12 +4948,12 @@ test('a new head whose handover was held polls at the ordinary interval, and a l
   // The poll finds the new head while the turn runs, and holds it.
   world.pr = pushedD()
   await clock.advance(10 * 60_000)
-  expect(await line()).toBe('pilot: #7 open · checks passed · new head, handing over in 10m')
+  expect(await line()).toBe('builder: #7 open · checks passed · new head, handing over in 10m')
 
   world.pr = openPullRequest({ headRefOid: A, commits: [{ oid: C }, { oid: D }, { oid: A }] })
-  await $.command.run({ command: 'pilot', args: 'poll' } as never)
+  await $.command.run({ command: 'builder', args: 'poll' } as never)
   await clock.settle()
-  expect(await line()).toBe('pilot: #7 open · checks passed · new head, handing over in 2m')
+  expect(await line()).toBe('builder: #7 open · checks passed · new head, handing over in 2m')
 })
 
 test('a new head whose handover was refused polls at the ordinary interval', async ($, on) => {
@@ -4970,7 +4970,7 @@ test('a new head whose handover was refused polls at the ordinary interval', asy
   await clock.advance(10 * 60_000)
 
   expect(record.prompts).toEqual([])
-  expect(await line()).toBe('pilot: #7 open · checks passed · new head, handing over in 10m')
+  expect(await line()).toBe('builder: #7 open · checks passed · new head, handing over in 10m')
 })
 
 test('a turn-end read that matches what the session was told, with no prompt submitted, still arms the looks after the turn end', async ($, on) => {
@@ -5011,11 +5011,11 @@ test('a call that runs on past 10 seconds has its time kept current every second
 
   const call = loose($)({ tool: 'Bash', tool_use_id: 'u1', command: 'npm test' })
   await clock.advance(10_000)
-  expect(await shown()).toBe('pilot: no pull request yet · running: npm test (10s)')
+  expect(await shown()).toBe('builder: no pull request yet · running: npm test (10s)')
   await clock.advance(1000)
-  expect(await shown()).toBe('pilot: no pull request yet · running: npm test (11s)')
+  expect(await shown()).toBe('builder: no pull request yet · running: npm test (11s)')
   await clock.advance(4000)
-  expect(await shown()).toBe('pilot: no pull request yet · running: npm test (15s)')
+  expect(await shown()).toBe('builder: no pull request yet · running: npm test (15s)')
 
   tools.get('u1')!.finish()
   await call
@@ -5034,11 +5034,11 @@ test('background work reported at a turn end keeps the line live, so an agent th
 
   await $.classic.Stop({ stop_hook_active: false, background_tasks: [shellTask] } as never)
   await clock.settle()
-  expect(await shown()).toBe('pilot: no pull request yet · 1 background command')
+  expect(await shown()).toBe('builder: no pull request yet · 1 background command')
   listed.push({ id: 'agent-1', type: 'Explore', description: 'Look', status: 'running' })
   await clock.advance(5000)
 
-  expect(await shown()).toBe('pilot: no pull request yet · 1 agent: Explore · 1 background command')
+  expect(await shown()).toBe('builder: no pull request yet · 1 agent: Explore · 1 background command')
 })
 
 test('a subagent that finishes records how it ended, on a card of its own when the mod never saw it start', async ($, on) => {
@@ -5053,7 +5053,7 @@ test('a subagent that finishes records how it ended, on a card of its own when t
   await $.turn.complete({ answer: 'Findings.\nLENS-END security cccccccc findings=0', durationMs: 3000, isAborted: false, turnId: 'a1', reason: 'answer', agentId: 'agent-5' } as never)
   await clock.settle()
   // Finished agents are folded under one button until it is pressed.
-  await pane.press({ key: 'pilot-fold' })
+  await pane.press({ key: 'builder-fold' })
 
   const drawn = await drawnOf(pane)
   expect(drawn).toContain('completed agent')
@@ -5158,7 +5158,7 @@ test('a poll that read no change hands over nothing for a read the desktop app\'
 test('a poll that read no change hands over nothing while the desktop app\'s CI event has not yet told its read, even after another look reads the same failure', async ($, on) => {
   const clock = mock.clock(on)
   // The poll's read of the told record waits, so the CI event's look and
-  // then /pilot poll can store their reads in that moment.
+  // then /builder poll can store their reads in that moment.
   const { stored, holdNext } = storeHoldingTold(on)
   engine(on)
   const world = fakeGitHub(on)
@@ -5177,9 +5177,9 @@ test('a poll that read no change hands over nothing while the desktop app\'s CI 
   world.pr = failing()
   const event = $.prompt.submit({ text: CI_EVENT, origin: { kind: 'sdk' } } as never)
   await clock.settle()
-  // /pilot poll, a look that only observes and leaves its read for a
+  // /builder poll, a look that only observes and leaves its read for a
   // handover to tell, reads the same failure after the event's look.
-  await $.command.run({ command: 'pilot', args: 'poll' } as never)
+  await $.command.run({ command: 'builder', args: 'poll' } as never)
   release()
   await clock.settle()
   held.release()
@@ -5216,7 +5216,7 @@ test('a poll that read no change hands over nothing for a read the look after po
   // The review is posted, and the look after the post stores it and waits
   // before it records it as told.
   const releaseSeen = holdNext('get', 'seen:')
-  const post = loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
+  const post = loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
   await clock.settle()
   releaseTold()
   await clock.settle()
@@ -5252,11 +5252,11 @@ test('a poll that read no change hands over nothing while the look after posting
   // The review is posted, and the look after the post stores it and waits
   // before it records it as told.
   const releaseSeen = holdNext('get', 'seen:')
-  const post = loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
+  const post = loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
   await clock.settle()
-  // /pilot poll, a look that only observes and leaves its read for a
+  // /builder poll, a look that only observes and leaves its read for a
   // handover to tell, reads the same review after the post's look.
-  await $.command.run({ command: 'pilot', args: 'poll' } as never)
+  await $.command.run({ command: 'builder', args: 'poll' } as never)
   releaseTold()
   await clock.settle()
   releaseSeen()
@@ -5267,7 +5267,7 @@ test('a poll that read no change hands over nothing while the look after posting
   expect(prompts.filter(text => text.includes('pull request #7 changed'))).toEqual([])
 })
 
-test('a poll that read no change hands over nothing while the desktop app\'s CI event, overtaken by /pilot poll, has not yet told the failure it read', async ($, on) => {
+test('a poll that read no change hands over nothing while the desktop app\'s CI event, overtaken by /builder poll, has not yet told the failure it read', async ($, on) => {
   const clock = mock.clock(on)
   // The poll's read of the told record waits, so the other looks can run in
   // that moment.
@@ -5291,9 +5291,9 @@ test('a poll that read no change hands over nothing while the desktop app\'s CI 
   world.hold = new Promise<void>(resolve => { releaseCiRead = resolve })
   const event = $.prompt.submit({ text: CI_EVENT, origin: { kind: 'sdk' } } as never)
   await clock.settle()
-  // /pilot poll, a look that only observes, reads the failure and stores it
+  // /builder poll, a look that only observes, reads the failure and stores it
   // first.
-  await $.command.run({ command: 'pilot', args: 'poll' } as never)
+  await $.command.run({ command: 'builder', args: 'poll' } as never)
   await clock.settle()
   // The CI event's look comes back overtaken, goes on with its read, and its
   // prompt waits.
@@ -5314,7 +5314,7 @@ test('a poll that read no change hands over nothing while the desktop app\'s CI 
   expect(toldRecord.checks.map(check => [check.name, check.state])).toEqual([['tests', 'failed']])
 })
 
-test('a poll that read no change hands over nothing while the look after posting a review, overtaken by /pilot poll, has not yet told the review it read', async ($, on) => {
+test('a poll that read no change hands over nothing while the look after posting a review, overtaken by /builder poll, has not yet told the review it read', async ($, on) => {
   const clock = mock.clock(on)
   // The poll's read of the told record waits, and so does the look after the
   // post when it reads the seen time, between going on with its read and
@@ -5339,11 +5339,11 @@ test('a poll that read no change hands over nothing while the look after posting
   const releaseTold = holdNext('get')
   await clock.advance(10 * 60_000)
   await clock.settle()
-  const post = loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
+  const post = loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
   await clock.settle()
-  // /pilot poll, a look that only observes, reads the review and stores it
+  // /builder poll, a look that only observes, reads the review and stores it
   // first.
-  await $.command.run({ command: 'pilot', args: 'poll' } as never)
+  await $.command.run({ command: 'builder', args: 'poll' } as never)
   await clock.settle()
   // The look after the post comes back overtaken, goes on with its read, and
   // waits before it records it as told.
@@ -5380,11 +5380,11 @@ test('a poll whose read of the told record is older than the CI event\'s record 
   await clock.advance(10 * 60_000)
   await clock.settle()
   // The checks fail, the CI event's look stores the failure while the
-  // event's own prompt waits, and /pilot poll reads the same failure.
+  // event's own prompt waits, and /builder poll reads the same failure.
   world.pr = failing()
   const event = $.prompt.submit({ text: CI_EVENT, origin: { kind: 'sdk' } } as never)
   await clock.settle()
-  await $.command.run({ command: 'pilot', args: 'poll' } as never)
+  await $.command.run({ command: 'builder', args: 'poll' } as never)
   // The event's prompt goes on and the event records the failure as told,
   // all while the poll still waits on its read of the told record.
   held.release()
@@ -5420,11 +5420,11 @@ test('a poll whose read of the told record is older than the record the look aft
   await clock.advance(10 * 60_000)
   await clock.settle()
   // The review is posted, the look after the post stores it and waits before
-  // it records it as told, and /pilot poll reads the same review.
+  // it records it as told, and /builder poll reads the same review.
   const releaseSeen = holdNext('get', 'seen:')
-  const post = loose($)({ tool: 'mcp__pilot__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
+  const post = loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
   await clock.settle()
-  await $.command.run({ command: 'pilot', args: 'poll' } as never)
+  await $.command.run({ command: 'builder', args: 'poll' } as never)
   // The look after the post records the review as told, all while the poll
   // still waits on its read of the told record.
   releaseSeen()
@@ -5539,7 +5539,7 @@ test('a switch of pull requests while a told write for the old one waits leaves 
   // The session watches #8 while that write still waits. The switch is not
   // awaited yet, because its delete of #7's record queues behind the write.
   world.otherNumber = 8
-  const switching = loose($)({ tool: 'mcp__pilot__watch', number: 8 })
+  const switching = loose($)({ tool: 'mcp__builder__watch', number: 8 })
   await clock.settle()
   release()
   await switching
@@ -5565,7 +5565,7 @@ test('a poll under a new watch whose told record is still being written hands ov
   // record still says the checks passed.
   world.pr = failing()
   const release = holdNext('set')
-  const watching = loose($)({ tool: 'mcp__pilot__watch', number: 7 })
+  const watching = loose($)({ tool: 'mcp__builder__watch', number: 7 })
   await clock.settle()
   // The poll the first watch scheduled runs under the new watch meanwhile.
   await clock.advance(10 * 60_000)
@@ -5599,7 +5599,7 @@ test('a poll that began reading the told record while the watch tool\'s write wa
 
   world.pr = failing()
   const releaseWrite = holdNext('set')
-  const watching = loose($)({ tool: 'mcp__pilot__watch', number: 7 })
+  const watching = loose($)({ tool: 'mcp__builder__watch', number: 7 })
   await clock.settle()
   const releaseRead = holdNext('get')
   await clock.advance(10 * 60_000)
@@ -5629,7 +5629,7 @@ test('no stuck prompt comes while a told record is being written, and once the w
   // watch tool's write of the told record waits past the stuck prompt's time.
   await clock.advance(40 * 60_000)
   const release = holdNext('set')
-  const watching = loose($)({ tool: 'mcp__pilot__watch', number: 7 })
+  const watching = loose($)({ tool: 'mcp__builder__watch', number: 7 })
   await clock.settle()
   await clock.advance(10 * 60_000)
   expect(stuck()).toEqual([])
@@ -5665,8 +5665,8 @@ test('a told write that fails does not stop later handovers', async ($, on) => {
   expect((stored.get('prompted:session-1:o/r#7') as { checks: { state: string }[] }).checks.map(check => check.state)).toEqual(['failed'])
 })
 
-const PROGRESS = 'mcp__pilot__progress'
-const TITLE = 'ABC-123 pilot progress'
+const PROGRESS = 'mcp__builder__progress'
+const TITLE = 'ABC-123 builder progress'
 // A stage report as /implement makes it, under TITLE unless the case names another.
 const report = ($: Engine, stage: string, over: object = {}) => loose($)({ tool: PROGRESS, title: TITLE, stage, ...over })
 
@@ -5678,12 +5678,12 @@ const report = ($: Engine, stage: string, over: object = {}) => loose($)({ tool:
 // first call on `$`.
 async function progressBand($: Engine, on: On, surface: 'terminal' | 'desktop' = 'terminal', bodyColumns = 120) {
   on('ui.render', ($, e) => ($.ui.resolve(e) as unknown as { Text: (props: object) => never }).Text({ children: 'host line' }))
-  const band = await $.ui.mount({ plugin: 'pilot', surface, component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, bodyColumns } as never })
+  const band = await $.ui.mount({ plugin: 'builder', surface, component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, bodyColumns } as never })
   const textOf = (query: { key: string } | { type: string; text: RegExp }) => async () => {
     await band.redraw()
     return (await band.find(query))?.text ?? ''
   }
-  return { band, line: textOf({ key: 'pilot-line' }), bar: textOf({ type: 'Text', text: / of 9 · / }), agents: textOf({ key: 'pilot-agents' }) }
+  return { band, line: textOf({ key: 'builder-line' }), bar: textOf({ type: 'Text', text: / of 9 · / }), agents: textOf({ key: 'builder-agents' }) }
 }
 
 test('before open_pane and with nothing running there is no band; after it the line reads started and idle, and after a spec report the stage', async ($, on) => {
@@ -5697,17 +5697,17 @@ test('before open_pane and with nothing running there is no band; after it the l
   expect(await line()).toBe('')
   expect(await band.find({ text: 'host line' })).toBeDefined()
 
-  await loose($)({ tool: 'mcp__pilot__open_pane' })
-  expect(await line()).toBe('pilot: started · idle')
+  await loose($)({ tool: 'mcp__builder__open_pane' })
+  expect(await line()).toBe('builder: started · idle')
   expect(await bar()).toBe('')
 
   const ran = await report($, 'spec')
-  expect(String(ran.result)).toBe('pilot: spec (2 of 9)')
-  expect(await line()).toBe('pilot: spec · idle')
+  expect(String(ran.result)).toBe('builder: spec (2 of 9)')
+  expect(await line()).toBe('builder: spec · idle')
   expect(await bar()).toBe(`${TITLE} · spec · ██░░░░░░░░ 2 of 9 · 22%`)
 })
 
-test('/pilot starts pilot as the open_pane tool does, so the band shows from then on', async ($, on) => {
+test('/builder starts builder as the open_pane tool does, so the band shows from then on', async ($, on) => {
   mock.clock(on)
   mock.store(on)
   engine(on)
@@ -5718,8 +5718,8 @@ test('/pilot starts pilot as the open_pane tool does, so the band shows from the
   await startOnly($)
   expect(await line()).toBe('')
 
-  await $.command.run({ command: 'pilot', args: 'wakes' } as never)
-  expect(await line()).toBe('pilot: started · idle')
+  await $.command.run({ command: 'builder', args: 'wakes' } as never)
+  expect(await line()).toBe('builder: started · idle')
 })
 
 test('a reported stage sets the bar to the stages before it, an earlier one changes only the label, one outside the list is refused, and a new title resets the bar', async ($, on) => {
@@ -5730,18 +5730,18 @@ test('a reported stage sets the bar to the stages before it, an earlier one chan
   fakePanes(on)
   const { bar, line } = await progressBand($, on)
   await startOnly($)
-  await loose($)({ tool: 'mcp__pilot__open_pane' })
+  await loose($)({ tool: 'mcp__builder__open_pane' })
 
   await report($, 'review', { note: 'round 2' })
   expect(await bar()).toBe(`${TITLE} · review rounds · round 2 · ████████░░ 7 of 9 · 78%`)
   const back = await report($, 'build')
-  expect(String(back.result)).toBe('pilot: build (7 of 9)')
+  expect(String(back.result)).toBe('builder: build (7 of 9)')
   expect(await bar()).toBe(`${TITLE} · build · ████████░░ 7 of 9 · 78%`)
 
   const refused = await report($, 'deploy')
-  expect(String(refused.result)).toBe('pilot: deploy is not a stage of /implement; the stages are grounding, issue, spec, plan, build, verify, pr, review and merge.')
+  expect(String(refused.result)).toBe('builder: deploy is not a stage of /implement; the stages are grounding, issue, spec, plan, build, verify, pr, review and merge.')
   expect(await bar()).toBe(`${TITLE} · build · ████████░░ 7 of 9 · 78%`)
-  expect(await line()).toBe('pilot: build · idle')
+  expect(await line()).toBe('builder: build · idle')
 
   await clock.advance(1000)
   await report($, 'issue', { title: 'ABC-300 the next issue' })
@@ -5756,7 +5756,7 @@ test('a started mark and a stage an older session left draw the band, and a malf
   const seeded = { title: TITLE, stage: 'plan', furthest: 'build', note: '', since: 1, autoOpened: true }
   olderBuildState(on, { started: true, progress: seeded })
   const { line, bar } = await progressBand($, on)
-  expect(await line()).toBe('pilot: plan tournament · idle')
+  expect(await line()).toBe('builder: plan tournament · idle')
   expect(await bar()).toBe(`${TITLE} · plan tournament · ████░░░░░░ 4 of 9 · 44%`)
 })
 
@@ -5767,7 +5767,7 @@ test('a progress value in another shape draws as no stage reported, without thro
   fakeGitHub(on)
   olderBuildState(on, { started: true, progress: { title: TITLE, stage: 'deploy', furthest: 'deploy', note: '', since: 1 } })
   const { line, bar } = await progressBand($, on)
-  expect(await line()).toBe('pilot: started · idle')
+  expect(await line()).toBe('builder: started · idle')
   expect(await bar()).toBe('')
 })
 
@@ -5778,10 +5778,10 @@ test('on the desktop the band is one drawing and two buttons with no text rows, 
   fakeGitHub(on)
   fakePanes(on)
   on('ui.render', ($, e) => ($.ui.resolve(e) as unknown as { Text: (props: object) => never }).Text({ children: 'host line' }))
-  const desktop = await $.ui.mount({ plugin: 'pilot', surface: 'desktop', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, bodyColumns: 100 } as never })
-  const terminal = await $.ui.mount({ plugin: 'pilot', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, bodyColumns: 100 } as never })
+  const desktop = await $.ui.mount({ plugin: 'builder', surface: 'desktop', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, bodyColumns: 100 } as never })
+  const terminal = await $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, bodyColumns: 100 } as never })
   await startOnly($)
-  await loose($)({ tool: 'mcp__pilot__open_pane' })
+  await loose($)({ tool: 'mcp__builder__open_pane' })
   await report($, 'spec', { title: 'a<&>"b\'c' })
   await desktop.redraw()
   await terminal.redraw()
@@ -5791,7 +5791,7 @@ test('on the desktop the band is one drawing and two buttons with no text rows, 
   expect(drawings).toHaveLength(1)
   expect(String(drawings[0]!.props.source)).toContain('a&lt;&amp;&gt;&quot;b&apos;c')
   expect(String(drawings[0]!.props.source)).not.toContain('a<&>')
-  expect((await desktop.findAll({ type: 'Button' })).map(button => button.key)).toEqual(['pilot-agents', 'pilot-line'])
+  expect((await desktop.findAll({ type: 'Button' })).map(button => button.key)).toEqual(['builder-agents', 'builder-line'])
 
   expect(await terminal.findAll({ type: 'Svg' })).toHaveLength(0)
   const row = (await terminal.find({ type: 'Text', text: / of 9 · / }))?.text ?? ''
@@ -5809,7 +5809,7 @@ test('the agent-count button counts the running agents and opens the pane, also 
   const listed = engineAgents(on)
   const { band, agents } = await progressBand($, on)
   await startOnly($)
-  await loose($)({ tool: 'mcp__pilot__open_pane' })
+  await loose($)({ tool: 'mcp__builder__open_pane' })
   await report($, 'spec')
   listed.push({ id: 'agent-1', type: 'Explore', description: 'Look', status: 'running' })
   await $.turn.start({ text: 'go', turnId: 't1' } as never)
@@ -5823,23 +5823,23 @@ test('the agent-count button counts the running agents and opens the pane, also 
   // The person closes the pane open_pane opened.
   panes.listed = []
   panes.opened = []
-  await band.press({ key: 'pilot-agents' })
-  expect(panes.opened).toEqual([{ id: 'pilot', title: 'pilot' }])
-  await band.press({ key: 'pilot-agents' })
-  expect(panes.closed).toEqual(['pilot'])
+  await band.press({ key: 'builder-agents' })
+  expect(panes.opened).toEqual([{ id: 'builder', title: 'builder' }])
+  await band.press({ key: 'builder-agents' })
+  expect(panes.closed).toEqual(['builder'])
   expect(panes.listed).toEqual([])
 
-  await band.press({ key: 'pilot-line' })
-  await band.press({ key: 'pilot-line' })
+  await band.press({ key: 'builder-line' })
+  await band.press({ key: 'builder-line' })
   expect(panes.opened).toHaveLength(3)
-  expect(panes.closed).toEqual(['pilot'])
+  expect(panes.closed).toEqual(['builder'])
 
   // A list of panes the engine refuses counts as the pane being closed, so
   // the agent-count button opens it rather than doing nothing.
   panes.isRefusing = true
-  await band.press({ key: 'pilot-agents' })
+  await band.press({ key: 'builder-agents' })
   expect(panes.opened).toHaveLength(4)
-  expect(panes.closed).toEqual(['pilot'])
+  expect(panes.closed).toEqual(['builder'])
 })
 
 test('the pane opens on its own at the first report of each title, once, and not when it is already open', async ($, on) => {
@@ -5852,7 +5852,7 @@ test('the pane opens on its own at the first report of each title, once, and not
 
   await report($, 'grounding')
   await report($, 'issue')
-  expect(panes.opened).toEqual([{ id: 'pilot', title: 'pilot' }])
+  expect(panes.opened).toEqual([{ id: 'builder', title: 'builder' }])
 
   // Closed by the person, the pane stays closed for the same title.
   panes.listed = []
@@ -5878,7 +5878,7 @@ test('the automatic opening says nothing when the engine refuses it, and the rep
   await startOnly($)
 
   const ran = await report($, 'spec')
-  expect(String(ran.result)).toBe('pilot: spec (2 of 9)')
+  expect(String(ran.result)).toBe('builder: spec (2 of 9)')
 })
 
 test('a subagent cannot report progress, and nothing is recorded', async ($, on) => {
@@ -5917,20 +5917,20 @@ test('a merged pull request reads nine of nine and merged on both rows, and a ne
   fakePanes(on)
   const { bar, line } = await progressBand($, on)
   await startOnly($)
-  await loose($)({ tool: 'mcp__pilot__open_pane' })
+  await loose($)({ tool: 'mcp__builder__open_pane' })
   await report($, 'review')
-  await loose($)({ tool: 'mcp__pilot__watch', number: 7 })
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
   expect(await bar()).toContain('7 of 9 · 78%')
 
   world.pr = openPullRequest({ state: 'MERGED' })
   await clock.advance(10 * 60_000)
   expect(await bar()).toBe(`${TITLE} · merged · ██████████ 9 of 9 · 100%`)
-  expect(await line()).toBe('pilot: #7 merged · checks passed · not polling')
+  expect(await line()).toBe('builder: #7 merged · checks passed · not polling')
 
   await clock.advance(1000)
   await report($, 'grounding', { title: 'ABC-300 the next issue' })
   expect(await bar()).toBe('ABC-300 the next issue · grounding · ░░░░░░░░░░ 0 of 9 · 0%')
-  expect(await line()).toBe('pilot: #7 merged · checks passed · not polling')
+  expect(await line()).toBe('builder: #7 merged · checks passed · not polling')
 })
 
 test('a pull request closed without merging keeps the count and reads closed, and both rows stay', async ($, on) => {
@@ -5941,14 +5941,14 @@ test('a pull request closed without merging keeps the count and reads closed, an
   fakePanes(on)
   const { bar, line } = await progressBand($, on)
   await startOnly($)
-  await loose($)({ tool: 'mcp__pilot__open_pane' })
+  await loose($)({ tool: 'mcp__builder__open_pane' })
   await report($, 'review')
-  await loose($)({ tool: 'mcp__pilot__watch', number: 7 })
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
 
   world.pr = openPullRequest({ state: 'CLOSED' })
   await clock.advance(10 * 60_000)
   expect(await bar()).toBe(`${TITLE} · closed · ████████░░ 7 of 9 · 78%`)
-  expect(await line()).toBe('pilot: #7 closed · checks passed · not polling')
+  expect(await line()).toBe('builder: #7 closed · checks passed · not polling')
 })
 
 // The engine beneath the mod's agent and turn hooks: each spawn is answered
@@ -5974,7 +5974,7 @@ async function finish($: Engine, listed: { id: string; status: string }[], id: s
   await $.turn.complete({ answer, durationMs: 4000, isAborted: false, turnId: `t-${id}`, reason: 'answer', agentId: id } as never)
 }
 const paneOn = ($: Engine, surface: 'terminal' | 'desktop' = 'terminal', bodyColumns = 120) =>
-  $.ui.mount({ plugin: 'pilot', surface, component: 'Pane', requestId: 'pilot', props: { bodyColumns } as never })
+  $.ui.mount({ plugin: 'builder', surface, component: 'Pane', requestId: 'builder', props: { bodyColumns } as never })
 // The planned rows the terminal pane draws, by the type each names.
 async function plannedIn(pane: Awaited<ReturnType<typeof paneOn>>) {
   await pane.redraw()
@@ -5991,10 +5991,10 @@ test('on the desktop the pane\'s work header and agent rows are drawings and no 
   const desktop = await paneOn($, 'desktop', 100)
   const terminal = await paneOn($, 'terminal', 100)
   await startOnly($)
-  await loose($)({ tool: 'mcp__pilot__open_pane' })
+  await loose($)({ tool: 'mcp__builder__open_pane' })
   await report($, 'pr')
-  await loose($)({ tool: 'mcp__pilot__watch', number: 7 })
-  await spawn($, 'pilot:security-reviewer', 'DESCRIPTION-MARKER <review>')
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await spawn($, 'builder:security-reviewer', 'DESCRIPTION-MARKER <review>')
   await clock.settle()
   await desktop.redraw()
   await terminal.redraw()
@@ -6028,13 +6028,13 @@ test('finished agents are folded under one button that unfolds and folds them, a
   await clock.settle()
   await pane.redraw()
 
-  expect((await pane.find({ key: 'pilot-fold' }))?.text).toBe('Finished · 1')
+  expect((await pane.find({ key: 'builder-fold' }))?.text).toBe('Finished · 1')
   expect(await pane.find({ type: 'Text', text: 'running Plan · plan the change' })).toBeDefined()
   expect(await pane.find({ type: 'Text', text: 'map the hooks' })).toBeUndefined()
 
-  await pane.press({ key: 'pilot-fold' })
+  await pane.press({ key: 'builder-fold' })
   expect(await pane.find({ type: 'Text', text: 'completed Explore · map the hooks · Opus 5.5 · 4s · Mapped.' })).toBeDefined()
-  await pane.press({ key: 'pilot-fold' })
+  await pane.press({ key: 'builder-fold' })
   expect(await pane.find({ type: 'Text', text: 'map the hooks' })).toBeUndefined()
 })
 
@@ -6050,13 +6050,13 @@ test('a package call plans the four focused reviewers, each leaves as it starts,
   await watch($)
   expect(await plannedIn(pane)).toEqual([])
 
-  await loose($)({ tool: 'mcp__pilot__package', issue: 'Do it.' })
+  await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
   const focused = ['security-reviewer', 'maintainability-reviewer', 'performance-reviewer', 'data-reviewer']
   expect(await plannedIn(pane)).toEqual(focused)
 
-  await spawn($, 'pilot:security-reviewer')
+  await spawn($, 'builder:security-reviewer')
   expect(await plannedIn(pane)).toEqual(focused.slice(1))
-  for (const type of focused.slice(1)) await spawn($, `pilot:${type}`)
+  for (const type of focused.slice(1)) await spawn($, `builder:${type}`)
   expect(await plannedIn(pane)).toEqual([])
   for (const agent of [...listed]) await finish($, listed, agent.id)
   expect(await plannedIn(pane)).toEqual(['spec-reviewer', 'adversarial-reviewer'])
@@ -6088,7 +6088,7 @@ test('a counsel question plans its seven members, an ask-again plans only the th
 
   // The package call plans the four focused reviewers too; each type is listed once,
   // and the owner's advocate is still waited on by the counsel.
-  await loose($)({ tool: 'mcp__pilot__package', issue: 'Do it.' })
+  await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
   expect(await plannedIn(pane)).toEqual([...members.slice(0, 4), 'owners-advocate'])
 
   await loose($)({ tool: TALLY, id: 'c1', round: 1, votes: ballots(['1', '1', '1', '1', '1', '1', '1']) })
@@ -6138,7 +6138,7 @@ test('values an older build stored draw without throwing: a card without a model
   const question = { id: 'c1', question: 'Which?', options: ['a', 'b'], background: '', paths: [], lean: '', folder: '/f', round: 1, tallies: [] }
   olderBuildState(on, {
     started: true,
-    agents: [{ id: 'agent-1', type: 'pilot:spec-reviewer', description: 'old card', status: 'running', startedAt: 40_000 }],
+    agents: [{ id: 'agent-1', type: 'builder:spec-reviewer', description: 'old card', status: 'running', startedAt: 40_000 }],
     counsel: [question],
     finishedFolded: 'sideways',
     packaged: { head: 7 },
@@ -6160,7 +6160,7 @@ function agentMessages(on: On) {
 }
 const said = (text: string) => ({ role: 'assistant', text, toolUses: [] })
 const agentPane = ($: Engine, surface: 'terminal' | 'desktop' = 'terminal') =>
-  $.ui.mount({ plugin: 'pilot', surface, component: 'Pane', requestId: 'pilot-agent', props: { bodyColumns: 100 } as never })
+  $.ui.mount({ plugin: 'builder', surface, component: 'Pane', requestId: 'builder-agent', props: { bodyColumns: 100 } as never })
 
 test('an agent\'s output button opens the agent pane with its card, what it was asked, and its last forty messages', async ($, on) => {
   const clock = mock.clock(on)
@@ -6181,7 +6181,7 @@ test('an agent\'s output button opens the agent pane with its card, what it was 
   const pane = await paneOn($)
   const output = await agentPane($)
   await startOnly($)
-  await spawn($, 'pilot:security-reviewer', 'review the diff')
+  await spawn($, 'builder:security-reviewer', 'review the diff')
   await clock.settle()
   await pane.redraw()
 
@@ -6192,7 +6192,7 @@ test('an agent\'s output button opens the agent pane with its card, what it was 
   await output.redraw()
 
   expect(messages.readFor).toEqual(['agent-1'])
-  expect(panes.opened.at(-1)?.id).toBe('pilot-agent')
+  expect(panes.opened.at(-1)?.id).toBe('builder-agent')
   expect(await output.find({ type: 'Text', text: 'running security-reviewer · review the diff · Opus 5.5 · 0s' })).toBeDefined()
   expect(await output.find({ type: 'Text', text: 'Asked: Please review the diff.' })).toBeDefined()
   expect(await output.find({ type: 'Text', text: 'Reading the diff' })).toBeDefined()
@@ -6289,7 +6289,7 @@ test('the output button opens the agent pane at once, which says it is reading t
   const pressed = pane.press({ key: 'output-agent-1' })
   try {
     await clock.settle()
-    expect(panes.opened.at(-1)?.id).toBe('pilot-agent')
+    expect(panes.opened.at(-1)?.id).toBe('builder-agent')
     await output.redraw()
     expect(await output.find({ type: 'Text', text: 'running Explore · map the hooks' })).toBeDefined()
     expect(await output.find({ type: 'Text', text: 'Reading the messages.' })).toBeDefined()
@@ -6611,7 +6611,7 @@ test('once the person closes the agent pane, reads of the list no longer read it
   await clock.advance(5000)
   expect(messages.readFor.length).toBeGreaterThan(1)
 
-  panes.listed = panes.listed.filter(id => id !== 'pilot-agent')
+  panes.listed = panes.listed.filter(id => id !== 'builder-agent')
   await clock.advance(5000)
   const reads = messages.readFor.length
   await clock.advance(20_000)
@@ -6645,7 +6645,7 @@ test('while the agent pane waits on a slow read of its agent\'s messages, a seco
 
   // The person closes the agent pane, so the next read of the list empties
   // the cache, and the pane's next draw has to read the messages itself.
-  panes.listed = panes.listed.filter(id => id !== 'pilot-agent')
+  panes.listed = panes.listed.filter(id => id !== 'builder-agent')
   await clock.advance(5000)
 
   // The engine now keeps every read of the messages waiting. Meanwhile the
@@ -6763,7 +6763,7 @@ test('no stuck prompt comes while a subagent runs, and once it ends one comes 45
   const listed = spawning(on)
   const prompts = recordPrompts(on)
   await watch($)
-  await spawn($, 'pilot:claim-checker')
+  await spawn($, 'builder:claim-checker')
   // In steps, because the live ticker redraws every second while it runs.
   // The agent ends ten minutes past a whole interval, so its end is not
   // hidden by a postponement that falls at the same moment.
@@ -6786,7 +6786,7 @@ test('an agent the engine dropped from its list no longer holds the stuck prompt
   const listed = spawning(on)
   const prompts = recordPrompts(on)
   await watch($)
-  await spawn($, 'pilot:claim-checker')
+  await spawn($, 'builder:claim-checker')
   await clock.advance(30 * MINUTE)
   // The engine drops the agent with no turn.complete for it, and the live
   // ticker's read of the list, within five seconds, shows it gone.
@@ -7154,7 +7154,7 @@ test('a stuck prompt the engine refuses is tried again one interval later, witho
 function readRefusal(key: string | undefined) {
   const refusal = { reads: 0 }
   const refuses = (e: { plugin: string; key: string }) => {
-    if (refusal.reads <= 0 || e.plugin !== 'pilot' || e.key !== key) return undefined
+    if (refusal.reads <= 0 || e.plugin !== 'builder' || e.key !== key) return undefined
     refusal.reads -= 1
     return { deny: 'the state could not be read' } as never
   }
@@ -7175,7 +7175,7 @@ function refusedReads(on: On, key: string) {
 function refusedWrites(on: On, key: string, matches: (value: unknown) => boolean = () => true) {
   const refusal = { writes: 0, refusals: 0 }
   on('state.set', ($, e, next) => {
-    if (refusal.writes > 0 && e.plugin === 'pilot' && e.key === key && matches(e.value)) {
+    if (refusal.writes > 0 && e.plugin === 'builder' && e.key === key && matches(e.value)) {
       refusal.writes -= 1
       refusal.refusals += 1
       return { deny: 'the state could not be written' } as never
@@ -7206,13 +7206,13 @@ function refusedAfterWrite(on: On, fault: {
     return { deny: refuses === 'get' ? 'the state could not be read' : 'the state could not be written' } as never
   }
   on('state.set', ($, e, next) => {
-    if (refusal.isArmed && e.plugin === 'pilot' && e.key === written && matches(e.value)) left = count
-    else if (refuses === 'set' && left > 0 && e.plugin === 'pilot' && e.key === refused) return refuse()
+    if (refusal.isArmed && e.plugin === 'builder' && e.key === written && matches(e.value)) left = count
+    else if (refuses === 'set' && left > 0 && e.plugin === 'builder' && e.key === refused) return refuse()
     return next(e)
   })
   if (refuses === 'get') {
     on('state.get', ($, e, next) => {
-      if (left > 0 && e.plugin === 'pilot' && e.key === refused) return refuse()
+      if (left > 0 && e.plugin === 'builder' && e.key === refused) return refuse()
       return next(e)
     })
   }
@@ -7335,12 +7335,12 @@ test('a stuck prompt that falls while a change is being handed over is dropped, 
     return { text: e.text }
   })
   await watch($)
-  // /pilot poll reads the failure first, which restarts the quiet time, so
+  // /builder poll reads the failure first, which restarts the quiet time, so
   // the poll after it finds nothing new to record and only hands the
   // change over, which leaves the quiet time alone.
   await clock.advance(20 * MINUTE)
   world.pr = failing()
-  await $.command.run({ command: 'pilot', args: 'poll' } as never)
+  await $.command.run({ command: 'builder', args: 'poll' } as never)
   await clock.advance(45 * MINUTE)
   expect(prompts).toEqual([])
 
@@ -7377,7 +7377,7 @@ test('a stuck prompt that falls while the CI event\'s look has not yet told its 
 
 // Watches #7 with a five-hour window at 100 percent that resets two hours
 // on, and ends a turn as usual and then one with an error, both at T0, so
-// the turn-end looks of the first are due during the hold. /pilot is
+// the turn-end looks of the first are due during the hold. /builder is
 // answered beneath the mod, for a test that runs it. `runs` are the head's
 // unfinished workflow runs from the start.
 async function holdOnWindow($: Engine, on: On, runs: { id: number; run_attempt: number; name: string }[] = []) {
@@ -7401,7 +7401,7 @@ async function holdOnWindow($: Engine, on: On, runs: { id: number; run_attempt: 
 
 test('a turn that dies with a window at 100 percent holds: the line says until when, no gh runs, and one resume prompt comes a minute after the reset', async ($, on) => {
   const { clock, world, prompts, line } = await holdOnWindow($, on)
-  expect(await line()).toBe('pilot: #7 open · checks passed · waiting on the usage limit until 02:01:00')
+  expect(await line()).toBe('builder: #7 open · checks passed · waiting on the usage limit until 02:01:00')
   // A subagent that ends during the hold restarts the quiet time, but no
   // stuck prompt comes while the hold is on.
   await $.turn.complete({ answer: 'Done.', durationMs: 1, isAborted: false, turnId: 't-agent', reason: 'answer', agentId: 'agent-9' } as never)
@@ -7412,7 +7412,7 @@ test('a turn that dies with a window at 100 percent holds: the line says until w
   expect(prompts).toEqual([])
 
   await clock.advance(1000)
-  expect(resumesOf(prompts)).toEqual(['pilot: the usage limit has reset; carry on /implement from the stage you were in.'])
+  expect(resumesOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in.'])
   expect(prompts.length).toBe(1)
   expect(await line()).not.toContain('waiting on the usage limit')
   await clock.advance(10 * MINUTE)
@@ -7435,19 +7435,19 @@ test('an unfinished workflow run polls nothing during a hold, neither the pull r
   expect(world.calls.some(call => call.startsWith('gh api --paginate repos/o/r/actions/runs?'))).toBe(true)
 })
 
-test('/pilot poll still reads the pull request during a hold', async ($, on) => {
+test('/builder poll still reads the pull request during a hold', async ($, on) => {
   const { world } = await holdOnWindow($, on)
   world.calls = []
-  const shown = await $.command.run({ command: 'pilot', args: 'poll' } as never)
+  const shown = await $.command.run({ command: 'builder', args: 'poll' } as never)
 
   expect(JSON.stringify(shown)).toContain('Checks: passed')
   expect(world.calls.some(call => call.startsWith('gh pr view 7'))).toBe(true)
 })
 
-test('a hold whose pull request merged meanwhile, as a /pilot poll during the hold read it, clears at the resume time with no resume prompt', async ($, on) => {
+test('a hold whose pull request merged meanwhile, as a /builder poll during the hold read it, clears at the resume time with no resume prompt', async ($, on) => {
   const { clock, world, prompts, line } = await holdOnWindow($, on)
   world.pr = openPullRequest({ state: 'MERGED' })
-  await $.command.run({ command: 'pilot', args: 'poll' } as never)
+  await $.command.run({ command: 'builder', args: 'poll' } as never)
   await clock.advance(HOUR)
   expect(await line()).toContain('waiting on the usage limit until 02:01:00')
 
@@ -7493,9 +7493,9 @@ test('a handover still being submitted at the resume time clears the hold with n
   })
   const line = await abovePrompt($, on)
   await watch($)
-  // /pilot poll reads the failure, and the poll after it hands it over.
+  // /builder poll reads the failure, and the poll after it hands it over.
   world.pr = failing()
-  await $.command.run({ command: 'pilot', args: 'poll' } as never)
+  await $.command.run({ command: 'builder', args: 'poll' } as never)
   await clock.advance(15 * MINUTE)
   expect(isWaiting).toBe(true)
 
@@ -7516,7 +7516,7 @@ test('a handover still being submitted at the resume time clears the hold with n
 })
 
 // Once `arm()` is called, lets the store act on the next read or write of the
-// pilot value `key` and then holds its answer until the test calls
+// builder value `key` and then holds its answer until the test calls
 // `release()`, as a slow store or another plugin's hook may. Unlike
 // writeWaits below, which holds an operation before the store acts, this one
 // holds it after. `seen` counts every read or write of `key`, held or not,
@@ -7527,7 +7527,7 @@ function answerWaits(on: On, event: 'state.get' | 'state.set', key: string) {
   const late = { arm: () => { isArmed = true }, release: () => {}, seen: 0 }
   const gate = new Promise<void>(resolve => { late.release = resolve })
   const isHeld = (e: { plugin: string; key: string }) => {
-    if (e.plugin !== 'pilot' || e.key !== key) return false
+    if (e.plugin !== 'builder' || e.key !== key) return false
     late.seen += 1
     if (!isArmed) return false
     isArmed = false
@@ -7551,7 +7551,7 @@ function answerWaits(on: On, event: 'state.get' | 'state.set', key: string) {
   return late
 }
 
-// Once `arm()` is called, makes the next write of the pilot value `key` that
+// Once `arm()` is called, makes the next write of the builder value `key` that
 // `matches` wait until the test lets it through. `isWaiting` says whether a
 // write is waiting now. It is set up before the test first calls `$`, as the
 // kit requires of a hook beneath the mod.
@@ -7559,7 +7559,7 @@ function writeWaits(on: On, key: string, matches: (value: unknown) => boolean) {
   let isArmed = false
   const write = { isWaiting: false, release: () => {}, arm: () => { isArmed = true } }
   on('state.set', async ($, e, next) => {
-    if (isArmed && e.plugin === 'pilot' && e.key === key && matches(e.value)) {
+    if (isArmed && e.plugin === 'builder' && e.key === key && matches(e.value)) {
       isArmed = false
       write.isWaiting = true
       await new Promise<void>(resolve => { write.release = resolve })
@@ -7599,7 +7599,7 @@ test('a write that fails as the resume time clears the hold sends no prompt, and
   await clock.advance(15 * MINUTE - 1000)
   expect(prompts).toEqual([])
   await clock.advance(1000)
-  expect(resumesOf(prompts)).toEqual(['pilot: the usage limit has reset; carry on /implement from the stage you were in.'])
+  expect(resumesOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in.'])
   expect(prompts.length).toBe(1)
   expect(await line()).not.toContain('waiting on the usage limit')
 })
@@ -7616,7 +7616,7 @@ test('a read of the hold refused at the resume time sends nothing, and the resum
   await clock.advance(15 * MINUTE - 1000)
   expect(prompts).toEqual([])
   await clock.advance(1000)
-  expect(resumesOf(prompts)).toEqual(['pilot: the usage limit has reset; carry on /implement from the stage you were in.'])
+  expect(resumesOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in.'])
   expect(prompts.length).toBe(1)
   expect(await line()).not.toContain('waiting on the usage limit')
 })
@@ -7628,12 +7628,12 @@ test('a read of the hold refused at the end of a turn that ended with an answer 
   await ownTurn($, 't3')
   await clock.settle()
   expect(refusal.reads).toBe(0)
-  expect(await line()).toBe('pilot: #7 open · checks passed · waiting on the usage limit until 02:01:00')
+  expect(await line()).toBe('builder: #7 open · checks passed · waiting on the usage limit until 02:01:00')
 
   await clock.advance(2 * HOUR + MINUTE - 1000)
   expect(prompts).toEqual([])
   await clock.advance(1000)
-  expect(resumesOf(prompts)).toEqual(['pilot: the usage limit has reset; carry on /implement from the stage you were in.'])
+  expect(resumesOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in.'])
   expect(prompts.length).toBe(1)
   expect(await line()).not.toContain('waiting on the usage limit')
 })
@@ -7647,7 +7647,7 @@ test('a write of the quiet time refused just after the resume time clears the ho
   await clock.advance(2 * HOUR + MINUTE)
   fault.isArmed = false
   expect(fault.refusals).toBe(1)
-  expect(resumesOf(prompts)).toEqual(['pilot: the usage limit has reset; carry on /implement from the stage you were in.'])
+  expect(resumesOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in.'])
   expect(await line()).not.toContain('waiting on the usage limit')
 
   // No turn follows the resume prompt here, so the stuck prompt comes 45
@@ -7918,7 +7918,7 @@ test('a refused resume prompt whose new hold cannot be saved is tried again 15 m
   await clock.advance(15 * MINUTE - 1000)
   expect(resumesOf(record.prompts)).toEqual([])
   await clock.advance(1000)
-  expect(resumesOf(record.prompts)).toEqual(['pilot: the usage limit has reset; carry on /implement from the stage you were in.'])
+  expect(resumesOf(record.prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in.'])
 
   // No turn follows the resume prompt here, so the stuck prompt still comes
   // 45 minutes after the clear.
@@ -8150,7 +8150,7 @@ async function holdBeingSaved($: Engine, on: On) {
   let letSaveThrough = () => {}
   let isClearRefused = false
   on('state.set', async ($, e, next) => {
-    if (e.plugin === 'pilot' && e.key === 'usageHold') {
+    if (e.plugin === 'builder' && e.key === 'usageHold') {
       if (e.value === null && isClearRefused) {
         isClearRefused = false
         return { deny: 'the state could not be written' } as never
@@ -8210,7 +8210,7 @@ async function holdClearedWithStageRefused($: Engine, on: On) {
   await startOnly($)
   await clock.settle()
   expect(holdRead.refusal.reads).toBe(0)
-  await loose($)({ tool: 'mcp__pilot__open_pane' })
+  await loose($)({ tool: 'mcp__builder__open_pane' })
   await report($, 'spec')
   await $.turn.start({ text: 'go', turnId: 't1' } as never)
   holdRead.refusal.reads = 1
@@ -8265,7 +8265,7 @@ test('a person\'s prompt that comes while the hold is being saved, when taking t
   expect(stuckOf(prompts)).toEqual([])
 
   await clock.advance(1000)
-  expect(resumesOf(prompts)).toEqual(['pilot: the usage limit has reset; carry on /implement from the stage you were in.'])
+  expect(resumesOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in.'])
   expect(await line()).not.toContain('waiting on the usage limit')
   await clock.advance(10 * MINUTE)
   expect(world.calls.some(call => call.startsWith('gh pr view 7'))).toBe(true)
@@ -8368,18 +8368,18 @@ test('a turn of the session\'s own that ends with an answer while a later turn s
     // turn's end has not yet read the hold.
     await ownTurn($, 't2', 'error')
     await clock.settle()
-    expect(await line()).toBe('pilot: #7 open · checks passed · waiting on the usage limit until 02:01:00')
+    expect(await line()).toBe('builder: #7 open · checks passed · waiting on the usage limit until 02:01:00')
   } finally {
     clearingBusy.release()
     await ended
     await clock.settle()
   }
-  expect(await line()).toBe('pilot: #7 open · checks passed · waiting on the usage limit until 02:01:00')
+  expect(await line()).toBe('builder: #7 open · checks passed · waiting on the usage limit until 02:01:00')
 
   await clock.advance(2 * HOUR + MINUTE - 1000)
   expect(resumesOf(prompts)).toEqual([])
   await clock.advance(1000)
-  expect(resumesOf(prompts)).toEqual(['pilot: the usage limit has reset; carry on /implement from the stage you were in.'])
+  expect(resumesOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in.'])
   await clock.advance(3 * HOUR)
   expect(resumesOf(prompts).length).toBe(1)
 })
@@ -8454,7 +8454,7 @@ test('a turn that dies on the limit in a session with no watch and no stage repo
   const prompts = recordPrompts(on)
   const line = await abovePrompt($, on)
   await startOnly($)
-  await loose($)({ tool: 'mcp__pilot__open_pane' })
+  await loose($)({ tool: 'mcp__builder__open_pane' })
   expect(await line()).toContain('idle')
   await ownTurn($, 't1', 'error')
   await clock.settle()
@@ -8497,14 +8497,14 @@ test('a turn that dies on the limit with a stage reported and nothing watched ho
   const prompts = recordPrompts(on)
   const line = await abovePrompt($, on)
   await startOnly($)
-  await loose($)({ tool: 'mcp__pilot__open_pane' })
+  await loose($)({ tool: 'mcp__builder__open_pane' })
   await report($, 'spec')
   await ownTurn($, 't1', 'error')
   await clock.settle()
-  expect(await line()).toBe('pilot: spec · waiting on the usage limit until 02:01:00')
+  expect(await line()).toBe('builder: spec · waiting on the usage limit until 02:01:00')
 
   await clock.advance(2 * HOUR + MINUTE)
-  expect(resumesOf(prompts)).toEqual(['pilot: the usage limit has reset; carry on /implement from the stage you were in (spec).'])
+  expect(resumesOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in (spec).'])
 })
 
 // With nothing watched there is no stuck prompt to fall back on, so a read
@@ -8525,11 +8525,11 @@ test('a read of the stage refused just after the resume time clears a hold with 
   fakePanes(on)
   const line = await abovePrompt($, on)
   await startOnly($)
-  await loose($)({ tool: 'mcp__pilot__open_pane' })
+  await loose($)({ tool: 'mcp__builder__open_pane' })
   await report($, 'spec')
   await ownTurn($, 't1', 'error')
   await clock.settle()
-  expect(await line()).toBe('pilot: spec · waiting on the usage limit until 02:01:00')
+  expect(await line()).toBe('builder: spec · waiting on the usage limit until 02:01:00')
 
   fault.isArmed = true
   await clock.advance(2 * HOUR + MINUTE)
@@ -8540,7 +8540,7 @@ test('a read of the stage refused just after the resume time clears a hold with 
   await clock.advance(15 * MINUTE - 1000)
   expect(prompts).toEqual([])
   await clock.advance(1000)
-  expect(resumesOf(prompts)).toEqual(['pilot: the usage limit has reset; carry on /implement from the stage you were in (spec).'])
+  expect(resumesOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in (spec).'])
   expect(prompts.length).toBe(1)
 })
 
@@ -8557,11 +8557,11 @@ test('a refused resume prompt whose new hold cannot be saved, with nothing watch
   fakePanes(on)
   const line = await abovePrompt($, on)
   await startOnly($)
-  await loose($)({ tool: 'mcp__pilot__open_pane' })
+  await loose($)({ tool: 'mcp__builder__open_pane' })
   await report($, 'spec')
   await ownTurn($, 't1', 'error')
   await clock.settle()
-  expect(await line()).toBe('pilot: spec · waiting on the usage limit until 02:01:00')
+  expect(await line()).toBe('builder: spec · waiting on the usage limit until 02:01:00')
 
   refusal.writes = 1
   record.refusing = true
@@ -8573,7 +8573,7 @@ test('a refused resume prompt whose new hold cannot be saved, with nothing watch
   await clock.advance(15 * MINUTE - 1000)
   expect(resumesOf(record.prompts)).toEqual([])
   await clock.advance(1000)
-  expect(resumesOf(record.prompts)).toEqual(['pilot: the usage limit has reset; carry on /implement from the stage you were in (spec).'])
+  expect(resumesOf(record.prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in (spec).'])
 })
 
 // The retry of the decision after the clear sits in the hold's timer slot,
@@ -8592,7 +8592,7 @@ test('a prompt that is not the person\'s, whose read of the hold is refused whil
   expect(holdRead.refusal.reads).toBe(0)
 
   await clock.advance(15 * MINUTE)
-  expect(resumesOf(prompts)).toEqual(['pilot: the usage limit has reset; carry on /implement from the stage you were in (spec).'])
+  expect(resumesOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in (spec).'])
 })
 
 // The end of a turn that ended with an answer reads the hold to take it off.
@@ -8610,7 +8610,7 @@ test('a turn that ends with an answer, whose read of the hold is refused while t
   expect(holdRead.refusal.reads).toBe(0)
 
   await clock.advance(15 * MINUTE)
-  expect(resumesOf(prompts)).toEqual(['pilot: the usage limit has reset; carry on /implement from the stage you were in (spec).'])
+  expect(resumesOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in (spec).'])
   expect(prompts.length).toBe(1)
 })
 
@@ -8624,7 +8624,7 @@ test('a prompt that is not the person\'s, whose read of the hold is refused afte
   // The decision after the clear, tried again 15 minutes later, sends the
   // resume prompt, which arms nothing more.
   await clock.advance(15 * MINUTE)
-  expect(resumesOf(prompts)).toEqual(['pilot: the usage limit has reset; carry on /implement from the stage you were in (spec).'])
+  expect(resumesOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in (spec).'])
 
   // A prompt that is not the person's, here a task notification, arms the
   // timers again, and cannot read the hold either.
@@ -8751,7 +8751,7 @@ for (const [how, fail] of [
     expect(world.calls.filter(call => call.startsWith('gh api --paginate')).length).toBeGreaterThan(readsBefore)
     expect(prompts).toEqual([])
 
-    const shown = await $.command.run({ command: 'pilot', args: 'poll' } as never)
+    const shown = await $.command.run({ command: 'builder', args: 'poll' } as never)
     expect(JSON.stringify(shown)).toContain('The workflow runs could not be read at the last look.')
     expect(prompts).toEqual([])
   })
@@ -8774,7 +8774,7 @@ test('the workflow runs are read at the head gh pr view gave, not at the local c
 
 // The checkout the mod is loaded from through a link, as a machine that links
 // the mod into a git checkout has it, standing at C when the session starts.
-const MOD = '/checkout/mods/pilot'
+const MOD = '/checkout/mods/builder'
 const SESSION_DIFF = `git diff --quiet ${C} ${D} -- agents .claude-plugin/plugin.json hooks/hooks.json`
 const HOOKS_DIFF = `git diff --quiet ${C} ${D} -- hooks :(exclude)hooks/hooks.json`
 
@@ -8809,7 +8809,7 @@ function moves(world: ReturnType<typeof fakeGitHub>, paths: string[]) {
   world.changed[`${C} ${D}`] = paths
 }
 
-test('with nothing watched, the turn end after the checkout moved and changed an agent warns that pilot changed on disk', async ($, on) => {
+test('with nothing watched, the turn end after the checkout moved and changed an agent warns that builder changed on disk', async ($, on) => {
   const { world, stats, line, turnEnd, quietDiffs } = await linkedSession($, on)
   expect(await line()).toBe('')
 
@@ -8921,7 +8921,7 @@ test('the pane of a stale session leads with the warning, in yellow, with a pull
   world.heads[MOD] = C
   linkedMod(on, MOD)
   sessionTurns(on)
-  const pane = await $.ui.mount({ plugin: 'pilot', surface: 'terminal', component: 'Pane', requestId: 'pilot', props: {} as never })
+  const pane = await $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'Pane', requestId: 'builder', props: {} as never })
   const firstRow = async () => {
     await pane.redraw()
     const [first] = await pane.findAll({ type: 'Text' })
@@ -8937,7 +8937,7 @@ test('the pane of a stale session leads with the warning, in yellow, with a pull
   await clock.settle()
   expect(await firstRow()).toEqual({ text: STALE_WARNING, color: 'yellow' })
 
-  await $.tool.call({ tool: 'mcp__pilot__watch', number: 7 } as never)
+  await $.tool.call({ tool: 'mcp__builder__watch', number: 7 } as never)
   await clock.settle()
   expect(await firstRow()).toEqual({ text: STALE_WARNING, color: 'yellow' })
   expect((await pane.find({ text: 'Next:' }))?.text).toContain('o/r#7 · open')
@@ -9118,11 +9118,11 @@ test('a move back to the commit the session loaded clears the warning at the nex
   expect(await line()).toBe('')
 })
 
-test('with a pull request watched, a poll alone finds that pilot changed on disk, with no turn end', async ($, on) => {
+test('with a pull request watched, a poll alone finds that builder changed on disk, with no turn end', async ($, on) => {
   const { clock, world, line } = await linkedSession($, on)
-  await $.tool.call({ tool: 'mcp__pilot__watch', number: 7 } as never)
+  await $.tool.call({ tool: 'mcp__builder__watch', number: 7 } as never)
   await clock.settle()
-  expect(await line()).toBe('pilot: #7 open · checks passed · nothing to hand over · next look in 10m')
+  expect(await line()).toBe('builder: #7 open · checks passed · nothing to hand over · next look in 10m')
 
   moves(world, ['agents/spec-reviewer.md'])
   await clock.advance(10 * 60_000)
@@ -9178,7 +9178,7 @@ test('a reload whose comparison finishes after the first load fills in the sessi
   expect(await line()).toBe(STALE_WARNING)
 })
 
-test('a turn end during a usage-limit hold still finds that pilot changed on disk', async ($, on) => {
+test('a turn end during a usage-limit hold still finds that builder changed on disk', async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
   mock.store(on)
   engine(on)
@@ -9195,7 +9195,7 @@ test('a turn end during a usage-limit hold still finds that pilot changed on dis
   // A turn that dies with the window at 100 percent starts the hold.
   await ownTurn($, 't1', 'error')
   await clock.settle()
-  expect(await line()).toBe('pilot: #7 open · checks passed · waiting on the usage limit until 02:01:00')
+  expect(await line()).toBe('builder: #7 open · checks passed · waiting on the usage limit until 02:01:00')
 
   // The checkout moves and changes an agent, and another turn dies during the hold.
   moves(world, ['agents/spec-reviewer.md'])

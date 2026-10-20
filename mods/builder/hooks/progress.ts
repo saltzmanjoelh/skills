@@ -157,12 +157,12 @@ function barLabel(progress: Progress | null, ended: string | null): string {
 // Together they are the six reviewers of REVIEWERS in hooks/state.ts. The
 // order here is the order the pane lists planned agents in.
 export const FOCUSED_REVIEWERS: readonly string[] = [
-  'pilot:security-reviewer',
-  'pilot:maintainability-reviewer',
-  'pilot:performance-reviewer',
-  'pilot:data-reviewer',
+  'builder:security-reviewer',
+  'builder:maintainability-reviewer',
+  'builder:performance-reviewer',
+  'builder:data-reviewer',
 ]
-export const VERDICT_REVIEWERS: readonly string[] = ['pilot:spec-reviewer', 'pilot:adversarial-reviewer']
+export const VERDICT_REVIEWERS: readonly string[] = ['builder:spec-reviewer', 'builder:adversarial-reviewer']
 const PLANNED_ORDER = [...FOCUSED_REVIEWERS, ...VERDICT_REVIEWERS]
 
 // What the planned agents are worked out from: the watched pull request (null

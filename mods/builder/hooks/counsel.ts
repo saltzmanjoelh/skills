@@ -292,7 +292,7 @@ function existingOption(n: number, optionCount: number): { vote: number } | { re
 // is not a member of the counsel.
 export function memberName(raw: unknown): string | null {
   if (typeof raw !== 'string') return null
-  const name = raw.trim().startsWith('pilot:') ? raw.trim() : `pilot:${raw.trim()}`
+  const name = raw.trim().startsWith('builder:') ? raw.trim() : `builder:${raw.trim()}`
   return COUNSEL_MEMBERS.includes(name) ? name : null
 }
 
@@ -545,7 +545,7 @@ function whyAsked(q: CounselQuestion, t: CounselTally): string {
 }
 
 // A member's name without the plugin's prefix, as the decision sentence says it.
-export const shortName = (member: string) => member.replace(/^pilot:/, '')
+export const shortName = (member: string) => member.replace(/^builder:/, '')
 
 // Names as a sentence lists them: a, a and b, or a, b and c.
 function listed(names: readonly string[]): string {
