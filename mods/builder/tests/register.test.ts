@@ -9944,19 +9944,20 @@ test('a new session id with no end of the old session, as after a /clear whose e
   expect(s.writesOf()).toBe(oldWrites)
 })
 
-test('a session that takes its memo up at a prompt, with its own generation not the memo\'s and the reload\'s raise refused, writes the file again', async ($, on) => {
+test('a session that takes its memo up at a prompt, with its own generation not the memo\'s and the reload\'s take-up refused, writes the file again', async ($, on) => {
   const refusal = refusedWrites(on, 'statusMemo')
   const s = foremanSession(on)
   await firstPrompt($, s.clock)
-  // A hot reload that gets through raises the memo's stored generation
-  // above 0.
+  // A hot reload that gets through takes the memo up under its own load
+  // stamp, one above the first load's, since the clock has not moved.
   await reloads($, s.clock)
   // The kit runs one copy of the module, so a new copy, which starts with
   // its own generation at 0 and no ticket known, cannot be loaded. An end of
   // the session whose reset of the memo is refused stands in for one: it
   // forgets the ticket and leaves this copy's generation not the memo's,
-  // while the memo stays this session's. The hot reload after it then has
-  // its raise of the memo refused, as a failed start of the hooks would.
+  // while the memo stays this session's. The hot reload after it gets a load
+  // stamp above the memo's generation, and then has its take-up of the memo
+  // refused, as a failed start of the hooks would.
   refusal.writes = 1
   await endSession($, 'resume')
   refusal.writes = 1
@@ -9993,4 +9994,101 @@ test('a prompt that found no memo keeps the memo of this session that another pr
   await first
   await s.clock.settle()
   expect(s.statusAt()?.state).toBe('in-cleanup')
+})
+
+// Stands in for a newer copy of the module, one loaded after this copy, that
+// owns the memo of session-1. The kit runs one copy of the module, so once
+// `appear()` is called, every read of the memo answers the newer copy's memo,
+// whose generation is one above this copy's load stamp, until the mod writes
+// the memo. `holdNext()` makes the next read of the memo wait, with the
+// answer it had when it was read, until `release()`. `writes` holds the value
+// of every write of the memo after `appear()`.
+function newerOwnersMemo(on: On) {
+  const newer = {
+    sessionId: 'session-1', ticket: 'slot-9', path: BUILD, cwd: '/repo', state: null, stateSince: 0,
+    askedAt: null, prompts: [], cleanup: null, generation: S0 + 1,
+  }
+  let hasAppeared = false
+  let isHeld = false
+  let release = () => {}
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const owner = {
+    newer,
+    writes: [] as { ticket: string | null; generation: number }[],
+    appear: () => { hasAppeared = true },
+    holdNext: () => { isHeld = true },
+    release: () => release(),
+  }
+  let isSeeded = true
+  on('state.get', async ($, e, next) => {
+    if (e.plugin !== 'builder' || e.key !== 'statusMemo') return next(e)
+    const answer = hasAppeared && isSeeded ? { value: { value: newer, version: 0 } } as never : await next(e)
+    if (isHeld) {
+      isHeld = false
+      await gate
+    }
+    return answer
+  })
+  on('state.set', ($, e, next) => {
+    if (hasAppeared && e.plugin === 'builder' && e.key === 'statusMemo') {
+      isSeeded = false
+      owner.writes.push(e.value as { ticket: string | null; generation: number })
+    }
+    return next(e)
+  })
+  return owner
+}
+
+test('a copy whose load stamp is lower than the memo\'s generation does not take the memo up, write the file, or change the stored generation', async ($, on) => {
+  const owner = newerOwnersMemo(on)
+  const s = foremanSession(on)
+  // This copy loads first, with no memo stored, so its stamp is the time of
+  // its load. A newer copy then owns the memo of this session.
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await s.clock.settle()
+  owner.appear()
+
+  await $.prompt.submit({ text: TICKETED, origin: { kind: 'composer' } } as never)
+  await s.clock.advance(5 * MINUTE)
+  expect(s.files.writes.log.filter(path => path.includes('/foreman/'))).toEqual([])
+  expect(owner.writes.every(written => written.generation === S0 + 1 && written.ticket === 'slot-9')).toBe(true)
+  expect(s.transcriptReads()).toBe(0)
+})
+
+test('a prompt that found no memo does not write its own over the memo of this session that a newer copy wrote while it looked', async ($, on) => {
+  const owner = newerOwnersMemo(on)
+  const s = foremanSession(on)
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await s.clock.settle()
+
+  // The prompt's read of the memo answers that there is none and is held,
+  // while a newer copy writes the memo of this session.
+  owner.holdNext()
+  const first = $.prompt.submit({ text: TICKETED, origin: { kind: 'composer' } } as never)
+  await s.clock.settle()
+  owner.appear()
+  owner.release()
+  await first
+  await s.clock.advance(5 * MINUTE)
+
+  expect(s.transcriptReads()).toBe(1)
+  expect(s.files.writes.log.filter(path => path.includes('/foreman/'))).toEqual([])
+  expect(owner.writes.every(written => written.generation === S0 + 1 && written.ticket === 'slot-9')).toBe(true)
+})
+
+test('a hot reload whose clock has not moved past the memo\'s generation still takes the memo up under a larger generation', async ($, on) => {
+  const generations: number[] = []
+  on('state.set', ($, e, next) => {
+    if (e.plugin === 'builder' && e.key === 'statusMemo') generations.push((e.value as { generation: number }).generation)
+    return next(e)
+  })
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  expect(generations.at(-1)).toBe(S0)
+
+  // The clock is frozen, as for two loads in one millisecond.
+  await reloads($, s.clock)
+  expect(generations.at(-1)).toBe(S0 + 1)
+  await reloads($, s.clock)
+  expect(generations.at(-1)).toBe(S0 + 2)
 })

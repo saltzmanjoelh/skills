@@ -311,8 +311,11 @@ export type StatusMemo = {
   prompts: OpenPrompt[]
   // The cleanup record, or null before the cleanup skill started.
   cleanup: { failedCalls: number; lastError: string } | null
-  // Raised at each start of the hooks, so a writer left running by the
-  // module's copy from before a hot reload sees it is not the newest and stops.
+  // The load stamp of the module's copy that owns the memo, which orders the
+  // copies by when they loaded. Only a copy whose stamp is not below it may
+  // take the memo up, and taking it up sets it to that copy's stamp, so a
+  // writer left running by the copy from before a hot reload sees it is not
+  // the newest and stops, and that copy cannot take the memo back.
   generation: number
 }
 

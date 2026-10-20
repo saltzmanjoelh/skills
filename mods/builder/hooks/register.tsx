@@ -2648,15 +2648,23 @@ let statusFlight: Promise<void> | null = null
 // up on after its timeout, so the session's end can delete the file again
 // after a write that lands once it was deleted.
 const statusWrites = new Set<Promise<void>>()
-// The generation this copy of the module writes under. Two counters share
-// the word: the memo's stored `generation`, which survives a hot reload, and
-// this module variable. Each start of the hooks, and each look for the ticket
-// that takes a memo up, raises the stored one and sets this one to match, so
-// a writer that a copy from before a hot reload left running finds the
-// stored generation is not its own and stops. The session's
-// end raises only this module variable, so a writer of the ended session that
-// captured the old value stops, and the stored generation stays as it is until
-// the next conversation writes a memo of its own.
+// When this copy of the module loaded, as a number that orders the copies of
+// the module by when they loaded: a later load always has a larger stamp. It
+// is set once, at the start of the hooks that each load runs (see
+// stampLoad). A copy from before a hot reload keeps running the work it had
+// in flight, and the stamp is what tells it apart from the newest copy.
+let loadStamp = 0
+// The generation this copy of the module writes under. Two values share the
+// word: the memo's stored `generation`, which survives a hot reload and holds
+// the load stamp of the copy that owns the memo, and this module variable.
+// Only the newest copy owns the memo: a copy takes it up only when its own
+// stamp is not below the stored generation, and then sets both to its stamp
+// (see takeUpMemo). So a writer that a copy from before a hot reload left
+// running finds the stored generation is not its own and stops, and that
+// copy can never take the memo back. The session's end raises only this
+// module variable, so a writer of the ended session that captured the old
+// value stops, and the stored generation stays as it is until the next
+// conversation writes a memo of its own.
 let statusGen = 0
 // The text of the record last written, as comparedTextOf gives it, to
 // compare the next one with. A hot reload forgets it, which costs one write.
@@ -2709,7 +2717,8 @@ function statusChanged($: $, force = false) {
 // write time is not written, unless the tick asked. A write that fails or
 // times out is dropped: the next change or the next tick tries again, and
 // nothing here can stop a hook. It stops when the memo belongs to another
-// session, holds no ticket or no path, or was raised to a newer generation.
+// session, holds no ticket or no path, or was taken up by a newer copy of
+// the module, whose load stamp is now its generation.
 // A copy of the module from before a hot reload keeps running the writer it
 // had in flight, so the memo's generation is read again right before the
 // file is written, with no await between that read and the start of the
@@ -2835,42 +2844,64 @@ function adoptMemo($: $, memo: StatusMemo) {
   }
 }
 
-// Takes a memo of this session up for this copy of the module: the memo as it
-// stands when it is written is raised to a new generation, which this copy
-// then writes under, and its answer is taken. Only the generation is raised,
-// so a change that landed since the memo was last read is kept. When the
-// session has no memo by then, `found` is written instead and taken, or,
-// when `found` is null, nothing is written or taken. The start of the hooks
-// and the look at a prompt both take a memo up through here, so that a copy
-// whose start failed, or that found no memo at its start because the copy
-// before it wrote one later, still writes under the stored generation.
+// Sets this copy's load stamp, once, at the start of the hooks, before the
+// memo is taken up. It is the time of the load, or one more than the memo's
+// stored generation when the clock has not moved past it, as with two loads
+// in one millisecond, so a later load always gets a larger stamp than any
+// copy before it. Any memo's generation counts, whichever session it
+// belongs to. When the memo cannot be read the time of the load stands
+// alone, and when the clock cannot be read either the stamp stays as it is.
+async function stampLoad($: $) {
+  let stored = 0
+  try {
+    const raw: unknown = await read($, statusMemo)
+    const generation = typeof raw === 'object' && raw !== null ? (raw as { generation?: unknown }).generation : undefined
+    if (typeof generation === 'number' && Number.isFinite(generation)) stored = generation
+  } catch {
+    // The time of the load stands alone, as said above.
+  }
+  const now = await $.clock.now()
+  loadStamp = now > stored ? now : stored + 1
+}
+
+// Takes a memo of this session up for this copy of the module, when this copy
+// owns it: the memo's stored generation is not above this copy's load stamp.
+// Then the memo as it stands when it is written gets this copy's stamp as its
+// generation, which this copy then writes under, and its answer is taken.
+// Only the generation changes, so a change that landed since the memo was
+// last read is kept. A memo whose generation is above the stamp belongs to a
+// newer copy, so it is left as it is and nothing is taken: this copy does no
+// more for the status file. When the session has no memo by then, `found`,
+// which carries this copy's stamp, is written instead and taken, or, when
+// `found` is null, nothing is written or taken. Both ways of taking a memo
+// up, at the start of the hooks and at a prompt, come through here, so that
+// a copy whose start failed, or that found no memo at its start because the
+// copy before it wrote one later, still takes the memo up.
 async function takeUpMemo($: $, sessionId: string, found: StatusMemo | null) {
   const taken = statusMemoIn(await update($, statusMemo, raw => {
     const memo = statusMemoIn(raw, sessionId)
     if (memo === null) return found ?? raw
-    return { ...memo, generation: memo.generation + 1 }
+    return memo.generation > loadStamp ? raw : { ...memo, generation: loadStamp }
   }), sessionId)
-  if (taken === null) return
-  statusGen = taken.generation
+  if (taken === null || taken.generation !== loadStamp) return
+  statusGen = loadStamp
   adoptMemo($, taken)
 }
 
-// Looks for the ticket at a prompt, once per session id. The answer a memo of
-// this session holds is taken up as it is, so a hot reload does not look
-// again. Otherwise the first prompt is the first user message of the
+// Looks for the ticket at a prompt, once per session id. A memo of this
+// session is taken up as it is (see startStatus), so a hot reload does not
+// look again. Otherwise the first prompt is the first user message of the
 // transcript, or the prompt being submitted when the transcript holds none
 // or cannot be read. The configuration folder and the desktop id are read
 // only when there is a ticket, so a session without one reads nothing more.
-// A memo of this session that another prompt, or the copy of the module
-// from before a hot reload, wrote while this one looked is taken up rather
-// than written over.
+// The new memo carries this copy's load stamp. A memo of this session that
+// another prompt, the copy of the module from before a hot reload, or a
+// newer copy wrote while this one looked is never written over: it is taken
+// up when this copy owns it, and left as it is when a newer copy does.
 async function lookForTicket($: $, submitted: string) {
   const sessionId = await $.session.id()
   if (ticketKnown !== undefined && ticketFor === sessionId) return
-  if (statusMemoIn(await read($, statusMemo), sessionId) !== null) {
-    await takeUpMemo($, sessionId, null)
-    return
-  }
+  if (await startStatus($)) return
   let first = submitted
   try {
     first = firstPromptOf(await $.session.messages(), submitted)
@@ -2879,36 +2910,43 @@ async function lookForTicket($: $, submitted: string) {
   }
   const ticket = ticketIn(first)
   const found = ticket === null
-    ? newMemo({ sessionId, ticket: null, path: null, cwd: '', generation: statusGen })
+    ? newMemo({ sessionId, ticket: null, path: null, cwd: '', generation: loadStamp })
     : newMemo({
         sessionId,
         ticket,
         path: buildPathOf(configDirOf(await $.env.get('CLAUDE_CONFIG_DIR'), await $.env.get('HOME')), sessionId),
         desktopSessionId: await $.env.get('CLAUDE_CODE_HOST_SESSION_ID'),
         cwd: (await read($, cwd)) ?? (await $.session.cwd()),
-        generation: statusGen,
+        generation: loadStamp,
       })
   await takeUpMemo($, sessionId, found)
 }
 
-// At each start of the hooks, the session's start and every hot reload, a
-// memo of this session is taken up (see takeUpMemo). The memo is read first,
-// because `update` writes even when its change hands back the value it was
-// given.
-async function startStatus($: $) {
+// Takes a memo of this session up when there is one (see takeUpMemo), and
+// says whether there was one, taken up or left to a newer copy. It runs at
+// each start of the hooks, the session's start and every hot reload, and at
+// a prompt before the ticket is looked for, so the two cannot come to take a
+// memo up in different ways. The memo is read first, because `update` writes
+// even when its change hands back the value it was given.
+async function startStatus($: $): Promise<boolean> {
   const sessionId = await $.session.id()
-  if (statusMemoIn(await read($, statusMemo), sessionId) === null) return
+  if (statusMemoIn(await read($, statusMemo), sessionId) === null) return false
   await takeUpMemo($, sessionId, null)
+  return true
 }
 
 // At the session's end nothing more is written. Writing is closed and this
 // module copy's statusGen raised first, leaving the memo's stored generation
-// alone, so a writer of the ended session that is still
-// awaiting a read stops before it writes, even once a new conversation writes
-// again. A session with a ticket then deletes the file after a merge, and
-// when the process goes on under another session id, after a /clear or a
-// resume, everything is made ready for the new conversation, whether or not
-// the delete got through.
+// and this copy's load stamp alone, so a writer of the ended session that is
+// still awaiting a read stops before it writes. Raising statusGen claims no
+// memo: only the load stamp does that. Once a new conversation takes a memo
+// up, statusGen is this copy's stamp again, but a writer of the ended
+// session that holds a record read before the end still stops, because the
+// memo under the ended session's id is gone by then: it was reset, or the
+// new conversation's memo replaced it. A session with a ticket then deletes
+// the file after a merge, and when the process goes on under another session
+// id, after a /clear or a resume, everything is made ready for the new
+// conversation, whether or not the delete got through.
 async function endStatus($: $, reason: string, sessionId: string, budget: { remainingMs: number }) {
   const wasTicketed = ticketKnown === 'some'
   statusClosed = true
@@ -3100,10 +3138,13 @@ export const register: Register = on => {
         required: ['title', 'stage'],
       },
     })
-    // A memo of this session, kept across a hot reload, is taken up again
-    // first, so the writes below already count for the status file. When
-    // this fails, the next prompt takes the memo up instead (see
-    // lookForTicket), and until then the file is not written.
+    // This load's stamp is set first, so it orders this copy after every
+    // copy loaded before it (see stampLoad). A memo of this session, kept
+    // across a hot reload, is then taken up again, so the writes below
+    // already count for the status file. When taking it up fails, the next
+    // prompt takes the memo up instead (see lookForTicket), and until then
+    // the file is not written.
+    await stampLoad($).catch(() => undefined)
     await startStatus($).catch(() => undefined)
     await update($, cwd, () => e.cwd)
     // The hooks start again after a hot reload too, which drops every call in

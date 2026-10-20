@@ -52,9 +52,21 @@ lives in `hooks/register.tsx`. The record's types go in the contract,
    `statusChanged($, true)`, which rebuilds from the atoms, so it also heals
    any missed trigger. `session.start` arms it again after a hot reload
    when the memo holds a ticket for this session.
-5. **A writer left over from before a hot reload stops.** `session.start`
-   raises the memo's generation and keeps it in a module variable; the loop
-   stops when the memo's generation is not its own.
+5. **A writer left over from before a hot reload stops.** A copy of the
+   module from before a hot reload keeps running the work it had in flight,
+   so each copy gets a load stamp that orders the copies by when they
+   loaded. `session.start` sets it once, before the memo is taken up, from
+   `$.clock.now()`, or from one more than the memo's stored generation when
+   the clock has not moved past it, so a later load always has a larger
+   stamp. The memo's generation holds the stamp of the copy that owns it,
+   and only the newest copy owns it: a copy takes the memo up, at the start
+   of the hooks or at a prompt, through one shared function, and only when
+   its stamp is not below the stored generation. Taking it up sets the
+   generation, and the generation the copy writes under, to its stamp. A
+   copy whose stamp is below the stored generation leaves the memo as it is
+   and writes nothing, and a new memo written at a prompt never overwrites
+   one that a newer copy wrote meanwhile. The loop stops when the memo's
+   generation is not its own.
 6. **The session's end.** `session.end` marks the session closed
    synchronously and cancels the tick, waits for the write in flight within
    the engine's budget, and then, when the watched pull request's snapshot
