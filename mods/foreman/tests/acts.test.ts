@@ -347,7 +347,7 @@ test('after a reload the ledger in $.state keeps a wake from coming twice', asyn
   w.folder.put('a.json', cleaning)
   const p = { ...newPairing('ft-ABC-1', 'local_a', T0), owner: 's-ABC-1', ownerFile: 'a.json', issueKey: 'ABC-1' }
   const acted = { ...p, acts: { ...p.acts, episode: { state: 'in-cleanup', since: T0 }, cleanupWokeFor: `in-cleanup@${T0}` } }
-  leftInState(on, {
+  leftInState(on, { sessionOf: 'session-1',
     tickets: { pairings: [acted], freedWhilePaused: false, folderMissing: false },
     parent: { isOn: true, slots: null, isPaused: false },
     nextReadAt: T0 - SECOND,
@@ -471,7 +471,7 @@ test('a notification that never answers is given up on after 30 seconds', async 
 test('work a read decided before a reload dropped its timer is carried out once the timers are armed again', async ($, on) => {
   const w = world(on)
   w.folder.put('a.json', record('ABC-1', 'working', { desktopSessionId: 'local_a' }))
-  leftInState(on, {
+  leftInState(on, { sessionOf: 'session-1',
     tickets: {
       ...ticketsIn(w.stored.get(ticketsKey('session-1'))),
       outbox: { logs: ['A line decided before the reload.'], effects: [{ kind: 'nudge', to: 'local_a', name: 'ABC-1' }], lines: ['foreman: one slot free; pick the next issue and start it.'] },
@@ -603,4 +603,30 @@ test('a subagent\'s turn start does not count as the parent\'s turn, and the end
   await w.clock.settle()
   expect(w.engine.prompts).toHaveLength(2)
   expect(w.engine.appended).toEqual([])
+})
+
+test('after a /clear the parent goes on under the new session id with its role and its tickets', async ($, on) => {
+  const w = world(on)
+  await start($)
+  await foreman($)
+  await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh' })
+  await $.session.end({ reason: 'clear', sessionId: 'session-1', resume: { id: 'session-1' } } as never)
+  w.engine.sessionId = 'session-2'
+  await startSession($, { prompt: 'Run /implement ABC-8.', context: 'fresh' })
+  expect(String(w.engine.started.at(-1)?.prompt)).toContain('foreman-ticket: ft-')
+  expect(ticketsIn(w.stored.get(ticketsKey('session-2'))).pairings).toHaveLength(2)
+  expect((w.stored.get('parent:session-2') as { isOn?: boolean } | undefined)?.isOn).toBe(true)
+})
+
+test('after a resume to another conversation that stored nothing, the role is off and no ticket is added', async ($, on) => {
+  const w = world(on)
+  await start($)
+  await foreman($)
+  await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh' })
+  await $.session.end({ reason: 'resume', sessionId: 'session-1', resume: { id: 'session-3' } } as never)
+  w.engine.sessionId = 'session-3'
+  await startSession($, { prompt: 'Run /implement ABC-8.', context: 'fresh' })
+  expect(w.engine.started.at(-1)?.prompt).toBe('Run /implement ABC-8.')
+  expect(w.stored.has(ticketsKey('session-3'))).toBe(false)
+  expect(ticketsIn(w.stored.get(ticketsKey('session-1'))).pairings).toHaveLength(1)
 })

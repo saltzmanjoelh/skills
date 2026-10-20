@@ -25,6 +25,8 @@ const nextReadAt = atom({ plugin: 'foreman', key: 'nextReadAt' } as const, null)
 const log = atom({ plugin: 'foreman', key: 'log' } as const, [])
 const tickets = atom({ plugin: 'foreman', key: 'tickets' } as const, TICKETS_EMPTY)
 const turnRuns = atom({ plugin: 'foreman', key: 'turnRuns' } as const, false)
+const sessionOf = atom({ plugin: 'foreman', key: 'sessionOf' } as const, null)
+const carryOver = atom({ plugin: 'foreman', key: 'carryOver' } as const, false)
 
 // How many lines the log keeps.
 export const LOG_KEPT = 20
@@ -68,7 +70,8 @@ let timer: { cancel: () => void } | undefined
 let ticker: { cancel: () => void } | undefined
 // The read under way, so a second one waits for it rather than racing it.
 let reading: Promise<void> | undefined
-// The plugin's options, as register received them.
+// The plugin's options, as register received them. Everything reads them
+// from here.
 let currentOptions: Record<string, unknown> = {}
 // The store write of the ledger under way, so writes go in order, and the
 // ledger this copy of the module last stored, as JSON, so a read that changed
@@ -103,6 +106,7 @@ async function addLog($: $, text: string) {
 // may run it again when another write got in first, so it must not have side
 // effects. Answers the settings as written.
 async function writeParent($: $, change: (settings: ForemanParent) => ForemanParent): Promise<ForemanParent> {
+  await adoptSession($)
   let written = PARENT_OFF
   await update($, parent, raw => {
     written = change(parentIn(raw))
@@ -120,6 +124,7 @@ async function writeParent($: $, change: (settings: ForemanParent) => ForemanPar
 // when the write runs, and the writes go one after another, so the last one
 // to land always carries the newest ledger.
 async function writeTickets($: $, change: (t: ForemanTickets) => ForemanTickets): Promise<ForemanTickets> {
+  await adoptSession($)
   let written = TICKETS_EMPTY
   let unchanged = false
   const sessionId = await $.session.id()
@@ -167,6 +172,38 @@ function reasonOf(error: unknown): string {
 function limitsOf(options: Record<string, unknown>): Limits {
   const minutes = (raw: unknown, fallback: number) => (typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : fallback)
   return { idleMs: minutes(options.idleMinutes, IDLE_MINUTES) * 60_000, cleanupMs: minutes(options.cleanupMinutes, CLEANUP_MINUTES) * 60_000 }
+}
+
+// Takes up the current session's settings and ledger when $.state holds
+// another session's, as at the first start, after a /clear and after a
+// resume, which go on under a new session id with no new start. The stored
+// ones are taken when there are any. Otherwise a /clear carries the last
+// session's role and tickets over to the new id, since it is the same parent
+// going on, and anything else starts with the role off and no tickets. It
+// does nothing while $.state already holds this session's, so a start that
+// comes again after a hot reload keeps the newer ledger $.state holds.
+async function adoptSession($: $) {
+  const id = await $.session.id()
+  if ((await read($, sessionOf)) === id) return
+  const carry = (await read($, carryOver)) === true
+  const rawParent = await $.store.get(storeKey(id))
+  const rawTickets = await $.store.get(ticketsKey(id))
+  const hasParent = rawParent !== undefined && rawParent !== null
+  const hasTickets = rawTickets !== undefined && rawTickets !== null
+  const settings = hasParent ? parentIn(rawParent) : carry ? parentIn(await read($, parent)) : PARENT_OFF
+  await update($, parent, () => settings)
+  let ledger = TICKETS_EMPTY
+  await update($, tickets, heldRaw => {
+    ledger = hasTickets ? { ...ticketsIn(rawTickets), sessionId: id } : carry ? { ...ticketsIn(heldRaw), sessionId: id } : { ...TICKETS_EMPTY, sessionId: id }
+    return ledger
+  })
+  await update($, sessionOf, () => id)
+  await update($, carryOver, () => false)
+  if (carry && !hasParent && settings.isOn) await $.store.set(storeKey(id), settings).catch(() => undefined)
+  if (carry && !hasTickets && ledger.pairings.length > 0) {
+    await $.store.set(ticketsKey(id), ledger).catch(() => undefined)
+    lastStored = JSON.stringify(ledger)
+  }
 }
 
 // Whether this session is the parent, as $.state holds it.
@@ -393,6 +430,7 @@ function schedule($: $, delay: number) {
 // not armed, as after a hot reload dropped them: from the saved time of the
 // next read, reading at once when that time has passed or none was saved.
 async function ensureArmed($: $) {
+  await adoptSession($)
   if (armed || !(await isOn($))) return
   armed = true
   ticker ??= $.clock.every(REDRAW_MS, () => $.ui.invalidate('ui.render'))
@@ -406,13 +444,13 @@ async function ensureArmed($: $) {
 }
 
 // The View the band and the pane draw from.
-async function view($: $, options: Record<string, unknown>): Promise<View> {
+async function view($: $): Promise<View> {
   const settings = parentIn(await read($, parent))
   const due = await read($, nextReadAt)
   const lines = await read($, log)
   return {
     isOn: settings.isOn,
-    slots: slotsOf(settings, options.slots),
+    slots: slotsOf(settings, currentOptions.slots),
     isPaused: settings.isPaused,
     rows: settings.isOn ? await shownNow($) : [],
     now: await $.clock.now(),
@@ -595,28 +633,19 @@ export const register: Register = (on, options) => {
       name: 'foreman',
       description: 'Make this session the parent and show its /implement sub sessions. `/foreman slots <n>` sets how many it runs at once, `/foreman pause` and `/foreman resume` pause and resume it.',
     })
-    const id = await $.session.id()
-    const rawParent = await $.store.get(storeKey(id))
-    const rawTickets = await $.store.get(ticketsKey(id))
-    // $.state keeps the ledger it holds when that ledger is this session's
-    // and has something in it, so a start that comes again in a running
-    // session cannot put an older stored ledger over a newer one. Otherwise
-    // the stored ledger, or an empty one, takes its place, so a process that
-    // goes on as another session never keeps the last session's tickets.
-    const storedTickets = ticketsIn(rawTickets)
-    await update($, tickets, heldRaw => {
-      const held = ticketsIn(heldRaw)
-      const isOurs = held.sessionId === id && (held.pairings.length > 0 || hasWork(held.outbox))
-      return isOurs ? held : { ...storedTickets, sessionId: id }
-    })
-    // The settings are this session's stored ones, or off when it stored
-    // none, so a process that goes on as another session does not keep the
-    // last session's role.
-    const storedParent = rawParent === undefined || rawParent === null ? PARENT_OFF : parentIn(rawParent)
-    await update($, parent, () => storedParent)
-    if (storedParent.isOn) await ensureArmed($)
+    await adoptSession($)
+    if (await isOn($)) await ensureArmed($)
     return next(e)
   })
+
+  // A /clear ends the session and goes on under a new id with no new start,
+  // as the same parent, so its role and tickets are carried over to the new
+  // id when it next takes its session up. A resume to another conversation
+  // ends it the same way but carries nothing over.
+  on('session.end', async ($, e, next) => {
+    await update($, carryOver, () => e.reason === 'clear').catch(() => undefined)
+    return next(e)
+  }).catch(($, e, next) => next(e))
 
   // The host already puts the mod's name in front of a command's output.
   // Every /foreman command also arms the timers again when a hot reload has
@@ -655,6 +684,7 @@ export const register: Register = (on, options) => {
   // other session the call passes unchanged. A hook that throws passes the
   // call on as it came.
   on('tool.call', { tool: START_TOOL }, async ($, e, next) => {
+    await adoptSession($)
     if (!(await isOn($))) return next(e)
     return startSession($, e, next)
   }).catch(($, e, next) => {
@@ -678,14 +708,14 @@ export const register: Register = (on, options) => {
         void releaseRow($, file).catch(() => undefined)
       },
     }
-    return paneTree(elementsOf($, e), await view($, options), presses, columnsOf(e.props.bodyColumns))
+    return paneTree(elementsOf($, e), await view($), presses, columnsOf(e.props.bodyColumns))
   })
 
   // The band gives way to Claude Code's survey, and to the host in a session
   // that is not a parent, which bandTree answers with null.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
-    const v = await view($, options)
+    const v = await view($)
     const presses = {
       open: (file: string) => {
         void openRow($, file).catch(() => undefined)

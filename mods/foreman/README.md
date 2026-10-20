@@ -39,6 +39,8 @@ Only status files whose ticket this parent issued show in its band and its pane 
 
 A ticket that no status file has carried for a day, as one given to a proposal card that never started, is forgotten.
 
+After a `/clear` the parent goes on with its role and its tickets. A resume to another conversation takes that conversation's own, or none.
+
 A parent that ran the read-only version of foreman has no tickets, so sub sessions it started before the upgrade do not show.
 
 ## The status folder

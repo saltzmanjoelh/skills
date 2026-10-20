@@ -213,6 +213,11 @@ first saw it in that state.
   day is forgotten, so the ledger cannot grow without bound.
 - A hot reload keeps the pairings, the nudge counts and the wake record in
   `$.state`; a restart reads them from the store.
+- A `/clear` goes on under a new session id with no new session start, as
+  the same parent, so its role and its tickets carry over to the new id. A
+  resume to another conversation takes that conversation's own stored role
+  and tickets, or none. The ledger records the session it belongs to, so one
+  session's tickets are never shown, acted on or stored as another's.
 - The idle clock counts from `stateSince`, so after a restart of the parent an
   idle that began long ago is nudged at the first read.
 

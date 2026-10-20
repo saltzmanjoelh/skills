@@ -144,6 +144,7 @@ export function engine(on: On) {
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.id', () => ({ value: answers.sessionId }))
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('command.run', () => ({ text: '' }))
   on('ui.open', ($, e) => {
     panes.push(e.id)

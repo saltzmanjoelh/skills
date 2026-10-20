@@ -108,6 +108,15 @@ declare module 'claude-code' {
       // Whether a turn of the session's own loop is running, so a wake is
       // appended to it rather than submitted.
       turnRuns: boolean
+      // The session id whose settings and ledger $.state holds, or null
+      // before the first start. A /clear or a resume goes on under a new id
+      // with no new start, so the next hook that finds the id changed takes
+      // that session's own up then.
+      sessionOf: string | null
+      // Whether the session ended for a /clear, so the conversation that goes
+      // on under the new id is the same parent and keeps its role and
+      // tickets when it stored none of its own.
+      carryOver: boolean
     }
   }
 }

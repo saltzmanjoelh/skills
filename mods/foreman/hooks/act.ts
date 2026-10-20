@@ -197,13 +197,23 @@ function idleRule(s: Step) {
   setActs(s, { stretch: { ...stretch, woke: true } })
 }
 
+// Whether a record may be gone, before the desktop app's list is asked: it
+// is not done, its file has not changed for GONE_MS, its pull request has
+// not merged, and the gone wake has not already gone for this file. The gone
+// rule and needsList both ask it, so the list is read only when the rule
+// could act on it.
+function mayBeGone(p: ForemanPairing, row: SubRow, now: number): boolean {
+  return row.record.state !== 'done'
+    && now - row.mtimeMs > GONE_MS
+    && p.acts.goneWokeFor !== row.mtimeMs
+    && !/^merged$/i.test(row.record.pr?.state ?? '')
+}
+
 // Gone, in any state but done: the file has not changed for GONE_MS, the list
 // does not show the session running, and the pull request has not merged.
 // One stretch is one unchanged modification time.
 function goneRule(s: Step) {
-  if (s.row.record.state === 'done' || s.sessionsById === null) return
-  if (s.now - s.row.mtimeMs <= GONE_MS || s.p.acts.goneWokeFor === s.row.mtimeMs) return
-  if (/^merged$/i.test(s.row.record.pr?.state ?? '')) return
+  if (s.sessionsById === null || !mayBeGone(s.p, s.row, s.now)) return
   if (endedIn(s.sessionsById, desktopOf(s.p, s.row)) === null) return
   s.reasons.push({ kind: 'gone', who: whoOf(s.row.record.issueKey, s.p.ticket), minutes: minutesOf(s.now - s.row.mtimeMs) })
   setActs(s, { goneWokeFor: s.row.mtimeMs })
@@ -223,14 +233,12 @@ export function slotOutcome(free: number, isPaused: boolean): SlotOutcome {
 }
 
 // Whether this read needs the desktop app's list: some active owned record is
-// done, or its file is older than GONE_MS.
+// done, or may be gone, as mayBeGone says.
 export function needsList(t: ForemanTickets, rows: readonly SubRow[], now: number): boolean {
   const active = new Map(t.pairings.flatMap(p => (p.owner !== null && p.standing === 'active' ? [[p.owner, p] as const] : [])))
   return rows.some(r => {
     const p = active.get(r.record.sessionId)
-    // An old file whose gone wake already went needs no list, as goneRule
-    // would pass it by.
-    return p !== undefined && ownsTicket(p, r) && (r.record.state === 'done' || (now - r.mtimeMs > GONE_MS && p.acts.goneWokeFor !== r.mtimeMs))
+    return p !== undefined && ownsTicket(p, r) && (r.record.state === 'done' || mayBeGone(p, r, now))
   })
 }
 
