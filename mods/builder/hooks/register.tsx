@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Next, PromptOrigin, Register, ResolveInput, ToolCallInput, ToolCallResult } from 'claude-code'
 
-import type { AgentCard, BackgroundTask, BuilderRun, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, Wake } from '../types'
+import type { AgentCard, BackgroundTask, BuilderRun, BuildStatus, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, StatusMemo, Wake } from '../types'
 import { isSvgSurface } from './art'
 import { checkoutSentence, worktreeWithBranch, type Checkout } from './checkout'
 import { afterAskAgain, afterTally, askAgainAnswer, briefAnswer, briefFactsOf, briefRefusal, briefText, counselAnswer, decisionLine, destinationOf, endedDecisionLines, FOLLOW_UP_OPTIONS, followUpAnswer, followUpAskAgainAnswer, followUpsRefusal, followUpStepOf, followUpVotesOf, keepCounsel, MAX_BRIEF_OPTIONS, MAX_FOLLOW_UPS, MIN_OPTIONS, neverStartedCandidatesOf, neverStartedOf, type PullRequestRef, reviewParagraph, stepOf, type UnreadableVote, votesOf } from './counsel'
@@ -12,6 +12,7 @@ import { afterReport, endedOf, plannedOf, progressIn, reportAnswer, reportOf, st
 import { changePrompt, ciEventContext, resumePrompt, stateLines, stuckPrompt } from './prompts'
 import { factIn, packageText, secretIn, verdictsLine, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
+import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, buildPathOf, configDirOf, firstPromptOf, isCleanupSkill, isSameRecord, newMemo, recordOf, statusMemoIn, ticketIn, type StatusFacts } from './status'
 import { timeOfDay } from './text'
 
 type $ = EngineInterface
@@ -46,6 +47,12 @@ const loaded = atom({ plugin: 'builder', key: 'loaded' } as const, null)
 // How the first load of this build in the session began. It survives a hot
 // reload too, and a restart starts without it.
 const loadBegun = atom({ plugin: 'builder', key: 'loadBegun' } as const, null)
+// What the status file for the foreman needs beyond the values above. It
+// survives a hot reload, so the ticket is not looked for again and the time
+// the state began is kept; a /clear resets it. The state.set hook in
+// `register` leaves its writes out, so writing it never asks for another
+// write of the status file.
+const statusMemo = atom({ plugin: 'builder', key: 'status' } as const, null)
 
 // The builder mod: it watches the pull request the session works on, shows that
 // pull request and the session's agents in a pane, and starts a turn when the
@@ -2599,7 +2606,275 @@ function succeeded(ran: ToolCallResult): boolean {
   return typeof result !== 'object' || result === null || result.backgroundTaskId === undefined
 }
 
+// The status file for the foreman. A session whose first prompt holds a
+// `foreman-ticket:` line writes one JSON file, which the foreman reads on its
+// own timer to see what every session it started is doing. hooks/status.ts
+// holds the rules; what follows reads the state, writes the file and keeps
+// it fresh. The README section "The status file for the foreman" describes
+// the file.
+//
+// Whether this session has a ticket: 'some' once one was found, 'none' once
+// the first prompt was looked at and holds none, and undefined before that
+// and after a /clear. `ticketFor` is the session id the answer belongs to, so
+// a /clear whose end was cut off is noticed at the next prompt. Both are
+// module variables so that every write of state can ask for a write of the
+// file with no await, and a hot reload sets them from the memo again.
+let ticketKnown: 'some' | 'none' | undefined
+let ticketFor: string | undefined
+// A write of the file was asked for since the writer last read the state,
+// and whether one of those asks was the minute's tick, which writes even
+// when nothing changed.
+let statusDirty = false
+let statusForced = false
+// A writer is scheduled or running, and the promise of the one running, which
+// the session's end waits on.
+let statusPending = false
+let statusFlight: Promise<void> | null = null
+// The memo's generation this copy of the module writes under. The memo's is
+// raised at each start of the hooks, so a writer that a copy from before a
+// hot reload left running finds the memo's generation is not its own and
+// stops.
+let statusGen = 0
+// The record last written, to compare the next one with. A hot reload
+// forgets it, which costs one write.
+let lastWritten: BuildStatus | null = null
+// The minute's tick, and whether the session has ended, after which nothing
+// more is written.
+let statusTick: { cancel: () => void } | undefined
+let statusClosed = false
+
+// The file is written at least this often while the session lives, so a file
+// whose write time stops moving tells the foreman the session is gone or hung.
+const STATUS_EVERY_MS = 60_000
+// How long one write may take before the writer gives up on it, so a write
+// that never settles cannot stop writing for good. A write that finishes
+// after the writer gave up on it, over a newer one, is put right by the next.
+const STATUS_WRITE_TIMEOUT_MS = 30_000
+
+// Asks for the file to be worked out again and written when it changed, or
+// written in any case when `force` is set. It does nothing in a session that
+// has no ticket, or none known yet, and nothing once the session has ended.
+// Asks that arrive while a writer is scheduled or running are folded into
+// it: the writer reads the state again before it finishes, so the newest
+// record is always the last one written.
+function statusChanged($: $, force = false) {
+  if (ticketKnown !== 'some' || statusClosed) return
+  statusDirty = true
+  if (force) statusForced = true
+  if (statusPending) return
+  statusPending = true
+  const gen = statusGen
+  try {
+    $.clock.after(0, () => {
+      statusFlight = writeStatus($, gen).finally(() => {
+        statusFlight = null
+      })
+    })
+  } catch {
+    statusPending = false
+  }
+}
+
+// Writes the record while a write has been asked for since the last read of
+// the state. A record equal to the last one written in every field but the
+// write time is not written, unless the tick asked. A write that fails or
+// times out is dropped: the next change or the next tick tries again, and
+// nothing here can stop a hook. It stops when the memo belongs to another
+// session, holds no ticket or no path, or was raised to a newer generation.
+async function writeStatus($: $, gen: number): Promise<void> {
+  try {
+    while (statusDirty && !statusClosed && gen === statusGen) {
+      statusDirty = false
+      const force = statusForced
+      statusForced = false
+      const facts = await statusFacts($)
+      if (facts === null || facts.memo.generation !== gen || facts.memo.path === null) return
+      const record = recordOf(facts, await $.clock.now())
+      if (!force && lastWritten !== null && isSameRecord(lastWritten, record)) continue
+      if (statusClosed) return
+      await withinTimeout($, $.fs.write(facts.memo.path, JSON.stringify(record)), STATUS_WRITE_TIMEOUT_MS)
+      lastWritten = record
+      if (facts.memo.state === record.state && facts.memo.stateSince === record.stateSince) continue
+      const { sessionId } = facts.memo
+      await update($, statusMemo, raw => {
+        const memo = statusMemoIn(raw, sessionId)
+        return memo === null ? raw : afterWrite(memo, record)
+      })
+    }
+  } catch {
+    // Dropped, as said above.
+  } finally {
+    statusPending = false
+    if (statusDirty) statusChanged($)
+  }
+}
+
+// Settles as `work` does, or rejects once `ms` have passed.
+function withinTimeout<T>($: $, work: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = $.clock.after(ms, () => reject(new Error('timed out')))
+    work.then(
+      value => {
+        timer.cancel()
+        resolve(value)
+      },
+      error => {
+        timer.cancel()
+        reject(error)
+      },
+    )
+  })
+}
+
+// Everything the record is worked out from, read fresh, or null when the
+// memo is not this session's or holds no ticket.
+async function statusFacts($: $): Promise<StatusFacts | null> {
+  const memo = statusMemoIn(await read($, statusMemo), await $.session.id())
+  if (memo === null || memo.ticket === null) return null
+  return {
+    memo: { ...memo, ticket: memo.ticket },
+    progress: progressIn(await read($, progress)),
+    run: await read($, run),
+    pr: snapshotIn(await read($, pr)),
+    busy: (await read($, busy)) === true,
+    agents: await read($, agents),
+    background: await read($, background),
+    calls: await read($, calls),
+    questions: await read($, questions),
+    nextLook: await read($, nextLook),
+    usageHold: holdIn(await read($, usageHold)),
+  }
+}
+
+// Applies an event's change to the memo and asks for a write. It does nothing
+// in a session that has no ticket, or none known yet.
+async function changeMemo($: $, change: (memo: StatusMemo) => StatusMemo) {
+  if (ticketKnown !== 'some') return
+  const sessionId = await $.session.id()
+  await update($, statusMemo, raw => {
+    const memo = statusMemoIn(raw, sessionId)
+    return memo === null ? raw : change(memo)
+  })
+  statusChanged($)
+}
+
+// Starts the minute's tick, or starts it again. Each tick works the record
+// out again from the state, so it also puts right a change whose ask was
+// missed.
+function armStatusTick($: $) {
+  statusTick?.cancel()
+  statusTick = $.clock.every(STATUS_EVERY_MS, () => statusChanged($, true))
+}
+
+// Takes the answer a memo of this session already holds: the ticket, or that
+// there is none. A memo with a ticket starts the tick and a write.
+function adoptMemo($: $, memo: StatusMemo) {
+  ticketKnown = memo.ticket === null ? 'none' : 'some'
+  ticketFor = memo.sessionId
+  if (ticketKnown === 'some') {
+    armStatusTick($)
+    statusChanged($, true)
+  }
+}
+
+// Looks for the ticket at a prompt, once per session id. The answer a memo of
+// this session holds is taken as it is, so a hot reload does not look again.
+// Otherwise the first prompt is the first user message of the transcript, or
+// the prompt being submitted when the transcript holds none or cannot be
+// read. The configuration folder and the desktop id are read only when there
+// is a ticket, so a session without one reads nothing more.
+async function lookForTicket($: $, submitted: string) {
+  const sessionId = await $.session.id()
+  if (ticketKnown !== undefined && ticketFor === sessionId) return
+  const stored = statusMemoIn(await read($, statusMemo), sessionId)
+  if (stored !== null) {
+    adoptMemo($, stored)
+    return
+  }
+  let first = submitted
+  try {
+    first = firstPromptOf(await $.session.messages(), submitted)
+  } catch {
+    // The prompt being submitted is checked instead.
+  }
+  const ticket = ticketIn(first)
+  const found = ticket === null
+    ? newMemo({ sessionId, ticket: null, path: null, cwd: '', generation: statusGen })
+    : newMemo({
+        sessionId,
+        ticket,
+        path: buildPathOf(configDirOf(await $.env.get('CLAUDE_CONFIG_DIR'), await $.env.get('HOME')), sessionId),
+        desktopSessionId: await $.env.get('CLAUDE_CODE_HOST_SESSION_ID'),
+        cwd: (await read($, cwd)) ?? (await $.session.cwd()),
+        generation: statusGen,
+      })
+  await update($, statusMemo, () => found)
+  adoptMemo($, found)
+}
+
+// At each start of the hooks, the session's start and every hot reload: a
+// memo of this session is raised to a new generation, which this copy of the
+// module then writes under, and its answer is taken.
+async function startStatus($: $) {
+  const sessionId = await $.session.id()
+  const stored = statusMemoIn(await read($, statusMemo), sessionId)
+  if (stored === null) return
+  statusGen = stored.generation + 1
+  const raised = { ...stored, generation: statusGen }
+  await update($, statusMemo, () => raised)
+  adoptMemo($, raised)
+}
+
+// At the session's end nothing more is written. A session with a ticket waits
+// for the write in flight, within the engine's short budget for ending a
+// session, and then, when the watched pull request merged, deletes the file
+// with `rm -f`, since the engine's file interface has no delete. Without a
+// merge the file stays for the foreman to read. When the process goes on
+// under another session id, after a /clear or a resume, the memo is reset,
+// and the new conversation looks for a ticket in its own first prompt.
+async function endStatus($: $, reason: string, sessionId: string, budget: { remainingMs: number }) {
+  const wasTicketed = ticketKnown === 'some'
+  statusClosed = true
+  statusTick?.cancel()
+  statusTick = undefined
+  try {
+    if (wasTicketed) {
+      const flight = statusFlight
+      if (flight !== null) await withinTimeout($, flight, Math.max(0, Math.min(budget.remainingMs - 250, 1_000))).catch(() => undefined)
+      const memo = statusMemoIn(await read($, statusMemo), sessionId)
+      const r = await read($, run)
+      const s = snapshotIn(await read($, pr))
+      const isMerged = r !== null && s !== null && s.repo === r.repo && s.number === r.number && s.state === 'MERGED'
+      if (memo?.path != null && isMerged) await $.process.run(['rm', '-f', memo.path], { timeoutMs: 1_000 })
+    }
+  } finally {
+    if (reason === 'clear' || reason === 'resume') {
+      ticketKnown = undefined
+      ticketFor = undefined
+      lastWritten = null
+      statusDirty = false
+      statusForced = false
+      statusClosed = false
+      await update($, statusMemo, () => null)
+    }
+  }
+}
+
 export const register: Register = on => {
+  // Every write of the mod's own state asks for the status file to be worked
+  // out again, so a writer of state added later cannot forget to. A wrapper
+  // around `update` cannot do this, because the engine reads which values a
+  // module writes from each call's atom at the call site, and refuses a call
+  // whose atom is a parameter. The memo's own writes are left out, so writing
+  // it never asks for another write. In a session with no ticket the ask
+  // returns at once, so such a session does what it did before the file
+  // existed.
+  on('state.set', async ($, e, next) => {
+    const set = await next(e)
+    if (e.plugin === 'builder' && e.key !== 'status') statusChanged($)
+    return set
+  })
+
   on('session.start', async ($, e, next) => {
     // The commit this load of the hooks reads its files at, recorded first,
     // and not awaited, so the session's start never waits on git.
