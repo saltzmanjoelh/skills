@@ -1,0 +1,16 @@
+{
+  "name": "foreman",
+  "version": "0.1.0",
+  "types": "./types/index.d.ts",
+  "author": { "name": "Joel Saltzman" },
+  "description": "Shows a parent session every /implement sub session at a glance, in a band above the prompt and a pane, and opens a sub session beside the parent when its issue is pressed",
+  "dependencies": ["builder"],
+  "userConfig": {
+    "slots": {
+      "type": "number",
+      "title": "Slots",
+      "description": "How many sub sessions a parent session runs at once, from 1 to 20, unless /foreman slots sets another count for that session.",
+      "default": 2
+    }
+  }
+}
