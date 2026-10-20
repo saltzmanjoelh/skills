@@ -30,17 +30,14 @@ export type FileRead = { file: string; mtimeMs: number; text: string | null }
 // one. A file the read did not find leaves, and a file that never parsed is
 // not kept. A file whose text is the same as the kept entry's keeps that
 // entry and is not parsed again, since its text parsed when it was kept.
-// `parse` turns a text into its record, as it does for `rowsOf`. The hooks
-// in register.tsx keep one map of parsed texts, `parsedTexts`, and each read
-// and each drawing makes its own remembering pass from it, so each new text
-// is parsed once. The result is in file name order.
-export function afterRead(kept: readonly ForemanFile[], found: readonly FileRead[], parse: (text: string) => BuildStatus | null = recordIn): ForemanFile[] {
+// The result is in file name order.
+export function afterRead(kept: readonly ForemanFile[], found: readonly FileRead[]): ForemanFile[] {
   const before = new Map(kept.map(entry => [entry.file, entry]))
   const next: ForemanFile[] = []
   for (const f of found) {
     const last = before.get(f.file)
     if (last !== undefined && f.text === last.text) next.push(last)
-    else if (f.text !== null && parse(f.text) !== null) next.push({ file: f.file, text: f.text, mtimeMs: f.mtimeMs })
+    else if (f.text !== null && recordIn(f.text) !== null) next.push({ file: f.file, text: f.text, mtimeMs: f.mtimeMs })
     else if (last !== undefined) next.push(last)
   }
   return next.sort((a, b) => byKeyThenFile(null, a.file, null, b.file))
@@ -65,40 +62,14 @@ export type SubRow = { file: string; record: BuildStatus; mtimeMs: number; isSta
 // The rows for the kept files, judged stale against the read made at
 // `readAt`, in issue-key order and then file name order, with the rows that
 // have no issue yet after every row that has one. A kept text that no
-// longer parses, as one an older build kept might not, is left out. `parse`
-// turns a kept text into its record; the hooks pass one that remembers the
-// texts it has parsed, so a redraw does not parse every file again.
-export function rowsOf(files: readonly ForemanFile[], readAt: number, parse: (text: string) => BuildStatus | null = recordIn): SubRow[] {
+// longer parses, as one an older build kept might not, is left out.
+export function rowsOf(files: readonly ForemanFile[], readAt: number): SubRow[] {
   const rows: SubRow[] = []
   for (const f of files) {
-    const record = parse(f.text)
+    const record = recordIn(f.text)
     if (record !== null) rows.push({ file: f.file, record, mtimeMs: f.mtimeMs, isStale: isStale(f.mtimeMs, readAt) })
   }
   return rows.sort((a, b) => byKeyThenFile(a.record.issueKey, a.file, b.record.issueKey, b.file))
-}
-
-// A parse that remembers the records of the texts it has parsed. `previous`
-// holds what the last pass remembered, and a text found there is not parsed
-// again. `remembered` holds only the texts this pass was handed, whether
-// parsed or found in `previous`, so a text no longer passed is forgotten. A
-// caller keeps `remembered` and hands it in as `previous` on its next pass.
-// The hooks in register.tsx differ in one way: a drawing passes every kept
-// text and so replaces the map with what it remembered, while a read skips
-// the unchanged texts and so adds what it remembered to the map instead.
-export function rememberingParse(
-  previous: ReadonlyMap<string, BuildStatus | null>,
-  parseText: (text: string) => BuildStatus | null = recordIn,
-): { parse: (text: string) => BuildStatus | null; remembered: Map<string, BuildStatus | null> } {
-  const remembered = new Map<string, BuildStatus | null>()
-  const parse = (text: string) => {
-    // Handed already in this pass: the record is remembered.
-    if (remembered.has(text)) return remembered.get(text)!
-    // Handed in the last pass: reuse its record. Otherwise parse the text.
-    const record = previous.has(text) ? previous.get(text)! : parseText(text)
-    remembered.set(text, record)
-    return record
-  }
-  return { parse, remembered }
 }
 
 // How long until the next read, given the rows the read found.

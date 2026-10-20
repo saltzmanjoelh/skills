@@ -7,8 +7,7 @@ import { failureLine, openSession, type DesktopCall } from './desktop'
 import { bandTree, PANE, paneTree, type Elements, type View } from './pane'
 import type { ForemanParent } from '../types'
 import { PARENT_OFF, parentIn, slotsOf, storeKey } from './parent'
-import { afterRead, nameOf, nextReadDelay, rememberingParse, rowsOf, type FileRead, type SubRow } from './subs'
-import type { BuildStatus } from './record'
+import { afterRead, nameOf, nextReadDelay, rowsOf, type FileRead, type SubRow } from './subs'
 import { printable } from './text'
 
 type $ = EngineInterface
@@ -78,22 +77,12 @@ async function isOn($: $): Promise<boolean> {
   return parentIn(await read($, parent)).isOn
 }
 
-// The records parsed from the texts, by text. The band and the pane draw
-// every second, while the texts change only when a read lands, so each text
-// is parsed once, by the read that found it. Each drawing keeps only the
-// texts of the files kept now; a hot reload starts it empty, and the next
-// drawing parses them again.
-let parsedTexts: ReadonlyMap<string, BuildStatus | null> = new Map()
-
 // The rows as the last read left them.
 async function rowsNow($: $): Promise<SubRow[]> {
   const kept = await read($, files)
   const at = await read($, readAt)
   const list = Array.isArray(kept) ? kept : []
-  const pass = rememberingParse(parsedTexts)
-  const rows = rowsOf(list, typeof at === 'number' ? at : await $.clock.now(), pass.parse)
-  parsedTexts = pass.remembered
-  return rows
+  return rowsOf(list, typeof at === 'number' ? at : await $.clock.now())
 }
 
 // Lists the folder and reads each `.json` file in it. A listing that fails
@@ -141,13 +130,7 @@ async function readAndSchedule($: $) {
     const found = await readFolder($)
     const now = await $.clock.now()
     if (found !== null) {
-      // The texts this read parsed are added to the ones remembered, rather
-      // than replacing them, because the read skips the texts that did not
-      // change. The drawing of the rows just below forgets the ones no file
-      // holds any more.
-      const pass = rememberingParse(parsedTexts)
-      await update($, files, kept => afterRead(Array.isArray(kept) ? kept : [], found, pass.parse))
-      parsedTexts = new Map([...parsedTexts, ...pass.remembered])
+      await update($, files, kept => afterRead(Array.isArray(kept) ? kept : [], found))
       await update($, readAt, () => now)
     }
     const delay = nextReadDelay(await rowsNow($))

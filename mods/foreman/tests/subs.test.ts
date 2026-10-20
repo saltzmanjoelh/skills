@@ -1,9 +1,9 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { ForemanFile } from '../types'
-import { recordIn, STATES } from '../hooks/record'
+import { STATES } from '../hooks/record'
 import {
-  afterRead, ageWords, busyCount, byKeyThenFile, chipText, fitChips, isStale, nextReadDelay, READ_LATER_MS, READ_SOON_MS, rememberingParse, rowsOf,
+  afterRead, ageWords, busyCount, byKeyThenFile, chipText, fitChips, isStale, nextReadDelay, READ_LATER_MS, READ_SOON_MS, rowsOf,
   STALE_MS, STATE_LOOK, untilWords,
 } from '../hooks/subs'
 
@@ -151,59 +151,23 @@ test('rows with an issue key come first in key order, then rows with none, and f
   expect(byKeyThenFile(null, 'a.json', null, 'a.json')).toBe(0)
 })
 
-test('the rows come from the parse they are given, which is handed each kept text once', () => {
-  const texts: string[] = []
-  const files = [kept('a.json', record('ABC-1', 'working'), 0), kept('b.json', record('ABC-2', 'idle'), 0)]
-  const parse = (text: string) => {
-    texts.push(text)
-    return text === files[0]!.text ? null : JSON.parse(text)
-  }
-  const rows = rowsOf(files, 0, parse)
-  expect(texts).toEqual([files[0]!.text, files[1]!.text])
-  expect(rows.map(r => r.file)).toEqual(['b.json'])
-})
-
-test('a remembering parse parses an unchanged text once across two passes, parses a changed text again, and forgets a text no longer passed', () => {
-  const texts: string[] = []
-  const counting = (text: string) => {
-    texts.push(text)
-    return recordIn(text)
-  }
-  const one = record('ABC-1', 'working')
-  const two = record('ABC-2', 'idle')
-  const first = rememberingParse(new Map(), counting)
-  expect(first.parse(one)?.issueKey).toBe('ABC-1')
-  expect(first.parse(two)?.issueKey).toBe('ABC-2')
-  expect(texts).toEqual([one, two])
-
-  const changed = record('ABC-2', 'done')
-  const second = rememberingParse(first.remembered, counting)
-  expect(second.parse(one)?.issueKey).toBe('ABC-1')
-  expect(second.parse(changed)?.state).toBe('done')
-  expect(texts).toEqual([one, two, changed])
-  expect([...second.remembered.keys()]).toEqual([one, changed])
-
-  // A text that did not parse is remembered as not parsing, and parsed once.
-  const third = rememberingParse(second.remembered, counting)
-  expect(third.parse('{')).toBeNull()
-  expect(third.parse('{')).toBeNull()
-  expect(texts).toEqual([one, two, changed, '{'])
-  expect([...third.remembered.keys()]).toEqual(['{'])
-})
-
-test('a read does not parse a file whose text is unchanged, and still keeps the last good read of a file that does not parse', () => {
+test('a read keeps the kept entry for an unchanged text, replaces it for a changed text that parses, and keeps the last good read of a half-written file', () => {
   const a = record('ABC-1', 'working')
   const b = record('ABC-2', 'idle')
-  const before = [kept('a.json', a, 1), kept('b.json', b, 2)]
-  const texts: string[] = []
-  const parse = (text: string) => {
-    texts.push(text)
-    return recordIn(text)
-  }
+  const c = record('ABC-3', 'idle')
+  const before = [kept('a.json', a, 1), kept('b.json', b, 2), kept('c.json', c, 3)]
+  const changed = record('ABC-3', 'done')
   const after = afterRead(before, [
     { file: 'a.json', mtimeMs: 10, text: a },
     { file: 'b.json', mtimeMs: 20, text: '{"sessionId": "s-ABC-2", "issu' },
-  ], parse)
-  expect(texts).toEqual(['{"sessionId": "s-ABC-2", "issu'])
-  expect(after).toEqual([kept('a.json', a, 1), kept('b.json', b, 2)])
+    { file: 'c.json', mtimeMs: 30, text: changed },
+  ])
+  // The unchanged text keeps the kept entry itself, with its old modification
+  // time, rather than a new entry carrying the time this read listed.
+  expect(after[0]).toBe(before[0])
+  expect(after[0]!.mtimeMs).toBe(1)
+  // The half-written file keeps its last good read.
+  expect(after[1]).toBe(before[1])
+  // The changed text that parses replaces the kept entry.
+  expect(after[2]).toEqual(kept('c.json', changed, 30))
 })
