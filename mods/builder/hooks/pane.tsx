@@ -185,7 +185,8 @@ export const STALE_WARNING = 'builder changed on disk since this session loaded 
 
 const SEPARATOR = ' · '
 // How every line above the prompt begins. withWarning drops it after the
-// warning, which already names builder, so the functions that build each line write it from here.
+// warning, which already names builder, so the functions that build each
+// line take the prefix from this constant rather than writing it themselves.
 const PREFIX = 'builder: '
 
 // The line `lineWith` builds for a width, led by the stale warning when the
