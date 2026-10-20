@@ -9769,3 +9769,22 @@ test('a turn that starts closes a permission prompt raised while no turn ran, so
   await s.clock.settle()
   expect(s.statusAt()).toMatchObject({ state: 'working', reason: 'The session\'s own turn is running.' })
 })
+
+test('a subagent\'s own tool call that returns closes the permission prompt that subagent raised', async ($, on) => {
+  const s = foremanSession(on)
+  // The agent is none of the mod's reviewers, so the fence lets its call run.
+  on('agent.list', () => ({ value: [] }))
+  const tools = heldTools(on)
+  await firstPrompt($, s.clock)
+  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {}, agent_id: 'agent-9' } as never)
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('needs-you')
+
+  const call = loose($)({ tool: 'Bash', tool_use_id: 'u1', command: 'ls', agentId: 'agent-9' })
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('needs-you')
+  tools.get('u1')!.finish()
+  await call
+  await s.clock.settle()
+  expect(s.statusAt()?.state).not.toBe('needs-you')
+})

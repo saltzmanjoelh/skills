@@ -1436,10 +1436,13 @@ async function repliedTurnClearsHold($: $, turnsStarted: number) {
   }
 }
 
-// A prompt the person started a turn with brings the stuck interval back to
-// the first, and clears a hold at once, with no resume turn. Every other
-// prompt, the mod's own among them, changes neither. Before the first await,
-// the number of the person's prompts moves on, so a hold being decided while
+// A prompt the person started a turn with answers whatever question the
+// counsel left for them, so the status file stops reading that the person is
+// needed; a failure there changes none of the other resets. It also brings the
+// stuck interval back to the first, and clears a hold at once, with no resume
+// turn. Every other prompt, the mod's own among them, changes none of these.
+// Right after the counsel's question is cleared, before any other await, the
+// number of the person's prompts moves on, so a hold being decided while
 // this runs is not started (see startHold), and the hold's number moves on
 // and its timer is cancelled, so a resume time that falls while this runs
 // sends no resume prompt beside the person's, whether its timer has yet to
@@ -1450,6 +1453,7 @@ async function repliedTurnClearsHold($: $, turnsStarted: number) {
 // hold's timer is armed again for a hold still on.
 async function personPromptResets($: $, origin: PromptOrigin, text: string) {
   if (!isPersonPrompt(origin, text)) return
+  await changeMemo($, afterPersonPrompt).catch(() => undefined)
   personPrompts += 1
   stopHoldTimer()
   try {
@@ -3176,12 +3180,11 @@ export const register: Register = on => {
   // The turn it starts gets the rest of the pull request's state with it.
   //
   // The first prompt the mod sees for a session id is where it looks for the
-  // foreman's ticket, and a prompt of the person's answers whatever question
-  // the counsel left for them.
+  // foreman's ticket, and a prompt of the person's resets what it answers or
+  // ends, the counsel's question among them (see personPromptResets).
   on('prompt.submit', async ($, e, next) => {
     void ensureArmed($)
     await lookForTicket($, e.text).catch(() => undefined)
-    if (isPersonPrompt(e.origin, e.text)) await changeMemo($, afterPersonPrompt).catch(() => undefined)
     await personPromptResets($, e.origin, e.text).catch(() => undefined)
     if (e.origin.kind !== 'sdk' || !isCiMonitorEvent(e.text)) return next(e)
     const r0 = await read($, run)
