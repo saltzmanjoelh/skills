@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { recordIn, STATES, type BuildStatus } from '../hooks/record'
+import { recordIn, STATES, type SubRecord } from '../hooks/record'
 
 // A whole record as builder writes it, which each test changes.
 const WHOLE = {
@@ -26,7 +26,7 @@ const text = (over: Record<string, unknown> = {}, drop: string[] = []) => {
 }
 
 test('a whole record reads back field for field', () => {
-  const expected: BuildStatus = { ...WHOLE, stage: 'build', state: 'working' }
+  const expected: SubRecord = { ...WHOLE, stage: 'build', state: 'working' }
   expect(recordIn(text())).toEqual(expected)
 })
 

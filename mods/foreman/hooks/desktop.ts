@@ -4,7 +4,7 @@
 
 import type { McpToolResult } from 'claude-code'
 
-import type { BuildStatus } from './record'
+import type { SubRecord } from './record'
 
 export type DesktopCall = (server: string, tool: string, args?: Record<string, unknown>) => Promise<McpToolResult>
 
@@ -72,7 +72,7 @@ function sessionsIn(result: McpToolResult): { sessionId: string; cwd: string }[]
 
 // The desktop session id for a record: its own when it has one, else the
 // first listed session whose folder is the record's.
-async function sessionIdOf(call: DesktopCall, record: Pick<BuildStatus, 'desktopSessionId' | 'cwd'>): Promise<{ id: string } | { reason: string }> {
+async function sessionIdOf(call: DesktopCall, record: Pick<SubRecord, 'desktopSessionId' | 'cwd'>): Promise<{ id: string } | { reason: string }> {
   if (record.desktopSessionId !== undefined) return { id: record.desktopSessionId }
   if (record.cwd === null) return { reason: REASONS.noAddress }
   const answer = await answerOf(call, SESSIONS_SERVER, LIST_TOOL, { limit: LIST_LIMIT })
@@ -89,7 +89,7 @@ async function sessionIdOf(call: DesktopCall, record: Pick<BuildStatus, 'desktop
 // band and pane stay on screen. Answers the id it opened, or why it could
 // not. An answer that is not an error counts as opened, including the
 // desktop app's answer that the session is already showing.
-export async function openSession(call: DesktopCall, record: Pick<BuildStatus, 'desktopSessionId' | 'cwd'>): Promise<OpenResult> {
+export async function openSession(call: DesktopCall, record: Pick<SubRecord, 'desktopSessionId' | 'cwd'>): Promise<OpenResult> {
   const found = await sessionIdOf(call, record)
   if ('reason' in found) return found
   const answer = await answerOf(call, WINDOW_SERVER, OPEN_TOOL, { session_id: found.id, target: 'split' })

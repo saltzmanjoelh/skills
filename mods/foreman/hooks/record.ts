@@ -1,57 +1,49 @@
 // The status record that builder writes for each /implement sub session, one
 // JSON file per sub session in the status folder, and how foreman reads one.
 //
-// Builder's state contract will declare this record, as BuildStatus, with
-// BuildStage and BuildState. Until the change that adds it there has merged,
-// foreman declares the same types here under the same names. Once builder's
-// contract has them, replace these declarations with an import of those three
-// names from 'builder', as hooks/stages.ts imports StageId, and keep
-// recordIn.
+// Builder's state contract declares the record as BuildStatus, with
+// BuildStage and BuildState. Foreman reads a file tolerantly, so the record
+// it answers is builder's with the fields it may find missing or malformed
+// loosened. SubRecord is derived from BuildStatus, so a field builder adds or
+// renames reaches foreman's type check.
 
-import { isStage, STAGES, type StageId } from './stages'
+import type { BuildStage, BuildState, BuildStatus } from 'builder'
 
-// One of builder's nine stages.
-export type BuildStage = StageId
+import { isStage, STAGES } from './stages'
+
+export type { BuildStage, BuildState }
 
 // The states a sub session can be in. STATE_LOOK in hooks/subs.ts gives each
 // one its words and its color.
 export const STATES = ['working', 'waiting-on-builder', 'idle', 'needs-you', 'in-cleanup', 'done'] as const
-export type BuildState = (typeof STATES)[number]
+
+// This line stops the type check when foreman's list of states and builder's
+// differ in either direction, as the one in hooks/stages.ts does for stages.
+const STATES_MATCH_BUILDER: [(typeof STATES)[number], BuildState] extends [BuildState, (typeof STATES)[number]] ? true : never = true
+void STATES_MATCH_BUILDER
 
 // The sub session's pull request: the repository as owner/name, its number,
-// its state in words such as `open`, and its checks in words such as
-// `passed`. Foreman does not draw the repository.
-export type RecordPullRequest = { repo: string; number: number; state: string; checks: string }
+// its state in words such as `OPEN`, and its checks in words such as
+// `passed`. Foreman does not draw the repository. The state and the checks
+// are kept as any text a file holds.
+export type RecordPullRequest = Omit<NonNullable<BuildStatus['pr']>, 'state' | 'checks'> & { state: string; checks: string }
 
 // What a session has met since its cleanup began: how many calls failed, and
 // the last error line, which is empty until a call fails.
-export type RecordCleanup = { failedCalls: number; lastError: string }
+export type RecordCleanup = NonNullable<BuildStatus['cleanup']>
 
-export type BuildStatus = {
-  sessionId: string
+// A record as foreman reads it. The ticket, the folder and the two times may
+// be null where builder always writes them, and `version` is not read.
+export type SubRecord = Omit<BuildStatus, 'version' | 'ticket' | 'cwd' | 'stateSince' | 'writtenAt' | 'pr'> & {
   // The ticket the parent gave the sub session, or null when it has none.
   ticket: string | null
-  // The desktop app's id for the session, once builder knows it.
-  desktopSessionId?: string
   // The folder the sub session works in, or null when the record has none.
   cwd: string | null
-  // The issue's key, or null before the session's first progress report,
-  // when the title is empty too.
-  issueKey: string | null
-  issueTitle: string
-  // One of builder's nine stages, or null before the first stage report.
-  stage: BuildStage | null
-  // How many of the nine stages are done.
-  stageDone: number
   pr: RecordPullRequest | null
-  state: BuildState
-  reason: string
   // When the state began and when the record was written, in milliseconds
   // since the epoch, or null when the record does not say.
   stateSince: number | null
   writtenAt: number | null
-  // Present in any state once cleanup has started.
-  cleanup?: RecordCleanup
 }
 
 const isState = (raw: unknown): raw is BuildState => typeof raw === 'string' && (STATES as readonly string[]).includes(raw)
@@ -89,7 +81,7 @@ function cleanupIn(raw: unknown): RecordCleanup | undefined {
 // counts as not parsing, because builder always writes the field. Every other field falls back to a safe
 // default when it is missing or of the wrong type. Strings are kept as
 // written; whatever draws them cleans them first.
-export function recordIn(text: string): BuildStatus | null {
+export function recordIn(text: string): SubRecord | null {
   let raw: unknown
   try {
     raw = JSON.parse(text)

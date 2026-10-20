@@ -5,7 +5,7 @@
 // so the tests can check each rule without the engine.
 
 import type { ForemanFile } from '../types'
-import { recordIn, type BuildStatus, type BuildState } from './record'
+import { recordIn, type SubRecord, type BuildState } from './record'
 import { stageLabel } from './stages'
 import { printable } from './text'
 
@@ -57,7 +57,7 @@ export function byKeyThenFile(aKey: string | null, aFile: string, bKey: string |
 
 // One sub session as the band and the pane show it. It is keyed by the name
 // of its file, whatever session id the record holds.
-export type SubRow = { file: string; record: BuildStatus; mtimeMs: number; isStale: boolean }
+export type SubRow = { file: string; record: SubRecord; mtimeMs: number; isStale: boolean }
 
 // The rows for the kept files, judged stale against the read made at
 // `readAt`, in issue-key order and then file name order, with the rows that
