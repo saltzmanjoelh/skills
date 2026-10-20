@@ -6,9 +6,13 @@ This repository holds generic skills, agents and mods for Claude Code. The
 Base branch: main
 Checks: none
 Merge command: gh pr merge <n> --merge --match-head-commit <sha>
+Max pushes per round: 12
 
 The repository has no continuous integration, so no checks report on a pull
-request. Every other fact that `/implement` reads keeps its default.
+request. The limit on pushes per round is 12 rather than the default of 8
+while the foreman and builder mods are being built, because their review
+rounds have needed more fix pushes than that. Every other fact that
+`/implement` reads keeps its default.
 
 ## Gates
 
