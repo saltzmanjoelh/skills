@@ -704,4 +704,25 @@ test('after a /clear whose save under the new id fails, the cleared conversation
   await $.prompt.submit({ text: 'next', wait: false, origin: { kind: 'person' } } as never)
   await w.clock.settle()
   expect(ticketsIn(w.stored.get(ticketsKey('session-1'))).pairings).toHaveLength(1)
+  // The next save that lands finishes the hand-over.
+  w.store.refused.delete(ticketsKey('session-2'))
+  await startSession($, { prompt: 'Run /implement ABC-8.', context: 'fresh' })
+  expect(ticketsIn(w.stored.get(ticketsKey('session-2'))).pairings).toHaveLength(2)
+  expect(ticketsIn(w.stored.get(ticketsKey('session-1'))).pairings).toEqual([])
+})
+
+test('a write whose session id changes after the session was taken up drops its change and leaves the ledger as it was', async ($, on) => {
+  const w = world(on)
+  w.folder.put('a.json', record('ABC-1', 'working', { desktopSessionId: 'local_a' }))
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  // The taking-up reads session-1, and the write's own read sees session-2.
+  w.engine.nextSessionIds = ['session-1', 'session-2']
+  await ui.pane.press({ key: 'release-a.json' })
+  await w.clock.settle()
+  w.engine.nextSessionIds = []
+  expect(ticketsIn(w.stored.get(ticketsKey('session-1'))).pairings.map(p => p.standing)).toEqual(['active'])
+  expect(w.stored.has(ticketsKey('session-2'))).toBe(false)
+  expect(w.engine.prompts).toEqual([])
 })

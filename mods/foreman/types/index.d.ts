@@ -117,6 +117,10 @@ declare module 'claude-code' {
       // on under the new id is the same parent and keeps its role and
       // tickets when it stored none of its own.
       carryOver: boolean
+      // The session id of a conversation that a /clear cleared, whose stored
+      // tickets are to be emptied once the carried ones are stored under the
+      // new id, or null when no hand-over waits.
+      handOver: string | null
     }
   }
 }

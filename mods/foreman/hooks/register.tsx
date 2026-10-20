@@ -27,6 +27,7 @@ const tickets = atom({ plugin: 'foreman', key: 'tickets' } as const, TICKETS_EMP
 const turnRuns = atom({ plugin: 'foreman', key: 'turnRuns' } as const, false)
 const sessionOf = atom({ plugin: 'foreman', key: 'sessionOf' } as const, null)
 const carryOver = atom({ plugin: 'foreman', key: 'carryOver' } as const, false)
+const handOver = atom({ plugin: 'foreman', key: 'handOver' } as const, null)
 
 // How many lines the log keeps.
 export const LOG_KEPT = 20
@@ -96,12 +97,22 @@ async function statusFolderOf($: $): Promise<string> {
 // repeats at every read does not push the rest of the log out. It is
 // appended inside `update`, so two lines written at once both land.
 async function addLog($: $, text: string) {
+  await addLogs($, [text])
+}
+
+// Adds several lines to the log in one update, each as addLog would.
+async function addLogs($: $, texts: readonly string[]) {
+  if (texts.length === 0) return
   const at = await $.clock.now()
   await update($, log, lines => {
-    const kept = Array.isArray(lines) ? lines : []
-    const last = kept.at(-1)
-    if (last !== undefined && last.text === text) return [...kept.slice(0, -1), { at, text, times: (last.times ?? 1) + 1 }]
-    return [...kept, { at, text }].slice(-LOG_KEPT)
+    let kept = Array.isArray(lines) ? lines : []
+    for (const text of texts) {
+      const last = kept.at(-1)
+      kept = last !== undefined && last.text === text
+        ? [...kept.slice(0, -1), { at, text, times: (last.times ?? 1) + 1 }]
+        : [...kept, { at, text }].slice(-LOG_KEPT)
+    }
+    return kept
   })
 }
 
@@ -121,31 +132,36 @@ async function writeParent($: $, change: (settings: ForemanParent) => ForemanPar
 }
 
 // Changes the ledger in $.state and then writes it to the store under this
-// session's id. The change is applied inside `update`, which may run it again
+// session's id, and answers the ledger written, or null when the change was
+// dropped. The change is applied inside `update`, which may run it again
 // when another write got in first, so it must not have side effects; a
 // caller that needs what the change decided keeps it from the last run, as
 // `writeParent` does. The store write sends the ledger as $.state holds it
 // when the write runs, and the writes go one after another, so the last one
-// to land always carries the newest ledger.
-async function writeTickets($: $, change: (t: ForemanTickets) => ForemanTickets): Promise<ForemanTickets> {
+// to land always carries the newest ledger. The change is dropped when
+// $.state holds another session's ledger, which happens when the id changes
+// between the taking-up and the update, as a /clear or a resume landing in
+// between makes it; that ledger is left as it is, never relabelled, and the
+// next hook takes the new session up.
+async function writeTickets($: $, change: (t: ForemanTickets) => ForemanTickets): Promise<ForemanTickets | null> {
   await adoptSession($)
-  let written = TICKETS_EMPTY
+  let written: ForemanTickets | null = null
   let unchanged = false
   const sessionId = await $.session.id()
   await update($, tickets, raw => {
     const held = ticketsIn(raw)
-    // The id can change between the taking-up above and this update, when a
-    // /clear or a resume lands in between. A ledger that is not this
-    // writer's session's is then left as it is, never relabelled, and the
-    // change is dropped; the next hook takes the new session up.
-    if (held.sessionId !== null && held.sessionId !== sessionId) {
-      unchanged = true
+    unchanged = true
+    written = null
+    if (held.sessionId !== null && held.sessionId !== sessionId) return held
+    const changed = change(held)
+    if (changed === held) {
       written = held
       return held
     }
-    const changed = change(held)
-    unchanged = changed === held
-    written = unchanged || changed.sessionId === sessionId ? changed : { ...changed, sessionId }
+    unchanged = false
+    // A ledger that no session has stamped yet, as before the first
+    // taking-up has run, takes this session's id with its first change.
+    written = changed.sessionId === sessionId ? changed : { ...changed, sessionId }
     return written
   })
   if (!unchanged) await persistTickets($)
@@ -163,9 +179,11 @@ async function persistTickets($: $): Promise<boolean> {
     const value = ticketsIn(await read($, tickets))
     const text = JSON.stringify(value)
     if (value.sessionId === null || value.sessionId !== (await $.session.id())) return false
-    if (text === lastStored) return true
-    await $.store.set(ticketsKey(value.sessionId), value)
-    lastStored = text
+    if (text !== lastStored) {
+      await $.store.set(ticketsKey(value.sessionId), value)
+      lastStored = text
+    }
+    await finishHandOver($, value.sessionId)
     return true
   })
   persisting = next.then(() => undefined, () => undefined)
@@ -213,6 +231,17 @@ async function adoptSession($: $) {
 // same parent going on, or nothing, with the role off and no tickets.
 type Source = 'stored' | 'carried' | 'fresh'
 
+// Empties the stored tickets of a conversation a /clear cleared, once the
+// carried ones are stored under `current`, so the cleared one cannot act on
+// them a second time. A failure leaves the hand-over waiting for the next
+// save, which tries again.
+async function finishHandOver($: $, current: string) {
+  const cleared = await read($, handOver)
+  if (typeof cleared !== 'string' || cleared === current) return
+  await $.store.set(ticketsKey(cleared), { ...TICKETS_EMPTY, sessionId: cleared })
+  await update($, handOver, () => null)
+}
+
 async function takeUpSession($: $, id: string) {
   const carry = (await read($, carryOver)) === true
   const rawParent = await $.store.get(storeKey(id))
@@ -227,6 +256,10 @@ async function takeUpSession($: $, id: string) {
   let settings = PARENT_OFF
   if (parentFrom === 'stored') settings = parentIn(rawParent)
   if (parentFrom === 'carried') settings = parentIn(await read($, parent))
+  // Should the id move on again while the store was read, as a second /clear
+  // would make it, this taking-up writes nothing, and the next caller takes
+  // the newest session up.
+  if ((await $.session.id()) !== id) return
   await update($, parent, () => settings)
 
   let previous: string | null = null
@@ -246,16 +279,14 @@ async function takeUpSession($: $, id: string) {
   if (ticketsFrom !== 'carried') return
   // The tickets now belong to the conversation that goes on, so once they
   // are stored under its key, the one that was cleared is left with none,
-  // and resuming it later cannot act on them a second time. Until they are,
-  // the cleared one keeps them, so a failed save loses nothing.
-  if (!(await persistTickets($))) return
-  // `previous` is set inside the update's change, which the type check does
-  // not follow, so it is read again here with its type.
-  const handedOver: string | null = previous
-  if (handedOver !== null && handedOver !== id) {
-    await $.store.set(ticketsKey(handedOver), { ...TICKETS_EMPTY, sessionId: handedOver })
-      .catch(error => addLog($, `Could not save the tickets: ${reasonOf(error)}.`))
-  }
+  // and resuming it later cannot act on them a second time. The hand-over
+  // waits in $.state until a save of the carried ledger lands, so a failed
+  // save loses nothing and the next one finishes it. `previous` is set
+  // inside the update's change, which the type check does not follow, so it
+  // is read again here with its type.
+  const cleared: string | null = previous
+  if (cleared !== null && cleared !== id) await update($, handOver, () => cleared)
+  await persistTickets($)
 }
 
 // Whether this session is the parent, as $.state holds it.
@@ -444,7 +475,7 @@ async function carryOut($: $) {
     return hasWork(t.outbox) ? { ...t, outbox: OUTBOX_EMPTY } : t
   })
   if (!hasWork(work)) return
-  for (const line of work.logs) await addLog($, line)
+  await addLogs($, work.logs)
   await Promise.all(work.effects.map(effect => (effect.kind === 'nudge'
     ? nudge($, effect.to, effect.name, ', because it has been idle').catch(() => undefined)
     : notify($, effect.text).catch(() => undefined))))
@@ -632,8 +663,9 @@ async function startSession<E extends Record<string, unknown>>($: $, e: E, next:
       // id then.
       const localId = localIdIn(typeof out.text === 'string' ? out.text : JSON.stringify(out.result ?? ''))
       const at = await $.clock.now()
-      await writeTickets($, t => ({ ...t, pairings: [...t.pairings, newPairing(brief.ticket, localId, at)] }))
-      await addLog($, localId === null
+      const landed = await writeTickets($, t => ({ ...t, pairings: [...t.pairings, newPairing(brief.ticket, localId, at)] }))
+      if (landed === null) await addLog($, `Could not record ticket ${brief.ticket}, because the session changed while it was being recorded.`)
+      else await addLog($, localId === null
         ? `Gave ticket ${brief.ticket} to a sub session that has not started yet.`
         : `Paired ticket ${brief.ticket} with ${localId}.`)
     }
