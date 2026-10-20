@@ -8,7 +8,7 @@
 // names from 'builder', as hooks/stages.ts imports StageId, and keep
 // recordIn.
 
-import { isStage, type StageId } from './stages'
+import { isStage, STAGES, type StageId } from './stages'
 
 // One of builder's nine stages.
 export type BuildStage = StageId
@@ -58,10 +58,11 @@ const textOr = <T>(raw: unknown, fallback: T): string | T => (typeof raw === 'st
 const filledOr = <T>(raw: unknown, fallback: T): string | T => (typeof raw === 'string' && raw.trim() !== '' ? raw : fallback)
 const timeOr = (raw: unknown): number | null => (typeof raw === 'number' && Number.isFinite(raw) ? raw : null)
 
-// The stages done, as a whole number held between 0 and 9.
+// The stages done, as a whole number held between 0 and the number of
+// stages.
 function stagesDone(raw: unknown): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return 0
-  return Math.min(Math.max(Math.floor(raw), 0), 9)
+  return Math.min(Math.max(Math.floor(raw), 0), STAGES.length)
 }
 
 // The pull request, or null unless it has a positive whole number.

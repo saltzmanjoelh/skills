@@ -39,7 +39,19 @@ export function afterRead(kept: readonly ForemanFile[], found: readonly FileRead
       if (last !== undefined) next.push(last)
     }
   }
-  return next.sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0))
+  return next.sort((a, b) => byKeyThenFile(null, a.file, null, b.file))
+}
+
+// The order of the rows, which `afterRead` also uses for its files by giving
+// every file no issue key. Rows that have no issue key yet go after every row
+// that has one. Two rows that both have a key go in key order. Rows whose
+// keys are equal, and rows that both have no key, go in file name order.
+export function byKeyThenFile(aKey: string | null, aFile: string, bKey: string | null, bFile: string): number {
+  if (aKey === null && bKey !== null) return 1
+  if (aKey !== null && bKey === null) return -1
+  if (aKey !== null && bKey !== null && aKey !== bKey) return aKey < bKey ? -1 : 1
+  if (aFile === bFile) return 0
+  return aFile < bFile ? -1 : 1
 }
 
 // One sub session as the band and the pane show it. It is keyed by the name
@@ -56,9 +68,7 @@ export function rowsOf(files: readonly ForemanFile[], readAt: number): SubRow[] 
     const record = recordIn(f.text)
     if (record !== null) rows.push({ file: f.file, record, mtimeMs: f.mtimeMs, isStale: isStale(f.mtimeMs, readAt) })
   }
-  const order = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
-  const keyOrder = (a: string | null, b: string | null) => (a === null ? (b === null ? 0 : 1) : b === null ? -1 : order(a, b))
-  return rows.sort((a, b) => keyOrder(a.record.issueKey, b.record.issueKey) || order(a.file, b.file))
+  return rows.sort((a, b) => byKeyThenFile(a.record.issueKey, a.file, b.record.issueKey, b.file))
 }
 
 // How long until the next read, given the rows the read found.
@@ -133,15 +143,24 @@ export const moreWords = (more: number) => `+${more} more`
 // separator, and how many are left over. When they do not all fit, room is
 // kept for the separator and `+N more`. When the room is not a number, every
 // chip is shown.
+//
+// The chips are added from the left with a running total. Each chip added
+// costs at least the three cells of its separator, and `+N more` can grow
+// shorter by at most one cell, so the space used only ever grows as chips
+// are added. That is why the walk can stop at the first count that no
+// longer fits and keep the count before it.
 export function fitChips(chips: readonly string[], room: number): { shown: number; more: number } {
   const n = chips.length
   if (typeof room !== 'number' || !Number.isFinite(room)) return { shown: n, more: 0 }
-  const costs = chips.map(chip => chip.length + SEPARATOR.length)
-  const total = costs.reduce((sum, cost) => sum + cost, 0)
+  const total = chips.reduce((sum, chip) => sum + chip.length + SEPARATOR.length, 0)
   if (total <= room) return { shown: n, more: 0 }
-  for (let shown = n - 1; shown > 0; shown--) {
-    const used = costs.slice(0, shown).reduce((sum, cost) => sum + cost, 0) + SEPARATOR.length + moreWords(n - shown).length
-    if (used <= room) return { shown, more: n - shown }
+  let shown = 0
+  let used = 0
+  while (shown < n - 1) {
+    const next = used + chips[shown]!.length + SEPARATOR.length
+    if (next + SEPARATOR.length + moreWords(n - shown - 1).length > room) break
+    used = next
+    shown++
   }
-  return { shown: 0, more: n }
+  return { shown, more: n - shown }
 }

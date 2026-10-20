@@ -239,6 +239,9 @@ async function runCommand($: $, args: string): Promise<string> {
     return 'This parent is no longer paused.'
   }
   await writeParent($, p => ({ ...p, isOn: true }))
+  // Arming makes the first read of the status folder, so it has to come
+  // before the pane opens. Opened first, the pane would draw from no read at
+  // all and say that the folder holds no sub sessions until the read landed.
   await ensureArmed($)
   await $.ui.open({ id: PANE, title: 'foreman' }).catch(() => undefined)
   return 'This session is now the parent, and foreman shows its sub sessions above the prompt and in its pane.'
@@ -263,7 +266,6 @@ export const register: Register = (on, options) => {
   // The host already puts the mod's name in front of a command's output.
   on('command.run', { command: 'foreman' }, async ($, e) => {
     const text = await runCommand($, typeof e.args === 'string' ? e.args : '')
-    await ensureArmed($)
     return { text }
   })
 

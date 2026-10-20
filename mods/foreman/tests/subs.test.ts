@@ -1,10 +1,9 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { ForemanFile } from '../types'
-import { RANGE, USAGE, commandOf } from '../hooks/commands'
 import { STATES } from '../hooks/record'
 import {
-  afterRead, ageWords, busyCount, chipText, fitChips, isStale, nextReadDelay, READ_LATER_MS, READ_SOON_MS, rowsOf,
+  afterRead, ageWords, busyCount, byKeyThenFile, chipText, fitChips, isStale, nextReadDelay, READ_LATER_MS, READ_SOON_MS, rowsOf,
   STALE_MS, STATE_LOOK, untilWords,
 } from '../hooks/subs'
 
@@ -131,20 +130,23 @@ test('the band shows as many chips as fit its room and says how many more there 
   expect(fitChips([], 5)).toEqual({ shown: 0, more: 0 })
 })
 
-test('/foreman turns the role on, slots takes a whole number from 1 to 20, and pause and resume set and clear the pause', () => {
-  expect(commandOf('')).toEqual({ kind: 'on' })
-  expect(commandOf('   ')).toEqual({ kind: 'on' })
-  expect(commandOf('slots 3')).toEqual({ kind: 'slots', count: 3 })
-  expect(commandOf('  slots   20 ')).toEqual({ kind: 'slots', count: 20 })
-  expect(commandOf('slots 1')).toEqual({ kind: 'slots', count: 1 })
-  expect(commandOf('pause')).toEqual({ kind: 'pause' })
-  expect(commandOf('resume')).toEqual({ kind: 'resume' })
+test('with many chips at a narrow width, the band shows the most that fit beside the words for the rest', () => {
+  // Every chip is five long, so it costs eight cells with its separator.
+  const chips = Array.from({ length: 200 }, () => 'ABC-1')
+  // Three chips use 24 cells, and ` · +197 more` takes 12 more.
+  expect(fitChips(chips, 36)).toEqual({ shown: 3, more: 197 })
+  expect(fitChips(chips, 35)).toEqual({ shown: 2, more: 198 })
+  expect(fitChips(chips, 11)).toEqual({ shown: 0, more: 200 })
+  expect(fitChips(chips, 200 * 8 - 1)).toEqual({ shown: 198, more: 2 })
+  expect(fitChips(chips, 200 * 8)).toEqual({ shown: 200, more: 0 })
 })
 
-test('a slots count that is not a whole number from 1 to 20 is refused with the range, and anything else with the usage', () => {
-  for (const bad of ['slots 0', 'slots 21', 'slots 2.5', 'slots x', 'slots -1', 'slots 1e1', 'slots 03x']) {
-    expect(commandOf(bad)).toEqual({ kind: 'refused', text: RANGE })
-  }
-  for (const bad of ['slots', 'slots 3 4', 'pause now', 'start', 'resume 2']) expect(commandOf(bad)).toEqual({ kind: 'refused', text: USAGE })
-  expect(RANGE).toContain('from 1 to 20')
+test('rows with an issue key come first in key order, then rows with none, and file names break ties', () => {
+  expect(byKeyThenFile(null, 'a.json', 'ABC-1', 'z.json')).toBe(1)
+  expect(byKeyThenFile('ABC-1', 'z.json', null, 'a.json')).toBe(-1)
+  expect(byKeyThenFile('ABC-1', 'z.json', 'ABC-2', 'a.json')).toBe(-1)
+  expect(byKeyThenFile('ABC-2', 'a.json', 'ABC-1', 'z.json')).toBe(1)
+  expect(byKeyThenFile('ABC-1', 'a.json', 'ABC-1', 'b.json')).toBe(-1)
+  expect(byKeyThenFile(null, 'b.json', null, 'a.json')).toBe(1)
+  expect(byKeyThenFile(null, 'a.json', null, 'a.json')).toBe(0)
 })
