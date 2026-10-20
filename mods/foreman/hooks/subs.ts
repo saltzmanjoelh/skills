@@ -87,7 +87,10 @@ export function rememberingParse(
 ): { parse: (text: string) => BuildStatus | null; remembered: Map<string, BuildStatus | null> } {
   const remembered = new Map<string, BuildStatus | null>()
   const parse = (text: string) => {
-    const record = remembered.has(text) ? remembered.get(text)! : previous.has(text) ? previous.get(text)! : parseText(text)
+    // Handed already in this pass: the record is remembered.
+    if (remembered.has(text)) return remembered.get(text)!
+    // Handed in the last pass: reuse its record. Otherwise parse the text.
+    const record = previous.has(text) ? previous.get(text)! : parseText(text)
     remembered.set(text, record)
     return record
   }
