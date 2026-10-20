@@ -8,9 +8,9 @@ import { barOf, modelLabel, stageLabel, type Bar } from './progress'
 import { isRunning, shownStatus, waitingOn } from './state'
 import { clockTime, printable, timeOfDay } from './text'
 
-export const PANE = 'pilot'
+export const PANE = 'builder'
 // The second pane, which shows one agent's card and messages.
-export const AGENT_PANE = 'pilot-agent'
+export const AGENT_PANE = 'builder-agent'
 
 // What the pane and the line above the prompt draw from, read by the hooks.
 export type View = {
@@ -29,7 +29,7 @@ export type View = {
   background: BackgroundTask[]
   // The session's own tool calls in progress.
   calls: ForegroundCall[]
-  // Whether pilot was started this session (open_pane or /pilot).
+  // Whether builder was started this session (open_pane or /builder).
   started: boolean
   // The work last reported through the progress tool, read through progressIn.
   progress: Progress | null
@@ -181,16 +181,17 @@ function lineAbove(v: View, width: number | undefined): string | null {
 // What the line says when the mod's files on disk differ from the ones this
 // session loaded. It never claims the loaded mod is the older one, because
 // the checkout may have moved either way.
-export const STALE_WARNING = 'pilot changed on disk since this session loaded it; restart this session to load it'
+export const STALE_WARNING = 'builder changed on disk since this session loaded it; restart this session to load it'
 
 const SEPARATOR = ' · '
 // How every line above the prompt begins. withWarning drops it after the
-// warning, which already names pilot, so the builders write it from here.
-const PREFIX = 'pilot: '
+// warning, which already names builder, so the functions that build each
+// line take the prefix from this constant rather than writing it themselves.
+const PREFIX = 'builder: '
 
 // The line `lineWith` builds for a width, led by the stale warning when the
 // session is stale. The warning is never cut: the rest of the line follows it
-// without its `pilot: ` prefix, fitted to the width the warning and its
+// without its `builder: ` prefix, fitted to the width the warning and its
 // separator leave, and the line is the warning alone when there is nothing
 // else to say or too little room for more than an ellipsis.
 function withWarning(v: View, width: number | undefined, lineWith: (width: number | undefined) => string | null): string | null {
@@ -225,9 +226,9 @@ function stageWords(progress: Progress | null): string {
 }
 
 // The band's second row. With a pull request watched it is the line above,
-// whether pilot was started or not. Once pilot is started with none watched,
+// whether builder was started or not. Once builder is started with none watched,
 // it names the stage (or `started`), what runs and the usage-limit hold, or
-// `idle` when neither is there, fitted as the line is. Before pilot is
+// `idle` when neither is there, fitted as the line is. Before builder is
 // started it is the line as it was before there was a bar: none while nothing
 // runs and no hold is on. A stale session's row leads with the warning, as the
 // line does.
@@ -274,9 +275,9 @@ export function agentCount(v: View): string {
 
 export type BandPresses = { agents: () => void; line: () => void }
 
-// The band above the prompt, as a column: the bar, once pilot is started and
+// The band above the prompt, as a column: the bar, once builder is started and
 // there is one, with the agent-count button on its own row below it, then the
-// second row as a button. Before pilot is started there is no bar, as before
+// second row as a button. Before builder is started there is no bar, as before
 // there was one. `line` is the second row, secondRow(v, width), which the
 // caller has already worked out. Null when there is neither a bar nor a
 // second row.
@@ -286,9 +287,9 @@ export function bandTree(ui: Elements, v: View, line: string | null, width: numb
   if (bar === null && line === null) return null
   return (
     <Box flexDirection="column">
-      {bar !== null && barRow(ui, bar, width, 'pilot-bar')}
-      {bar !== null && <Button key="pilot-agents" plain dimColor label={agentCount(v)} onPress={presses.agents} />}
-      {line !== null && <Button key="pilot-line" plain dimColor label={line} onPress={presses.line} />}
+      {bar !== null && barRow(ui, bar, width, 'builder-bar')}
+      {bar !== null && <Button key="builder-agents" plain dimColor label={agentCount(v)} onPress={presses.agents} />}
+      {line !== null && <Button key="builder-line" plain dimColor label={line} onPress={presses.line} />}
     </Box>
   )
 }
@@ -390,7 +391,7 @@ function counselTree({ Text }: El, list: readonly CounselQuestion[]) {
 }
 
 export const NOTHING_WATCHED =
-  'No pull request is watched. The session calls the watch tool after opening one, or run /pilot watch <number>.'
+  'No pull request is watched. The session calls the watch tool after opening one, or run /builder watch <number>.'
 
 // The agents as the pane lists them: running ones first, newest first within
 // each group.
@@ -410,7 +411,7 @@ function ranFor(card: AgentCard, now: number): number {
   return now - card.startedAt
 }
 
-// What an agent's row shows, cleaned: its type without the `pilot:` prefix,
+// What an agent's row shows, cleaned: its type without the `builder:` prefix,
 // its description, its model as modelLabel names it, its status as
 // shownStatus words it, how long it has run or ran, and its summary line once
 // it has one.
@@ -505,7 +506,7 @@ function agentsTree(ui: Elements, v: View, columns: number | undefined, presses:
     ...running.flatMap(card => agentWithOutput(ui, card, v.now, columns, presses)),
     ...v.planned.map(type => plannedRow(ui, type, columns)),
     ...(finished.length === 0 ? [] : [
-      <Button key="pilot-fold" plain dimColor label={`Finished · ${finished.length}`} onPress={presses.fold} />,
+      <Button key="builder-fold" plain dimColor label={`Finished · ${finished.length}`} onPress={presses.fold} />,
       ...(v.finishedFolded ? [] : finished.flatMap(card => agentWithOutput(ui, card, v.now, columns, presses))),
     ]),
     ...(v.background.length === 0 ? [] : [
@@ -643,14 +644,14 @@ export function messagesReadOf(got: unknown): MessagesRead {
   return { reason: 'the engine answered something other than a list.' }
 }
 
-// The agent pane: the agent's card as its row in the pilot pane draws it,
+// The agent pane: the agent's card as its row in the builder pane draws it,
 // what it was asked, and its messages, or why they could not be read. `card`
 // is undefined when the mod has no record of the agent chosen, and `read` is
 // null while its messages have not been read yet.
 export function agentPaneTree(ui: Elements, card: AgentCard | undefined, read: MessagesRead | null, now: number, columns?: number) {
   const { Box, Text } = ui
   if (card === undefined) {
-    return <Box flexDirection="column"><Text dimColor>No agent is chosen. Press an agent's output button in the pilot pane.</Text></Box>
+    return <Box flexDirection="column"><Text dimColor>No agent is chosen. Press an agent's output button in the builder pane.</Text></Box>
   }
   const asked = typeof card.asked === 'string' && card.asked.trim() !== ''
     ? `Asked: ${printable(card.asked, 200)}`

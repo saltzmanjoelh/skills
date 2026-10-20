@@ -35,7 +35,7 @@ function runsLines(s: Snapshot): string[] {
 // merged or closed, so this prompt knows nothing about the counsel.
 export function changePrompt(s: Snapshot, changes: readonly string[], decisions: readonly string[] = []): string {
   return [
-    `pilot: pull request #${s.number} changed.`,
+    `builder: pull request #${s.number} changed.`,
     ...changes,
     '',
     ...stateLines(s),
@@ -49,7 +49,7 @@ export function changePrompt(s: Snapshot, changes: readonly string[], decisions:
 // Added to the desktop app's CI event, so the turn it starts already knows
 // the rest of the pull request's state.
 export function ciEventContext(s: Snapshot): string {
-  return ['pilot: the pull request as of this event.', ...stateLines(s)].join('\n')
+  return ['builder: the pull request as of this event.', ...stateLines(s)].join('\n')
 }
 
 // The turn the mod starts when the session has been quiet for the stuck
@@ -58,15 +58,15 @@ export function ciEventContext(s: Snapshot): string {
 export function stuckPrompt(number: number, quietMs: number): string {
   const minutes = Math.floor(quietMs / 60_000)
   return [
-    `pilot: nothing has happened on pull request #${number} for ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}.`,
+    `builder: nothing has happened on pull request #${number} for ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}.`,
     'Check with gh whether what you are waiting on is real.',
     'Then take the first step of the list in /implement that applies, or end the turn if the wait is real.',
   ].join('\n')
 }
 
 // The turn the mod starts when a usage-limit hold resumes, naming the stage
-// last reported with mcp__pilot__progress when there is one.
+// last reported with mcp__builder__progress when there is one.
 export function resumePrompt(stageLabel: string | null): string {
   const stage = stageLabel === null ? '' : ` (${stageLabel})`
-  return `pilot: the usage limit has reset; carry on /implement from the stage you were in${stage}.`
+  return `builder: the usage limit has reset; carry on /implement from the stage you were in${stage}.`
 }

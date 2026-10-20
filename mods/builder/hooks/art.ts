@@ -158,7 +158,7 @@ export function barSvg(bar: Bar, widthPx: number): string {
   ].join(''))
 }
 
-// What an agent row draws: the agent's type (the `pilot:` prefix is dropped
+// What an agent row draws: the agent's type (the `builder:` prefix is dropped
 // here, so either form may be given), its description, its model as
 // modelLabel names it, its status as shownStatus words it, how long it has
 // run or ran, its summary line once it has one, and whether it still runs.
@@ -216,7 +216,7 @@ export function agentSvg(r: AgentRow, now: number, widthPx: number): string {
   ].join(''))
 }
 
-// A planned row: a hollow mark, the type (the `pilot:` prefix dropped), and
+// A planned row: a hollow mark, the type (the `builder:` prefix dropped), and
 // `planned` at the right.
 export function plannedSvg(type: string, widthPx: number): string {
   const width = svgWidth(widthPx)

@@ -1,4 +1,4 @@
-// The pilot mod's state contract: what $.state holds and the pull request
+// The builder mod's state contract: what $.state holds and the pull request
 // snapshot it is built from. Self-contained, as the engine requires.
 
 export type CheckState = 'pending' | 'passed' | 'failed'
@@ -39,10 +39,10 @@ export type Snapshot = {
 }
 
 // The pull request the session works on. Set only when asked: by the watch
-// tool, or by /pilot watch.
+// tool, or by /builder watch.
 // `since` is when this watch began, so work begun under an earlier watch of
 // the same pull request can tell it is stale.
-export type PilotRun = { repo: string; number: number; cwd: string; login: string; since: number }
+export type BuilderRun = { repo: string; number: number; cwd: string; login: string; since: number }
 
 // The engine's words for where an agent's loop stands, as `$.agent.list()`
 // gives them. A card an older build saved may still hold 'done' or 'aborted';
@@ -226,8 +226,8 @@ export type Loaded = { head: string | null; session: LoadedCommit; hooks: Loaded
 
 declare module 'claude-code' {
   interface PluginState {
-    pilot: {
-      run: PilotRun | null
+    builder: {
+      run: BuilderRun | null
       pr: Snapshot | null
       agents: AgentCard[]
       questions: Question[]
@@ -249,8 +249,8 @@ declare module 'claude-code' {
       background: BackgroundTask[]
       // The session's own tool calls in progress, oldest first.
       calls: ForegroundCall[]
-      // Whether pilot was started this session, by the open_pane tool or the
-      // /pilot command. It stays true for the rest of the session.
+      // Whether builder was started this session, by the open_pane tool or the
+      // /builder command. It stays true for the rest of the session.
       started: boolean
       // The work the session last reported through the progress tool, or null
       // before the first report. Read through progressIn in hooks/progress.ts.

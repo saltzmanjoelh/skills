@@ -10,18 +10,18 @@ import { ciOf, isCiMonitorEvent, type Snapshot } from './github'
 // claim checker and the bug reproducer may run commands, so they are in
 // neither.
 export const REVIEWERS = new Set([
-  'pilot:spec-reviewer',
-  'pilot:adversarial-reviewer',
-  'pilot:security-reviewer',
-  'pilot:maintainability-reviewer',
-  'pilot:performance-reviewer',
-  'pilot:data-reviewer',
+  'builder:spec-reviewer',
+  'builder:adversarial-reviewer',
+  'builder:security-reviewer',
+  'builder:maintainability-reviewer',
+  'builder:performance-reviewer',
+  'builder:data-reviewer',
 ])
 
 // The owner's advocate sits on the counsel only and is never launched in a
 // pull request's review rounds, so it is not in REVIEWERS. It only reads, as
 // the reviewers do.
-export const OWNERS_ADVOCATE = 'pilot:owners-advocate'
+export const OWNERS_ADVOCATE = 'builder:owners-advocate'
 
 // The agents the mod holds to REVIEWER_TOOLS, the reviewers and the owner's
 // advocate. The engine's tool lists in the agent files are the first fence,

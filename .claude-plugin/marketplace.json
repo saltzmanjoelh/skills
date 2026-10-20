@@ -5,8 +5,8 @@
   "owner": { "name": "Joel Saltzman" },
   "plugins": [
     {
-      "name": "pilot",
-      "source": "./mods/pilot",
+      "name": "builder",
+      "source": "./mods/builder",
       "description": "Watches the pull request an /implement session is working on, shows its state and its agents, and wakes the session when the pull request changes"
     }
   ]

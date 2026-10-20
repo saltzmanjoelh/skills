@@ -41,8 +41,8 @@ a concrete name, use an obviously invented placeholder such as `example-app`,
 `acme` or `my-project`.
 
 When text needs to point at an earlier piece of work, name it by what it did
-or by the spec that describes it, for example "the change that made the pilot
-mod show its true state (see `docs/specs/pilot-true-state.md`)", never by its
+or by the spec that describes it, for example "the change that made the mod show
+its true state (see `docs/specs/pilot-true-state.md`)", never by its
 issue number. When a skill or a test needs an example issue key, use the
 obvious placeholder `ABC-123`, which the code and tests already use. When
 quoted output needs a pull request number, write `#N`. Invented numbers in a

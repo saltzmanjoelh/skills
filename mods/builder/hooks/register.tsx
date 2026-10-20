@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Next, PromptOrigin, Register, ResolveInput, ToolCallInput, ToolCallResult } from 'claude-code'
 
-import type { AgentCard, BackgroundTask, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, PilotRun, Wake } from '../types'
+import type { AgentCard, BackgroundTask, BuilderRun, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, Wake } from '../types'
 import { isSvgSurface } from './art'
 import { checkoutSentence, worktreeWithBranch, type Checkout } from './checkout'
 import { afterAskAgain, afterTally, askAgainAnswer, briefAnswer, briefFactsOf, briefRefusal, briefText, counselAnswer, decisionLine, destinationOf, endedDecisionLines, FOLLOW_UP_OPTIONS, followUpAnswer, followUpAskAgainAnswer, followUpsRefusal, followUpStepOf, followUpVotesOf, keepCounsel, MAX_BRIEF_OPTIONS, MAX_FOLLOW_UPS, MIN_OPTIONS, neverStartedCandidatesOf, neverStartedOf, type PullRequestRef, reviewParagraph, stepOf, type UnreadableVote, votesOf } from './counsel'
@@ -17,37 +17,37 @@ import { timeOfDay } from './text'
 type $ = EngineInterface
 
 // The session's values the pane draws from. They survive a hot reload.
-const run = atom({ plugin: 'pilot', key: 'run' } as const, null)
-const pr = atom({ plugin: 'pilot', key: 'pr' } as const, null)
-const agents = atom({ plugin: 'pilot', key: 'agents' } as const, [])
-const questions = atom({ plugin: 'pilot', key: 'questions' } as const, [])
-const wakes = atom({ plugin: 'pilot', key: 'wakes' } as const, [])
-const cwd = atom({ plugin: 'pilot', key: 'cwd' } as const, null)
-const busy = atom({ plugin: 'pilot', key: 'busy' } as const, false)
-const nextLook = atom({ plugin: 'pilot', key: 'nextLook' } as const, null)
-const counsel = atom({ plugin: 'pilot', key: 'counsel' } as const, [])
-const background = atom({ plugin: 'pilot', key: 'background' } as const, [])
-const calls = atom({ plugin: 'pilot', key: 'calls' } as const, [])
-const started = atom({ plugin: 'pilot', key: 'started' } as const, false)
-const progress = atom({ plugin: 'pilot', key: 'progress' } as const, null)
-const packaged = atom({ plugin: 'pilot', key: 'packaged' } as const, null)
-const finishedFolded = atom({ plugin: 'pilot', key: 'finishedFolded' } as const, true)
-const outputAgent = atom({ plugin: 'pilot', key: 'outputAgent' } as const, null)
+const run = atom({ plugin: 'builder', key: 'run' } as const, null)
+const pr = atom({ plugin: 'builder', key: 'pr' } as const, null)
+const agents = atom({ plugin: 'builder', key: 'agents' } as const, [])
+const questions = atom({ plugin: 'builder', key: 'questions' } as const, [])
+const wakes = atom({ plugin: 'builder', key: 'wakes' } as const, [])
+const cwd = atom({ plugin: 'builder', key: 'cwd' } as const, null)
+const busy = atom({ plugin: 'builder', key: 'busy' } as const, false)
+const nextLook = atom({ plugin: 'builder', key: 'nextLook' } as const, null)
+const counsel = atom({ plugin: 'builder', key: 'counsel' } as const, [])
+const background = atom({ plugin: 'builder', key: 'background' } as const, [])
+const calls = atom({ plugin: 'builder', key: 'calls' } as const, [])
+const started = atom({ plugin: 'builder', key: 'started' } as const, false)
+const progress = atom({ plugin: 'builder', key: 'progress' } as const, null)
+const packaged = atom({ plugin: 'builder', key: 'packaged' } as const, null)
+const finishedFolded = atom({ plugin: 'builder', key: 'finishedFolded' } as const, true)
+const outputAgent = atom({ plugin: 'builder', key: 'outputAgent' } as const, null)
 // The stuck prompt's quiet time and interval, and the usage-limit hold. They
 // survive a hot reload too, so the timers armed from them come back at their
 // original times, and a restart starts without them, as the README says.
-const quietSince = atom({ plugin: 'pilot', key: 'quietSince' } as const, null)
-const stuckEvery = atom({ plugin: 'pilot', key: 'stuckEvery' } as const, STUCK_FIRST_MS)
-const usageHold = atom({ plugin: 'pilot', key: 'usageHold' } as const, null)
+const quietSince = atom({ plugin: 'builder', key: 'quietSince' } as const, null)
+const stuckEvery = atom({ plugin: 'builder', key: 'stuckEvery' } as const, STUCK_FIRST_MS)
+const usageHold = atom({ plugin: 'builder', key: 'usageHold' } as const, null)
 // The commits the mod was loaded from. It survives a hot reload, so the
 // session commit recorded at the session's first start is never rewritten,
 // and a restart starts without it.
-const loaded = atom({ plugin: 'pilot', key: 'loaded' } as const, null)
+const loaded = atom({ plugin: 'builder', key: 'loaded' } as const, null)
 // How the first load of this build in the session began. It survives a hot
 // reload too, and a restart starts without it.
-const loadBegun = atom({ plugin: 'pilot', key: 'loadBegun' } as const, null)
+const loadBegun = atom({ plugin: 'builder', key: 'loadBegun' } as const, null)
 
-// The pilot mod: it watches the pull request the session works on, shows that
+// The builder mod: it watches the pull request the session works on, shows that
 // pull request and the session's agents in a pane, and starts a turn when the
 // pull request changes while the session is idle. GitHub is the record.
 // `$.store` remembers the state last handed to the session, so a restart does
@@ -98,7 +98,7 @@ let commandLooks: { cancel: () => void }[] = []
 let lookSeq = 0
 let newestStoredLook = 0
 let toldSeq = 0
-let newestRead: { r: PilotRun; s: Snapshot; seq: number } | null = null
+let newestRead: { r: BuilderRun; s: Snapshot; seq: number } | null = null
 // One mark for each look that tells the session its own read (the desktop
 // app's CI event's look and the look after the mod posts a review) that has
 // gone on with its read but not yet finished: it has neither recorded the
@@ -215,13 +215,13 @@ const COMMAND_TIMEOUT_MS = 20_000
 const AFTER_LOOK_MS = [10_000, 40_000]
 // How often the display is redrawn while a look is scheduled.
 const REDRAW_MS = 30_000
-const WATCH_TOOL = 'mcp__pilot__watch'
-const PACKAGE_TOOL = 'mcp__pilot__package'
-const REVIEW_TOOL = 'mcp__pilot__post_review'
-const COUNSEL_TOOL = 'mcp__pilot__counsel'
-const TALLY_TOOL = 'mcp__pilot__counsel_tally'
-const OPEN_PANE_TOOL = 'mcp__pilot__open_pane'
-const PROGRESS_TOOL = 'mcp__pilot__progress'
+const WATCH_TOOL = 'mcp__builder__watch'
+const PACKAGE_TOOL = 'mcp__builder__package'
+const REVIEW_TOOL = 'mcp__builder__post_review'
+const COUNSEL_TOOL = 'mcp__builder__counsel'
+const TALLY_TOOL = 'mcp__builder__counsel_tally'
+const OPEN_PANE_TOOL = 'mcp__builder__open_pane'
+const PROGRESS_TOOL = 'mcp__builder__progress'
 const SESSION_TOOLS = new Set([WATCH_TOOL, PACKAGE_TOOL, REVIEW_TOOL, COUNSEL_TOOL, TALLY_TOOL, OPEN_PANE_TOOL, PROGRESS_TOOL])
 
 // gh's output, trimmed, or null when gh failed or the engine cut its output
@@ -245,7 +245,7 @@ async function gh($: $, dir: string | null, args: string[]): Promise<string | nu
 // stored snapshot had (see carriedRuns), so a failed read never changes the
 // fingerprint. The mark that says so is set after the fingerprint is made,
 // which keeps it out of the fingerprint.
-async function fetchSnapshot($: $, r: Pick<PilotRun, 'repo' | 'number' | 'cwd' | 'login'>): Promise<Snapshot | null> {
+async function fetchSnapshot($: $, r: Pick<BuilderRun, 'repo' | 'number' | 'cwd' | 'login'>): Promise<Snapshot | null> {
   const out = await gh($, r.cwd, ['pr', 'view', String(r.number), '--repo', r.repo, '--json', PR_FIELDS])
   if (out === null) return null
   const live = JSON.parse(out) as GhPullRequest
@@ -260,7 +260,7 @@ async function fetchSnapshot($: $, r: Pick<PilotRun, 'repo' | 'number' | 'cwd' |
 // three), or the answer named no state the mod knows. It runs from the
 // session's folder and names the repository, so it reads the pull request it
 // is given whatever the watch follows.
-async function readPullRequestState($: $, target: Pick<PilotRun, 'repo' | 'number'>): Promise<Snapshot['state'] | null> {
+async function readPullRequestState($: $, target: Pick<BuilderRun, 'repo' | 'number'>): Promise<Snapshot['state'] | null> {
   const out = await gh($, await read($, cwd), ['pr', 'view', String(target.number), '--repo', target.repo, '--json', 'state'])
   return pullRequestStateIn(out)
 }
@@ -268,7 +268,7 @@ async function readPullRequestState($: $, target: Pick<PilotRun, 'repo' | 'numbe
 // The head's unfinished workflow runs, or null when they could not be read:
 // gh failed, threw or had its output cut off (the gh helper refuses all
 // three), or a line was not a run.
-async function readRuns($: $, r: Pick<PilotRun, 'repo' | 'cwd'>, head: string): Promise<WorkflowRun[] | null> {
+async function readRuns($: $, r: Pick<BuilderRun, 'repo' | 'cwd'>, head: string): Promise<WorkflowRun[] | null> {
   const out = await gh($, r.cwd, ['api', '--paginate', `repos/${r.repo}/actions/runs?head_sha=${head}&per_page=100`, '--jq', RUNS_JQ])
   return out === null ? null : runsOf(out)
 }
@@ -279,7 +279,7 @@ async function readRuns($: $, r: Pick<PilotRun, 'repo' | 'cwd'>, head: string): 
 const TOLD_PREFIX = 'prompted:'
 const SEEN_PREFIX = 'seen:'
 
-async function promptedKey($: $, r: Pick<PilotRun, 'repo' | 'number'>): Promise<string> {
+async function promptedKey($: $, r: Pick<BuilderRun, 'repo' | 'number'>): Promise<string> {
   return `${TOLD_PREFIX}${await $.session.id()}:${r.repo}#${r.number}`
 }
 const seenKeyFor = (toldKey: string) => `${SEEN_PREFIX}${toldKey.slice(TOLD_PREFIX.length)}`
@@ -302,7 +302,7 @@ const OWED_PREFIX = 'counsel-owed:'
 type OwedDecision = { key: string; line: string; at: number }
 
 // The prefix ends with the separator, so the keys for #1 do not include #12's.
-const owedPrefix = (target: Pick<PilotRun, 'repo' | 'number'>) => `${OWED_PREFIX}${target.repo}#${target.number}:`
+const owedPrefix = (target: Pick<BuilderRun, 'repo' | 'number'>) => `${OWED_PREFIX}${target.repo}#${target.number}:`
 
 // A stored value of another shape counts as nothing owed, as a told record of
 // another shape counts as no record.
@@ -311,7 +311,7 @@ function owedIn(key: string, stored: unknown): OwedDecision | null {
   return typeof d?.line === 'string' && typeof d.at === 'number' ? { key, line: d.line, at: d.at } : null
 }
 
-async function owedDecisions($: $, target: Pick<PilotRun, 'repo' | 'number'>): Promise<OwedDecision[]> {
+async function owedDecisions($: $, target: Pick<BuilderRun, 'repo' | 'number'>): Promise<OwedDecision[]> {
   const prefix = owedPrefix(target)
   const owed: OwedDecision[] = []
   for (const key of await $.store.keys()) {
@@ -325,7 +325,7 @@ async function owedDecisions($: $, target: Pick<PilotRun, 'repo' | 'number'>): P
 // The decisions still owed to a pull request, or none when the store could
 // not list or read them. The change prompt and the watch tool's answer list
 // them on the way to something else, so a store that fails must stop neither.
-async function owedSafely($: $, target: Pick<PilotRun, 'repo' | 'number'>): Promise<OwedDecision[]> {
+async function owedSafely($: $, target: Pick<BuilderRun, 'repo' | 'number'>): Promise<OwedDecision[]> {
   try {
     return await owedDecisions($, target)
   } catch {
@@ -348,7 +348,7 @@ async function forgetListed($: $, listed: readonly OwedDecision[]) {
   }
 }
 
-async function oweDecision($: $, target: Pick<PilotRun, 'repo' | 'number'>, questionId: string, line: string, at: number) {
+async function oweDecision($: $, target: Pick<BuilderRun, 'repo' | 'number'>, questionId: string, line: string, at: number) {
   await $.store.set(`${owedPrefix(target)}${await $.session.id()}:${questionId}`, { line, at })
 }
 
@@ -357,7 +357,7 @@ async function forgetTold($: $, toldKey: string) {
   await $.store.delete(seenKeyFor(toldKey))
 }
 
-const isSameRun = (a: PilotRun | null, b: PilotRun) =>
+const isSameRun = (a: BuilderRun | null, b: BuilderRun) =>
   a !== null && a.repo === b.repo && a.number === b.number && a.since === b.since
 // The stamp of the newest watch, as a module variable, because a state read
 // inside a hook that is still running does not see a watch made since it
@@ -365,8 +365,8 @@ const isSameRun = (a: PilotRun | null, b: PilotRun) =>
 let currentSince: number | undefined
 // The half of stillWatching that needs no await, for a check that must sit
 // right before a prompt with nothing between them.
-const isCurrentWatch = (r: PilotRun) => currentSince === undefined || r.since === currentSince
-const stillWatching = async ($: $, r: PilotRun) =>
+const isCurrentWatch = (r: BuilderRun) => currentSince === undefined || r.since === currentSince
+const stillWatching = async ($: $, r: BuilderRun) =>
   isCurrentWatch(r) && isSameRun(await read($, run), r)
 
 const WAKES_KEPT = 50
@@ -385,7 +385,7 @@ async function recordWake($: $, wake: Wake) {
 //   own turn runs (the poll, and the end of a turn that held a change);
 // - `known` records the state as already in front of the session (after the
 //   mod posts the session's own review);
-// - `observe` hands nothing over (/pilot poll, the looks after any other turn
+// - `observe` hands nothing over (/builder poll, the looks after any other turn
 //   ends and after the session's own push or merge, and the desktop app's CI
 //   event, which records what was told once its prompt goes on). It
 //   refreshes the display and reschedules the next poll, which it may bring
@@ -438,9 +438,9 @@ async function lookAt(
   source: Wake['source'],
   mode: Mode,
   { actsOnRead = mode !== 'observe', ownRead }: { actsOnRead?: boolean; ownRead?: object } = {},
-): Promise<{ r: PilotRun; s: Snapshot; seq: number; delivered: boolean } | null> {
+): Promise<{ r: BuilderRun; s: Snapshot; seq: number; delivered: boolean } | null> {
   const leavesReadForHandover = ownRead === undefined
-  // No look runs during a usage-limit hold, except the /pilot poll the person
+  // No look runs during a usage-limit hold, except the /builder poll the person
   // asks for. The look at the resume time runs once the hold is cleared.
   if (source !== 'command' && (await isHoldOn($))) return null
   const r = await read($, run)
@@ -505,7 +505,7 @@ const OWED_KEPT_MS = 90 * 24 * 60 * 60_000
 // counts as no record, rather than throwing on every poll and silencing the
 // session. The pane's guard against a snapshot an older build saved in its
 // state is `isDrawable` in hooks/pane.tsx.
-async function told($: $, r: PilotRun): Promise<Snapshot | null> {
+async function told($: $, r: BuilderRun): Promise<Snapshot | null> {
   return snapshotIn(await $.store.get(await promptedKey($, r)))
 }
 
@@ -540,7 +540,7 @@ const inToldQueue = oneAtATime({ passesErrors: true })
 // read has been claimed as told since it was queued, so the record ends on
 // the newest read even when an older write is still running as the newer one
 // is queued.
-async function tell($: $, r: PilotRun, s: Snapshot, seq: number) {
+async function tell($: $, r: BuilderRun, s: Snapshot, seq: number) {
   if (seq < toldSeq) return
   toldSeq = seq
   toldWrites += 1
@@ -563,7 +563,7 @@ async function tell($: $, r: PilotRun, s: Snapshot, seq: number) {
 
 // A live session marks the pull request seen once a day even when nothing is
 // delivered, so pruning only ever removes records of sessions that ended.
-async function keepSeen($: $, r: PilotRun) {
+async function keepSeen($: $, r: BuilderRun) {
   const key = seenKeyFor(await promptedKey($, r))
   const now = await $.clock.now()
   const seen = await $.store.get(key)
@@ -649,7 +649,7 @@ async function tellingOwnRead<T>(work: (ownRead: object) => Promise<T>): Promise
 // its mark is taken out, and the next poll hands the change over; when a
 // told write fails, `toldWrites` is lowered all the same, and the next poll
 // hands the change over.
-function newestFor(r: PilotRun, s: Snapshot, seq: number): { s: Snapshot; seq: number } | null {
+function newestFor(r: BuilderRun, s: Snapshot, seq: number): { s: Snapshot; seq: number } | null {
   if (toldWrites > 0 || untoldOwnReads.size > 0) return null
   const newest = newestRead !== null && newestRead.seq > seq && isSameRun(newestRead.r, r) ? newestRead : { s, seq }
   return newest.seq < newestStoredLook ? null : newest
@@ -676,7 +676,7 @@ function newestFor(r: PilotRun, s: Snapshot, seq: number): { s: Snapshot; seq: n
 // pull request, because no review will list them now, and the keys it listed
 // are deleted once the prompt is accepted. A refused prompt deletes none, so
 // the next handover or the watch tool's answer lists them.
-async function deliver($: $, r: PilotRun, s: Snapshot, seq: number): Promise<boolean> {
+async function deliver($: $, r: BuilderRun, s: Snapshot, seq: number): Promise<boolean> {
   // Claimed before any await, so the poll and the end of a turn cannot both
   // pass this point and hand the same change over twice.
   if (isDelivering) return false
@@ -825,7 +825,7 @@ async function schedule($: $, known?: Snapshot, keepSooner = false) {
     timerDue = at
     timer = $.clock.after(poll.ms, () => {
       // Each poll also compares the mod's files, so a watched session learns
-      // that pilot changed on disk without waiting for a turn end.
+      // that builder changed on disk without waiting for a turn end.
       void compareLoaded($).catch(() => undefined)
       // A look that read the pull request schedules the next one itself; one
       // that failed (gh offline, a timeout) or found nothing watched leaves it
@@ -955,7 +955,7 @@ async function resetStuckInterval($: $) {
 // request is not open, or the session has not gone quiet since it started.
 // `quietFrom` is a quiet time that could not be saved, which counts when it
 // is later than the saved one.
-async function stuckDue($: $, quietFrom?: number): Promise<{ r: PilotRun; since: number; every: number; now: number } | null> {
+async function stuckDue($: $, quietFrom?: number): Promise<{ r: BuilderRun; since: number; every: number; now: number } | null> {
   const r = await read($, run)
   const s = await read($, pr)
   const hold = holdIn(await read($, usageHold))
@@ -1457,12 +1457,12 @@ async function personPromptResets($: $, origin: PromptOrigin, text: string) {
 
 // The pull request is read before anything changes, so a wrong number leaves
 // the one already watched in place.
-async function watch($: $, target: Omit<PilotRun, 'since'>): Promise<Snapshot | null> {
+async function watch($: $, target: Omit<BuilderRun, 'since'>): Promise<Snapshot | null> {
   const s = await fetchSnapshot($, target)
   if (s === null) return null
   const previous = await read($, run)
   // Always later than the watch it replaces, even within one millisecond.
-  const r: PilotRun = { ...target, since: Math.max(await $.clock.now(), (previous?.since ?? 0) + 1) }
+  const r: BuilderRun = { ...target, since: Math.max(await $.clock.now(), (previous?.since ?? 0) + 1) }
   currentSince = r.since
   newestRead = null
   await update($, run, () => r)
@@ -1688,7 +1688,7 @@ async function checkoutOf($: $, from: string, branch: string): Promise<Checkout>
 // its folders.
 async function packageDir($: $, dir: string, head: string): Promise<string | null> {
   const gitDir = await gitDirOf($, dir)
-  return gitDir === null ? null : `${gitDir}/pilot/${head.slice(0, 8)}`
+  return gitDir === null ? null : `${gitDir}/builder/${head.slice(0, 8)}`
 }
 
 // The folder that holds the session's counsel briefs, one folder per question,
@@ -1697,12 +1697,12 @@ async function packageDir($: $, dir: string, head: string): Promise<string | nul
 // in the checkout shares the git folder, so the folder is named by the session.
 async function counselDir($: $, dir: string): Promise<string | null> {
   const gitDir = await gitDirOf($, dir)
-  return gitDir === null ? null : `${gitDir}/pilot/counsel/${await $.session.id()}`
+  return gitDir === null ? null : `${gitDir}/builder/counsel/${await $.session.id()}`
 }
 
 type PrForReview = GhPullRequest & { baseRefName: string; headRefName: string }
 
-async function livePullRequest($: $, r: PilotRun): Promise<PrForReview | null> {
+async function livePullRequest($: $, r: BuilderRun): Promise<PrForReview | null> {
   const out = await gh($, r.cwd, ['pr', 'view', String(r.number), '--repo', r.repo, '--json', `${PR_FIELDS},baseRefName,headRefName`])
   if (out === null) return null
   try {
@@ -2067,7 +2067,7 @@ const inLabelQueue = oneAtATime({ passesErrors: false })
 // question is open. That is what takes off a label left on by a session that
 // was killed while its question was open, which a restarted mod has no
 // record of.
-async function labelForQuestion($: $, r: PilotRun, at: number) {
+async function labelForQuestion($: $, r: BuilderRun, at: number) {
   const names = await gh($, r.cwd, ['pr', 'view', String(r.number), '--repo', r.repo, '--json', 'labels', '--jq', '[.labels[].name]'])
   if (names === null) return
   const isOn = (JSON.parse(names) as string[]).includes(DECISION_LABEL)
@@ -2090,7 +2090,7 @@ async function takeOffAnsweredLabels($: $) {
   }
 }
 
-async function addLabel($: $, r: PilotRun, name: string): Promise<boolean> {
+async function addLabel($: $, r: BuilderRun, name: string): Promise<boolean> {
   const args = ['pr', 'edit', String(r.number), '--repo', r.repo, '--add-label', name]
   if ((await gh($, r.cwd, args)) !== null) return true
   // The label may not exist in this repository yet. Creating it without
@@ -2163,7 +2163,7 @@ async function showOutput($: $, id: string) {
   // write of the agent caused started it, and it is fresh enough to share.
   const isReadByDrawSincePress = outputCache?.id === id && outputCache.started > before
   if (!isReadByDrawSincePress) outputCache = startRead($, id).reading
-  await $.ui.open({ id: AGENT_PANE, title: 'pilot agent' })
+  await $.ui.open({ id: AGENT_PANE, title: 'builder agent' })
   $.ui.invalidate('ui.render')
 }
 
@@ -2493,30 +2493,30 @@ function columnsOf(columns: unknown): number | undefined {
   return typeof columns === 'number' && Number.isFinite(columns) ? columns : undefined
 }
 
-// Pilot counts as started from the first open_pane call or /pilot command of
+// Builder counts as started from the first open_pane call or /builder command of
 // the session, and stays started.
 async function markStarted($: $) {
   await update($, started, () => true)
 }
 
-// Who asked for the pane: the person, by typing /pilot, or anything else,
+// Who asked for the pane: the person, by typing /builder, or anything else,
 // which is the open_pane tool or the mod's own opening and gets the tool's
 // wording. It is required so that a new caller chooses its wording.
 type Asker = 'tool' | 'command'
 
-// Opens the pane for the open_pane tool and for /pilot alike, so the two
+// Opens the pane for the open_pane tool and for /builder alike, so the two
 // cannot drift apart, and says what the engine answered. A pane the mod opens
 // on its own is drawn only from 144 terminal columns, and an app that places
 // no panes never draws it, so the answer never claims the pane opened when it
 // only waits. It quotes the engine's reason exactly, because the reason is
 // what tells the person which remedy applies. The person who has just typed
-// /pilot is not told to type it, only that widening the terminal shows it.
+// /builder is not told to type it, only that widening the terminal shows it.
 async function openPane($: $, asker: Asker): Promise<string> {
-  const opened = await $.ui.open({ id: PANE, title: 'pilot' })
+  const opened = await $.ui.open({ id: PANE, title: 'builder' })
   if (opened.isPlaced) return 'The pane is open.'
   const waits = `The pane waits and is not drawn yet. The engine says: "${opened.reason}"`
   if (asker === 'command') return `${waits} When the reason is the terminal's width, widening the terminal shows it.`
-  return `${waits} When the reason is the terminal's width, typing /pilot or widening the terminal shows it.`
+  return `${waits} When the reason is the terminal's width, typing /builder or widening the terminal shows it.`
 }
 
 // The agent-count button's press: closes the pane when the engine lists it as
@@ -2563,18 +2563,18 @@ async function serveProgress($: $, input: ReportInput): Promise<string> {
 async function route($: $, e: ToolCallInput, next: Next<'tool.call'>): Promise<ToolCallResult> {
   const tool = String(e.tool)
   if (SESSION_TOOLS.has(tool) && e.agentId !== undefined) {
-    return { deny: 'pilot: only the session opens the pane, reports progress, watches, packages, posts and puts questions to the counsel; a subagent reports to it.' }
+    return { deny: 'builder: only the session opens the pane, reports progress, watches, packages, posts and puts questions to the counsel; a subagent reports to it.' }
   }
   if (tool === OPEN_PANE_TOOL) {
     await markStarted($)
-    return { result: `pilot: ${await openPane($, 'tool')}` }
+    return { result: `builder: ${await openPane($, 'tool')}` }
   }
-  if (tool === PROGRESS_TOOL) return { result: `pilot: ${await serveProgress($, e as unknown as ReportInput)}` }
-  if (tool === WATCH_TOOL) return { result: `pilot: ${await serveWatch($, e as unknown as WatchInput)}` }
-  if (tool === PACKAGE_TOOL) return { result: `pilot: ${await servePackage($, e as unknown as PackageInput)}` }
-  if (tool === REVIEW_TOOL) return { result: `pilot: ${await serveReview($, e as unknown as ReviewInput)}` }
-  if (tool === COUNSEL_TOOL) return { result: `pilot: ${await serveCounsel($, e as unknown as CounselInput)}` }
-  if (tool === TALLY_TOOL) return { result: `pilot: ${await serveTally($, e as unknown as TallyInput)}` }
+  if (tool === PROGRESS_TOOL) return { result: `builder: ${await serveProgress($, e as unknown as ReportInput)}` }
+  if (tool === WATCH_TOOL) return { result: `builder: ${await serveWatch($, e as unknown as WatchInput)}` }
+  if (tool === PACKAGE_TOOL) return { result: `builder: ${await servePackage($, e as unknown as PackageInput)}` }
+  if (tool === REVIEW_TOOL) return { result: `builder: ${await serveReview($, e as unknown as ReviewInput)}` }
+  if (tool === COUNSEL_TOOL) return { result: `builder: ${await serveCounsel($, e as unknown as CounselInput)}` }
+  if (tool === TALLY_TOOL) return { result: `builder: ${await serveTally($, e as unknown as TallyInput)}` }
   if (tool === 'AskUserQuestion' && e.agentId === undefined) {
     return asking($, (e as unknown as AskInput).questions?.[0]?.question, () => next(e))
   }
@@ -2585,7 +2585,7 @@ async function route($: $, e: ToolCallInput, next: Next<'tool.call'>): Promise<T
     // tools.
     const type = await agentType($, e.agentId)
     if (type !== undefined && READ_ONLY_AGENTS.has(type)) {
-      return { deny: `pilot: ${type} only reads; ${tool} is not available to it.` }
+      return { deny: `builder: ${type} only reads; ${tool} is not available to it.` }
     }
   }
   return next(e)
@@ -2605,12 +2605,12 @@ export const register: Register = on => {
     // and not awaited, so the session's start never waits on git.
     void loadHooks($).catch(() => undefined)
     await $.command.register({
-      name: 'pilot',
-      description: 'Open the pilot pane. `/pilot poll` reads the pull request now, `/pilot watch <number>` watches one, `/pilot wakes` lists what woke the mod.',
+      name: 'builder',
+      description: 'Open the builder pane. `/builder poll` reads the pull request now, `/builder watch <number>` watches one, `/builder wakes` lists what woke the mod.',
     })
     await $.tool.register({
       name: 'watch',
-      description: 'Tell the pilot mod which pull request this session works on, right after opening it. The mod then shows its state and starts a turn when it changes.',
+      description: 'Tell the builder mod which pull request this session works on, right after opening it. The mod then shows its state and starts a turn when it changes.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -2679,7 +2679,7 @@ export const register: Register = on => {
             items: {
               type: 'object',
               properties: {
-                member: { type: 'string', description: 'The member\'s agent type, such as pilot:spec-reviewer.' },
+                member: { type: 'string', description: 'The member\'s agent type, such as builder:spec-reviewer.' },
                 vote: { type: 'string', description: 'The text after VOTE:, word for word as the member reported it, without tidying it. Empty for a member that failed or was stopped, and always empty or left out on a follow-ups question.' },
                 reason: { type: 'string', description: 'The text after REASON:, as reported.' },
                 new_option: { type: 'string', description: 'The text after NEW OPTION:, if the member gave one.' },
@@ -2706,7 +2706,7 @@ export const register: Register = on => {
     })
     await $.tool.register({
       name: 'open_pane',
-      description: 'Open the pilot pane, as /pilot does, so the person can see the mod from the start of the session. Takes no input. Answers that the pane is open, or that it waits and is not drawn yet, with the engine\'s reason.',
+      description: 'Open the builder pane, as /builder does, so the person can see the mod from the start of the session. Takes no input. Answers that the pane is open, or that it waits and is not drawn yet, with the engine\'s reason.',
     })
     await $.tool.register({
       name: 'progress',
@@ -2734,7 +2734,7 @@ export const register: Register = on => {
     ensureLive($)
     void pruneTold($).catch(() => undefined)
     void pruneOwed($).catch(() => undefined)
-    // Watching starts only when asked (the watch tool or /pilot watch), so a
+    // Watching starts only when asked (the watch tool or /builder watch), so a
     // session that has not named a pull request is never handed one.
     void ensureArmed($)
     // A watch that survived a reload is read at once, so the pane does not
@@ -2768,13 +2768,13 @@ export const register: Register = on => {
     // The fence could not decide. A subagent's call that a reviewer could not
     // make is refused rather than let through.
     if (e.agentId !== undefined && !REVIEWER_TOOLS.has(String(e.tool))) {
-      return { deny: 'pilot: the reviewer fence could not check this call, so it is refused.' }
+      return { deny: 'builder: the reviewer fence could not check this call, so it is refused.' }
     }
     return next(e)
   })
 
   // The host already puts the mod's name in front of a command's output.
-  on('command.run', { command: 'pilot' }, async ($, e) => {
+  on('command.run', { command: 'builder' }, async ($, e) => {
     await markStarted($)
     const [verb, arg] = e.args.trim().split(/\s+/)
     if (verb === 'poll') {
@@ -2874,7 +2874,7 @@ export const register: Register = on => {
     // would leave a read-only agent, a reviewer or the owner's advocate,
     // outside the fence; they run from the session.
     if (e.workflow !== undefined && READ_ONLY_AGENTS.has(e.subagentType)) {
-      return { deny: `pilot: ${e.subagentType} runs only from the session, where the reviewer fence can see it.` }
+      return { deny: `builder: ${e.subagentType} runs only from the session, where the reviewer fence can see it.` }
     }
     const spawned = await next(e)
     const id = spawned.agentId
@@ -2917,7 +2917,7 @@ export const register: Register = on => {
       refreshLater($)
       void ensureArmed($)
       // Every turn end compares the mod's files, hold or not, so a session
-      // with nothing watched still learns that pilot changed on disk.
+      // with nothing watched still learns that builder changed on disk.
       void compareLoaded($).catch(() => undefined)
       // A turn an API error ended may start a usage-limit hold. While the
       // hold is on, a change held during the turn stays held for the end of
@@ -3017,7 +3017,7 @@ export const register: Register = on => {
 
   // The band gives way to Claude Code's survey, and to the host when it has
   // nothing to draw, which bandTree answers with null. Pressing the line opens the
-  // pane, as /pilot does; pressing the agent count opens it or closes it.
+  // pane, as /builder does; pressing the agent count opens it or closes it.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     const v = await view($)

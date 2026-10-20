@@ -17,7 +17,7 @@ function pullRequest(state: 'OPEN' | 'MERGED' | 'CLOSED' = 'OPEN', head = HEAD) 
 // Progress as the mod records it, at the spec stage of one title unless the
 // case says otherwise.
 function progress(over: Partial<Progress> = {}): Progress {
-  return { title: 'ABC-123 pilot progress', stage: 'spec', furthest: 'spec', note: '', since: NOW - 60_000, autoOpened: true, ...over }
+  return { title: 'ABC-123 builder progress', stage: 'spec', furthest: 'spec', note: '', since: NOW - 60_000, autoOpened: true, ...over }
 }
 
 // Applies a report and fails the test when it was refused.
@@ -52,8 +52,8 @@ test('a stored progress value reads back only when every field is sound', () => 
 })
 
 test('a first report starts the work at its stage, cleaned, not yet opened, from now', () => {
-  const next = reported(null, { title: 'ABC-123\u001b[2J pilot\nprogress', stage: 'spec', note: 'first\tpass' })
-  expect(next).toEqual({ title: 'ABC-123 pilot progress', stage: 'spec', furthest: 'spec', note: 'first pass', since: NOW, autoOpened: false })
+  const next = reported(null, { title: 'ABC-123\u001b[2J builder\nprogress', stage: 'spec', note: 'first\tpass' })
+  expect(next).toEqual({ title: 'ABC-123 builder progress', stage: 'spec', furthest: 'spec', note: 'first pass', since: NOW, autoOpened: false })
 })
 
 test('the title is cut to sixty characters and the note to forty, and a missing note or title is empty', () => {
@@ -67,7 +67,7 @@ test('the title is cut to sixty characters and the note to forty, and a missing 
 
 test('a stage outside the nine is refused, naming all nine, and each of the nine is read', () => {
   for (const stage of ['deploy', '', undefined, 3, 'SPEC']) {
-    const result = reportOf({ title: 'ABC-123 pilot progress', stage })
+    const result = reportOf({ title: 'ABC-123 builder progress', stage })
     expect('refusal' in result).toBe(true)
     if (!('refusal' in result)) continue
     for (const { id } of STAGES) expect(result.refusal).toContain(id)
@@ -105,7 +105,7 @@ test('a different title starts new work from its own stage, and the pane may ope
 })
 
 test('the bar counts the stages before the furthest one out of nine, with its percentage', () => {
-  expect(barOf(progress(), null, null)).toEqual({ title: 'ABC-123 pilot progress', label: 'spec', done: 2, total: 9, percent: 22 })
+  expect(barOf(progress(), null, null)).toEqual({ title: 'ABC-123 builder progress', label: 'spec', done: 2, total: 9, percent: 22 })
   expect(barOf(progress({ stage: 'grounding', furthest: 'grounding' }), null, null)).toMatchObject({ done: 0, percent: 0 })
   expect(barOf(progress({ stage: 'merge', furthest: 'merge' }), null, null)).toMatchObject({ label: 'merge', done: 8, percent: 89 })
   expect(barOf(progress({ stage: 'review', furthest: 'review', note: 'round 2' }), null, null)?.label).toBe('review rounds · round 2')
@@ -155,11 +155,11 @@ const card = (id: string, type: string, startedAt: number, over: Partial<AgentCa
   ({ id, type, description: `about ${id}`, status: 'running', startedAt, ...over })
 const done = (id: string, type: string, startedAt: number) => card(id, type, startedAt, { status: 'completed', endedAt: startedAt + 1_000 })
 
-const FOCUSED = ['pilot:security-reviewer', 'pilot:maintainability-reviewer', 'pilot:performance-reviewer', 'pilot:data-reviewer']
-const VERDICT = ['pilot:spec-reviewer', 'pilot:adversarial-reviewer']
+const FOCUSED = ['builder:security-reviewer', 'builder:maintainability-reviewer', 'builder:performance-reviewer', 'builder:data-reviewer']
+const VERDICT = ['builder:spec-reviewer', 'builder:adversarial-reviewer']
 // A counsel question plans the reviewers in the review round's order, then the
 // owner's advocate, which no review round plans.
-const COUNSEL = [...FOCUSED, ...VERDICT, 'pilot:owners-advocate']
+const COUNSEL = [...FOCUSED, ...VERDICT, 'builder:owners-advocate']
 const PACKAGED_AT = NOW - 30_000
 
 function input(over: Partial<PlannedInput> = {}): PlannedInput {
@@ -180,20 +180,20 @@ test('the focused and verdict reviewers together are the six reviewers', () => {
 })
 
 test('the counsel is the six reviewers and the owner\'s advocate, which reviews no pull request but is held to the read-only fence', () => {
-  expect([...COUNSEL_MEMBERS].sort()).toEqual([...REVIEWERS, 'pilot:owners-advocate'].sort())
-  expect(OWNERS_ADVOCATE).toBe('pilot:owners-advocate')
+  expect([...COUNSEL_MEMBERS].sort()).toEqual([...REVIEWERS, 'builder:owners-advocate'].sort())
+  expect(OWNERS_ADVOCATE).toBe('builder:owners-advocate')
   expect(REVIEWERS.has(OWNERS_ADVOCATE)).toBe(false)
   expect([...READ_ONLY_AGENTS].sort()).toEqual([...COUNSEL_MEMBERS].sort())
 })
 
 test('after a package call at the watched head the four focused reviewers are planned until each starts', () => {
   expect(plannedOf(input())).toEqual(FOCUSED)
-  const oneStarted = input({ agents: [card('s', 'pilot:security-reviewer', PACKAGED_AT + 1)] })
+  const oneStarted = input({ agents: [card('s', 'builder:security-reviewer', PACKAGED_AT + 1)] })
   expect(plannedOf(oneStarted)).toEqual(FOCUSED.slice(1))
   // A reviewer that started at the very time of the call counts as started since.
-  expect(plannedOf(input({ agents: [card('s', 'pilot:security-reviewer', PACKAGED_AT)] }))).toEqual(FOCUSED.slice(1))
+  expect(plannedOf(input({ agents: [card('s', 'builder:security-reviewer', PACKAGED_AT)] }))).toEqual(FOCUSED.slice(1))
   // One that started before the call belongs to an earlier round.
-  expect(plannedOf(input({ agents: [done('s', 'pilot:security-reviewer', PACKAGED_AT - 1)] }))).toEqual(FOCUSED)
+  expect(plannedOf(input({ agents: [done('s', 'builder:security-reviewer', PACKAGED_AT - 1)] }))).toEqual(FOCUSED)
 })
 
 test('once the four focused reviewers have finished since the call, the two verdict reviewers are planned until each starts', () => {
@@ -202,9 +202,9 @@ test('once the four focused reviewers have finished since the call, the two verd
   // While one of the four still runs, nothing is planned.
   const oneRunning = [...four.slice(0, 3), card('f3', FOCUSED[3]!, PACKAGED_AT + 3)]
   expect(plannedOf(input({ agents: oneRunning }))).toEqual([])
-  const specStarted = [...four, card('v', 'pilot:spec-reviewer', PACKAGED_AT + 10)]
-  expect(plannedOf(input({ agents: specStarted }))).toEqual(['pilot:adversarial-reviewer'])
-  const bothStarted = [...specStarted, card('w', 'pilot:adversarial-reviewer', PACKAGED_AT + 11)]
+  const specStarted = [...four, card('v', 'builder:spec-reviewer', PACKAGED_AT + 10)]
+  expect(plannedOf(input({ agents: specStarted }))).toEqual(['builder:adversarial-reviewer'])
+  const bothStarted = [...specStarted, card('w', 'builder:adversarial-reviewer', PACKAGED_AT + 11)]
   expect(plannedOf(input({ agents: bothStarted }))).toEqual([])
 })
 
@@ -221,16 +221,16 @@ test('no review row is planned once the head moves, the pull request merges or c
 test('a counsel question waiting for votes plans its seven members until each starts, in the fixed order', () => {
   const none = { pr: null, packaged: null }
   expect(plannedOf(input({ ...none, counsel: [question()] }))).toEqual(COUNSEL)
-  const started = [card('a', 'pilot:data-reviewer', NOW - 10_000), card('b', 'pilot:spec-reviewer', NOW - 5)]
-  expect(plannedOf(input({ ...none, counsel: [question()], agents: started }))).toEqual([...FOCUSED.slice(0, 3), 'pilot:adversarial-reviewer', 'pilot:owners-advocate'])
+  const started = [card('a', 'builder:data-reviewer', NOW - 10_000), card('b', 'builder:spec-reviewer', NOW - 5)]
+  expect(plannedOf(input({ ...none, counsel: [question()], agents: started }))).toEqual([...FOCUSED.slice(0, 3), 'builder:adversarial-reviewer', 'builder:owners-advocate'])
   // An agent that started before the launch was for something else.
-  expect(plannedOf(input({ ...none, counsel: [question()], agents: [done('a', 'pilot:data-reviewer', NOW - 10_001)] }))).toEqual(COUNSEL)
+  expect(plannedOf(input({ ...none, counsel: [question()], agents: [done('a', 'builder:data-reviewer', NOW - 10_001)] }))).toEqual(COUNSEL)
 })
 
 test('a counsel question asked again of two members plans only those two', () => {
-  const asked = question({ askedAgain: ['pilot:spec-reviewer', 'pilot:data-reviewer'], launchedAt: NOW - 1_000 })
-  const before = [done('d', 'pilot:data-reviewer', NOW - 9_000), done('s', 'pilot:spec-reviewer', NOW - 9_000)]
-  expect(plannedOf(input({ pr: null, packaged: null, counsel: [asked], agents: before }))).toEqual(['pilot:data-reviewer', 'pilot:spec-reviewer'])
+  const asked = question({ askedAgain: ['builder:spec-reviewer', 'builder:data-reviewer'], launchedAt: NOW - 1_000 })
+  const before = [done('d', 'builder:data-reviewer', NOW - 9_000), done('s', 'builder:spec-reviewer', NOW - 9_000)]
+  expect(plannedOf(input({ pr: null, packaged: null, counsel: [asked], agents: before }))).toEqual(['builder:data-reviewer', 'builder:spec-reviewer'])
 })
 
 test('a counsel question plans nothing once its round is tallied, and plans the next round after a rerun', () => {

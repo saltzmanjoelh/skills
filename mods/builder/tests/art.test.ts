@@ -7,7 +7,7 @@ const NOW = 1_000_000
 const MARKUP = `a<&>"b'c`
 const ESCAPED = 'a&lt;&amp;&gt;&quot;b&apos;c'
 
-const bar = (over: Partial<Bar> = {}): Bar => ({ title: 'ABC-123 pilot progress', label: 'spec', done: 2, total: 9, percent: 22, ...over })
+const bar = (over: Partial<Bar> = {}): Bar => ({ title: 'ABC-123 builder progress', label: 'spec', done: 2, total: 9, percent: 22, ...over })
 
 function row(over: Partial<AgentRow> = {}): AgentRow {
   return {
@@ -123,9 +123,9 @@ test('a planned row shows its type and planned, escaped', () => {
   expect(svg).not.toContain(MARKUP)
 })
 
-test('a row drops the pilot prefix from its type, and a type an older build stored as something other than text draws as none', () => {
-  expect(agentSvg(row({ type: 'pilot:spec-reviewer' }), NOW, 700)).toContain('>spec-reviewer<')
-  expect(plannedSvg('pilot:data-reviewer', 500)).toContain('>data-reviewer<')
+test('a row drops the builder prefix from its type, and a type an older build stored as something other than text draws as none', () => {
+  expect(agentSvg(row({ type: 'builder:spec-reviewer' }), NOW, 700)).toContain('>spec-reviewer<')
+  expect(plannedSvg('builder:data-reviewer', 500)).toContain('>data-reviewer<')
   expectOneDrawing(agentSvg(row({ type: 7 as never }), NOW, 700), 700)
   expectOneDrawing(plannedSvg(null as never, 500), 500)
 })
@@ -133,7 +133,7 @@ test('a row drops the pilot prefix from its type, and a type an older build stor
 test('the terminal bar row drops the title, then the stage, then the percentage, and only then is cut', () => {
   const b = bar()
   const full = fitBar(b, 200)
-  expect(full).toBe(`ABC-123 pilot progress · spec · ${barCells(2, 9, 10)} 2 of 9 · 22%`)
+  expect(full).toBe(`ABC-123 builder progress · spec · ${barCells(2, 9, 10)} 2 of 9 · 22%`)
   expect(fitBar(b, Number.NaN)).toBe(full)
   expect(fitBar(b, full.length)).toBe(full)
   const noTitle = `spec · ${barCells(2, 9, 10)} 2 of 9 · 22%`

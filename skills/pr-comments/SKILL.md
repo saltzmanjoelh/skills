@@ -89,12 +89,12 @@ Classify each thread:
 - **UNCLEAR**: you cannot tell what is being asked. Ask in-thread; leave it
   unresolved; move on to the others rather than blocking.
 
-For anything non-obvious, spawn a `pilot:claim-checker` subagent to try to
+For anything non-obvious, spawn a `builder:claim-checker` subagent to try to
 REFUTE the comments before you accept them. Give it those comments as a
 numbered list of claims, together with the head commit they are about, and
 it tries to refute each one with evidence from the code.
 
-When the pilot mod is not loaded, so that no `pilot:claim-checker` agent type
+When the builder mod is not loaded, so that no `builder:claim-checker` agent type
 exists, spawn a `general-purpose` subagent instead and give it the same
 numbered list of claims and the same head commit. Tell it these four things:
 

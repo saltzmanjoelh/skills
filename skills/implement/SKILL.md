@@ -1,18 +1,18 @@
 ---
 name: implement
-description: One session per issue, from the issue to a merged pull request. Spec, plan tournament, build, verify, open the pull request, then drive it with the pilot mod's reviewers until both verdicts approve and the checks are green, and merge it. Use when the user says "/implement <issue>", "implement this", or "/implement --resume #N" to pick up a pull request after a restart.
+description: One session per issue, from the issue to a merged pull request. Spec, plan tournament, build, verify, open the pull request, then drive it with the builder mod's reviewers until both verdicts approve and the checks are green, and merge it. Use when the user says "/implement <issue>", "implement this", or "/implement --resume #N" to pick up a pull request after a restart.
 ---
 
 # Implement
 
 One session takes one piece of work from the issue to a merged pull request.
 It delegates as much as it can to agents, so it stays free to answer the
-person and to react when the pull request changes. It needs the `pilot`
+person and to react when the pull request changes. It needs the `builder`
 mod: the mod watches the pull request, starts a turn when it changes, shows
 the state in its pane, and owns the reviewer agents.
 
 The person's part is the questions, in the spec interview or later, that
-the counsel (the pilot mod's six reviewers and its owner's advocate, seven
+the counsel (the builder mod's six reviewers and its owner's advocate, seven
 members voting) does not decide, and
 the few questions that always go straight to them (see **Questions**). Everything else runs without them, so the session can be
 left alone.
@@ -54,16 +54,16 @@ merging.
 
 ## Reporting the stage
 
-The pilot mod draws a progress bar above the prompt over the nine stages of
+The builder mod draws a progress bar above the prompt over the nine stages of
 this skill, and the session tells it which stage it is in by calling
-`mcp__pilot__progress` with a `title` (the issue in a few words, such as
+`mcp__builder__progress` with a `title` (the issue in a few words, such as
 `ABC-123 short issue name`, the same for the whole issue), a `stage`, and,
 when it helps, a `note` for a sub-step such as `round 2`. Report a stage on
 entering it, not on finishing it:
 
 | Stage | When |
 |---|---|
-| `grounding` | right after `mcp__pilot__open_pane` in step 1 |
+| `grounding` | right after `mcp__builder__open_pane` in step 1 |
 | `issue` | before the Explore check in step 2 |
 | `spec` | at the start of step 3 |
 | `plan` | at the start of step 4 |
@@ -97,7 +97,7 @@ step 2, comes after all of them.
    unavailable, say in one sentence, at that moment, that Remote Control is
    off and why, and carry on. The session works without it; only following
    it from another device is lost.
-2. Start the pilot mod by calling `mcp__pilot__open_pane`, which opens the
+2. Start the builder mod by calling `mcp__builder__open_pane`, which opens the
    mod's pane. The tool may be deferred, so look for it with ToolSearch
    before deciding it is missing. If there is no such tool, the mod is not
    loaded: say so and stop, because watching the pull request and every
@@ -137,7 +137,7 @@ Run `/plan-tournament`. Commit its plan file by itself too.
 Write each test the plan names first and see it fail before making it pass.
 Where the plan has independent steps, give each to a `general-purpose`
 agent working in this worktree, one at a time or on disjoint files; never
-give a builder `isolation: worktree`, because an isolated worktree starts
+give such an agent `isolation: worktree`, because an isolated worktree starts
 from the default branch, not from this branch. Follow the project's hard
 rules. Commit in coherent steps with complete-sentence messages.
 
@@ -154,7 +154,7 @@ for credentials (see "Rules"), then push and open it with
 was measured, written once; history goes in the reviews, not the body. If
 the project's `CLAUDE.md` says the body must begin with particular lines,
 write them. Set the state label to `in-review` (see "State labels"), then
-call `mcp__pilot__watch` with the number, and go straight on into the list
+call `mcp__builder__watch` with the number, and go straight on into the list
 below, from the top, in the same turn: the watch records the state at
 opening as already told, so no turn may come for it. From here the pull
 request drives the session.
@@ -164,7 +164,7 @@ request drives the session.
 On every turn that starts from the pull request's state (a turn the mod
 starts, the mod's stuck prompt, the desktop app's CI event, a reviewer
 finishing, or resuming), read the state from the mod's last report or
-`mcp__pilot__watch`, and take the first of these that applies. Decide from
+`mcp__builder__watch`, and take the first of these that applies. Decide from
 the reviews, checks, commits and mergeability, never from the state labels,
 which are for the person to read.
 
@@ -352,7 +352,7 @@ and either way **Over a limit** is checked after every push:
   so the next turn comes within about two minutes of the push and starts
   the list again from **Merged**.
 - **`Checks: none`:** there are no checks to wait for, so do not wait for
-  the mod to hand the push over: call `mcp__pilot__watch` with the pull
+  the mod to hand the push over: call `mcp__builder__watch` with the pull
   request's number, which reads the new state and records it as told.
   Then start the list again from **Merged** in the same turn. If the watch
   fails, or the head it reports is not the commit just pushed (GitHub has
@@ -420,12 +420,12 @@ request counts as follow-ups only.
 **First half, at a head where the focused reviewers have not run** (**The
 focused reviewers have not run at this head** says which heads those are).
 
-1. Call `mcp__pilot__package` with the issue in a few lines, the spec and
+1. Call `mcp__builder__package` with the issue in a few lines, the spec and
    plan paths, and the test summary line. It answers with the package
    folder and the full head.
-2. In one message, launch `pilot:security-reviewer`,
-   `pilot:maintainability-reviewer`, `pilot:performance-reviewer` and
-   `pilot:data-reviewer`, each with "Review package: <folder>. Head:
+2. In one message, launch `builder:security-reviewer`,
+   `builder:maintainability-reviewer`, `builder:performance-reviewer` and
+   `builder:data-reviewer`, each with "Review package: <folder>. Head:
    <full sha>." Never with `isolation: worktree`: they read this worktree,
    and the mod refuses them any tool that changes it. Each agent's report
    arrives as its own message once it finishes; wait for all four before
@@ -433,27 +433,27 @@ focused reviewers have not run at this head** says which heads those are).
 3. Merge findings that describe the same problem into one, naming every
    reviewer that raised it. Number every finding marked
    `Needs checking: yes` and give them, with the head, to one
-   `pilot:claim-checker`. Drop what it refutes. A speculative finding is
+   `builder:claim-checker`. Drop what it refutes. A speculative finding is
    dropped and listed as dropped in the round's review, never a code
    change. When point 4 commits fixes, the commit's message ends with a
    `Dropped:` section naming those findings, one sentence each on why, so
    that a session that restarts before the review still has them.
 4. Fix every confirmed finding and every unmarked finding. Mechanical fixes
-   can go to a builder agent. Rerun the gates the fixes could move, push,
+   can go to an implementation agent. Rerun the gates the fixes could move, push,
    and go on as **When a turn ends** says for a push: end the turn under
-   `Checks: expected`, or re-read with `mcp__pilot__watch` and start the
+   `Checks: expected`, or re-read with `mcp__builder__watch` and start the
    list again under `Checks: none`.
 5. With nothing to fix, start the list again from **Merged** in the same
    turn (see "When a turn ends").
 
 **Second half, once the focused reviewers found nothing to fix at the head.**
 
-1. In one message, launch `pilot:spec-reviewer` and
-   `pilot:adversarial-reviewer` with "Review package: <folder>. Head:
+1. In one message, launch `builder:spec-reviewer` and
+   `builder:adversarial-reviewer` with "Review package: <folder>. Head:
    <full sha>. This is the round package.md states." Every head that
    drew a verdict review was a round, whichever way it went.
 2. Send their findings marked `Needs checking: yes` to one
-   `pilot:claim-checker`, and drop what it refutes.
+   `builder:claim-checker`, and drop what it refutes.
 3. Settle each reviewer's verdict. Take it from its `VERDICT:` line,
    except that a `REQUEST_CHANGES` whose blocking findings the claim
    checker all refuted, or that the rule for rounds turns into follow-ups,
@@ -582,7 +582,7 @@ focused reviewers have not run at this head** says which heads those are).
      binary file, because the whole file is new, gone, moved or not text,
      whatever its lines say.
 6. Post the review at the reviewed head, then do what point 5 chose. Call
-   `mcp__pilot__post_review` with the head and the verdicts point 3
+   `mcp__builder__post_review` with the head and the verdicts point 3
    settled. The body has: each distinct surviving finding once, naming the
    reviewers that raised it; the focused reviewers that ran, what they
    found and what was fixed in which commit; what the claim checker
@@ -625,7 +625,7 @@ focused reviewers have not run at this head** says which heads those are).
 ### Updating the linked checkout
 
 The **Merged** step does this first, before anything else. Skills, agents
-and the pilot mod load through symlinks under `~/.claude` into a
+and the builder mod load through symlinks under `~/.claude` into a
 repository's main checkout, not from this worktree, so a session started a
 moment after the merge runs whatever that checkout holds. The session
 otherwise never works in a main checkout; here it only fast-forwards one.
@@ -892,15 +892,15 @@ Before asking, try to answer it: read the code, the spec, the issue and its
 comments, or send an agent to. A question that the code or the documents
 answer is not a question.
 
-Then put it to the counsel. Call `mcp__pilot__counsel` with the question,
+Then put it to the counsel. Call `mcp__builder__counsel` with the question,
 two to four options, the background (the issue in a few lines, what was
 tried, what is at stake), the paths it touches and the session's own lean.
 Once this issue's pull request is open and watched, every counsel call also
 passes `pull_request` with that pull request's number, except a follow-ups
 question, below; before the pull request is opened, no call passes it.
-Launch all seven counsel members, the six pilot reviewers and
-`pilot:owners-advocate`, in one message, each with "Counsel brief:
-<folder>.", wait for all seven, and call `mcp__pilot__counsel_tally` with
+Launch all seven counsel members, the six builder reviewers and
+`builder:owners-advocate`, in one message, each with "Counsel brief:
+<folder>.", wait for all seven, and call `mcp__builder__counsel_tally` with
 their votes. The counsel decides when at least 4 of the 7 chose the same
 option. Follow what the tally answers: go with a decision and tell the
 person in the words it gives, which read "The counsel chose: <option> <n> of
@@ -914,7 +914,7 @@ as the tally's answer says. When the pull request merges or closes before a
 review lists a decision owed to it, the turn the mod starts for that, or
 the watch tool's answer, lists the decision and says to record it in the
 spec under "Decided by the counsel"; do so, leaving out a line the spec
-already has. The pilot pane lists members that gave no vote under "Without
+already has. The builder pane lists members that gave no vote under "Without
 a vote:", the label the question put to the person uses. When the
 counsel tool refuses a call because the number is not the watched, open
 pull request, its answer says what is watched, so call again with that
@@ -927,7 +927,7 @@ undecided follow-ups to the counsel as one question, or as several when
 more than twenty are left. The tool refuses more than twenty follow-ups in
 one call, so that is one call for up to twenty and one more call for each
 further twenty, all in the same round, with all seven members launched for
-each call. Call `mcp__pilot__counsel` with the question, the background,
+each call. Call `mcp__builder__counsel` with the question, the background,
 the paths and the session's lean as usual, and with `follow_ups` in place of
 `options`: a list of the follow-ups, each in one or two sentences saying
 what it is and what a person would see if it is never fixed. The mod gives
@@ -936,7 +936,7 @@ it as an issue, or drop it. This call never passes `pull_request`, and the
 tool refuses it if it does, because its decisions are recorded in the
 round's review, in the **Follow-ups** section, and nowhere else: not in the
 spec, and not in a paragraph the mod adds to a review. Launch all seven
-members as for any question, and call `mcp__pilot__counsel_tally` with each
+members as for any question, and call `mcp__builder__counsel_tally` with each
 member's numbered votes, giving for each member its vote and reason on
 every follow-up, keyed by the follow-up's number. Each follow-up is decided
 on its own, by an option with at least 4 of the 7 votes. When the tally
@@ -975,13 +975,13 @@ Every question has:
 
 `/implement --resume #N` is a new session after a restart, with neither
 Remote Control nor the pane, so it begins as step 1 does: turn Remote
-Control on, then start the pilot mod with `mcp__pilot__open_pane`,
+Control on, then start the builder mod with `mcp__builder__open_pane`,
 handling a refusal or a missing tool as step 1 says. Then report the
 `review` stage, before the watch: the bar counts a merge only for a watch
 that began after the title's first report, so a resumed session that
 watched first would never see its bar reach `merged`. Then find the pull
 request's branch and its worktree (make one from the branch if there is
-none), call `mcp__pilot__watch`, and read the spec and plan paths from the
+none), call `mcp__builder__watch`, and read the spec and plan paths from the
 spec directory on the branch (never from the pull request body). When the
 worktree holds commits the pull request lacks, do what "Commits the pull
 request lacks" says. Then enter the list above from the top, reporting
