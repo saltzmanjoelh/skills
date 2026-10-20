@@ -2648,10 +2648,14 @@ let statusFlight: Promise<void> | null = null
 // up on after its timeout, so the session's end can delete the file again
 // after a write that lands once it was deleted.
 const statusWrites = new Set<Promise<void>>()
-// The memo's generation this copy of the module writes under. The memo's is
-// raised at each start of the hooks, so a writer that a copy from before a
-// hot reload left running finds the memo's generation is not its own and
-// stops.
+// The generation this copy of the module writes under. Two counters share
+// the word: the memo's stored `generation`, which survives a hot reload, and
+// this module variable. Each start of the hooks raises the stored one and sets
+// this one to match, so a writer that a copy from before a hot reload left
+// running finds the stored generation is not its own and stops. The session's
+// end raises only this module variable, so a writer of the ended session that
+// captured the old value stops, and the stored generation stays as it is until
+// the next conversation writes a memo of its own.
 let statusGen = 0
 // The text of the record last written, as comparedTextOf gives it, to
 // compare the next one with. A hot reload forgets it, which costs one write.
@@ -2884,8 +2888,9 @@ async function startStatus($: $) {
   adoptMemo($, raised)
 }
 
-// At the session's end nothing more is written. Writing is closed and the
-// generation raised first, so a writer of the ended session that is still
+// At the session's end nothing more is written. Writing is closed and this
+// module copy's statusGen raised first, leaving the memo's stored generation
+// alone, so a writer of the ended session that is still
 // awaiting a read stops before it writes, even once a new conversation writes
 // again. A session with a ticket then deletes the file after a merge, and
 // when the process goes on under another session id, after a /clear or a

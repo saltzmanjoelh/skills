@@ -178,7 +178,8 @@ session shows it.
   tries again. Nothing a write does can stop a hook.
 - The delete at the session's end runs inside the engine's short budget for
   ending a session. When it fails or is cut off, the file stays and reads
-  `done`, which tells foreman the same thing.
+  `done`, or `in-cleanup` when the cleanup skill had started, either of which
+  tells foreman the session finished its pull request.
 - Reading the transcript for the ticket can fail; then the prompt being
   submitted is checked instead.
 
