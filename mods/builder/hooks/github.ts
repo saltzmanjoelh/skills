@@ -3,7 +3,7 @@
 // JSON gh printed, so the tests can feed it fixtures and the hooks can call it
 // without touching the network.
 
-import type { Check, CheckState, Snapshot, Verdict, Verdicts, WorkflowRun } from '../types'
+import type { BuildStatus, Check, CheckState, Snapshot, Verdict, Verdicts, WorkflowRun } from '../types'
 
 export type { Check, CheckState, Snapshot, Verdict, Verdicts, WorkflowRun }
 
@@ -298,7 +298,9 @@ export function isSameState(a: unknown, b: unknown): boolean {
   return fingerprintOf(one) === fingerprintOf(other)
 }
 
-export type CiState = 'none' | 'pending' | 'failed' | 'passed'
+// The checks' overall state, the same words the status file for the foreman
+// writes, so the two cannot drift apart.
+export type CiState = NonNullable<BuildStatus['pr']>['checks']
 
 // Each check name is judged by its newest run, so a passing rerun that GitHub
 // lists beside the old failed run it replaced reads as passed.
