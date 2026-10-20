@@ -4,7 +4,8 @@
 // The parent's settings. `isOn` says this session ran /foreman and so is a
 // parent. `slots` is the count /foreman slots set, or null when none was set,
 // in which case the `slots` option applies. `isPaused` says /foreman pause is
-// in force; in this step it only changes what the band says. Read through
+// in force: while it is, a slot that frees is remembered rather than waking
+// the parent's model, and /foreman resume then wakes it once. Read through
 // parentIn in hooks/parent.ts, which reads a value in any other shape as off.
 export type ForemanParent = { isOn: boolean; slots: number | null; isPaused: boolean }
 

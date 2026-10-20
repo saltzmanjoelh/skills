@@ -169,25 +169,10 @@ async function rowsNow($: $): Promise<SubRow[]> {
   return rowsOf(list, typeof at === 'number' ? at : await $.clock.now())
 }
 
-// The ledger as $.state holds it, read through ticketsIn once for each value
-// the atom holds: the band and the pane are drawn every second, and the
-// ledger changes only at a read, a press or a start_session call.
-const ledgers = new WeakMap<object, ForemanTickets>()
-async function ledgerNow($: $): Promise<ForemanTickets> {
-  const raw = await read($, tickets)
-  if (typeof raw !== 'object' || raw === null) return ticketsIn(raw)
-  let ledger = ledgers.get(raw)
-  if (ledger === undefined) {
-    ledger = ticketsIn(raw)
-    ledgers.set(raw, ledger)
-  }
-  return ledger
-}
-
 // The rows the band and the pane show: those that own a ticket of this
 // parent that was not freed.
 async function shownNow($: $): Promise<SubRow[]> {
-  return shownRows(await rowsNow($), await ledgerNow($))
+  return shownRows(await rowsNow($), ticketsIn(await read($, tickets)))
 }
 
 // Lists the folder and reads each `.json` file in it. A listing that fails
@@ -595,20 +580,20 @@ export const register: Register = (on, options) => {
       description: 'Make this session the parent and show its /implement sub sessions. `/foreman slots <n>` sets how many it runs at once, `/foreman pause` and `/foreman resume` pause and resume it.',
     })
     const id = await $.session.id()
-    const raw = await $.store.get(storeKey(id))
+    const rawParent = await $.store.get(storeKey(id))
     const rawTickets = await $.store.get(ticketsKey(id))
     // The stored ledger is taken only while $.state holds none of its own,
     // so a start that comes again in a running session cannot put an older
     // ledger over a newer one.
     if (rawTickets !== undefined && rawTickets !== null) {
       const stored = ticketsIn(rawTickets)
-      await update($, tickets, raw => {
-        const held = ticketsIn(raw)
+      await update($, tickets, heldRaw => {
+        const held = ticketsIn(heldRaw)
         return held.pairings.length === 0 && !hasWork(held.outbox) ? stored : held
       })
     }
-    if (raw !== undefined && raw !== null) {
-      const stored = parentIn(raw)
+    if (rawParent !== undefined && rawParent !== null) {
+      const stored = parentIn(rawParent)
       await update($, parent, () => stored)
       if (stored.isOn) await ensureArmed($)
     }
