@@ -1,6 +1,6 @@
 # Pilot shows its progress from the moment /implement starts
 
-Issue: SAL-215. Written 2026-10-10.
+Written 2026-10-10.
 
 ## Goal
 
@@ -14,15 +14,16 @@ does not wrap their rows apart. In the terminal they are drawn as text.
 ## Users and trigger
 
 A person watching an `/implement` session, at the desk or from another
-device. Seen on 2026-10-09 in the SAL-160 session: its first turn called
-`mcp__pilot__open_pane` and the mod answered "The pane is open.", the mod ran
-through the spec and the plan comparison and the counsel worked, and the
-person saw nothing from pilot in the desktop app. The line above the prompt
-was hidden because no pull request was watched yet and, between agents,
-nothing ran. On 2026-10-09 the person overturned SAL-160's counsel decision
-to hide the line when nothing runs. The savvy-progress mod
-(`JohnnyVizz/claude-kit`, `plugins/savvy-progress`) is the reference design;
-its ideas are copied, not its code.
+device. Seen on 2026-10-09 in the session that built
+`pilot-shows-what-runs.md`: its first turn called `mcp__pilot__open_pane` and
+the mod answered "The pane is open.", the mod ran through the spec and the
+plan comparison and the counsel worked, and the person saw nothing from pilot
+in the desktop app. The line above the prompt was hidden because no pull
+request was watched yet and, between agents, nothing ran. On 2026-10-09 the
+person overturned that session's counsel decision to hide the line when
+nothing runs. The reference design is a third-party mod that shows a
+session's progress as a bar above the prompt; its ideas are copied, not its
+code.
 
 ## Behavior
 
@@ -32,7 +33,7 @@ its ideas are copied, not its code.
    `/pilot` command of the session, and stays started for the rest of the
    session. The mark is kept in the mod's state, so a hot reload keeps it.
 2. **A new session tool, `mcp__pilot__progress`,** takes `title` (the issue
-   in a few words, such as `SAL-215 pilot progress`), `stage` and an optional
+   in a few words, such as `ABC-123 pilot progress`), `stage` and an optional
    `note`. A subagent may not call it, as with the other session tools.
 3. **The stages are fixed, nine, in this order:** `grounding`, `issue`,
    `spec`, `plan`, `build`, `verify`, `pr`, `review`, `merge`, shown as
@@ -76,8 +77,9 @@ its ideas are copied, not its code.
     ones included, and a session deep in its review rounds showed `59 agents`
     while seven reviewers ran, which read as if all of them were still at
     work.
-11. **The second row is SAL-160's line,** unchanged once a pull request is
-    watched: `pilot: #<n> <state> · checks <ci> · …`, with its fitting rule
+11. **The second row is the line that `pilot-shows-what-runs.md` added,**
+    unchanged once a pull request is watched:
+    `pilot: #<n> <state> · checks <ci> · …`, with its fitting rule
     (agent names dropped from the end first, then the line cut with `…`).
     Before a pull request is watched it reads `pilot: <stage> · <what runs>`,
     or `pilot: <stage> · idle` when nothing runs, with the stage written
@@ -181,7 +183,8 @@ its ideas are copied, not its code.
   started, so the band shows its second row (`pilot: started · idle`) and no
   bar until a stage is reported.
 - **A narrow terminal.** The bar row drops the title before the stage and
-  the percentage; the line keeps SAL-160's fitting rule.
+  the percentage; the line keeps the fitting rule of
+  `pilot-shows-what-runs.md`.
 - **A title or description holding markup or escape sequences.** Cleaned
   for the terminal and escaped for SVG, so it is shown as text.
 - **The engine drops a finished agent from its list.** Its row stays as the
@@ -197,7 +200,7 @@ its ideas are copied, not its code.
 - A progress bar per agent, or a step tool for agents. The reviewer fence is
   not widened.
 - Planned builders or other agents the mod cannot work out on its own.
-- Cost and token counts, which savvy-progress shows.
+- Cost and token counts, which the reference design shows.
 - Changing how and when the mod looks at the pull request.
 
 ## Failure modes
@@ -222,8 +225,8 @@ Tests in `mods/pilot/tests`, each failing if its rule is removed:
   list is refused, and a new title resets the bar;
 - a merged pull request reads 9 of 9 and `merged`; a closed one keeps the
   count and reads `closed`; both rows stay after either;
-- with a pull request watched, the second row equals SAL-160's line for the
-  same view;
+- with a pull request watched, the second row equals the line that
+  `pilot-shows-what-runs.md` added, for the same view;
 - on the desktop surface the band, the pane's work header and its agent rows
   are drawn with `Svg` and buttons only, and no agent's description appears
   in a `Text` row (the pull request, counsel and next-step lines stay `Text`,
@@ -250,7 +253,7 @@ read by the reviewers only, since no gate reads `skills/`.
 
 - What should the steps of the pilot progress bar above the prompt be, so that it shows done out of planned and a percentage that reaches 100% when the pull request merges? The counsel chose The nine /implement stages are the steps: grounding, checking the issue, spec, plan tournament, build, verify, pull request open, review rounds, merge. The bar fills one ninth per stage finished, and the session reports only which stage it is in. Within a stage the session may add its own sub-steps (such as build 2 of 5), which the label shows but which do not move the bar., 5 of 6.
 - Which agents should the pilot pane list as planned, before they start? The counsel chose The mod works them out on its own from what it already knows. In a review round, the focused reviewers not yet launched at the watched head are planned (all four from the round's start, at the package call), then the two verdict reviewers once the four have finished. During a counsel question, the six members are planned from the counsel call until each one starts. Nothing else is ever planned., 6 of 6.
-- Once a pull request is watched, where should its state (number and state, checks, what runs, what the mod waits on and when it next looks) appear relative to the new progress bar above the prompt? The counsel chose Two rows: the progress bar on the first row (title, stage, done of nine, percentage, agent-count button), and under it today's text line with the pull request's state and what the mod waits on and when it next looks, as SAL-160 left it; before a pull request is watched, the second row shows what runs, or 'idle'., 6 of 6.
+- Once a pull request is watched, where should its state (number and state, checks, what runs, what the mod waits on and when it next looks) appear relative to the new progress bar above the prompt? The counsel chose Two rows: the progress bar on the first row (title, stage, done of nine, percentage, agent-count button), and under it today's text line with the pull request's state and what the mod waits on and when it next looks, as `pilot-shows-what-runs.md` left it; before a pull request is watched, the second row shows what runs, or 'idle'., 6 of 6.
 - What should the pilot band above the prompt (the progress bar and the line under it) do once the watched pull request has merged or closed? The counsel chose Keep both rows: the bar at 100% with 'merged' (or 'closed', with the bar left where it was) and the line saying the pull request merged or closed, until the session ends, or until a stage report with a different title starts new work, which resets the bar., 6 of 6.
 
 ## Decided by the person

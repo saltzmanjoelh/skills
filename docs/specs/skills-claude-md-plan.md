@@ -1,6 +1,6 @@
 # Plan: the skills repository's CLAUDE.md
 
-Spec: `docs/specs/skills-claude-md.md`. Issue: SAL-173. Written 2026-10-08.
+Spec: `docs/specs/skills-claude-md.md`. Written 2026-10-08.
 
 ## Chosen approach
 

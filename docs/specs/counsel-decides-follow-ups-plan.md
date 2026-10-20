@@ -1,8 +1,8 @@
 # Plan: the counsel decides each follow-up
 
-Spec: `counsel-decides-follow-ups.md` (SAL-288). Written 2026-10-14 from a
-plan tournament of three planners, simplest, most robust and most
-extensible, judged against the spec.
+Spec: `counsel-decides-follow-ups.md`. Written 2026-10-14 from a plan
+tournament of three planners, simplest, most robust and most extensible, judged
+against the spec.
 
 ## Chosen approach
 
@@ -131,9 +131,9 @@ ordinary vote read exactly as before. The words are `fix`, `file` and
 - **Votes matched by position** (simplest and most extensible plans): one
   skipped line while copying moves every later vote to the wrong follow-up
   without anyone noticing.
-- **A general seam for questions about many items with a table of kinds**
-  (most extensible plan): it serves SAL-290, which the spec leaves out, and
-  nothing needs it yet.
+- **A general seam for questions about many items with a table of kinds** (most
+  extensible plan): it serves a separate issue that decides the backlog of
+  `not-worthy` follow-ups, which the spec leaves out, and nothing needs it yet.
 - **Folding follow-up text onto one line** (most robust plan): a fake vote
   line in the brief does not change what a member writes in its own
   report, and ordinary questions are not folded.

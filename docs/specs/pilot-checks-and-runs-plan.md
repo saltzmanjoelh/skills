@@ -1,6 +1,6 @@
 # Plan: the pilot mod reads reruns and workflow runs correctly from GitHub
 
-Spec: `docs/specs/pilot-checks-and-runs.md` (SAL-245). Written 2026-10-12.
+Spec: `docs/specs/pilot-checks-and-runs.md`. Written 2026-10-12.
 
 ## Chosen approach
 
@@ -72,7 +72,8 @@ read give exactly one "finished" prompt, and the runs call uses the head from
 - **Reading the stored `pr` state before the gh calls** (extensible plan). It
   can only be older than reading it when the runs read fails, and it widens
   the signatures of `lookAt`, `watch` and `fetchSnapshot`.
-- **A `checkKey` seam for SAL-162** (extensible plan). SAL-162 is a non-goal.
+- **A `checkKey` seam for a check that completes again with the same result**
+  (extensible plan). That problem is a non-goal.
 - **Passing a `RunsRead` value into `snapshotOf`** (extensible plan). A plain
   runs parameter and a mark set by `fetchSnapshot` do the same with one layer
   fewer.

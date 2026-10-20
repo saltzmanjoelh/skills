@@ -1,6 +1,6 @@
 # An /implement session runs unattended
 
-Issue: SAL-176, with its sub-issue SAL-209. Written 2026-10-12.
+Written 2026-10-12.
 
 ## Goal
 
@@ -92,9 +92,10 @@ merge.
 11. The person starting a turn during the hold clears it at once, without
     the resume turn. A turn of the session's own that ends with reason
     `answer` or `refusal`, whatever started it, clears it too, without the
-    resume turn; one that ends `aborted` leaves it (`pilot-true-state.md`,
-    SAL-274). A hold that finds the work has ended by its resume
-    time clears itself without starting a turn.
+    resume turn; one that ends `aborted` leaves it (see the section of
+    `pilot-true-state.md` on a hold that outlives a clean turn). A hold that
+    finds the work has ended by its resume time clears itself without
+    starting a turn.
 
 ### The needs-decision label
 
@@ -114,9 +115,9 @@ merge.
     with the pull request open, that a stuck prompt enters the list from
     the top like any other, and, in step 5 and before, that a turn the mod
     starts after a usage limit carries on the stage it names.
-14. The "Resuming" paragraph is rewrapped to the file's width (SAL-209),
-    and it says that a usage-limit hold and the stuck prompt's interval do
-    not survive a restart, so a resumed session starts with neither.
+14. The "Resuming" paragraph is rewrapped to the file's width, and it says
+    that a usage-limit hold and the stuck prompt's interval do not survive
+    a restart, so a resumed session starts with neither.
 
 ## Edge cases
 
@@ -158,7 +159,7 @@ merge.
 - Keeping a hold or the stuck prompt's interval across a restart of the
   session.
 - Proving in a test that a model follows the "Resuming" section: that part
-  of SAL-176's item 3 is run by hand (see Verification).
+  of the issue's item 3 is run by hand (see Verification).
 
 ## Failure modes
 
@@ -231,8 +232,8 @@ that part as verified.
 
 ## Decided by the counsel
 
-- SAL-176 item 3 asks that /implement --resume be "tested end to end": kill a session while it waits on checks, start a new session in the same worktree with /implement --resume #N, and confirm it picks up at the right step; also confirm that hitting Max pushes per round sets stuck and asks once, and that a question left open overnight keeps its needs-decision label. This repository has no checks, and a session cannot kill and restart itself. What should this pull request do to satisfy item 3? The counsel chose Add mod tests that simulate a restart (a fresh engine over the same store, then a watch) to prove the mod's half, and write the manual procedure for the skill's half into the spec as a follow-up for the person., 6 of 6.
-- SAL-176 item 1 asks the pilot mod to start a turn telling the session to check with gh whether its wait is real, once 45 minutes pass with no change, no turn and no running agent, and no open question to the person. If the session checks, finds the wait is real (or finds nothing to do) and ends its turn again, how often may the stuck prompt fire after that? The counsel chose Backing off: 45 minutes, then 90, then 180, doubling up to a ceiling of 6 hours, and back to 45 after any change the mod sees on the pull request or a turn the person starts., 5 of 6.
-- SAL-176 item 2 asks the pilot mod, when the session's own turn ends with an error because a usage window is exhausted, to show "waiting on the usage limit until <time>", stop polling, and start a turn telling the session to continue once the window resets. The mod is loaded in every session, not only /implement ones. In which sessions should the hold start that continue turn? The counsel chose Whenever the session is running /implement: a pull request is watched, or the session has reported an /implement stage with mcp__pilot__progress, so a limit hit during the spec, plan or build also resumes., 6 of 6.
-- SAL-176 item 1 says the stuck prompt fires only when the session "is not waiting on the person". Today the mod counts the session as waiting on the person only while an AskUserQuestion it asked is unanswered. But skills/implement/SKILL.md also has the session set the `stuck` label and end its turn without an open question: for example after the person answered "no" to merging a head without checks, which leaves `stuck` and ends the turn until something changes. Should the `stuck` label on the watched pull request also count as waiting on the person, so the stuck prompt does not fire? The counsel chose No: only an open question counts; a `stuck` label still draws the backing-off stuck prompt, and the session, reading the label and the earlier answer, ends the turn again., 5 of 6.
-- For SAL-176's usage-limit hold, what should count as "the turn ended because a usage window is exhausted", and what should the mod do when it cannot read a reset time? The counsel chose Either signal: hold when the main-loop turn ended with reason 'error' and either a window reads 100 percent or more, or the StopFailure hook reported error 'rate_limit'. Resume one minute after the latest exhausted window's resetsAt; with no reset time, resume 15 minutes later, and hold again the same way if that continue turn also dies on the limit., 6 of 6.
+- Item 3 of the issue asks that /implement --resume be "tested end to end": kill a session while it waits on checks, start a new session in the same worktree with /implement --resume #N, and confirm it picks up at the right step; also confirm that hitting Max pushes per round sets stuck and asks once, and that a question left open overnight keeps its needs-decision label. This repository has no checks, and a session cannot kill and restart itself. What should this pull request do to satisfy item 3? The counsel chose Add mod tests that simulate a restart (a fresh engine over the same store, then a watch) to prove the mod's half, and write the manual procedure for the skill's half into the spec as a follow-up for the person., 6 of 6.
+- Item 1 of the issue asks the pilot mod to start a turn telling the session to check with gh whether its wait is real, once 45 minutes pass with no change, no turn and no running agent, and no open question to the person. If the session checks, finds the wait is real (or finds nothing to do) and ends its turn again, how often may the stuck prompt fire after that? The counsel chose Backing off: 45 minutes, then 90, then 180, doubling up to a ceiling of 6 hours, and back to 45 after any change the mod sees on the pull request or a turn the person starts., 5 of 6.
+- Item 2 of the issue asks the pilot mod, when the session's own turn ends with an error because a usage window is exhausted, to show "waiting on the usage limit until <time>", stop polling, and start a turn telling the session to continue once the window resets. The mod is loaded in every session, not only /implement ones. In which sessions should the hold start that continue turn? The counsel chose Whenever the session is running /implement: a pull request is watched, or the session has reported an /implement stage with mcp__pilot__progress, so a limit hit during the spec, plan or build also resumes., 6 of 6.
+- Item 1 of the issue says the stuck prompt fires only when the session "is not waiting on the person". Today the mod counts the session as waiting on the person only while an AskUserQuestion it asked is unanswered. But skills/implement/SKILL.md also has the session set the `stuck` label and end its turn without an open question: for example after the person answered "no" to merging a head without checks, which leaves `stuck` and ends the turn until something changes. Should the `stuck` label on the watched pull request also count as waiting on the person, so the stuck prompt does not fire? The counsel chose No: only an open question counts; a `stuck` label still draws the backing-off stuck prompt, and the session, reading the label and the earlier answer, ends the turn again., 5 of 6.
+- For the usage-limit hold, what should count as "the turn ended because a usage window is exhausted", and what should the mod do when it cannot read a reset time? The counsel chose Either signal: hold when the main-loop turn ended with reason 'error' and either a window reads 100 percent or more, or the StopFailure hook reported error 'rate_limit'. Resume one minute after the latest exhausted window's resetsAt; with no reset time, resume 15 minutes later, and hold again the same way if that continue turn also dies on the limit., 6 of 6.

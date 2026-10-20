@@ -1,8 +1,7 @@
 # Plan: the pilot line always says what the session is doing
 
-Spec: `pilot-shows-what-runs.md` (SAL-160). Written 2026-10-09 from a plan
-tournament of three planners (simplest, most robust, most extensible) and a
-judge.
+Spec: `pilot-shows-what-runs.md`. Written 2026-10-09 from a plan tournament
+of three planners (simplest, most robust, most extensible) and a judge.
 
 ## Chosen approach
 

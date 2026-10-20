@@ -1,7 +1,6 @@
 # Skills on other machines
 
-Issue: SAL-298, with its sub-issues SAL-250, SAL-197 and SAL-273. Written
-2026-10-14.
+Written 2026-10-14.
 
 ## Goal
 
@@ -10,13 +9,13 @@ sensibly on a machine that is not the one they were written on.
 
 - `/pr-comments` and `/spec` say what to do when the pilot mod is not
   loaded, instead of telling the session to use an agent or a tool that does
-  not exist (SAL-250).
+  not exist.
 - The first gate in `CLAUDE.md` stops its background `claude` run after two
   minutes, so that a stuck startup step costs at most two minutes instead of
-  ten (SAL-197).
+  ten.
 - The committed plan `docs/specs/implement-runs-unattended-plan.md` gives
   file paths relative to the repository, not absolute paths into a removed
-  worktree under a home folder (SAL-273).
+  worktree under a home folder.
 
 ## Users and trigger
 
@@ -62,7 +61,7 @@ It runs under a two-minute alarm:
 `perl -e 'alarm 120; exec @ARGV' env CLAUDE_CODE_PLUGIN_DIR_WATCH=1 claude -p ...`.
 macOS has no `timeout` command by default, while `perl` is always there. The
 variable `CLAUDE_CODE_PLUGIN_DIR_WATCH=1` stays, set on the `claude` call
-alone, as pull request 45 made it. Everything else in the command stays: the
+alone, as an earlier change made it. Everything else in the command stays: the
 old types are deleted first, the call's exit status is still ignored, and the
 gate still passes only if `mods/pilot/.claude-plugin/types/tsconfig.json`
 exists again. The gate's prose gains a short explanation of the limit: what
@@ -153,4 +152,4 @@ slowest load that finished by itself in under a minute.
 ## Decided by the counsel
 
 - When the pilot mod is not loaded, so the pilot:claim-checker agent does not exist, what should step 3 of /pr-comments tell the session to do with the comments it doubts? The counsel chose The session starts a general-purpose subagent with the same instructions the claim checker follows (a numbered list of claims, the head commit, refute each with evidence from the code)., 6 of 7.
-- SAL-250 asks whether other skills that name a pilot: agent need the same fallback sentence as /pr-comments. Should this pull request also change /spec, whose interview always goes to the counsel? The counsel chose Yes: widen the existing sentence in skills/spec/SKILL.md so that when the counsel tool is missing (the pilot mod is not loaded), the interview asks the person directly and says so, exactly as it already does when the counsel cannot sit., 7 of 7.
+- The issue about skills that need the pilot mod asks whether other skills that name a pilot: agent need the same fallback sentence as /pr-comments. Should this pull request also change /spec, whose interview always goes to the counsel? The counsel chose Yes: widen the existing sentence in skills/spec/SKILL.md so that when the counsel tool is missing (the pilot mod is not loaded), the interview asks the person directly and says so, exactly as it already does when the counsel cannot sit., 7 of 7.

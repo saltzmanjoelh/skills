@@ -1,7 +1,6 @@
 # Plan: delete the old review skills and agents
 
-Spec: `docs/specs/old-review-tools-deleted.md`. Issue: SAL-174. Written
-2026-10-12.
+Spec: `docs/specs/old-review-tools-deleted.md`. Written 2026-10-12.
 
 ## Chosen approach
 

@@ -1,6 +1,6 @@
 # A skipped run hides no real run, and a session knows when its pilot is stale
 
-Issues: SAL-282, covering SAL-171 and SAL-187. Written 2026-10-14.
+Written 2026-10-14.
 
 ## Goal
 
@@ -8,33 +8,31 @@ Two separate safeguards, shipped in one pull request.
 
 1. `/implement`'s step **Both verdicts approve at this head** never merges
    past a real workflow run because a later run that did no work stands in
-   for it (SAL-171).
+   for it.
 2. A session that is running a pilot mod different from the one a restart
-   would load is told so, on the line above the prompt and in the pane
-   (SAL-187).
+   would load is told so, on the line above the prompt and in the pane.
 
 ## Users and trigger
 
 **The merge step.** Every `/implement` session reaching its merge, in any
-repository with workflows. The case behind SAL-171, found in round 6 of the
-reviews of archived pull request 9: a workflow listens for `labeled`, skips
-its jobs on that action with an `if:`, and cancels pending runs through a
-concurrency group. Setting `ready-to-merge` starts a label run, which
-cancels the real run before any of its jobs start. A label event reports
-`event: pull_request` like a push, so the label run has the same
-`workflow_id` and `event` and a higher `run_number`. Under today's rule it
-replaces the cancelled run, every one of its jobs ends skipped, and the
-pull request merges past a check that never ran. A real run that failed is
-hidden the same way.
+repository with workflows. The case behind the first safeguard, found in round
+6 of the reviews of an earlier pull request: a workflow listens for `labeled`,
+skips its jobs on that action with an `if:`, and cancels pending runs through a
+concurrency group. Setting `ready-to-merge` starts a label run, which cancels
+the real run before any of its jobs start. A label event reports
+`event: pull_request` like a push, so the label run has the same `workflow_id`
+and `event` and a higher `run_number`. Under today's rule it replaces the
+cancelled run, every one of its jobs ends skipped, and the pull request merges
+past a check that never ran. A real run that failed is hidden the same way.
 
 **The stale mod.** Every session on a machine that loads the pilot mod
 through a link into a git checkout, as `~/.claude/skills/pilot` points at
 `~/Projects/skills/mods/pilot`. On 2026-10-07 a session started eight
 seconds before the main checkout was fast-forwarded onto the merge that
 added the counsel, and it ran without the counsel, not knowing why
-(SAL-186 has the account). SAL-186 made the checkout update right after a
-merge; this covers a session that is already running, or that started in
-the gap.
+(`merged-updates-linked-checkout.md` has the account). The change that spec
+describes made the checkout update right after a merge; this covers a
+session that is already running, or that started in the gap.
 
 ## Behavior
 
@@ -163,8 +161,8 @@ the gap.
   `mods/pilot/hooks/github.ts`), which keeps the newest check of each
   name. The merge is decided by the session from the step, not by the mod.
 - Checks posted by an app other than GitHub Actions. They have no workflow
-  run, so only the rollup sees them, and the case behind SAL-171 is
-  specific to Actions.
+  run, so only the rollup sees them, and the case behind the first
+  safeguard is specific to Actions.
 
 ## Failure modes
 
@@ -179,15 +177,14 @@ the gap.
 ## Open question
 
 Whether `gh pr view --json statusCheckRollup` keeps a failed check after a
-later skipped check of the same name arrives in another check suite
-(SAL-171, item 2) is not settled. It no longer decides a merge for checks
-from GitHub Actions: under point 2 the failed run is not replaced by a run
-that did no real work, so the workflow-runs read keeps it and the step
-stops at **A check failed, or a run failed** whatever the rollup shows.
-This rests on point 2. If the replacement rule is loosened later, the
-question decides merges again and must be settled first, with a
-throwaway repository whose workflow on `labeled` skips its job with an
-`if:`.
+later skipped check of the same name arrives in another check suite is not
+settled. It no longer decides a merge for checks from GitHub Actions: under
+point 2 the failed run is not replaced by a run that did no real work, so the
+workflow-runs read keeps it and the step stops at **A check failed, or a run
+failed** whatever the rollup shows. This rests on point 2. If the replacement
+rule is loosened later, the question decides merges again and must be
+settled first, with a throwaway repository whose workflow on `labeled` skips
+its job with an `if:`.
 
 ## Verification
 
@@ -211,15 +208,15 @@ throwaway repository whose workflow on `labeled` skips its job with an
   - `HEAD` unchanged since the last comparison runs no `git diff`;
   - the line above the prompt and the pane show the wording in point 11.
 - **The gates** in `CLAUDE.md`. The first, which writes the engine's types,
-  fails on Claude Code 2.1.299 (SAL-285), so the report says how the type
-  check ran, or that it did not.
+  fails on Claude Code 2.1.299 (`pilot-type-gate-watch.md` fixes that), so
+  the report says how the type check ran, or that it did not.
 
 ## Decided by the counsel
 
 - When the main skills checkout moves past the commit the running pilot mod was loaded from, and the move changed files the session uses, should the mod record one commit per session and always ask for a restart, or record the agents' commit and the hooks' commit separately so that a hot reload of the hooks can clear a warning about the hooks alone? The counsel chose Record two commits: the one the agents and plugin.json were read at (session start) and the one the hooks module last loaded at (each load and hot reload). Warn 'restart this session' when agents/ or .claude-plugin/plugin.json changed since session start, or when hooks/ changed since the hooks last loaded. A hot reload of the hooks therefore clears a warning that was only about the hooks., 4 of 6.
 - When should the pilot mod compare the commits it loaded from with the main checkout's current HEAD, given that it polls GitHub only while a pull request is watched? The counsel chose At each load of the hooks, at the end of every turn of the session, and on each poll of the watched pull request, so a session with nothing watched still finds out at its next turn end., 6 of 6.
 - In /implement's step 'Both verdicts approve at this head', when exactly should a newer workflow run stop replacing an older run of the same workflow and event, so that a run started by a label that skips every job cannot make a cancelled or failed real run disappear? The counsel chose A newer run replaces an older run of the same workflow_id and event only when the newer run did real work: its conclusion is not skipped, and at least one of its jobs (read with gh api repos/<repo>/actions/runs/<id>/jobs) ended other than skipped. This holds whatever the older run ended as, so a skipped run can hide neither a cancelled run nor a failed one., 5 of 6.
-- SAL-171 item 2 asks to settle, with a test repository, whether gh pr view's statusCheckRollup keeps a failed check after a later skipped check of the same name arrives in another check suite. Now that a skipped run no longer replaces an older run, should this pull request still run that experiment? The counsel chose Do not run it. Record in the spec why the answer no longer decides a merge: a failed run stays counted in the workflow-runs read whenever the newer run did no real work, so the step is already blocked by that run whether or not the rollup drops the failed check. Name the experiment as an open question in the spec., 6 of 6.
+- The issue behind the first safeguard also asks to settle, with a test repository, whether gh pr view's statusCheckRollup keeps a failed check after a later skipped check of the same name arrives in another check suite. Now that a skipped run no longer replaces an older run, should this pull request still run that experiment? The counsel chose Do not run it. Record in the spec why the answer no longer decides a merge: a failed run stays counted in the workflow-runs read whenever the newer run did no real work, so the step is already blocked by that run whether or not the rollup drops the failed check. Name the experiment as an open question in the spec., 6 of 6.
 - When the main checkout's HEAD differs from a commit the pilot mod recorded, but did not simply move forward (someone checked out another branch there, or reset it to an older commit), should the mod warn? The counsel chose Warn whenever the files the session uses (agents/, .claude-plugin/plugin.json, hooks/) differ between the recorded commit and HEAD, in whatever direction, with wording that does not claim 'older': for example 'pilot changed on disk since this session loaded it; restart this session to load it'., 6 of 6.
 
 `hooks/hooks.json` is counted with the session-start files rather than with

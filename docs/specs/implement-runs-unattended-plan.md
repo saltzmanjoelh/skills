@@ -1,8 +1,8 @@
 # Plan: an /implement session runs unattended
 
-Spec: `docs/specs/implement-runs-unattended.md`. Issue: SAL-176, with
-SAL-209. Written 2026-10-12 by a plan tournament of three blind planners
-(simplest thing, most robust, most extensible) and a judge.
+Spec: `docs/specs/implement-runs-unattended.md`. Written 2026-10-12 by a
+plan tournament of three blind planners (simplest thing, most robust, most
+extensible) and a judge.
 
 ## The choice
 
@@ -118,7 +118,7 @@ origins) are all included.
 
 ---
 
-## Plan (most-robust prior): an /implement session runs unattended (SAL-176, SAL-209)
+## Plan (most-robust prior): an /implement session runs unattended
 
 ### Approach summary
 

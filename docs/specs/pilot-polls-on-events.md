@@ -1,17 +1,17 @@
 # The pilot mod polls less where an event already says when a wait ends
 
-Issue: SAL-157. Written 2026-10-09.
+Written 2026-10-09.
 
 ## Goal
 
-SAL-157 asks the skills to react to events instead of polling, starting with
-GitHub label changes. This pull request does the part that this repository can
-do safely today. It lists every place the skills poll and which pushed event,
-if any, ends each wait. It lengthens the one interval whose wait is ended by a
-pushed event. It writes the list where the next person to change an interval
-will find it. It builds no webhook receiver, because no skill waits on a label
-change and a receiver is a new way into the machine; that work, and the
-polling in an outside scheduler, go to their own issues.
+The issue behind this spec asks the skills to react to events instead of
+polling, starting with GitHub label changes. This pull request does the part
+that this repository can do safely today. It lists every place the skills poll
+and which pushed event, if any, ends each wait. It lengthens the one interval
+whose wait is ended by a pushed event. It writes the list where the next person
+to change an interval will find it. It builds no webhook receiver, because no
+skill waits on a label change and a receiver is a new way into the machine;
+that work, and the polling in an outside scheduler, go to their own issues.
 
 ## Users and trigger
 
@@ -120,13 +120,14 @@ changed here.
 3. The four gates in the repository's `CLAUDE.md` pass.
 4. The README section names every key of `POLL_MS` and the new-head interval,
    checked by the reviewers.
-5. When the pull request merges, SAL-157 is marked done and two issues linked
-   to it are filed: the label receiver, and the outside scheduler's polling.
+5. When the pull request merges, the issue behind this spec is marked done
+   and two issues linked to it are filed: the label receiver, and the outside
+   scheduler's polling.
 
 ## Decided by the counsel
 
-- SAL-157 asks the skills to react to GitHub label changes (issues and pull_request events with action labeled or unlabeled) instead of polling. The desktop app's relay into a session covers only CI failures, merge conflicts and review comments, not labels. How should a label event reach a running session in this pull request? The counsel chose Do not build a webhook path in this pull request. Write the polling inventory into the spec, keep the existing desktop-app CI event as the one pushed source, lengthen the fallback intervals where an event already covers the state, and file the label receiver as its own issue once a receiver is chosen, since nothing in the skills waits on a person changing a label today., 6 of 6.
-- For SAL-157, which of the pilot mod's poll intervals should this pull request lengthen, given that the pushed event must cover leaving the state? The counsel chose Lengthen only the interval while a subagent runs, from 5 to 10 minutes, the same as when nothing is pending. The subagent's finish arrives as a notification that starts a turn, and the look at that turn's end brings the next poll forward., 5 of 6.
-- For SAL-157, where should the written list of every place the skills poll (what each polls, its interval, what it waits for, and which pushed event, if any, covers it) live? The counsel chose In the spec, and also as a short section in mods/pilot/README.md listing each waiting state, its interval and the event that covers it or why none does, with the comment above POLL_MS in state.ts pointing at that section., 4 of 6.
-- SAL-157 also covers an outside five-minute scheduler and the label receiver, and this pull request does neither. When this pull request merges, what happens to those two parts? The counsel chose Mark SAL-157 done when this pull request merges, and file two follow-up issues linked to it: one for a label receiver, to be built once a skill needs a label event and a receiver is chosen, and one to list and convert the polling in an outside scheduler, in that scheduler's own project., 6 of 6.
-- For SAL-157, what tests should prove the change: the subagent poll interval going from 5 to 10 minutes, and the new README section listing what the mod polls? The counsel chose The unit tests of the first option, plus a test in register.test.ts that drives the real hooks: with a subagent running and checks pending, the next look is 10 minutes away; when the subagent finishes and the session's turn ends, the look at the turn's end brings the next poll forward to 90 seconds., 6 of 6.
+- The issue behind this spec asks the skills to react to GitHub label changes (issues and pull_request events with action labeled or unlabeled) instead of polling. The desktop app's relay into a session covers only CI failures, merge conflicts and review comments, not labels. How should a label event reach a running session in this pull request? The counsel chose Do not build a webhook path in this pull request. Write the polling inventory into the spec, keep the existing desktop-app CI event as the one pushed source, lengthen the fallback intervals where an event already covers the state, and file the label receiver as its own issue once a receiver is chosen, since nothing in the skills waits on a person changing a label today., 6 of 6.
+- For this spec, which of the pilot mod's poll intervals should this pull request lengthen, given that the pushed event must cover leaving the state? The counsel chose Lengthen only the interval while a subagent runs, from 5 to 10 minutes, the same as when nothing is pending. The subagent's finish arrives as a notification that starts a turn, and the look at that turn's end brings the next poll forward., 5 of 6.
+- For this spec, where should the written list of every place the skills poll (what each polls, its interval, what it waits for, and which pushed event, if any, covers it) live? The counsel chose In the spec, and also as a short section in mods/pilot/README.md listing each waiting state, its interval and the event that covers it or why none does, with the comment above POLL_MS in state.ts pointing at that section., 4 of 6.
+- The issue behind this spec also covers an outside five-minute scheduler and the label receiver, and this pull request does neither. When this pull request merges, what happens to those two parts? The counsel chose Mark the issue done when this pull request merges, and file two follow-up issues linked to it: one for a label receiver, to be built once a skill needs a label event and a receiver is chosen, and one to list and convert the polling in an outside scheduler, in that scheduler's own project., 6 of 6.
+- For this spec, what tests should prove the change: the subagent poll interval going from 5 to 10 minutes, and the new README section listing what the mod polls? The counsel chose The unit tests of the first option, plus a test in register.test.ts that drives the real hooks: with a subagent running and checks pending, the next look is 10 minutes away; when the subagent finishes and the session's turn ends, the look at the turn's end brings the next poll forward to 90 seconds., 6 of 6.

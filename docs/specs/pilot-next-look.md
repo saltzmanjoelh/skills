@@ -1,6 +1,6 @@
 # A session that just pushed never looks dead
 
-Issue: SAL-159. Written 2026-10-08.
+Written 2026-10-08.
 
 ## Goal
 
@@ -11,7 +11,7 @@ session can always be told from a dead one.
 ## Users and trigger
 
 A person watching an `/implement` session. The trigger seen on 2026-10-08:
-the session pushed round 1's fixes on archived pull request 10, ended its
+the session pushed round 1's fixes on its pull request, ended its
 turn as the skill said, and the line read `waiting on nothing` for up to
 ten minutes, so the person cancelled a run that was working.
 
@@ -76,7 +76,7 @@ ten minutes, so the person cancelled a run that was working.
 ## Non-goals
 
 - A state for failed checks, and treating a check that completes again as
-  a change (SAL-158).
+  a change (see `pilot-failed-checks.md`).
 - Workflow runs that never register a check.
 - Changing the intervals themselves other than the new-head case.
 

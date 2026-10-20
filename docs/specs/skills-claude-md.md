@@ -1,6 +1,6 @@
 # The skills repository's CLAUDE.md
 
-Issue: SAL-173. Written 2026-10-08.
+Written 2026-10-08.
 
 ## Goal
 
@@ -68,8 +68,10 @@ reviewers, and a green run of the gates says nothing about them.
   incident behind a requirement, because a requirement needs its reason.
   They never contain credentials, client or customer data, people's personal
   details, or the contents of a private repository.
-- Files that name a project today are being cleaned up by SAL-174 and SAL-175.
-  A reviewer applies the rule to the text a pull request adds or changes.
+- Files that name a project today are being cleaned up by two separate
+  issues, the ones behind `old-review-tools-deleted.md` and
+  `generic-skills.md`. A reviewer applies the rule to the text a pull
+  request adds or changes.
 - Everything is written in plain, complete sentences: skills, agents, specs,
   commit messages, pull request descriptions and reviews.
 
@@ -92,8 +94,8 @@ reviewers, and a green run of the gates says nothing about them.
 
 ## Non-goals
 
-- Cleaning up the files that name a project today. SAL-174 and SAL-175 own
-  that.
+- Cleaning up the files that name a project today. The two separate issues
+  behind `old-review-tools-deleted.md` and `generic-skills.md` own that.
 - A gate that reads the skills or agents, such as a check of their
   frontmatter.
 - Changing `README.md`, any skill, any agent or the mod.
@@ -126,5 +128,5 @@ reviewers, and a green run of the gates says nothing about them.
 ## Decided by the counsel
 
 - In the new root CLAUDE.md, how should the Gates section present the step that generates the pilot mod's engine types (loading the mod once with `claude -p --max-turns 1 --plugin-dir mods/pilot "ok"` from a scratch folder), which the type check needs before it can pass? The counsel chose As the first bullet under ## Gates, run every time, but with the type check's bullet also saying what its failure looks like when the types are missing, 6 of 6.
-- The new CLAUDE.md states the rule that nothing in the skills repository names a project, but 13 files on main already do (README.md, five skills, four agents under agents/, and two of the pilot mod's agents). How should this change handle that gap? The counsel chose Change only CLAUDE.md, and word the rule with its scope: skills, agents, mods and README.md name no project, while docs/specs may cite real incidents. Say that existing breaches are tracked in SAL-174 and SAL-175, and that reviewers apply the rule to whatever text a pull request adds or changes., 5 of 6.
+- The new CLAUDE.md states the rule that nothing in the skills repository names a project, but 13 files on main already do (README.md, five skills, four agents under agents/, and two of the pilot mod's agents). How should this change handle that gap? The counsel chose Change only CLAUDE.md, and word the rule with its scope: skills, agents, mods and README.md name no project, while docs/specs may cite real incidents. Say that existing breaches are tracked in two separate issues, the ones behind old-review-tools-deleted.md and generic-skills.md, and that reviewers apply the rule to whatever text a pull request adds or changes., 5 of 6.
 - The three gates (the type check, `claude plugin test .` and `claude plugin validate .`) all run from mods/pilot and check only the pilot mod. What should the new CLAUDE.md's Gates section say about a pull request that changes only skills/, agents/, docs/ or README.md, which are Markdown files no gate reads? The counsel chose Run all the mod's gates on every change, and say plainly that no gate reads the skills, agents or docs, so a change to them is checked only by its reviewers, 6 of 6.

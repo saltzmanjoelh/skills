@@ -1,8 +1,8 @@
 # Plan: the pilot mod waits on a fix when a check fails, and wakes when a check completes again
 
-Spec: `docs/specs/pilot-failed-checks.md`. Issue: SAL-158. Written 2026-10-07
-from a plan tournament of three blind planners (simplest, most robust, most
-extensible) and a judge.
+Spec: `docs/specs/pilot-failed-checks.md`. Written 2026-10-07 from a plan
+tournament of three blind planners (simplest, most robust, most extensible)
+and a judge.
 
 ## Chosen approach
 

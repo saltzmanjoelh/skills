@@ -7038,11 +7038,13 @@ test('the hooks loaded afresh during a hold resume once, at the saved resume tim
   expect(resumesOf(prompts).length).toBe(1)
 })
 
-// SAL-270. The saved state's own hook refuses the read of the hold, because a
-// test may register only one state.get hook. The session start's look reads
-// the hold too, so a refusal used up by the session start does not by itself
-// show whose read it was. It is the arming's, because the session start runs
-// the arming up to its read of the hold before it starts the look.
+// A refused read of the usage-limit hold during arming (see
+// docs/specs/pilot-wake-ups.md). The saved state's own hook refuses the read of
+// the hold, because a test may register only one state.get hook. The session
+// start's look reads the hold too, so a refusal used up by the session start
+// does not by itself show whose read it was. It is the arming's, because the
+// session start runs the arming up to its read of the hold before it starts the
+// look.
 test('the hooks loaded afresh during a hold with the read of the hold refused try the arming again, and resume once at the saved resume time', async ($, on) => {
   const clock = mock.clock(on, { now: T0 + HOUR })
   mock.store(on)

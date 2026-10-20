@@ -1,12 +1,12 @@
 # The counsel decides before the person is asked
 
-Issue: SAL-167. Written 2026-10-07.
+Written 2026-10-07.
 
 ## Goal
 
 A session asks the person only when it has to. Before asking, it puts the
 question to a counsel made of the pilot mod's six reviewer agents and, since
-SAL-286, its owner's advocate. When at least 4 of the 7 choose the same
+2026-10-14, its owner's advocate. When at least 4 of the 7 choose the same
 option (see "The owner's advocate", which replaced the two-thirds rule), the
 session goes with that choice and records it where the person can see and overturn it. Otherwise the
 question reaches the person with the vote and each member's reason attached.
@@ -25,7 +25,7 @@ comments.
    `pilot:spec-reviewer`, `pilot:adversarial-reviewer`,
    `pilot:security-reviewer`, `pilot:maintainability-reviewer`,
    `pilot:performance-reviewer` and `pilot:data-reviewer`, and, since
-   SAL-286, the owner's advocate, `pilot:owners-advocate` (see "The owner's
+   2026-10-14, the owner's advocate, `pilot:owners-advocate` (see "The owner's
    advocate"). Each reviewer's file gains a section for counsel mode: when its
    prompt names a counsel brief instead of a review package, it reads the
    brief and the files the brief names, judges the question from its own
@@ -73,7 +73,7 @@ comments.
    While a question's round 2 is being voted on, the pane also draws round
    1's tally under the `round 2 · voting` line, labelled `Round 1:`, over
    round 1's options only, with the options round 1 added named as new and
-   given no count (`pilot-true-state.md`, SAL-185).
+   given no count (`pilot-true-state.md`).
 6. **The record.** A decision is also written where it took effect. During
    `/spec`, the spec gets a section headed "Decided by the counsel" with one
    line per decision: the question, the option chosen and the count. During
@@ -126,7 +126,7 @@ comments.
 - The mod does not launch the members itself; the session does, as with
   reviews.
 - No new agent type, and no change to how the reviewers review a pull
-  request. SAL-286 later added one agent, the owner's advocate, which sits
+  request. A later change added one agent, the owner's advocate, which sits
   on the counsel only (see "The owner's advocate").
 - The counsel does not replace the review rounds or the merge rules.
 
@@ -158,8 +158,8 @@ comments.
 
 ## Abstentions
 
-Issue: SAL-196. Added 2026-10-08. **Every member votes** (SAL-205) replaced
-the parts of this section that let a member leave the count.
+Added 2026-10-08. **Every member votes** replaced the parts of this section
+that let a member leave the count.
 
 A member's `VOTE: none` used to mean two things: "none of these options is
 right", which is dissent, and "this question is outside what I can judge",
@@ -280,15 +280,16 @@ count.
 
 ## Every member votes
 
-Issue: SAL-205. Added 2026-10-08.
+Added 2026-10-08.
 
-In SAL-175 the counsel was asked whether a grep should ignore letter case.
-Two members abstained, calling the question outside their angle, the other
-four split 2 to 2, and the question reached the person. It was a plain
-engineering question that every member could judge: the six members are one
-model in six reviewer roles, and none of them lacks the knowledge to answer
-it. Abstaining cost a member nothing, so it was the easy way out of a
-question, and each abstention made the counsel smaller. The goal is every
+While the remaining skills were being made generic (`generic-skills.md`),
+the counsel was asked whether a grep should ignore letter case. Two members
+abstained, calling the question outside their angle, the other four split
+2 to 2, and the question reached the person. It was a plain engineering
+question that every member could judge: the six members are one model in six
+reviewer roles, and none of them lacks the knowledge to answer it. Abstaining
+cost a member nothing, so it was the easy way out of a question, and each
+abstention made the counsel smaller. The goal is every
 member's input on every question. This section replaces the parts of
 **Abstentions** that let a member leave the count: rule 2's left-out and
 unreadable members, rule 3's floor, and rule 10's instruction to abstain.
@@ -405,9 +406,9 @@ abstaining.
 
 ## The owner's advocate
 
-Issue: SAL-286. Added 2026-10-14. This section replaces the count of six
-members and the two-thirds rule everywhere above. The sections above still
-say six where they record what was true when they were written.
+Added 2026-10-14. This section replaces the count of six members and the
+two-thirds rule everywhere above. The sections above still say six where they
+record what was true when they were written.
 
 Two problems followed from a counsel of six reviewers. Six is even, so a
 3 to 3 split could always happen, and a split went to the owner. And no
@@ -478,9 +479,9 @@ the reviewers check them.
 
 ## Follow-ups questions
 
-Issue: SAL-288. Added 2026-10-14. The full behaviour, and the reasons for
-it, are in `counsel-decides-follow-ups.md`; this section records how a
-follow-ups question differs from the questions described above.
+Added 2026-10-14. The full behaviour, and the reasons for it, are in
+`counsel-decides-follow-ups.md`; this section records how a follow-ups
+question differs from the questions described above.
 
 An `/implement` session used to decide on its own which of a pull
 request's follow-ups to file and which to drop. The counsel now decides
@@ -512,7 +513,7 @@ seven members rather than one sitting per follow-up.
    votes that exist: a follow-up with 4 votes for one option is decided,
    and every other follow-up is dropped as undecided, with its tally and
    the members without a vote. The question does not go to the person.
-   This departs from the rule of SAL-205 in "Every member votes" for
+   This departs from the rule in "Every member votes" for
    follow-ups questions only, and the owner decided it; every other
    question still goes to the person in that case.
 6. **No rerun and nothing owed.** A follow-ups question never reruns, and
@@ -543,7 +544,7 @@ seven members rather than one sitting per follow-up.
 - **One question per follow-up.** A sitting of seven agents for each
   follow-up costs far more than one sitting for all of them.
 - **Sending the question to the person when a member is still without a
-  vote**, as SAL-205 does for other questions. One silent member would
+  vote**, as "Every member votes" does for other questions. One silent member would
   then send every follow-up of the round to the owner, including the ones
   that already have four votes, and the owner chose to count from the
   votes that exist instead.
@@ -587,7 +588,7 @@ at the time. Decisions recorded since then use the shape rule 7 of
 - When a member answers VOTE: abstain and also writes a NEW OPTION line, what happens to the proposed option? The counsel chose Ignore the proposal: an abstaining member said it cannot judge the question, so it does not propose options either. Only a VOTE: none can carry a NEW OPTION, as today., 6 of 6.
 - When the counsel decides with some members abstaining, how should the one-sentence decision (told to the person, written in the spec's "Decided by the counsel" section and in a review's decision paragraph) state the count? The counsel chose Count against the members who took part and name the abstainers: "The counsel chose X, 3 of 4; performance-reviewer and data-reviewer abstained.", 4 of 6.
 - In round 1, when fewer than three members took part (so the floor stops a decision) and a member who voted none proposed a new option, should the counsel rerun with the proposal added, or send the question straight to the person? The counsel chose Rerun as today: any round 1 that does not decide and has a fitting proposal goes to round 2, whatever the reason it did not decide. The new option may bring abstainers back in., 4 of 6.
-- Counsel members may no longer abstain (the person's decision for SAL-205). What should each reviewer's counsel-mode section and the brief tell a member to do when it believes the answer depends on what the person wants, or on a fact about their business that neither the brief nor the files give? The counsel chose Vote none, with a REASON saying that only the person can answer and why. Enough none votes keep the counsel from deciding, so the question reaches the person., 5 of 5; performance-reviewer abstained.
+- Counsel members may no longer abstain (the person's decision recorded in "Every member votes"). What should each reviewer's counsel-mode section and the brief tell a member to do when it believes the answer depends on what the person wants, or on a fact about their business that neither the brief nor the files give? The counsel chose Vote none, with a REASON saying that only the person can answer and why. Enough none votes keep the counsel from deciding, so the question reaches the person., 5 of 5; performance-reviewer abstained.
 
 ## Decided by the person
 
@@ -597,12 +598,12 @@ at the time. Decisions recorded since then use the shape rule 7 of
 - A member that failed, was stopped or gave an unreadable vote is treated as
   an abstention rather than as a vote against. (Asked directly, for the same
   reason.)
-- SAL-205: members may no longer abstain. A member without a vote, whether
-  it voted `abstain`, failed, was stopped or gave an unreadable vote, is
-  asked again, and a second time without a vote sends the question to the
-  person. This replaces the decision above that such a member is treated as
-  an abstention. (Asked directly, for the same reason.)
-- SAL-286, 2026-10-14: with seven members, the counsel decides when at least
-  4 of the 7 vote for the same option, a strict majority, rather than two
-  thirds, which would be 5. (Asked directly, because the question is about
-  the counsel itself.)
+- For "Every member votes": members may no longer abstain. A member without
+  a vote, whether it voted `abstain`, failed, was stopped or gave an
+  unreadable vote, is asked again, and a second time without a vote sends the
+  question to the person. This replaces the decision above that such a member
+  is treated as an abstention. (Asked directly, for the same reason.)
+- For "The owner's advocate", 2026-10-14: with seven members, the counsel
+  decides when at least 4 of the 7 vote for the same option, a strict
+  majority, rather than two thirds, which would be 5. (Asked directly,
+  because the question is about the counsel itself.)

@@ -1,6 +1,6 @@
 # A merge reaches the checkout that new sessions load
 
-Issue: SAL-186. Written 2026-10-08.
+Written 2026-10-08.
 
 ## Goal
 
@@ -15,7 +15,7 @@ Every later session on this Mac. Skills, agents and the pilot mod load
 through symlinks under `~/.claude` (for example `~/.claude/skills/pilot`
 points at `~/Projects/skills/mods/pilot`), so a session runs whatever the
 main checkout holds when it starts, not what its own worktree holds. The
-trigger seen on 2026-10-07: archived pull request 13 merged at 21:07, a
+trigger seen on 2026-10-07: a pull request merged at 21:07, a
 session started at 21:13:11, and the main checkout was fast-forwarded only
 at 21:13:19, so that session ran the mod from before the counsel and had no
 access to it.
@@ -109,13 +109,14 @@ Its new first action, before moving the issue, filing follow-ups, running
 ## Non-goals
 
 - Telling a session that is already running that its mod is out of date.
-  That is a separate issue, waiting on SAL-160.
+  That is a separate issue, waiting on the change that
+  `pilot-shows-what-runs.md` describes.
 - Other repositories' checkouts, which their own gates
   govern. No `~/.claude` link points into them today. If one ever did, the
   step would treat that checkout like any other linked checkout, under the
   same guards; there is no per-project switch to turn the update off.
-- Changing `/cleanup` (SAL-175 owns it) or `mods/pilot` (SAL-160 is
-  changing it).
+- Changing `/cleanup` (`generic-skills.md` owns it) or `mods/pilot` (the
+  change that `pilot-shows-what-runs.md` describes is changing it).
 - A new notification channel.
 
 ## Failure modes

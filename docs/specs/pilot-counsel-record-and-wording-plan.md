@@ -2,7 +2,7 @@
 
 Date: 2026-10-14
 
-Spec: `pilot-counsel-record-and-wording.md` (SAL-296).
+Spec: `pilot-counsel-record-and-wording.md`.
 
 ## Chosen approach
 
@@ -12,16 +12,16 @@ grafted from the other two.
 
 The most robust plan won because it is the only one that closes a race in the
 change prompt. `deliver` chooses the read to hand over twice: once before the
-awaits that read `busy`, and again just before the submit. A look in
-"observe" mode can store a newer read in between without holding
-`isDelivering`. The other two plans read the owed decisions only when the read
-they saw before that await was merged or closed. When a merged read arrives
-during the await, they hand over "merged" with no decisions listed, and since
-polling stops once the pull request is not open, nothing lists those
-decisions again unless the session calls the watch tool. That is the loss
-SAL-180 is about. The chosen plan reads the owed decisions whatever the state,
-after the `busy` block and before the read is chosen again, and lists them
-only when the chosen read is merged or closed.
+awaits that read `busy`, and again just before the submit. A look in "observe"
+mode can store a newer read in between without holding `isDelivering`. The
+other two plans read the owed decisions only when the read they saw before that
+await was merged or closed. When a merged read arrives during the await, they
+hand over "merged" with no decisions listed, and since polling stops once the
+pull request is not open, nothing lists those decisions again unless the
+session calls the watch tool. That is the loss the spec means by "A decision
+can be written down nowhere". The chosen plan reads the owed decisions whatever
+the state, after the `busy` block and before the read is chosen again, and
+lists them only when the chosen read is merged or closed.
 
 ### What changes
 
@@ -95,7 +95,7 @@ only when the chosen read is merged or closed.
 - **From the simplest plan: the default `'OPEN'`.** The most robust plan
   defaulted the new parameter to `null` so that a forgotten argument would
   fail toward the spec. That forces an edit at `tests/counsel.test.ts:704`,
-  which pull request 47's hunk uses as context, so the rebase would conflict.
+  which the follow-ups change's hunk uses as context, so the rebase would conflict.
   `serveTally` is the only caller in production, and the register tests prove
   it passes the state it read.
 - **From the simplest plan: "tell the person in those words".** Spec point 9
@@ -120,9 +120,9 @@ only when the chosen read is merged or closed.
   type the mod already uses for an unknown state.
 - **Parsing `gh` output in `counsel.ts`.** Parsing GitHub's answers belongs in
   `github.ts`, beside `snapshotOf`.
-- **Merging `withOneMark` with pull request 47's `sentence` helper.** That
-  helper ends members' reasons; changing it would change pull request 47's
-  behaviour. The two can be merged once both are on main.
+- **Merging `withOneMark` with the follow-ups change's `sentence` helper.** That
+  helper ends members' reasons; changing it would change the follow-ups
+  change's behaviour. The two can be merged once both are on main.
 - **Listing owed decisions in the desktop app's CI event context.** That event
   comes for a failed check or a merge conflict, not a merge, and the spec does
   not ask for it. The pull request names it as a gap.
@@ -146,7 +146,7 @@ only when the chosen read is merged or closed.
 7. Run the existing race tests around `deliver`. If the extra await breaks an
    exact interleaving, adjust the test's hold counts; the guards are checked
    again after the await, so the production behaviour holds.
-8. Rebase onto pull request 47 if it has merged, then edit the documents.
+8. Rebase onto the follow-ups change if it has merged, then edit the documents.
 9. Run every gate.
 
 ## Test plan

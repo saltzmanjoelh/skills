@@ -1,7 +1,6 @@
 # Plan: the pilot mod starts no repeated, noisy or missing turns
 
-Spec: `docs/specs/pilot-wake-ups.md`. Issue: SAL-281, covering SAL-258,
-SAL-162 and SAL-270. Written 2026-10-13.
+Spec: `docs/specs/pilot-wake-ups.md`. Written 2026-10-13.
 
 ## Chosen approach
 
@@ -13,42 +12,43 @@ record begins during a write and answers with the old record after the write
 has landed. The spec now says so in Behavior 1. The plan below is that plan
 with the grafts listed after it.
 
-1. **SAL-162, in `mods/pilot/hooks/github.ts`.** A private helper,
-   `isRepeatNews(state)`, answers whether a check that completed again in
-   the same state is news: it is unless the state is `passed`. `fingerprintOf`
+1. **The passing rerun, in `mods/pilot/hooks/github.ts`.** A private helper,
+   `isRepeatNews(state)`, answers whether a check that completed again in the
+   same state is news: it is unless the state is `passed`. `fingerprintOf`
    leaves a check's completion time out when the repeat is not news, and
    `completedAgain` skips such a name, so the fingerprint and the wording
    always agree. The comments above `fingerprintOf`, `checkSentences` and
    `completedAgain` are rewritten to match. Nothing is stored differently;
-   `isSameState` recomputes both fingerprints, so an older build's told
-   record compares correctly.
-2. **SAL-270, in `mods/pilot/hooks/register.tsx`.** `setHoldTimer`'s boolean
-   `isAfterClear` becomes a named kind of work, `'resume' | 'after-clear' |
-   'arm'`, chosen with a plain `switch`. `'arm'` runs `armingRetry($, gen)`,
-   which does nothing when the hold's number has moved on and otherwise
-   calls `armUnattended`. `armUnattended` notes the hold's number before its
-   read of the hold; when that read is refused and the number has not moved,
-   it calls `setHoldTimer($, gen, RESUME_FALLBACK_MS, 'arm')` and rethrows to
-   `ensureArmed`. When a retry's own read is refused, both `armUnattended`'s
-   catch and `setHoldTimer`'s own catch arm the same retry in the same slot
-   under the same number; the second cancels the first, which the comment
-   says. The rule comment above `stuckTimer` names the retry.
-3. **SAL-258, in `mods/pilot/hooks/register.tsx`.** A module counter,
-   `toldWrites`, beside `untoldOwnReads`. `tell` raises it immediately after
-   `toldSeq = seq`, with no await between, and lowers it in a `finally` that
-   covers everything after, including `promptedKey`, the queued write and
+   `isSameState` recomputes both fingerprints, so an older build's told record
+   compares correctly.
+2. **The refused hold read, in `mods/pilot/hooks/register.tsx`.**
+   `setHoldTimer`'s boolean `isAfterClear` becomes a named kind of work,
+   `'resume' | 'after-clear' | 'arm'`, chosen with a plain `switch`. `'arm'`
+   runs `armingRetry($, gen)`, which does nothing when the hold's number has
+   moved on and otherwise calls `armUnattended`. `armUnattended` notes the
+   hold's number before its read of the hold; when that read is refused and the
+   number has not moved, it calls `setHoldTimer($, gen, RESUME_FALLBACK_MS,
+   'arm')` and rethrows to `ensureArmed`. When a retry's own read is refused,
+   both `armUnattended`'s catch and `setHoldTimer`'s own catch arm the same
+   retry in the same slot under the same number; the second cancels the first,
+   which the comment says. The rule comment above `stuckTimer` names the retry.
+3. **The repeated handover, in `mods/pilot/hooks/register.tsx`.** A module
+   counter, `toldWrites`, beside `untoldOwnReads`. `tell` raises it immediately
+   after `toldSeq = seq`, with no await between, and lowers it in a `finally`
+   that covers everything after, including `promptedKey`, the queued write and
    `schedule`. `newestFor` answers null while it is raised, which covers both
    choice points in `deliver`. `deliver` also returns false at once when it is
    raised at the moment `toldSeqBeforeRead` is noted, read in the same step.
    `fireStuck` drops the stuck prompt while it is raised. Comments are
    rewritten: the counter's own (what raises it, who reads it, that a write
-   that never settles holds handovers back, that a hot reload resets it),
-   the block above `toldSeq`, `newestFor`'s list of null cases (now three),
-   and the block in `deliver` that lists what keeps the told record up to
-   date, which names the counter instead of the marks and the claim.
-4. **Documents.** The SAL-162 bullet in the Non-goals of
-   `docs/specs/pilot-checks-and-runs.md` is rewritten to say SAL-281 settled
-   it, as the counsel decided on 2026-10-13, and that nobody watched it live.
+   that never settles holds handovers back, that a hot reload resets it), the
+   block above `toldSeq`, `newestFor`'s list of null cases (now three), and the
+   block in `deliver` that lists what keeps the told record up to date, which
+   names the counter instead of the marks and the claim.
+4. **Documents.** The bullet about the passing rerun in the Non-goals of
+   `docs/specs/pilot-checks-and-runs.md` is rewritten to say this change
+   settled it, as the counsel decided on 2026-10-13, and that nobody watched
+   it live.
    `mods/pilot/README.md` does not describe a passing check completing again,
    so it is unchanged.
 
@@ -57,7 +57,7 @@ with the grafts listed after it.
 - **From the extensible plan, one rule for what a repeat means.** Both
   `fingerprintOf` and `completedAgain` call `isRepeatNews`, because if they
   disagreed the session would get a turn whose prompt says nothing, which is
-  SAL-162 again. It is not exported, since nothing outside `github.ts` uses
+  the passing rerun again. It is not exported, since nothing outside `github.ts` uses
   it.
 - **From the extensible plan, two tests.** Seven failing reruns and two
   passing ones give `7 checks completed again.`; a check passing again beside
@@ -86,7 +86,7 @@ with the grafts listed after it.
   plan's second addition).** A poll left by the previous watch can fire in
   the awaits between `update(run)` and `tell`'s claim, find no told record
   for the new pull request, and hand over the whole state. It is a
-  different window from SAL-258's, the fix would contradict the spec's rule
+  different window from the repeated handover's, the fix would contradict the spec's rule
   that the count lives in `tell` alone, and the poll would have to finish a
   `gh` read inside a few store calls, so it needs a stalled store. It is not
   filed: the run allows one follow-up, for a problem a person could run
@@ -103,10 +103,12 @@ with the grafts listed after it.
 Each step writes its tests first and sees them fail, then makes them pass,
 and is committed on its own.
 
-1. SAL-162: tests in `github.test.ts` and `register.test.ts`, then the
-   change in `github.ts`.
-2. SAL-270: tests in `register.test.ts`, then the change in `register.tsx`.
-3. SAL-258: tests in `register.test.ts`, then the change in `register.tsx`.
+1. The passing rerun: tests in `github.test.ts` and `register.test.ts`, then
+   the change in `github.ts`.
+2. The refused hold read: tests in `register.test.ts`, then the change in
+   `register.tsx`.
+3. The repeated handover: tests in `register.test.ts`, then the change in
+   `register.tsx`.
 4. The Non-goals bullet in `docs/specs/pilot-checks-and-runs.md`.
 5. All four gates.
 
@@ -139,7 +141,7 @@ and is committed on its own.
   a passing check at T1, is the same state as a fresh read passing at T2.
   Fails before.
 
-**`register.test.ts`, SAL-162**
+**`register.test.ts`, the passing rerun**
 
 - New: a poll that reads a check passing again, with nothing else changed,
   submits no prompt, and the wake log calls it unchanged. Fails before.
@@ -150,9 +152,9 @@ and is committed on its own.
   stands it would submit nothing after the change.
 - The failed-again test around line 1693 stays as a guard.
 
-**`register.test.ts`, SAL-270** (`refusedReads(on, 'usageHold')` registered
-before `reloadedOver`, and `refusal.reads` asserted to be zero after the
-session start, so the refused read is `armUnattended`'s)
+**`register.test.ts`, the refused hold read** (`refusedReads(on, 'usageHold')`
+registered before `reloadedOver`, and `refusal.reads` asserted to be zero after
+the session start, so the refused read is `armUnattended`'s)
 
 - New: loaded afresh during a hold with the first read refused, the resume
   comes once at the saved time and not again. Fails before: nothing is
@@ -163,7 +165,7 @@ session start, so the refused read is `armUnattended`'s)
 - New: a retry whose own read is refused arms another, and the resume still
   comes once. Fails before.
 
-**`register.test.ts`, SAL-258** (`storeHoldingTold`)
+**`register.test.ts`, the repeated handover** (`storeHoldingTold`)
 
 - New: with the watch tool's told write held, a poll under the new watch
   submits nothing; once the write lands, the next poll with nothing changed

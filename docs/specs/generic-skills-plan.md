@@ -1,6 +1,6 @@
 # Plan: make the remaining skills generic
 
-Spec: `docs/specs/generic-skills.md` (SAL-175). Written 2026-10-08.
+Spec: `docs/specs/generic-skills.md`. Written 2026-10-08.
 
 ## Chosen approach
 
@@ -65,7 +65,8 @@ grep.
 ## Edits
 
 **README.md.** Delete the sentence about a reviewer that moved to another repository.
-Leave the lists of skills and agents to SAL-174. Add a `## Project facts`
+Leave the lists of skills and agents to the change that deletes the old
+review tools (see `old-review-tools-deleted.md`). Add a `## Project facts`
 section: each fact is one `Label: value` line anywhere in the project's
 `CLAUDE.md`; the gates and the hard rules are sections under their headings;
 a skill refers to a fact's value by its label in lower case inside angle
@@ -88,7 +89,7 @@ The brief includes the architecture and gotchas documents the facts name,
 leaving out each one that does not exist. The judge checks the invariants in
 the architecture document when there is one. The plan goes to
 `<spec directory>/<feature>-plan.md`. The `/lens-review` mention stays for
-SAL-174.
+the change that deletes the old review tools.
 
 **verify-loop.** Facts: the `## Gates` row. Step 1 reads the bullets under the
 project's `## Gates` heading, in order; with no such section it detects
@@ -116,7 +117,7 @@ reviewer approves again after fixes are pushed and each reply names the
 commit. It says the section does not apply when no reviewers are named. The
 reference to the owner's "How to talk to me" section becomes a reference to
 the writing rules in the user's `~/.claude/CLAUDE.md`, if it has any. The
-`skeptic` references stay for SAL-174.
+`skeptic` references stay for the change that deletes the old review tools.
 
 **storypr.** Facts: `Base branch:`, `Screenshot directory:`. The diffs use
 `<base branch>..HEAD`; screenshots are added with
@@ -183,6 +184,7 @@ Each item maps to the spec's Verification section.
 
 ## Follow-ups
 
-- SAL-174 runs the spec's word and em dash greps with nothing excluded.
+- The change that deletes the old review tools runs the spec's word and em
+  dash greps with nothing excluded.
 - `storypr` could fetch the base branch and diff with three dots, so a stale
   local base branch does not mislead it.

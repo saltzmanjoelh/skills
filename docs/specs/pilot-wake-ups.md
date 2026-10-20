@@ -1,6 +1,5 @@
 # The pilot mod starts no repeated, noisy or missing turns
 
-Issue: SAL-281, covering SAL-258, SAL-162 and SAL-270.
 Written 2026-10-13.
 
 ## Goal
@@ -9,14 +8,14 @@ Every turn the pilot mod starts costs the session a full re-read of its
 context, and a turn the mod fails to start can leave an unattended session
 waiting for good. This change fixes three cases in `mods/pilot`:
 
-- Right after the watch tool reports a pull request's state, a poll can read
-  no record of what the session was told and send the whole state again
-  (SAL-258).
-- A check that completes again with the same passing result starts a turn
-  that tells the session nothing (SAL-162).
-- After a hot reload during a usage-limit hold, a refused read of the hold
-  can leave an unattended session with no timer and no poll at all
-  (SAL-270).
+- The repeated handover: right after the watch tool reports a pull
+  request's state, a poll can read no record of what the session was told
+  and send the whole state again.
+- The passing rerun: a check that completes again with the same passing
+  result starts a turn that tells the session nothing.
+- The refused hold read: after a hot reload during a usage-limit hold, a
+  refused read of the hold can leave an unattended session with no timer
+  and no poll at all.
 
 ## Users and trigger
 
@@ -125,9 +124,10 @@ refused read of the hold at the same moment.
 - The mod does not watch the session's commands for `gh run rerun` or
   `gh workflow run`, and keeps no record of reruns.
 - Nothing outside `mods/pilot` changes, except this spec, its plan, and the
-  SAL-162 bullet in the Non-goals of `docs/specs/pilot-checks-and-runs.md`,
-  which is rewritten to point here. `mods/pilot/README.md` changes only if
-  it describes a passing check that completes again.
+  bullet about the passing rerun in the Non-goals of
+  `docs/specs/pilot-checks-and-runs.md`, which is rewritten to point here.
+  `mods/pilot/README.md` changes only if it describes a passing check that
+  completes again.
 
 ## Failure modes
 
@@ -146,30 +146,30 @@ after it:
   again and fails gives a different fingerprint and `Check "<name>" failed
   again.`; a move from failed to passed and from pending to passed is still
   named. The existing tests that expect `passed again` are turned round.
-- `register.test.ts`, SAL-162: a poll that reads a check passing again, with
-  nothing else changed, submits no prompt; the existing test of an overtaken
-  poll that hands over "a rerun that passed" still hands over the move from
-  failed to passed.
-- `register.test.ts`, SAL-258: the watch tool's told write is held (through
-  `storeHoldingTold`) while a poll runs under the new watch; the poll submits
-  no prompt; after the write lands, the next poll with nothing changed
-  submits none either, and a real change after that is handed over. A
+- `register.test.ts`, the passing rerun: a poll that reads a check passing
+  again, with nothing else changed, submits no prompt; the existing test of an
+  overtaken poll that hands over "a rerun that passed" still hands over the
+  move from failed to passed.
+- `register.test.ts`, the repeated handover: the watch tool's told write is
+  held (through `storeHoldingTold`) while a poll runs under the new watch; the
+  poll submits no prompt; after the write lands, the next poll with nothing
+  changed submits none either, and a real change after that is handed over. A
   failed told write does not stop later handovers.
-- `register.test.ts`, SAL-270: with the hooks loaded afresh over a saved
-  state (`reloadedOver`) and the first read of the hold refused, the session
-  start arms a retry; 15 minutes later it arms the hold's timer when a hold
-  is saved, and the resume comes once at the saved time, and it arms the
-  stuck timer when none is, and the stuck prompt comes. A retry whose own
-  read is refused arms another retry.
+- `register.test.ts`, the refused hold read: with the hooks loaded afresh over
+  a saved state (`reloadedOver`) and the first read of the hold refused, the
+  session start arms a retry; 15 minutes later it arms the hold's timer when a
+  hold is saved, and the resume comes once at the saved time, and it arms the
+  stuck timer when none is, and the stuck prompt comes. A retry whose own read
+  is refused arms another retry.
 - All four gates in the project's `CLAUDE.md` pass.
 
-Nobody watched the SAL-162 change on a live pull request with checks; this
-repository runs none.
+Nobody watched the change for the passing rerun on a live pull request with
+checks; this repository runs none.
 
 ## Decided by the counsel
 
 - When a check on the watched pull request completes again with the same passing result it had before (today the prompt says `Check "<name>" passed again.`), should that still change the pilot mod's fingerprint and start a turn of the session? The counsel chose No. A check that completes again and passes, the same as it last passed, no longer changes the fingerprint or produces a sentence. A check that fails again still does. The mod does not try to tell whether the session itself reran the check: a rerun of a failed check that passes is a move from failed to passed, which is still news, and a rerun the session asks of a passing check usually shows pending first, which is also a move., 6 of 6.
-- When `armUnattended`'s own read of the usage-limit hold is refused (SAL-270), what should the mod arm so the unattended session is never left with no timer? The counsel chose Arm a retry of the whole arming step at RESUME_FALLBACK_MS (15 minutes), in the hold's timer slot. When it fires, it reads the hold again and arms the hold's timer if a hold is on, and the stuck timer if none is. A refused read at that retry arms the same retry again., 6 of 6.
+- When `armUnattended`'s own read of the usage-limit hold is refused (the refused hold read), what should the mod arm so the unattended session is never left with no timer? The counsel chose Arm a retry of the whole arming step at RESUME_FALLBACK_MS (15 minutes), in the hold's timer slot. When it fires, it reads the hold again and arms the hold's timer if a hold is on, and the stuck timer if none is. A refused read at that retry arms the same retry again., 6 of 6.
 - A workflow triggered by `pull_request: labeled` will still start turns after this change, because each unfinished workflow run is in the fingerprint by its id and attempt (a turn when it appears, another when it finishes). Should this pull request also do something about that? The counsel chose No. Leave the unfinished-run part of the fingerprint as it is and say so in the spec's Non-goals, with the reason: the merge step waits on unfinished runs and the mod starts its turn when they finish, so the finish turn is needed; file nothing., 5 of 6.
-- SAL-162's "Done when" says "Someone has watched whether this is noisy in practice." This repository has no checks, and no pull request with checks is being watched. How should this pull request treat that condition before merging and marking SAL-162 done? The counsel chose Treat the owner's 2026-10-13 instruction in SAL-281 (decide with the counsel) as replacing the watch condition. Verify with tests only, say in the spec and the pull request that nobody watched it live, and mark SAL-162 done on merge., 6 of 6.
-- To close SAL-258, what should a delivering look (a poll, or the held handover at a turn's end) do when it finds that a record of what the session was told has been claimed but not yet written? The counsel chose Hand nothing over whenever any told record's write is in flight, whichever look or tool claimed it. The next poll compares the pull request with the written record, so a change is delayed by at most one poll and never lost, as the other guards in deliver already do., 6 of 6.
+- The issue for the passing rerun says in its "Done when" "Someone has watched whether this is noisy in practice." This repository has no checks, and no pull request with checks is being watched. How should this pull request treat that condition before merging and marking that issue done? The counsel chose Treat the owner's 2026-10-13 instruction in the issue for this change (decide with the counsel) as replacing the watch condition. Verify with tests only, say in the spec and the pull request that nobody watched it live, and mark the issue for the passing rerun done on merge., 6 of 6.
+- To close the repeated handover, what should a delivering look (a poll, or the held handover at a turn's end) do when it finds that a record of what the session was told has been claimed but not yet written? The counsel chose Hand nothing over whenever any told record's write is in flight, whichever look or tool claimed it. The next poll compares the pull request with the written record, so a change is delayed by at most one poll and never lost, as the other guards in deliver already do., 6 of 6.

@@ -1,4 +1,4 @@
-# Plan: a session that just pushed never looks dead (SAL-159)
+# Plan: a session that just pushed never looks dead
 
 Spec: docs/specs/pilot-next-look.md. Tournament run 2026-10-08.
 

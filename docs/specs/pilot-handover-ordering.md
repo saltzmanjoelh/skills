@@ -1,28 +1,30 @@
 # The pilot mod hands the session the newest state once, at the right time
 
-Issue: SAL-244, covering SAL-216, SAL-217, SAL-219, SAL-221 and SAL-225.
 Written 2026-10-12.
 
 ## Goal
 
 The pilot mod hands a change on the watched pull request to the session with a
-prompt, and records what it handed over as told. The review of SAL-160 went
-four heads deep on the ordering of `lookAt`, `tell` and `deliver` in
-`mods/pilot/hooks/register.tsx`, each head finding a narrower race. This
-change closes the three races still open, designed together:
+prompt, and records what it handed over as told. The review of the change that
+`pilot-shows-what-runs.md` describes went four heads deep on the ordering of
+`lookAt`, `tell` and `deliver` in `mods/pilot/hooks/register.tsx`, each head
+finding a narrower race. This change closes the three races still open,
+designed together:
 
 - A change held while the session's turn runs can miss its handover at the
-  end of the turn and wait ten minutes (SAL-216).
+  end of the turn and wait ten minutes (the turn-end race).
 - Two overlapping records of what was told can be written in the wrong order
-  if the engine finishes a plugin's store calls out of order (SAL-217).
+  if the engine finishes a plugin's store calls out of order (the
+  out-of-order store race).
 - A delivering look that a newer look overtook can tell the session an older
-  state than the one the mod already stored and shows (SAL-219).
+  state than the one the mod already stored and shows (the overtaken-look
+  race).
 
 It also stops the session being woken by label changes the workflow makes
 itself, which in past sessions cost a full re-read of the session's context
 and did nothing. It widens the push pattern and writes its remaining misses
-into the spec (SAL-221), and corrects how the README and specs describe
-polling while a subagent runs (SAL-225).
+into the spec, and corrects how the README and specs describe polling while a
+subagent runs.
 
 ## Users and trigger
 
@@ -166,7 +168,7 @@ session sets a state label.
 - If the queue's write throws, the queue goes on with the next write, as the
   label queue does, and the record stays at the last write that succeeded.
 
-## Documentation (SAL-221, SAL-225)
+## Documentation
 
 - `docs/specs/pilot-shows-what-runs.md` gains the push pattern's remaining
   misses under its edge cases, and its push-pattern behavior names the global
@@ -209,21 +211,22 @@ items 8, 12, 13, 14, 17 and 20, which say why they cannot fail on the base.
    what the base computes, and a test with it would pass on the base.
 4. A told record without a `labels` array, whose other fields differ from the
    pull request, counts as no record and does not throw.
-5. The SAL-219 reproduction: a poll reads a failed check, a newer observing
-   look reads the rerun passing and stores it, then the overtaken poll
-   finishes. The prompt says the checks passed, not that they went from
+5. The overtaken-look race reproduction: a poll reads a failed check, a newer
+   observing look reads the rerun passing and stores it, then the overtaken
+   poll finishes. The prompt says the checks passed, not that they went from
    passed to failed, and the told record holds the passing read.
 6. An overtaken poll whose newer stored read matches what the session was
    told, because the pull request went back to the told state, sends no
    prompt.
-7. The SAL-216 reproduction: hold the poll's read of `busy` until
+7. The turn-end race reproduction: hold the poll's read of `busy` until
    `turn.complete` has run, push a new head, release it. A prompt is
    submitted without the clock moving, not after 600000 ms.
 8. A turn that starts again before the second read of `busy` keeps the hold,
    and that turn's end hands the change over. This passes on the base too; it
    guards the fix against handing over while the new turn runs.
-9. The SAL-217 case: two overlapping tells whose store writes the test
-   finishes in reverse order leave the newer read as the told record.
+9. The out-of-order store race case: two overlapping tells whose store
+   writes the test finishes in reverse order leave the newer read as the told
+   record.
 10. `isPushOrMerge` matches `git -c a=b push`, `git -C x -c a=b push` and
     `git -c a=b -c c=d push`, and still rejects every negative case in the
     existing table.
@@ -277,5 +280,5 @@ the README or the specs.
 - When the only change on the watched pull request is to its labels, which label changes should still wake the session with a prompt? The counsel chose Ignore only the labels the workflow itself manages (the state labels in-review, waiting-on-author, ready-to-merge and stuck, plus the mod's own needs-decision) by leaving them out of the change comparison; any other label added or removed by anyone still wakes the session., 6 of 6.
 - When a delivering look (the poll, or the held turn-end look) finds that a newer look has already stored a newer read of the pull request that has not been told to the session, what should it hand over? The counsel chose Hand over the newer stored read instead of its own, as if it had made that read itself, so the session is told the latest state the mod knows., 5 of 6.
 - When a delivering look decides to hold a change because the session's turn is running, but by the time it records the hold that turn has already ended (so the turn-end hook has already checked for a hold and found none), how soon should the held change be handed over? The counsel chose At once: the delivering look notices that the turn ended while it was deciding, and hands the change over itself (or starts the turn-end handover) without waiting for any poll., 6 of 6.
-- The pattern that recognises the session's own `git push` and merge commands matches inside quoted strings (such as `echo "a; git push"`) and misses `git -c key=value push`. Should SAL-244 change the pattern, or only write the misses into the spec? The counsel chose Tighten the pattern to accept any number of `-c key=value` and `-C dir` options before `push`, and write the quoted-string false match into the spec's edge cases as a known, harmless miss., 6 of 6.
+- The pattern that recognises the session's own `git push` and merge commands matches inside quoted strings (such as `echo "a; git push"`) and misses `git -c key=value push`. Should this pull request change the pattern, or only write the misses into the spec? The counsel chose Tighten the pattern to accept any number of `-c key=value` and `-C dir` options before `push`, and write the quoted-string false match into the spec's edge cases as a known, harmless miss., 6 of 6.
 - Told records saved before this change carry a fingerprint that includes the workflow's own labels, so after the upgrade every watched pull request whose label set includes one of them would compare as changed once. How should that be handled? The counsel chose Compare by recomputing the fingerprint from both snapshots' fields with the current rule at every comparison, never trusting the stored fingerprint string, so an old record compares correctly and no extra wake-up happens., 6 of 6.

@@ -1,8 +1,8 @@
 # The pilot mod reads reruns and workflow runs correctly from GitHub
 
-Issue: SAL-245, covering SAL-170, SAL-161, SAL-163, SAL-164, SAL-165 and
-SAL-166. SAL-162 was left open here and settled later by SAL-281 (see
-Non-goals). Written 2026-10-12, on top of archived pull request 27.
+Written 2026-10-12, on top of an earlier change to how the mod compares and
+stores what it reads. A related problem was
+left open here and settled later by `pilot-wake-ups.md` (see Non-goals).
 
 ## Goal
 
@@ -24,7 +24,7 @@ result, not the old run's.
 
 ## Behavior
 
-### Checks are judged by each name's newest run (SAL-161, SAL-163, SAL-164)
+### Checks are judged by each name's newest run
 
 1. `ciOf` in `mods/pilot/hooks/github.ts` judges each check name by its newest
    run, picked by the existing `newestRuns` helper (the last check of that name
@@ -43,7 +43,7 @@ result, not the old run's.
    completion time (it replaces its pick on `<=`), so it picks the same run as
    `newestRuns` does.
 
-### The head's unfinished workflow runs (SAL-170)
+### The head's unfinished workflow runs
 
 5. Each look reads the head's workflow runs after `gh pr view` has given the
    head, with
@@ -78,7 +78,7 @@ result, not the old run's.
 11. The state lines say how many workflow runs are unfinished when there are
     any.
 
-### Small corrections (SAL-165, SAL-166)
+### Small corrections
 
 12. In `checkSentences`, the "again" list is one `const`:
     `const again = isNewHead ? [] : completedAgain(before, after, namesThatMoved)`,
@@ -104,15 +104,15 @@ result, not the old run's.
 - A stored snapshot or told record that an older build saved has no `runs`
   field. It counts as having no runs, so after the upgrade a pull request with
   no unfinished runs compares as unchanged and starts no turn. `isSameState`
-  from #27 already recomputes both fingerprints with the current rule, so the
+  already recomputes both fingerprints with the current rule, so the
   newest-run change to the check part starts no turn on its own either.
 - A run that starts and completes between two looks is never seen as
   unfinished. If it registered a check, the check reports it. If it did not,
   the mod does not see it, and the merge step's own read of the runs finds it
   when the session next decides.
 - Two looks running at once may carry over runs from slightly different stored
-  snapshots when both runs reads fail. Only the newer look stores its result
-  (#27), and the next successful read corrects the runs.
+  snapshots when both runs reads fail. Only the newer look stores its result,
+  and the next successful read corrects the runs.
 - The `--jq` filter runs on each page of `--paginate`, which is correct
   because it keeps or drops each run on its own.
 - A run name is written by whoever can push a workflow, so it passes through
@@ -120,11 +120,11 @@ result, not the old run's.
 
 ## Non-goals
 
-- SAL-162 was left open here, and SAL-281 settled it in
-  `docs/specs/pilot-wake-ups.md`: a check that completes again with the same
-  passing result no longer changes the fingerprint or starts a turn. The
-  counsel decided this on 2026-10-13 in place of watching a pull request with
-  checks, and nobody watched the change live.
+- A check completing again with the same result was left open here, and
+  `docs/specs/pilot-wake-ups.md` settled it: a check that completes again
+  with the same passing result no longer changes the fingerprint or starts a
+  turn. The counsel decided this on 2026-10-13 in place of watching a pull
+  request with checks, and nobody watched the change live.
 - A completed run that failed without registering a check (a broken workflow
   file, `action_required`) does not make `ciOf` or `waitingOn` answer
   `failed`. The merge step reads such runs itself; the mod only wakes the
@@ -170,6 +170,6 @@ The four gates in the project's `CLAUDE.md` pass. The edits to
 
 ## Decided by the counsel
 
-- SAL-163 says to build the fingerprint's check part from each check name's newest run only if GitHub is shown to list superseded runs inconsistently at one head. Should this pull request build it from each name's newest run anyway? The counsel chose Yes: build the fingerprint's check part from each name's newest run, the same runs that ciOf (after SAL-161) and the change sentences judge, and close SAL-163., 5 of 6.
-- For SAL-170, what should the fingerprint record about each of the head's unfinished GitHub Actions workflow runs, and so which run changes start a turn? The counsel chose Presence only: each unfinished run's id and attempt number. A run appearing (queued, or rerun) or disappearing (it completed) starts a turn; a move between unfinished statuses, such as queued to in_progress or to waiting, does not., 6 of 6.
-- For SAL-170, the mod will read the head's workflow runs with a second gh call after `gh pr view`. When that second read fails (network error, rate limit, or a token without permission to read Actions), what should the look do? The counsel chose Carry on with the pull request's other facts, and keep the unfinished runs the last stored snapshot of this pull request had (none if there is no stored snapshot), so a failed read never changes the fingerprint., 6 of 6.
+- The issue about the fingerprint's check part says to build it from each check name's newest run only if GitHub is shown to list superseded runs inconsistently at one head. Should this pull request build it from each name's newest run anyway? The counsel chose Yes: build the fingerprint's check part from each name's newest run, the same runs that ciOf (once it judges each name by its newest run) and the change sentences judge, and close that issue., 5 of 6.
+- For the head's unfinished workflow runs, what should the fingerprint record about each of the head's unfinished GitHub Actions workflow runs, and so which run changes start a turn? The counsel chose Presence only: each unfinished run's id and attempt number. A run appearing (queued, or rerun) or disappearing (it completed) starts a turn; a move between unfinished statuses, such as queued to in_progress or to waiting, does not., 6 of 6.
+- For the head's unfinished workflow runs, the mod will read the head's workflow runs with a second gh call after `gh pr view`. When that second read fails (network error, rate limit, or a token without permission to read Actions), what should the look do? The counsel chose Carry on with the pull request's other facts, and keep the unfinished runs the last stored snapshot of this pull request had (none if there is no stored snapshot), so a failed read never changes the fingerprint., 6 of 6.

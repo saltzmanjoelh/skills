@@ -1,7 +1,7 @@
 # Plan: the pilot line and Remote Control
 
-Spec: [pilot-remote-control-dot.md](pilot-remote-control-dot.md). Issue:
-SAL-287. Written 2026-10-14.
+Spec: [pilot-remote-control-dot.md](pilot-remote-control-dot.md). Written
+2026-10-14.
 
 Two plans competed: the simplest change, and the most robust one. The judge
 chose the most robust plan and took three ideas from the simplest.
@@ -69,19 +69,19 @@ project, client, person, issue or repository.
    claim against
    `mods/pilot/.claude-plugin/types/claude-code/index.d.ts` as Claude Code
    2.1.299 writes it. The first gate on `main` does not write that file until
-   SAL-285's change lands, so the check uses the copy that version wrote in
-   the SAL-285 worktree. The `/config` row `remoteControl` is not in the
-   types, whose row key is a plain string, so that claim is checked against
-   the Claude Code program instead.
-2. Run `grep -niE 'SAL-|<owner>|<project>|pilot|linear' docs/specs/pilot-remote-control-dot-upstream-request.md`
+   the change in `pilot-type-gate-watch.md` lands, so the check uses the copy
+   that version wrote in that change's worktree. The `/config` row
+   `remoteControl` is not in the types, whose row key is a plain string, so
+   that claim is checked against the Claude Code program instead.
+2. Run `grep -niE '[a-z]{2,}-[0-9]+|<owner>|<project>|pilot|linear' docs/specs/pilot-remote-control-dot-upstream-request.md`
    and expect no output, then read the file whole.
 3. Run the four gates in order.
 4. Rebase on `origin/main`, confirm `git diff --stat origin/main` lists only
    the three files under `docs/specs/`, and open the pull request.
-5. After the merge, mark SAL-287 done and file one new issue for the dot
-   itself. It says it waits on Claude Code exposing the session's Remote
-   Control state, and it links the merged pull request and the request
-   file.
+5. After the merge, mark this spec's issue done and file one new issue for
+   the dot itself. It says it waits on Claude Code exposing the session's
+   Remote Control state, and it links the merged pull request and the
+   request file.
 
 ## Test plan
 
@@ -93,5 +93,5 @@ project, client, person, issue or repository.
   definition in the Claude Code program.
 - **The mod is unchanged:** the mod's tests and `claude plugin validate`
   pass. The load gate and the type check fail on `main` for the reason
-  SAL-285 tracks, and the report says so. It also says that the gates did
-  not read the documents.
+  `pilot-type-gate-watch.md` describes, and the report says so. It also says
+  that the gates did not read the documents.

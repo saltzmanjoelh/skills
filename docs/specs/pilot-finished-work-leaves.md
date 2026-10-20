@@ -1,34 +1,34 @@
 # Finished work leaves the pilot line and pane
 
-Issue: SAL-284, covering SAL-218, SAL-222 and SAL-207. Written 2026-10-14.
+Written 2026-10-14.
 
 ## Goal
 
 The pilot line above the prompt and the pilot pane never present work that has
 finished as still running, and `/pilot` never tells a person who has just typed
-`/pilot` to type it. This finishes what `pilot-shows-what-runs.md` (SAL-160)
-promised, "nothing on it stays wrong for long", in the three places where the
-reviews of #20 and #22 found it does not hold.
+`/pilot` to type it. This finishes what `pilot-shows-what-runs.md` promised,
+"nothing on it stays wrong for long", in the three places where the reviews of
+two later pull requests found it does not hold.
 
 ## Users and trigger
 
 A person watching an `/implement` session, at the desk or from another device.
 
-- **SAL-218.** The engine drops an agent from its list while the mod's stored
-  status for it still says running. The pane then shows
+- **A dropped agent.** The engine drops an agent from its list while the mod's
+  stored status for it still says running. The pane then shows
   `running Explore · about dropped · - · 5s` among the dimmed finished rows,
   with a duration that never moves. Everywhere else in the mod, "running"
   means `isRunning`, which is false for such an agent.
-- **SAL-222.** A background shell command finishes while the session is idle.
-  The engine wakes the session with a task notification, but that turn is
-  interrupted or ends on an error, so no Stop hook runs. The line keeps saying
-  `1 background command`, and the live ticker keeps redrawing every second and
-  reading the agent list every five seconds, until the next turn end, which may
-  be hours later.
-- **SAL-207.** A person types `/pilot` on a terminal under the width the
-  engine needs, or in an app that places no panes. The reply says that typing
-  `/pilot` or widening the terminal shows the pane, telling them to do what
-  they just did.
+- **A finished background command.** A background shell command finishes while
+  the session is idle. The engine wakes the session with a task notification,
+  but that turn is interrupted or ends on an error, so no Stop hook runs. The
+  line keeps saying `1 background command`, and the live ticker keeps redrawing
+  every second and reading the agent list every five seconds, until the next
+  turn end, which may be hours later.
+- **A `/pilot` reply that tells the person to type `/pilot`.** A person types
+  `/pilot` on a terminal under the width the engine needs, or in an app that
+  places no panes. The reply says that typing `/pilot` or widening the terminal
+  shows the pane, telling them to do what they just did.
 
 ## Behavior
 
@@ -54,21 +54,20 @@ A person watching an `/implement` session, at the desk or from another device.
    The engine's redraw request redraws every instance any of the mod's render
    hooks may select, so with this hook the live ticker's once-a-second redraw
    reaches every user-message row in the transcript while anything runs.
-   Measured in the test kit, a composer row was drawn 11 times in 10 seconds
-   of live ticking, against once without the hook, and narrowing the hook's
+   Measured in the test kit, a composer row was drawn 11 times in 10 seconds of
+   live ticking, against once without the hook, and narrowing the hook's
    matcher by the row's props does not narrow the redraw. An ordinary row then
    costs the hook's origin check before it is passed on, plus the engine's own
    redraw of the row. To keep an ended notification row from costing more, the
    mod keeps the ids of its background list in memory. The replacement at a
    turn end and the removal refresh them from what they wrote, and the live
-   ticker refreshes them from the store at every tick whose reads no write
-   of the list overtook, so ids that writes answered out of order left
-   behind are put right within a second while anything runs. A tick that a
-   write overtook decides nothing, and the next tick reads again
-   (`pilot-true-state.md`, SAL-292). A row whose task is not among them, which is every
-   subagent's and every task already taken off, starts no removal and reads
-   nothing. Until the ids are first known after the module loads, every ended
-   row's task is checked.
+   ticker refreshes them from the store at every tick whose reads no write of
+   the list overtook, so ids that writes answered out of order left behind are
+   put right within a second while anything runs. A tick that a write overtook
+   decides nothing, and the next tick reads again (`pilot-true-state.md`). A
+   row whose task is not among them, which is every subagent's and every task
+   already taken off, starts no removal and reads nothing. Until the ids are
+   first known after the module loads, every ended row's task is checked.
 3. **Every subagent's end refreshes the background list.** The engine's
    SubagentStop carries the same session-wide `background_tasks` list as the
    session's own Stop. When that field is present and is a list, the mod
@@ -159,5 +158,5 @@ Tests in `mods/pilot/tests`, run by `claude plugin test .`:
 
 ## Decided by the counsel
 
-- How should the pilot mod stop showing a background command that has finished while the session sits idle (SAL-222)? The counsel chose Drop each task from the background list when the engine draws the notification row for it, which carries the finished task's id and how it ended, and also take a fresh list from every subagent's end (SubagentStop carries the same session-wide list as Stop). The session's own turn end still replaces the whole list., 7 of 7.
+- How should the pilot mod stop showing a background command that has finished while the session sits idle? The counsel chose Drop each task from the background list when the engine draws the notification row for it, which carries the finished task's id and how it ended, and also take a fresh list from every subagent's end (SubagentStop carries the same session-wide list as Stop). The session's own turn end still replaces the whole list., 7 of 7.
 - The new hook on transcript rows makes the mod's once-a-second redraw request redraw every user-message row in the transcript while anything runs. How should pull request 44 deal with that? The counsel chose Accept the cost. The hook returns at once for rows that are not ended-task notifications, so each extra redraw is cheap; record the measured behaviour in the spec, correct its 'costs only the check' wording, and skip the timer for ended notifications whose task is a subagent (those can never be in the background list)., 6 of 7.

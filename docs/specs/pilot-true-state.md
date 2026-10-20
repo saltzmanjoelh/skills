@@ -1,6 +1,6 @@
 # The pilot line and pane show the true state
 
-Issue: SAL-295, covering SAL-292, SAL-274, SAL-185 and SAL-231. Written 2026-10-14.
+Written 2026-10-14.
 
 ## Goal
 
@@ -18,7 +18,7 @@ wrong today.
 
 ## Behavior
 
-### A late read of the background list (SAL-292)
+### A late read of the background list
 
 1. The live ticker never lets a read of the background list that began before
    a newer write of that list decide what the in-memory ids hold, or whether
@@ -31,7 +31,7 @@ wrong today.
    whenever that list holds a task. A task the newer list holds is taken off
    by its notification row as usual, and the line shows the true count.
 
-### A hold that outlives a clean turn (SAL-274)
+### A hold that outlives a clean turn
 
 3. A turn of the session's own that ends with reason `answer` or `refusal`
    takes a saved usage-limit hold off, the way the person's prompt does: no
@@ -51,7 +51,7 @@ wrong today.
    started and ended before the hold was saved cannot leave a hold behind. If
    that turn is still running, its own end decides by item 3.
 
-### Round 1 while round 2 votes (SAL-185)
+### Round 1 while round 2 votes
 
 6. While a counsel question's round 2 is being voted on, the pane draws, under
    the `round 2 · voting` line, round 1's tally exactly as a finished round
@@ -62,7 +62,7 @@ wrong today.
    pane never shows an added option with a count of 0 from a round it was not
    in. The lean is drawn last, as today.
 
-### The output button (SAL-231)
+### The output button
 
 8. Pressing an agent's `output` button opens the agent pane at once, showing
    `Reading the messages.` until that agent's messages are read, and then the
@@ -151,9 +151,9 @@ because the races cannot be brought about on purpose there.
 
 ## Decided by the counsel
 
-- While a counsel question's round 2 is being voted on, what should the pilot pane show of round 1 (SAL-185)? The counsel chose Round 1's tally exactly as a finished round draws it (the tally per option and any members without a vote), labelled "Round 1:", under the "round 2 · voting" line, with the options round 1 added named as new, 7 of 7.
-- When the session's own turn ends without an error while a usage-limit hold is saved, what should take the hold off (SAL-274)? The counsel chose Both: the turn-start check after the save, and any later turn end without an error, 4 of 7.
-- The counsel decided that a turn end without an error takes a saved usage-limit hold off. Which turn end reasons should count for that (SAL-274)? The counsel chose Only 'answer' and 'refusal', the two reasons that mean the API replied; 'aborted' leaves the hold as it is, 4 of 7.
-- SAL-292 also notes an open question: the engine does not promise background task ids are unique within a session, so an old notification row drawn again after a resume could remove a newer task with the same id. Is guarding against that in scope for this run? The counsel chose Out of scope: the spec lists it as a non-goal, because nobody has seen an id reused and the engine's ids look unique, 7 of 7.
+- While a counsel question's round 2 is being voted on, what should the pilot pane show of round 1? The counsel chose Round 1's tally exactly as a finished round draws it (the tally per option and any members without a vote), labelled "Round 1:", under the "round 2 · voting" line, with the options round 1 added named as new, 7 of 7.
+- When the session's own turn ends without an error while a usage-limit hold is saved, what should take the hold off? The counsel chose Both: the turn-start check after the save, and any later turn end without an error, 4 of 7.
+- The counsel decided that a turn end without an error takes a saved usage-limit hold off. Which turn end reasons should count for that? The counsel chose Only 'answer' and 'refusal', the two reasons that mean the API replied; 'aborted' leaves the hold as it is, 4 of 7.
+- The issue about a late read of the background list also notes an open question: the engine does not promise background task ids are unique within a session, so an old notification row drawn again after a resume could remove a newer task with the same id. Is guarding against that in scope for this run? The counsel chose Out of scope: the spec lists it as a non-goal, because nobody has seen an id reused and the engine's ids look unique, 7 of 7.
 - Where should this run's changed rules be written down: in this run's new spec alone, or also as edits to the older specs whose rules they change? The counsel chose A new spec for this run, plus a short edit in each older spec whose rule changes (point 5 of pilot-counsel.md for the round 2 pane, rule 11 and the task-notification verification line of implement-runs-unattended.md for the hold, and the backgroundIds sentence in pilot-finished-work-leaves.md if it states the ticker's ordering), each pointing to the new spec, 6 of 7.
-- How should the spec say SAL-295's four fixes are verified? The counsel chose Tests in mods/pilot/tests only, each written to fail on today's code first (a held read for the ticker race and for the output button, a held save for the hold, and a drawn rerun tally for the pane), run by the repository's four gates, 7 of 7.
+- How should the spec say its four fixes are verified? The counsel chose Tests in mods/pilot/tests only, each written to fail on today's code first (a held read for the ticker race and for the output button, a held save for the hold, and a drawn rerun tally for the pane), run by the repository's four gates, 7 of 7.

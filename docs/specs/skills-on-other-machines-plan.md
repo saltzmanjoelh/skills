@@ -1,7 +1,6 @@
 # Plan: skills on other machines
 
-Spec: `docs/specs/skills-on-other-machines.md`. Issue: SAL-298. Written
-2026-10-14.
+Spec: `docs/specs/skills-on-other-machines.md`. Written 2026-10-14.
 
 ## Chosen approach
 
@@ -92,7 +91,7 @@ exists, and no file is added apart from this plan.
 
 - **Putting the gate's new prose straight after the
   `CLAUDE_CODE_PLUGIN_DIR_WATCH` sentence.** It would split the explanation
-  of why the step runs first, and pull request 45 already had to repair a
+  of why the step runs first, and an earlier change already had to repair a
   reference that an insertion there broke.
 - **"Before it runs the startup hooks".** That claims more than was measured.
   Only the stuck `SessionStart` hook was measured.

@@ -1,8 +1,8 @@
 # Plan: every counsel member votes
 
-Spec: `docs/specs/pilot-counsel.md`, section "Every member votes" (SAL-205).
-Written 2026-10-09 from a three-plan tournament: the simplest plan won, with
-three ideas taken from the most extensible one.
+Spec: `docs/specs/pilot-counsel.md`, section "Every member votes". Written
+2026-10-09 from a three-plan tournament: the simplest plan won, with three
+ideas taken from the most extensible one.
 
 ## Chosen approach
 
@@ -108,11 +108,11 @@ exist, and the session puts it again, as today.
    `afterTally`, `askAgainAnswer`, `launchLine`, `counselAnswer`,
    `shortfallOf`, `decidedSentence`, `briefText`, `tallyLine`, comments.
 3. `hooks/register.tsx`: `serveTally` and the tool schema descriptions.
-4. Rewrite or delete the existing tests of the replaced SAL-196 rules (three
-   of three decides, the floor, abstentions leaving the count, every member
-   abstaining, round 2 counting its own abstentions, the decision sentence
-   naming abstainers), and give six votes to the register tests that leave
-   members out.
+4. Rewrite or delete the existing tests of the replaced rules from the
+   section "Abstentions" of the spec (three of three decides, the floor,
+   abstentions leaving the count, every member abstaining, round 2 counting
+   its own abstentions, the decision sentence naming abstainers), and give
+   six votes to the register tests that leave members out.
 5. The six reviewer files and the README.
 6. The gates, then the grep checks on the reviewer files by hand.
 

@@ -1,7 +1,6 @@
 # The linked-checkout update works on any machine and leaves the checkout in step with its remote
 
-Issue: SAL-297, with SAL-189, SAL-193, SAL-195 and SAL-299. Written
-2026-10-14.
+Written 2026-10-14.
 
 ## Goal
 
@@ -12,21 +11,20 @@ wrong result or a misleading report, and this change closes them:
 
 - On a machine that reaches GitHub only over ssh, the fetch by https address
   fails for a private repository, so every merge reports the checkout as left
-  alone and new sessions keep running old code (SAL-189).
+  alone and new sessions keep running old code.
 - When `~/.claude/skills` is itself a link into a checkout, or nothing under
   `~/.claude` is a link at all, the step reports "not linked" as if that were
-  the normal answer, while new sessions keep running old code (SAL-193).
+  the normal answer, while new sessions keep running old code.
 - After an update, `origin/<base>` still names the old commit, so
   `git status` in the main checkout says it is ahead of origin, which looks
-  like unpushed work (SAL-195).
+  like unpushed work.
 
 Where this spec and `merged-updates-linked-checkout.md` disagree, this one
 is later and wins: the fetch source, the tracking branch, the fetch in the
 already-updated case, and the outcomes the report can give.
 
 The same pull request also says, in the second half of a review round,
-where a cheap rename or rewrap goes when a round is over its push limit
-(SAL-299).
+where a cheap rename or rewrap goes when a round is over its push limit.
 
 ## Users and trigger
 
@@ -40,7 +38,7 @@ merged code.
 The change is to `skills/implement/SKILL.md`: the section "Updating the
 linked checkout", and point 4 of a review round's second half.
 
-### Finding the links (SAL-193)
+### Finding the links
 
 1. Finding the links also resolves each of `~/.claude/skills`,
    `~/.claude/agents` and
@@ -57,7 +55,7 @@ linked checkout", and point 4 of a review round's second half.
    sessions may run old code. "Not linked" now means only that links exist
    and none of them leads into the merged repository.
 
-### Fetching (SAL-189 and SAL-195)
+### Fetching
 
 3. Once a checkout matches and the base is the default branch, the step picks
    the fetch source. It reads each of the checkout's remotes with
@@ -146,7 +144,7 @@ linked checkout", and point 4 of a review round's second half.
    When no remote names the repository, this fetch is skipped, since the
    https address has no tracking branch to refresh.
 
-### The limit rule (SAL-299)
+### The limit rule
 
 8. In point 4 of a review round's second half, the rule for a round that
    would go past `Max rounds` or `Max pushes per round` lists every cheap

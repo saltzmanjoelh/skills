@@ -2,29 +2,25 @@
 
 Date: 2026-10-14
 
-Issue: SAL-296, which covers SAL-180, SAL-201 (with the two details of
-SAL-294, cancelled as its duplicate) and SAL-214.
-
 ## Goal
 
 Three things the counsel shows a person are wrong today.
 
-- **A decision can be written down nowhere (SAL-180).** A question put with
-  `pull_request` owes its decision to that pull request's next review. When
-  the pull request merges or closes while the counsel is still voting, or
-  after the tally but before the next review, no review ever lists it. The
-  session was told the mod would list it, so it did not write it in the spec
-  either, and the store prunes it ninety days later. Nobody can later find
-  why that option was chosen.
-- **The decision sentence reads as broken (SAL-201, SAL-294).** The sentence
-  is "The counsel chose X, 4 of 7." with the option's text as X. Options are
-  usually whole sentences, so the line reads "…as today., 6 of 6." or "The
-  counsel chose The approval…", in specs, in reviews and in what the person
-  is told.
-- **The pane and the question use two labels for one thing (SAL-214).** The
-  pane lists members without a vote under "Abstained:", while the question
-  put to the person lists them under "Without a vote:". A person reading the
-  pane may think abstaining is still allowed.
+- **A decision can be written down nowhere.** A question put with
+  `pull_request` owes its decision to that pull request's next review. When the
+  pull request merges or closes while the counsel is still voting, or after the
+  tally but before the next review, no review ever lists it. The session was
+  told the mod would list it, so it did not write it in the spec either, and
+  the store prunes it ninety days later. Nobody can later find why that option
+  was chosen.
+- **The decision sentence reads as broken.** The sentence is "The counsel chose
+  X, 4 of 7." with the option's text as X. Options are usually whole sentences,
+  so the line reads "…as today., 6 of 6." or "The counsel chose The approval…",
+  in specs, in reviews and in what the person is told.
+- **The pane and the question use two labels for one thing.** The pane lists
+  members without a vote under "Abstained:", while the question put to the
+  person lists them under "Without a vote:". A person reading the pane may
+  think abstaining is still allowed.
 
 ## Users and trigger
 
@@ -37,7 +33,7 @@ Three things the counsel shows a person are wrong today.
 
 ## Behavior
 
-### Where a decision is recorded (SAL-180)
+### Where a decision is recorded
 
 1. **The tally reads the pull request again.** When a round decides a
    question that owes its decision to a pull request, the tally asks GitHub
@@ -86,7 +82,7 @@ Three things the counsel shows a person are wrong today.
    tally's answer, the turn for the change or the watch tool's answer tells
    the session.
 
-### The decision sentence (SAL-201, SAL-294)
+### The decision sentence
 
 7. **The new shape.** The sentence is "The counsel chose: <option> <n> of
    <m> members voted for it." The option follows a colon exactly as the
@@ -109,7 +105,7 @@ Three things the counsel shows a person are wrong today.
     shape, and the spec says that lines written before 2026-10-14 use the old
     one.
 
-### One label (SAL-214)
+### One label
 
 11. **"Without a vote:" in the pane.** The pane lists members without a vote
     under "Without a vote:", with each reason or "no readable vote", for every
@@ -153,8 +149,8 @@ Three things the counsel shows a person are wrong today.
   counsel chose the spec instead; nothing in the mod posts plain comments.
 - Rewriting the decision lines already in `docs/specs`.
 - Changing what the pane shows as the chosen option ("Chosen: <option>").
-- Changing how a follow-ups question (pull request 47, SAL-288) records its
-  decisions.
+- Changing how a follow-ups question (`counsel-decides-follow-ups.md`)
+  records its decisions.
 - Closing every window a decision could fall through when the mod is not
   running at all: a decision owed to a pull request that nobody watches again
   is still pruned after ninety days.

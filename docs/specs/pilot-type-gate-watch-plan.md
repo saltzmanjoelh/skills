@@ -1,6 +1,6 @@
 # Plan: the pilot mod's type gate writes the installed version's types again
 
-Spec: `docs/specs/pilot-type-gate-watch.md`. Issue: SAL-285. Written 2026-10-14.
+Spec: `docs/specs/pilot-type-gate-watch.md`. Written 2026-10-14.
 
 ## Chosen approach
 
