@@ -68,14 +68,20 @@ builder says what each sub session does.
   remove it and add `~/.claude/skills/builder`. No session changes
   `~/.claude` itself.
 - **Sessions already running** keep the old names until they restart, so
-  the change merges only while no `/implement` run is in flight.
+  the change merges only while no `/implement` run other than the one
+  merging it is in flight. The merging run loads pilot from the main
+  checkout, so its merged step takes `mods/pilot` away from under it; it
+  finishes on what it already loaded, and the owner replaces the link and
+  restarts sessions afterwards.
 
 ## Non-goals
 
 - No alias: there is no `/pilot` command, `mcp__pilot__` tool or `pilot:`
   agent kept for a transition.
-- Other repositories that name pilot are listed in the pull request and not
-  changed.
+- Other repositories that name pilot are not changed. The pull request
+  describes them in general terms, because the repository's rules forbid
+  naming a project in it, and the session gives the owner their names and
+  the matching lines outside the repository.
 - No change to what the mod does.
 
 ## Failure modes
@@ -88,8 +94,9 @@ builder says what each sub session does.
 
 ## Verification
 
-- `git grep -i pilot -- ':!docs/specs/'` finds only the README's upgrade
-  note, the commands that replace the old link, and paths to old specs.
+- `git grep -i pilot -- ':!docs/specs/'` finds only the mod README's
+  upgrade note, the sentence in the root README that points at it, and
+  paths to old specs.
 - `test ! -e mods/pilot` and `test -d mods/builder`.
 - The four gates pass against `mods/builder`.
 - A fresh session that loads builder opens the pane with `/builder`, and in
