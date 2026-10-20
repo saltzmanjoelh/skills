@@ -61,11 +61,13 @@ export type SubRow = { file: string; record: BuildStatus; mtimeMs: number; isSta
 // The rows for the kept files, judged stale against the read made at
 // `readAt`, in issue-key order and then file name order, with the rows that
 // have no issue yet after every row that has one. A kept text that no
-// longer parses, as one an older build kept might not, is left out.
-export function rowsOf(files: readonly ForemanFile[], readAt: number): SubRow[] {
+// longer parses, as one an older build kept might not, is left out. `parse`
+// turns a kept text into its record; the hooks pass one that remembers the
+// texts it has parsed, so a redraw does not parse every file again.
+export function rowsOf(files: readonly ForemanFile[], readAt: number, parse: (text: string) => BuildStatus | null = recordIn): SubRow[] {
   const rows: SubRow[] = []
   for (const f of files) {
-    const record = recordIn(f.text)
+    const record = parse(f.text)
     if (record !== null) rows.push({ file: f.file, record, mtimeMs: f.mtimeMs, isStale: isStale(f.mtimeMs, readAt) })
   }
   return rows.sort((a, b) => byKeyThenFile(a.record.issueKey, a.file, b.record.issueKey, b.file))

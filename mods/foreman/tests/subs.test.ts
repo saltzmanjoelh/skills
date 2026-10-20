@@ -150,3 +150,15 @@ test('rows with an issue key come first in key order, then rows with none, and f
   expect(byKeyThenFile(null, 'b.json', null, 'a.json')).toBe(1)
   expect(byKeyThenFile(null, 'a.json', null, 'a.json')).toBe(0)
 })
+
+test('the rows come from the parse they are given, which is handed each kept text once', () => {
+  const texts: string[] = []
+  const files = [kept('a.json', record('ABC-1', 'working'), 0), kept('b.json', record('ABC-2', 'idle'), 0)]
+  const parse = (text: string) => {
+    texts.push(text)
+    return text === files[0]!.text ? null : JSON.parse(text)
+  }
+  const rows = rowsOf(files, 0, parse)
+  expect(texts).toEqual([files[0]!.text, files[1]!.text])
+  expect(rows.map(r => r.file)).toEqual(['b.json'])
+})

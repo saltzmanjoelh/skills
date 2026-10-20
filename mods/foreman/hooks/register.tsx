@@ -8,6 +8,7 @@ import { bandTree, PANE, paneTree, type Elements, type View } from './pane'
 import type { ForemanParent } from '../types'
 import { PARENT_OFF, parentIn, slotsOf, storeKey } from './parent'
 import { afterRead, nameOf, nextReadDelay, rowsOf, type FileRead, type SubRow } from './subs'
+import { recordIn, type BuildStatus } from './record'
 import { printable } from './text'
 
 type $ = EngineInterface
@@ -77,11 +78,26 @@ async function isOn($: $): Promise<boolean> {
   return parentIn(await read($, parent)).isOn
 }
 
+// The records parsed from the kept texts, by text. The band and the pane
+// draw every second, while the texts change only when a read lands, so each
+// text is parsed once. Only the texts of the files kept now are remembered;
+// a hot reload starts it empty, and the next drawing parses them again.
+let parsedTexts = new Map<string, BuildStatus | null>()
+
 // The rows as the last read left them.
 async function rowsNow($: $): Promise<SubRow[]> {
   const kept = await read($, files)
   const at = await read($, readAt)
-  return rowsOf(Array.isArray(kept) ? kept : [], typeof at === 'number' ? at : await $.clock.now())
+  const list = Array.isArray(kept) ? kept : []
+  const parsed = new Map<string, BuildStatus | null>()
+  const parse = (text: string) => {
+    const record = parsedTexts.has(text) ? parsedTexts.get(text)! : recordIn(text)
+    parsed.set(text, record)
+    return record
+  }
+  const rows = rowsOf(list, typeof at === 'number' ? at : await $.clock.now(), parse)
+  parsedTexts = parsed
+  return rows
 }
 
 // Lists the folder and reads each `.json` file in it. A listing that fails

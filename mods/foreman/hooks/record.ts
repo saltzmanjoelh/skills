@@ -13,7 +13,8 @@ import { isStage, STAGES, type StageId } from './stages'
 // One of builder's nine stages.
 export type BuildStage = StageId
 
-// The states a sub session can be in, in the order the pane explains them.
+// The states a sub session can be in. STATE_LOOK in hooks/subs.ts gives each
+// one its words and its color.
 export const STATES = ['working', 'waiting-on-builder', 'idle', 'needs-you', 'in-cleanup', 'done'] as const
 export type BuildState = (typeof STATES)[number]
 
