@@ -59,6 +59,8 @@ export function byKeyThenFile(aKey: string | null, aFile: string, bKey: string |
   if (aKey !== null && bKey !== null && aKey !== bKey) {
     const byKey = KEYS.compare(aKey, bKey)
     if (byKey !== 0) return byKey
+    // The collator counts some different keys as equal, such as ABC-01 and
+    // ABC-1, so they are put in a fixed order by their text.
     return aKey < bKey ? -1 : 1
   }
   if (aFile === bFile) return 0

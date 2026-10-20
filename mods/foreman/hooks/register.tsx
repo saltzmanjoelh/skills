@@ -121,10 +121,14 @@ async function writeParent($: $, change: (settings: ForemanParent) => ForemanPar
 // to land always carries the newest ledger.
 async function writeTickets($: $, change: (t: ForemanTickets) => ForemanTickets): Promise<ForemanTickets> {
   let written = TICKETS_EMPTY
+  let unchanged = false
   await update($, tickets, raw => {
-    written = change(ticketsIn(raw))
+    const before = ticketsIn(raw)
+    written = change(before)
+    unchanged = written === before
     return written
   })
+  if (unchanged) return written
   const next = persisting.then(async () => {
     const value = ticketsIn(await read($, tickets))
     const text = JSON.stringify(value)
@@ -221,7 +225,7 @@ async function readAndSchedule($: $) {
     }
     const { decision, rows } = await decideNow($, listing.exists, listing.found !== null, now)
     const usual = nextReadDelay(shownRows(rows, decision.tickets))
-    const delay = decision.wakeAt === null ? usual : Math.min(usual, Math.max(decision.wakeAt - now, SOONEST_READ_MS))
+    const delay = decision.nextDueAt === null ? usual : Math.min(usual, Math.max(decision.nextDueAt - now, SOONEST_READ_MS))
     schedule($, delay)
     await update($, nextReadAt, () => now + delay)
     later($, () => carryOut($))
@@ -269,7 +273,7 @@ async function decideNow($: $, folderExists: boolean, listed: boolean, now: numb
   }
   const settings = parentIn(await read($, parent))
   const input = { rows, now, limits: limitsOf(currentOptions), sessions, folderExists, listed, isPaused: settings.isPaused, slots: slotsOf(settings, currentOptions.slots) }
-  let decision: Decision = { tickets: TICKETS_EMPTY, effects: [], reasons: [], logs: [], wakeAt: null }
+  let decision: Decision = { tickets: TICKETS_EMPTY, effects: [], reasons: [], logs: [], nextDueAt: null }
   let joinLogs: string[] = []
   await writeTickets($, t => {
     const joined = joinOwners(t, rows)
@@ -289,12 +293,12 @@ const TIMED_OUT = Symbol('timed out')
 // CALL_TIMEOUT_MS. A call that rejects rejects here too.
 function within<T>($: $, call: Promise<T>): Promise<T | typeof TIMED_OUT> {
   return new Promise((resolve, reject) => {
-    const timer = $.clock.after(CALL_TIMEOUT_MS, () => resolve(TIMED_OUT))
+    const deadline = $.clock.after(CALL_TIMEOUT_MS, () => resolve(TIMED_OUT))
     call.then(value => {
-      timer.cancel()
+      deadline.cancel()
       resolve(value)
     }, error => {
-      timer.cancel()
+      deadline.cancel()
       reject(error)
     })
   })
@@ -447,16 +451,28 @@ async function nudgeRow($: $, file: string) {
   await nudge($, to, nameOf(row), ', because Nudge was pressed')
 }
 
-// Wakes the parent with the number of slots free, or remembers that a slot
-// freed while paused. Nothing happens when no slot is free.
-async function slotFreed($: $) {
+// Puts the wake with the number of slots free in the outbox, or remembers
+// that a slot freed while paused, and then carries the outbox out, as a read
+// does, so a reload in between loses nothing. Nothing happens when no slot is
+// free. On resume it acts only when a slot freed while paused, and clears
+// that in the same update.
+async function slotFreed($: $, onResume = false) {
   const settings = parentIn(await read($, parent))
   const outcome = slotOutcome(slotsOf(settings, currentOptions.slots) - busyCount(await shownNow($)), settings.isPaused)
-  if (outcome.kind === 'remember') {
-    await writeTickets($, t => ({ ...t, freedWhilePaused: true }))
-    return addLog($, PAUSED_SLOT_LOG)
-  }
-  if (outcome.kind === 'wake') await wake($, wakeLine([outcome.reason])!)
+  let remembered = false
+  await writeTickets($, t => {
+    remembered = false
+    if (onResume && !t.freedWhilePaused) return t
+    const base = onResume ? { ...t, freedWhilePaused: false } : t
+    if (outcome.kind === 'remember') {
+      remembered = true
+      return { ...base, freedWhilePaused: true }
+    }
+    if (outcome.kind === 'none') return base
+    return { ...base, outbox: addWork(base.outbox, { logs: [], effects: [], lines: [wakeLine([outcome.reason])!] }) }
+  })
+  if (remembered) await addLog($, PAUSED_SLOT_LOG)
+  later($, () => carryOut($))
 }
 
 // The Release button: the row's ticket is released, which frees its slot
@@ -524,13 +540,10 @@ async function runCommand($: $, args: string): Promise<string> {
   }
   if (command.kind === 'resume') {
     await writeParent($, p => ({ ...p, isPaused: false }))
-    let wasFreed = false
-    await writeTickets($, t => {
-      wasFreed = t.freedWhilePaused
-      return { ...t, freedWhilePaused: false }
-    })
-    // The wake is not waited for, so the command answers at once.
-    if (wasFreed && (await isOn($))) later($, () => slotFreed($))
+    // The wake goes in the outbox and is carried out from a timer, so the
+    // command answers at once.
+    if (await isOn($)) await slotFreed($, true)
+    else await writeTickets($, t => (t.freedWhilePaused ? { ...t, freedWhilePaused: false } : t))
     return 'This parent is no longer paused.'
   }
   await writeParent($, p => ({ ...p, isOn: true }))
@@ -608,7 +621,13 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: START_TOOL }, async ($, e, next) => {
     if (!(await isOn($))) return next(e)
     return startSession($, e as unknown as Record<string, unknown>, next as never) as never
-  }).catch(($, e, next) => next(e))
+  }).catch(($, e, next) => {
+    // Before the call went on, it goes on as it came, without a ticket. Once
+    // it went on, a failure is the tool's own, and next hands back its
+    // settled answer rather than starting the session again, as builder's
+    // own tool.call hook relies on.
+    return next(e)
+  })
 
   // The pane. Its presses open, nudge or release a sub session.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {

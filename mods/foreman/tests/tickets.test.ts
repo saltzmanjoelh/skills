@@ -77,14 +77,16 @@ test('only the rows that own a ticket of this parent show, a released one marked
 })
 
 test('past the most pairings kept, the oldest freed and released ones go first and an active one never goes', () => {
-  const active = Array.from({ length: MAX_PAIRINGS }, (_, i) => newPairing(`ft-active-${i}`, null, T0 - i))
+  const active = Array.from({ length: MAX_PAIRINGS - 2 }, (_, i) => newPairing(`ft-active-${i}`, null, T0 - 5000 - i))
   const done = [
-    { ...newPairing('ft-freed-old', null, T0 - 1000), standing: 'freed' as const },
     { ...newPairing('ft-released-new', null, T0 + 1000), standing: 'released' as const },
+    { ...newPairing('ft-freed-old', null, T0 - 1000), standing: 'freed' as const },
+    { ...newPairing('ft-freed-middle', null, T0), standing: 'freed' as const },
   ]
-  const kept = capped(withPairings(...done, ...active, newPairing('ft-active-last', null, T0 - 2000)))
-  expect(kept.pairings).toHaveLength(MAX_PAIRINGS + 1)
-  expect(kept.pairings.filter(p => p.standing === 'active')).toHaveLength(MAX_PAIRINGS + 1)
+  const kept = capped(withPairings(...done, ...active, newPairing('ft-active-last', null, T0 - 9000)))
+  expect(kept.pairings).toHaveLength(MAX_PAIRINGS)
+  expect(kept.pairings.filter(p => p.standing !== 'active').map(p => p.ticket)).toEqual(['ft-released-new'])
+  expect(kept.pairings.filter(p => p.standing === 'active')).toHaveLength(MAX_PAIRINGS - 1)
   const under = withPairings(...done)
   expect(capped(under)).toBe(under)
 })

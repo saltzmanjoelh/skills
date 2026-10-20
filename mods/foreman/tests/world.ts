@@ -106,7 +106,7 @@ export function desktopApp(on: On) {
 export function engine(on: On) {
   const toasts: string[] = []
   const panes: string[] = []
-  const e = {
+  const answers = {
     notices: [] as string[],
     prompts: [] as string[],
     appended: [] as string[],
@@ -116,24 +116,24 @@ export function engine(on: On) {
     startAnswer: 'Started the session local_new1 (name: example).',
     startFails: false,
   }
-  on('ui.notify', ($, n) => {
-    if (e.notify === 'throws') throw new Error('no channel')
-    if (e.notify === 'hang') return new Promise<never>(() => {})
-    e.notices.push(n.text)
-    return { value: e.notify === 'sent' ? { isSent: true, channel: 'terminal' } : { isSent: false, reason: 'disabled' } } as never
+  on('ui.notify', ($, e) => {
+    if (answers.notify === 'throws') throw new Error('no channel')
+    if (answers.notify === 'hang') return new Promise<never>(() => {})
+    answers.notices.push(e.text)
+    return { value: answers.notify === 'sent' ? { isSent: true, channel: 'terminal' } : { isSent: false, reason: 'disabled' } } as never
   })
-  on('prompt.submit', ($, p) => {
-    if (e.submit === 'dropped') return { drop: 'a Stop stands' }
-    e.prompts.push(p.text)
-    return { text: p.text }
+  on('prompt.submit', ($, e) => {
+    if (answers.submit === 'dropped') return { drop: 'a Stop stands' }
+    answers.prompts.push(e.text)
+    return { text: e.text }
   })
   on('session.append', ($, a, next) => {
-    e.appended.push(a.message.content.map(b => (b as { text?: string }).text ?? '').join(''))
+    answers.appended.push(a.message.content.map(b => (b as { text?: string }).text ?? '').join(''))
     return next(a)
   })
   on('tool.call', { tool: 'mcp__ccd_session__start_session' }, ($, call) => {
-    e.started.push({ ...call })
-    return { result: { content: [{ type: 'text', text: e.startAnswer }], isError: e.startFails }, text: e.startAnswer, ...(e.startFails ? { isError: true } : {}) } as never
+    answers.started.push({ ...call })
+    return { result: { content: [{ type: 'text', text: answers.startAnswer }], isError: answers.startFails }, text: answers.startAnswer, ...(answers.startFails ? { isError: true } : {}) } as never
   })
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -147,7 +147,7 @@ export function engine(on: On) {
     toasts.push(e.text)
     return { value: undefined }
   })
-  return { toasts, panes, e }
+  return { toasts, panes, answers }
 }
 
 // The usual world: the clock at T0, a store in memory that the test can read,
@@ -164,8 +164,8 @@ export function world(on: On, options: { store?: Record<string, unknown>; env?: 
   mock.env(on, options.env ?? { HOME })
   const folder = statusFolder(on, options.at, stored)
   const desktop = desktopApp(on)
-  const { toasts, panes, e } = engine(on)
-  return { clock, folder, desktop, toasts, panes, stored, engine: e }
+  const { toasts, panes, answers } = engine(on)
+  return { clock, folder, desktop, toasts, panes, stored, engine: answers }
 }
 
 // Stands in for what the mod left in $.state before a reload, as builder's

@@ -4,7 +4,6 @@
 
 import type { McpToolResult } from 'claude-code'
 
-import type { Listed } from './act'
 import type { SubRecord } from './record'
 
 export type DesktopCall = (server: string, tool: string, args?: Record<string, unknown>) => Promise<McpToolResult>
@@ -114,6 +113,9 @@ export async function sendMessage(call: DesktopCall, sessionId: string, text: st
   const answer = await answerOf(call, SESSIONS_SERVER, SEND_TOOL, { session_id: sessionId, message: text })
   return answer === 'not-connected' || answer === 'refused' ? answer : 'sent'
 }
+
+// One session as the desktop app's list gives it.
+export type Listed = { sessionId: string; isArchived: boolean; isRunning: boolean }
 
 // The desktop app's sessions, archived ones included, each with whether it
 // is archived and whether it runs, or why they could not be read. An entry

@@ -5,7 +5,7 @@
 
 import type { ForemanActs, ForemanEffect, ForemanOutbox, ForemanPairing, ForemanStanding, ForemanTickets } from '../types'
 import { byKeyThenFile, keyOf, nameOf, type SubRow } from './subs'
-import { byTicket } from './wake'
+import { byTicket as ticketName } from './wake'
 
 // The line builder looks for in a sub session's first prompt.
 export const TICKET_LINE = 'foreman-ticket:'
@@ -146,21 +146,30 @@ export const ownsTicket = (p: ForemanPairing, row: SubRow) => p.owner !== null &
 // the log.
 export function joinOwners(t: ForemanTickets, rows: readonly SubRow[]): { tickets: ForemanTickets; logs: string[] } {
   const logs: string[] = []
-  const byFile = [...rows].sort((a, b) => byKeyThenFile(null, a.file, null, b.file))
+  // The rows of each ticket, in file name order, so each pairing looks only
+  // at its own.
+  const byTicket = new Map<string, SubRow[]>()
+  for (const r of [...rows].sort((a, b) => byKeyThenFile(null, a.file, null, b.file))) {
+    if (r.record.ticket === null) continue
+    byTicket.set(r.record.ticket, [...(byTicket.get(r.record.ticket) ?? []), r])
+  }
   const pairings = t.pairings.map(p => {
+    const mine = byTicket.get(p.ticket)
+    if (mine === undefined) return p
     let next = p
     if (next.owner === null) {
-      const found = byFile.find(r => r.record.ticket === p.ticket && (p.localId === null || r.record.desktopSessionId === p.localId))
+      const found = mine.find(r => p.localId === null || r.record.desktopSessionId === p.localId)
       if (found !== undefined) {
         next = { ...next, owner: found.record.sessionId, ownerFile: found.file, localId: p.localId ?? found.record.desktopSessionId ?? null }
       }
     }
     if (next.owner === null) return next
-    const own = byFile.find(r => ownsTicket(next, r))
-    if (own !== undefined && own.record.issueKey !== next.issueKey) next = { ...next, issueKey: own.record.issueKey === null ? null : keyOf(own) }
-    const forks = byFile.filter(r => r.record.ticket === p.ticket && r.record.sessionId !== next.owner && !next.forks.includes(r.record.sessionId))
+    const own = mine.find(r => r.record.sessionId === next.owner)
+    const key = own === undefined || own.record.issueKey === null ? next.issueKey : keyOf(own)
+    if (key !== next.issueKey) next = { ...next, issueKey: key }
+    const forks = mine.filter(r => r.record.sessionId !== next.owner && !next.forks.includes(r.record.sessionId))
     if (forks.length > 0) {
-      const name = own === undefined ? byTicket(p.ticket) : nameOf(own)
+      const name = own === undefined ? ticketName(p.ticket) : nameOf(own)
       logs.push(...forks.map(() => `Left out a second status file with the ticket of ${name}, as a fork of its session writes.`))
       next = { ...next, forks: [...next.forks, ...forks.map(r => r.record.sessionId)].slice(-MAX_FORKS) }
     }
@@ -173,8 +182,10 @@ export function joinOwners(t: ForemanTickets, rows: readonly SubRow[]): { ticket
 // parent that was not freed, with a released one marked. A row with another
 // parent's ticket, or none, is not shown.
 export function shownRows(rows: readonly SubRow[], t: ForemanTickets): SubRow[] {
+  const byOwner = new Map(t.pairings.flatMap(p => (p.owner === null ? [] : [[p.owner, p] as const])))
   return rows.flatMap(row => {
-    const p = t.pairings.find(q => ownsTicket(q, row))
+    const owned = byOwner.get(row.record.sessionId)
+    const p = owned !== undefined && ownsTicket(owned, row) ? owned : undefined
     if (p === undefined || p.standing === 'freed') return []
     return [p.standing === 'released' ? { ...row, isReleased: true } : row]
   })

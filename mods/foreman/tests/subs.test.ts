@@ -145,6 +145,9 @@ test('rows with an issue key come first in key order, then rows with none, and f
   expect(byKeyThenFile(null, 'a.json', 'ABC-1', 'z.json')).toBe(1)
   expect(byKeyThenFile('ABC-1', 'z.json', null, 'a.json')).toBe(-1)
   expect(byKeyThenFile('ABC-1', 'z.json', 'ABC-2', 'a.json')).toBe(-1)
+  // The collator counts ABC-01 and ABC-1 as equal; their text decides.
+  expect(byKeyThenFile('ABC-01', 'z.json', 'ABC-1', 'a.json')).toBe(-1)
+  expect(byKeyThenFile('ABC-1', 'a.json', 'ABC-01', 'z.json')).toBe(1)
   expect(byKeyThenFile('ABC-2', 'a.json', 'ABC-1', 'z.json')).toBe(1)
   expect(byKeyThenFile('ABC-1', 'a.json', 'ABC-1', 'b.json')).toBe(-1)
   expect(byKeyThenFile(null, 'b.json', null, 'a.json')).toBe(1)

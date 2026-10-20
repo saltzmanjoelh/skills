@@ -55,7 +55,7 @@ test('an idle sub session that never answers is nudged at one and two thresholds
 test('a nudge goes to the local_ id start_session named, and the next due time is the next threshold', () => {
   const d = read(paired(), [row()], T0 + T)
   expect(d.effects).toEqual([{ kind: 'nudge', ticket: 'ft-a', to: 'local_a', name: 'ABC-1' }])
-  expect(d.wakeAt).toBe(T0 + 2 * T)
+  expect(d.nextDueAt).toBe(T0 + 2 * T)
 })
 
 test('a sub session that answers each nudge with a short turn and goes idle again still reaches the parent', () => {
@@ -175,4 +175,13 @@ test('the session list is needed only for a done record or a file older than the
   expect(needsList(t, [row()], T0 + MINUTE)).toBe(false)
   expect(needsList(t, [row({ state: 'done' })], T0)).toBe(true)
   expect(needsList(t, [row()], T0 + GONE_MS + 1)).toBe(true)
+})
+
+test('a pairing that no status file carried for a day is forgotten, and a younger one is kept', () => {
+  const young = read(paired(), [], T0 + 23 * 60 * MINUTE)
+  expect(young.tickets.pairings).toHaveLength(1)
+  const old = read(paired(), [], T0 + 25 * 60 * MINUTE)
+  expect(old.tickets.pairings).toEqual([])
+  expect(old.logs).toEqual(['Forgot ticket ft-a, because no status file carried it for a day.'])
+  expect(old.reasons).toEqual([])
 })

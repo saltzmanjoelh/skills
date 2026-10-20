@@ -4,6 +4,7 @@
 // answers the next ledger together with those effects, and
 // hooks/register.tsx carries them out. Every function is pure.
 
+import type { Listed } from './desktop'
 import type { BuildState } from './record'
 import type { ForemanActs, ForemanEffect, ForemanPairing, ForemanTickets } from '../types'
 import { busyCount, nameOf, type SubRow } from './subs'
@@ -22,8 +23,11 @@ export const GONE_MS = 5 * 60_000
 // How many failed calls in cleanup wake the parent before the threshold.
 export const CLEANUP_FAILED_CALLS = 3
 
-// One session as the desktop app's list gives it.
-export type Listed = { sessionId: string; isArchived: boolean; isRunning: boolean }
+// How long a pairing may wait for a status file with its ticket before it is
+// forgotten, as one from a proposal card that never started or a sub session
+// that never ran /implement would wait for ever. No row or slot depends on
+// it, so forgetting it changes nothing a person sees.
+export const UNOWNED_FOR_MS = 24 * 60 * 60_000
 
 // The desktop app's list of sessions for this read: not read because no rule
 // needed it, failed, or read.
@@ -55,8 +59,9 @@ export type Decision = {
   effects: Effect[]
   reasons: Reason[]
   logs: string[]
-  // The earliest time a nudge or a wake falls due, or null when none waits.
-  wakeAt: number | null
+  // The earliest time a rule falls due, a nudge, a wake or a cleanup
+  // threshold, which brings the next read forward; null when none waits.
+  nextDueAt: number | null
 }
 
 const minutesOf = (ms: number) => Math.max(Math.floor(ms / 60_000), 0)
@@ -237,7 +242,11 @@ export function decide(input: DecideInput): Decision {
   let freed = 0
   const byFile = new Map(rows.map(r => [r.file, r]))
   const pairings = input.tickets.pairings.flatMap(p => {
-    if (p.owner === null || p.ownerFile === null) return [p]
+    if (p.owner === null || p.ownerFile === null) {
+      if (now - p.pairedAt <= UNOWNED_FOR_MS) return [p]
+      logs.push(`Forgot ticket ${p.ticket}, because no status file carried it for a day.`)
+      return []
+    }
     const row = byFile.get(p.ownerFile)
     if (row === undefined) {
       if (!folderExists || !listed) return [p]
@@ -267,5 +276,5 @@ export function decide(input: DecideInput): Decision {
       reasons.push(outcome.reason)
     }
   }
-  return { tickets, effects, reasons, logs, wakeAt: due.length === 0 ? null : Math.min(...due) }
+  return { tickets, effects, reasons, logs, nextDueAt: due.length === 0 ? null : Math.min(...due) }
 }
