@@ -115,6 +115,8 @@ export function engine(on: On) {
     submit: 'ok' as 'ok' | 'dropped',
     startAnswer: 'Started the session local_new1 (name: example).',
     startFails: false,
+    // The session id the engine answers.
+    sessionId: 'session-1',
   }
   on('ui.notify', ($, e) => {
     if (answers.notify === 'throws') throw new Error('no channel')
@@ -137,7 +139,7 @@ export function engine(on: On) {
   })
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
-  on('session.id', () => ({ value: 'session-1' }))
+  on('session.id', () => ({ value: answers.sessionId }))
   on('command.run', () => ({ text: '' }))
   on('ui.open', ($, e) => {
     panes.push(e.id)

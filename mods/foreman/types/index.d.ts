@@ -79,8 +79,10 @@ export type ForemanOutbox = { logs: string[]; effects: ForemanEffect[]; lines: s
 // Every pairing of this parent, whether a slot freed while it was paused, so
 // /foreman resume can wake the parent for it, and what is still to be
 // carried out. `folderMissing` says the last read found no status folder, so
-// the log says so once.
-export type ForemanTickets = { pairings: ForemanPairing[]; freedWhilePaused: boolean; folderMissing: boolean; outbox: ForemanOutbox }
+// the log says so once. `sessionId` is the parent session the ledger belongs
+// to, or null before one wrote it, so a process that goes on as another
+// session never takes this one's ledger for its own.
+export type ForemanTickets = { sessionId: string | null; pairings: ForemanPairing[]; freedWhilePaused: boolean; folderMissing: boolean; outbox: ForemanOutbox }
 
 declare module 'claude-code' {
   interface PluginState {

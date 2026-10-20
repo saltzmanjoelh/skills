@@ -95,6 +95,9 @@ function endedIn(sessions: Listed[], id: string | null): string | null {
 // What one rule may change and add while it looks at one pairing.
 type Step = {
   p: ForemanPairing
+  // The owner record's current episode, which decide works out before any
+  // rule runs.
+  episode: { state: string; since: number }
   row: SubRow
   now: number
   limits: Limits
@@ -112,9 +115,9 @@ const STATE_RULES: Record<BuildState, (s: Step) => void> = {
   'working': s => {
     // A working episode inside an idle stretch keeps the stretch, unless the
     // record made progress or the work lasted a whole threshold.
-    const { stretch, episode } = s.p.acts
+    const { stretch } = s.p.acts
     if (stretch === null) return
-    if (stretch.progress !== progressOf(s.row) || s.now - episode!.since >= s.limits.idleMs) setActs(s, { stretch: null })
+    if (stretch.progress !== progressOf(s.row) || s.now - s.episode.since >= s.limits.idleMs) setActs(s, { stretch: null })
   },
   'waiting-on-builder': s => setActs(s, { stretch: null }),
   'idle': idleRule,
@@ -130,7 +133,7 @@ const STATE_RULES: Record<BuildState, (s: Step) => void> = {
     setActs(s, { stretch: null })
     const key = episodeKey(s)
     if (s.p.acts.cleanupWokeFor === key) return
-    const since = s.p.acts.episode!.since
+    const since = s.episode.since
     const cleanup = s.row.record.cleanup ?? { failedCalls: 0, lastError: '' }
     if (s.now - since >= s.limits.cleanupMs || cleanup.failedCalls >= CLEANUP_FAILED_CALLS) {
       s.reasons.push({ kind: 'cleanup', who: whoOf(s.row.record.issueKey, s.p.ticket), minutes: minutesOf(s.now - since), ...cleanup })
@@ -150,7 +153,7 @@ const STATE_RULES: Record<BuildState, (s: Step) => void> = {
   },
 }
 
-const episodeKey = (s: Step) => `${s.p.acts.episode!.state}@${s.p.acts.episode!.since}`
+const episodeKey = (s: Step) => `${s.episode.state}@${s.episode.since}`
 const setActs = (s: Step, change: Partial<ForemanActs>) => {
   s.p = { ...s.p, acts: { ...s.p.acts, ...change } }
 }
@@ -165,7 +168,7 @@ function idleRule(s: Step) {
   if (stretch === null || stretch.progress !== progress) stretch = { progress, nudges: 0, lastNudgeAt: null, woke: false }
   setActs(s, { stretch })
   if (stretch.woke) return
-  const since = s.p.acts.episode!.since
+  const since = s.episode.since
   const to = desktopOf(s.p, s.row)
   const who = whoOf(s.row.record.issueKey, s.p.ticket)
   if (to === null) {
@@ -260,7 +263,7 @@ export function decide(input: DecideInput): Decision {
     }
     if (!ownsTicket(p, row) || p.standing !== 'active') return [p]
     const episode = episodeOf(p.acts.episode, row, now)
-    const s: Step = { p: { ...p, acts: { ...p.acts, episode } }, row, now, limits, sessions, effects, reasons, logs, due, freed: 0 }
+    const s: Step = { p: { ...p, acts: { ...p.acts, episode } }, episode, row, now, limits, sessions, effects, reasons, logs, due, freed: 0 }
     STATE_RULES[row.record.state](s)
     goneRule(s)
     freed += s.freed

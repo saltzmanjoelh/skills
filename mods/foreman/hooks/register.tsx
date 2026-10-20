@@ -122,10 +122,12 @@ async function writeParent($: $, change: (settings: ForemanParent) => ForemanPar
 async function writeTickets($: $, change: (t: ForemanTickets) => ForemanTickets): Promise<ForemanTickets> {
   let written = TICKETS_EMPTY
   let unchanged = false
+  const sessionId = await $.session.id()
   await update($, tickets, raw => {
     const before = ticketsIn(raw)
-    written = change(before)
-    unchanged = written === before
+    const changed = change(before)
+    unchanged = changed === before
+    written = unchanged || changed.sessionId === sessionId ? changed : { ...changed, sessionId }
     return written
   })
   if (unchanged) return written
@@ -279,13 +281,11 @@ async function decideNow($: $, folderExists: boolean, listed: boolean, now: numb
   const settings = parentIn(await read($, parent))
   const input = { rows, now, limits: limitsOf(currentOptions), sessions, folderExists, listed, isPaused: settings.isPaused, slots: slotsOf(settings, currentOptions.slots) }
   let decision: Decision = { tickets: TICKETS_EMPTY, effects: [], reasons: [], logs: [], nextDueAt: null }
-  let joinLogs: string[] = []
   await writeTickets($, t => {
     const joined = joinOwners(t, rows)
-    joinLogs = joined.logs
     decision = decide({ ...input, tickets: joined.tickets })
     const line = wakeLine(decision.reasons)
-    const work = { logs: [...joinLogs, ...decision.logs], effects: decision.effects, lines: line === null ? [] : [line] }
+    const work = { logs: [...joined.logs, ...decision.logs], effects: decision.effects, lines: line === null ? [] : [line] }
     return { ...decision.tickets, outbox: addWork(decision.tickets.outbox, work) }
   })
   return { decision, rows }
@@ -582,16 +582,17 @@ export const register: Register = (on, options) => {
     const id = await $.session.id()
     const rawParent = await $.store.get(storeKey(id))
     const rawTickets = await $.store.get(ticketsKey(id))
-    // The stored ledger is taken only while $.state holds none of its own,
-    // so a start that comes again in a running session cannot put an older
-    // ledger over a newer one.
-    if (rawTickets !== undefined && rawTickets !== null) {
-      const stored = ticketsIn(rawTickets)
-      await update($, tickets, heldRaw => {
-        const held = ticketsIn(heldRaw)
-        return held.pairings.length === 0 && !hasWork(held.outbox) ? stored : held
-      })
-    }
+    // $.state keeps the ledger it holds when that ledger is this session's
+    // and has something in it, so a start that comes again in a running
+    // session cannot put an older stored ledger over a newer one. Otherwise
+    // the stored ledger, or an empty one, takes its place, so a process that
+    // goes on as another session never keeps the last session's tickets.
+    const stored = rawTickets === undefined || rawTickets === null ? TICKETS_EMPTY : ticketsIn(rawTickets)
+    await update($, tickets, heldRaw => {
+      const held = ticketsIn(heldRaw)
+      const isOurs = held.sessionId === id && (held.pairings.length > 0 || hasWork(held.outbox))
+      return isOurs ? held : { ...stored, sessionId: id }
+    })
     if (rawParent !== undefined && rawParent !== null) {
       const stored = parentIn(rawParent)
       await update($, parent, () => stored)

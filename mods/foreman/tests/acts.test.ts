@@ -519,3 +519,17 @@ test('a session start that comes again in a running session keeps the newer ledg
   await startSession($, { prompt: 'Run /implement ABC-8.', context: 'fresh' })
   expect(ledger(w).pairings).toHaveLength(2)
 })
+
+test('a process that goes on as another session starts that session with its own ledger, not the last session\'s', async ($, on) => {
+  const w = world(on)
+  await start($)
+  await foreman($)
+  await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh' })
+  expect(ledger(w).pairings).toHaveLength(1)
+  w.engine.sessionId = 'session-2'
+  await start($)
+  await w.clock.settle()
+  await startSession($, { prompt: 'Run /implement ABC-8.', context: 'fresh' })
+  expect(ticketsIn(w.stored.get(ticketsKey('session-2'))).pairings).toHaveLength(1)
+  expect(ledger(w).pairings).toHaveLength(1)
+})
