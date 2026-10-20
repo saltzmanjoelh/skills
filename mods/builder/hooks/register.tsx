@@ -52,7 +52,7 @@ const loadBegun = atom({ plugin: 'builder', key: 'loadBegun' } as const, null)
 // the state began is kept; a /clear resets it. The state.set hook in
 // `register` leaves its writes out, so writing it never asks for another
 // write of the status file.
-const statusMemo = atom({ plugin: 'builder', key: 'status' } as const, null)
+const statusMemo = atom({ plugin: 'builder', key: 'statusMemo' } as const, null)
 
 // The builder mod: it watches the pull request the session works on, shows that
 // pull request and the session's agents in a pane, and starts a turn when the
@@ -1436,13 +1436,10 @@ async function repliedTurnClearsHold($: $, turnsStarted: number) {
   }
 }
 
-// A prompt the person started a turn with answers whatever question the
-// counsel left for them, so the status file stops reading that the person is
-// needed; a failure there changes none of the other resets. It also brings the
-// stuck interval back to the first, and clears a hold at once, with no resume
-// turn. Every other prompt, the mod's own among them, changes none of these.
-// Right after the counsel's question is cleared, before any other await, the
-// number of the person's prompts moves on, so a hold being decided while
+// A prompt the person started a turn with brings the stuck interval back to
+// the first, and clears a hold at once, with no resume turn. Every other
+// prompt, the mod's own among them, changes neither. Before the first await,
+// the number of the person's prompts moves on, so a hold being decided while
 // this runs is not started (see startHold), and the hold's number moves on
 // and its timer is cancelled, so a resume time that falls while this runs
 // sends no resume prompt beside the person's, whether its timer has yet to
@@ -1451,9 +1448,16 @@ async function repliedTurnClearsHold($: $, turnsStarted: number) {
 // it. The interval is reset next, so the stuck prompt is armed once, from it:
 // by clearing the hold, or here when no hold is on. When the rest fails, the
 // hold's timer is armed again for a hold still on.
+//
+// The person's prompt also answers whatever question the counsel left for
+// them, but that reset lives in the prompt.submit hook rather than here. It
+// awaits, so it cannot come before the count and the timer move. It also has
+// to come after the look for the foreman's ticket, which awaits as well and so
+// runs after this: a session that takes its memo up only at this prompt, a
+// resumed one or one after a hot reload, has no memo to clear until that look
+// has run.
 async function personPromptResets($: $, origin: PromptOrigin, text: string) {
   if (!isPersonPrompt(origin, text)) return
-  await changeMemo($, afterPersonPrompt).catch(() => undefined)
   personPrompts += 1
   stopHoldTimer()
   try {
@@ -2880,7 +2884,8 @@ async function startStatus($: $) {
 // and the new conversation looks for a ticket in its own first prompt. The
 // generation is raised first, so a writer of the ended session that is still
 // awaiting a read stops before it writes, even once the new conversation
-// writes again, and writing opens again only after the memo was reset.
+// writes again, and writing opens again only once the memo's reset has
+// settled, whether it landed or failed.
 async function endStatus($: $, reason: string, sessionId: string, budget: { remainingMs: number }) {
   const wasTicketed = ticketKnown === 'some'
   statusClosed = true
@@ -2909,8 +2914,15 @@ async function endStatus($: $, reason: string, sessionId: string, budget: { rema
       lastWrittenText = null
       statusDirty = false
       statusForced = false
-      await update($, statusMemo, () => null)
-      statusClosed = false
+      // Writing opens again even when the reset fails. That is safe, because
+      // a memo left under the ended session's id reads as none for the new
+      // one (see statusMemoIn), and the new conversation looks for its own
+      // ticket and writes a memo of its own.
+      try {
+        await update($, statusMemo, () => null)
+      } finally {
+        statusClosed = false
+      }
     }
   }
 }
@@ -2921,12 +2933,13 @@ export const register: Register = on => {
   // around `update` cannot do this, because the engine reads which values a
   // module writes from each call's atom at the call site, and refuses a call
   // whose atom is a parameter. The memo's own writes are left out, so writing
-  // it never asks for another write. In a session with no ticket the ask
-  // returns at once, so such a session does what it did before the file
-  // existed.
+  // it never asks for another write. They are told apart by the key the memo's
+  // atom holds, so the hook and the atom cannot come to name different keys.
+  // In a session with no ticket the ask returns at once, so such a session
+  // does what it did before the file existed.
   on('state.set', async ($, e, next) => {
     const set = await next(e)
-    if (e.plugin === 'builder' && e.key !== 'status') statusChanged($)
+    if (e.plugin === 'builder' && e.key !== statusMemo.ref.key) statusChanged($)
     return set
   })
 
@@ -3179,13 +3192,17 @@ export const register: Register = on => {
   // The desktop app wakes the session for a CI failure or a merge conflict.
   // The turn it starts gets the rest of the pull request's state with it.
   //
-  // The first prompt the mod sees for a session id is where it looks for the
-  // foreman's ticket, and a prompt of the person's resets what it answers or
-  // ends, the counsel's question among them (see personPromptResets).
+  // A prompt of the person's resets the stuck interval and the hold first,
+  // before any await (see personPromptResets). The first prompt the mod sees
+  // for a session id is then where it looks for the foreman's ticket, and
+  // after that look a prompt of the person's answers whatever question the
+  // counsel left for them, so a session that takes its memo up only at this
+  // prompt clears that question too.
   on('prompt.submit', async ($, e, next) => {
     void ensureArmed($)
-    await lookForTicket($, e.text).catch(() => undefined)
     await personPromptResets($, e.origin, e.text).catch(() => undefined)
+    await lookForTicket($, e.text).catch(() => undefined)
+    if (isPersonPrompt(e.origin, e.text)) await changeMemo($, afterPersonPrompt).catch(() => undefined)
     if (e.origin.kind !== 'sdk' || !isCiMonitorEvent(e.text)) return next(e)
     const r0 = await read($, run)
     const toldBefore = r0 === null ? null : await told($, r0)

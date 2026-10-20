@@ -388,7 +388,7 @@ declare module 'claude-code' {
       // What the status file for the foreman needs beyond the values above,
       // or null before the first prompt was looked at for a ticket and after
       // a /clear. Read through statusMemoIn in hooks/status.ts.
-      status: StatusMemo | null
+      statusMemo: StatusMemo | null
     }
   }
 }

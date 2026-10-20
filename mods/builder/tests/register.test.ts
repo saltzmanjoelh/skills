@@ -233,15 +233,16 @@ function quietDiffFinds(world: { changed: Record<string, string[]> }, args: stri
 
 // What the engine answers beneath the mod in a session: registrations land,
 // and the session starts. `schemas`, when given, collects each tool's input
-// schema by name.
-function engine(on: On, schemas?: Record<string, unknown>) {
+// schema by name. `id`, when given, answers the asks for the session's id in
+// place of the plain answer, since the kit takes one hook for them.
+function engine(on: On, schemas?: Record<string, unknown>, id?: () => Promise<{ value: string }>) {
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('tool.register', ($, e) => {
     if (schemas) schemas[e.name] = e.inputSchema
     return { value: { tool: `mcp__builder__${e.name}` } }
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
-  on('session.id', () => ({ value: 'session-1' }))
+  on('session.id', id ?? (() => ({ value: 'session-1' })))
 }
 
 // Starts watching #7 the way /implement does, through the watch tool.
@@ -7387,11 +7388,12 @@ test('a stuck prompt that falls while the CI event\'s look has not yet told its 
 // on, and ends a turn as usual and then one with an error, both at T0, so
 // the turn-end looks of the first are due during the hold. /builder is
 // answered beneath the mod, for a test that runs it. `runs` are the head's
-// unfinished workflow runs from the start.
-async function holdOnWindow($: Engine, on: On, runs: { id: number; run_attempt: number; name: string }[] = []) {
+// unfinished workflow runs from the start, and `id`, when given, answers the
+// asks for the session's id (see engine).
+async function holdOnWindow($: Engine, on: On, runs: { id: number; run_attempt: number; name: string }[] = [], id?: () => Promise<{ value: string }>) {
   const clock = mock.clock(on, { now: T0 })
   mock.store(on)
-  engine(on)
+  engine(on, undefined, id)
   const world = fakeGitHub(on)
   world.runs = runs
   sessionTurns(on)
@@ -7679,6 +7681,36 @@ test('a person\'s prompt that is still on its way when the hold\'s timer fires g
 
   await clock.advance(1000)
   resetting.release()
+  await typed
+  await clock.settle()
+  expect(prompts).toEqual(['go on'])
+  expect(await line()).not.toContain('waiting on the usage limit')
+})
+
+// The look for the foreman's ticket awaits the session's id, so the person's
+// prompt is held there, and the hold's timer must already have given way.
+test('a person\'s prompt that is held at the session\'s id when the hold\'s timer fires gets only the person\'s prompt', async ($, on) => {
+  let isArmed = false
+  const asked = { isWaiting: false, release: () => {} }
+  const id = async () => {
+    if (isArmed) {
+      isArmed = false
+      asked.isWaiting = true
+      await new Promise<void>(resolve => { asked.release = resolve })
+      asked.isWaiting = false
+    }
+    return { value: 'session-1' }
+  }
+  const { clock, prompts, line } = await holdOnWindow($, on, [], id)
+  await clock.advance(2 * HOUR + MINUTE - 1000)
+  isArmed = true
+  const typed = $.prompt.submit({ text: 'go on', origin: { kind: 'composer' } } as never)
+  await clock.settle()
+  expect(asked.isWaiting).toBe(true)
+
+  await clock.advance(1000)
+  expect(resumesOf(prompts)).toEqual([])
+  asked.release()
   await typed
   await clock.settle()
   expect(prompts).toEqual(['go on'])
@@ -9640,7 +9672,7 @@ test('a call that returns with no permission prompt open, and a turn that starts
   const s = foremanSession(on)
   const memos: string[] = []
   on('state.set', ($, e, next) => {
-    if (e.plugin === 'builder' && e.key === 'status') memos.push(JSON.stringify(e.value))
+    if (e.plugin === 'builder' && e.key === 'statusMemo') memos.push(JSON.stringify(e.value))
     return next(e)
   })
   const tools = heldTools(on)
@@ -9698,6 +9730,20 @@ test('after a resume and a new session id, the new conversation\'s own ticket wr
   const s = foremanSession(on)
   await firstPrompt($, s.clock)
   await endSession($, 'resume')
+  s.ids.current = 'session-2'
+  await $.prompt.submit({ text: 'foreman-ticket: slot-2', origin: { kind: 'composer' } } as never)
+  await s.clock.settle()
+
+  expect(s.statusAt('/home/me/.claude/foreman/builds/session-2.json')).toMatchObject({ sessionId: 'session-2', ticket: 'slot-2', state: 'idle' })
+})
+
+test('after a /clear whose reset of the memo is refused, the new conversation\'s own ticket still writes its own file', async ($, on) => {
+  const refusal = refusedWrites(on, 'statusMemo', value => value === null)
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  refusal.writes = 1
+  await endSession($, 'clear')
+  expect(refusal.refusals).toBe(1)
   s.ids.current = 'session-2'
   await $.prompt.submit({ text: 'foreman-ticket: slot-2', origin: { kind: 'composer' } } as never)
   await s.clock.settle()

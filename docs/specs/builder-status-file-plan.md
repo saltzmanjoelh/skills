@@ -112,7 +112,7 @@ lives in `hooks/register.tsx`. The record's types go in the contract,
 ## Steps
 
 1. Types: `BuildStage`, `BuildState`, `BuildStatus` with the field names
-   foreman's session proposed, `StatusMemo`, and the `status` key of
+   foreman's session proposed, `StatusMemo`, and the `statusMemo` key of
    `PluginState`, each with a comment.
 2. `hooks/status.ts` and `tests/status.test.ts`: `ticketIn`,
    `firstPromptOf`, `issueOf`, `isCleanupSkill`, `errorLineOf`, the rule
