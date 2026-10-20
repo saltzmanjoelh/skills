@@ -14,8 +14,10 @@ anything the next step needs that this spec does not.
 - **`hooks/record.ts`** alone declares the status record and parses it
   (`recordIn(text)`), with a comment saying to replace the type with an import
   from builder's contract once that contract has it. A file counts as not
-  parsing unless it is a JSON object with a string `sessionId`, a non-empty
-  string `issueKey` and one of the six states. Every other field falls back to a
+  parsing unless it is a JSON object with a string `sessionId`, an `issueKey`
+  that is a non-empty string or null (null before the session's first
+  progress report), and one of the six states. The type is named
+  `BuildStatus`, as builder's contract will name it. Every other field falls back to a
   safe default when missing or of the wrong type: a stage outside builder's nine
   becomes null, and `stageDone` is held between 0 and 9.
 - **`$.state` keeps the last good text of each file**, as

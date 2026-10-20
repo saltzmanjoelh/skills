@@ -32,14 +32,16 @@ behaves exactly as it does without the mod.
    record's type belongs in builder's contract, which a change running at the
    same time adds. Until that change has merged, foreman declares the same
    type in a file of its own code, `hooks/record.ts`, and its comment says to
-   replace it with an import from builder's contract. The fields are the ones
-   proposed to that change: `sessionId`, `ticket`, `desktopSessionId` (once
-   known), `cwd`, `issueKey`, `issueTitle`, `stage` (one of builder's nine, or
-   null), `stageDone` (out of nine), `pr` (`number`, `state` and `checks`, or
+   replace it with an import from builder's contract. The type is named
+   `BuildStatus`, as builder's contract will name it, and its fields are the
+   ones that change confirmed: `sessionId`, `ticket`, `desktopSessionId` (once
+   known), `cwd`, `issueKey` (null before the session's first progress
+   report), `issueTitle`, `stage` (one of builder's nine, or null),
+   `stageDone` (out of nine), `pr` (`repo`, `number`, `state` and `checks`, or
    null), `state`, `reason`, `stateSince`, `writtenAt`, and `cleanup` (the
-   failed calls since cleanup began and the last error line) in the in-cleanup
-   state. The states are `working`, `waiting-on-builder`, `idle`,
-   `needs-you`, `in-cleanup` and `done`.
+   failed calls since cleanup began and the last error line, present in any
+   state once cleanup has started). The states are `working`,
+   `waiting-on-builder`, `idle`, `needs-you`, `in-cleanup` and `done`.
 3. **The role.** `/foreman` turns the role on for this session and opens the
    pane. The flag is kept in `$.state`, and in `$.store` under the session's
    id, so that a resume or a hot reload of the mod keeps it: when a session
@@ -73,7 +75,8 @@ behaves exactly as it does without the mod.
    - the slots busy out of the slots allowed, as `2 of 2 slots busy`, where
      every listed sub session whose state is not done counts as busy, stale
      ones included, and the word `paused` after it while paused;
-   - a chip for each sub session, holding its issue key and, while it is
+   - a chip for each sub session, holding its issue key (or `no issue yet`
+     while the record has none) and, while it is
      working or waiting on builder, its stage, or otherwise its state in
      words;
    - when the next read is due, as `next read in 30s`.
@@ -83,7 +86,8 @@ behaves exactly as it does without the mod.
    dimmed instead. Pressing a chip opens that sub session. With no sub
    sessions the row says `foreman: 0 of 2 slots busy · no sub sessions ·
    next read in 2m`.
-8. **The pane.** One row for each sub session, in issue-key order:
+8. **The pane.** One row for each sub session, in issue-key order, with the
+   rows that have no issue key yet after them in file-name order:
    - **The issue key and its pull request line**, such as
      `→ ABC-123 · #N open · checks passed`, drawn as one button in the accent
      color with the arrow, so it reads as pressable. Pressing it opens the
@@ -116,8 +120,10 @@ behaves exactly as it does without the mod.
 
 - The folder holds a file being written at the moment of the read: it does
   not parse, so the last good read of it stands.
-- A file parses but lacks a field foreman needs (an issue key, a known state,
-  a session id): it counts as not parsing.
+- A file parses but lacks a field foreman needs (a known state, a session
+  id, or an issue key that is either null or a non-empty string): it counts as
+  not parsing. A null issue key is valid; the row says `no issue yet` where
+  the key would go and can still be opened.
 - The same session's file is renamed or the record's `sessionId` differs from
   the file name: foreman keys each row by the file name.
 - A session whose record has no `cwd` and no `desktopSessionId` cannot be
