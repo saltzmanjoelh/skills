@@ -165,8 +165,55 @@ Each fact is one `Label: value` line anywhere in the file.
 | `Gotchas document:` | `docs/gotchas.md` | Named in the package, if the file exists |
 | `Merge command:` | none | Its words before the first `<` mark a Bash command of the session's own as a merge, after which the mod looks at the pull request soon; it is read once when the session starts |
 
+## The status file for the foreman
+
+The foreman is a mod for a parent session that runs several `/implement` sessions. It reads one JSON file per session it started, on its own timer, to see which of them need a person, which are idle and which are done, without spending the parent's tokens. Builder writes that file, and only in a session whose first prompt holds a line `foreman-ticket: <value>`. The value is the rest of the line with the white space around it removed, and a line with nothing after the colon counts as no ticket. The foreman adds the line to the prompt it starts a session with, so a session the owner starts by hand never writes a file.
+
+The first prompt is the first user message of the session's transcript that has text, read at the first prompt builder sees, so a resumed session finds the ticket of its original first prompt. When the transcript holds no such message yet, or cannot be read, the prompt being submitted is checked instead. A transcript longer than the 4096 entries the engine returns starts after the first prompt, and then no ticket is found. The answer is kept in the mod's state, so a hot reload does not look again. A `/clear` ends the session under its old id and drops the ticket with it, and the new conversation looks for a ticket in its own first prompt.
+
+The file is `<config>/foreman/builds/<session id>.json`, where `<config>` is the `CLAUDE_CONFIG_DIR` variable when it is set and `$HOME/.claude` otherwise. Nothing is written when that folder is not an absolute path, or when the session id holds anything but letters, digits, underscores and hyphens, so the file cannot land outside the builds folder. Builder works the record out again whenever its own state changes and at each event that can change the record (a permission prompt, a failed tool call, the cleanup skill), and writes the file when the record differs from the one last written in any field but the write time. It also writes the file at least once a minute while the session lives, with a new write time even when nothing else changed, so a file whose write time stops moving tells the foreman that the session is gone or hung. Writes go one at a time, and a change that arrives while a write runs is written after it, so the newest record is normally the last one written. The one exception is a write that runs past 30 seconds: builder gives up waiting for it, and it can still land over a newer record until the next change or the next minute's write replaces it. Every write replaces the whole file. The engine offers no way to rename a file into place, so a reader that catches a file in the middle of a write sees text that does not parse, and reads it again. A write that fails is dropped, and the next change or the next minute's write tries again.
+
+When the session ends after its pull request merged, builder deletes the file with `rm -f`, because the engine's file interface has no delete. That runs inside the engine's short budget for ending a session; when it fails or is cut off, the file stays and reads `done`, or `in-cleanup` when the cleanup skill had started, either of which tells the foreman the session finished its pull request. When the session ends without a merge, the file stays for the foreman to read. Nothing is written after the session's end.
+
+| Field | What it holds |
+|---|---|
+| `version` | `1`, raised whenever a field changes meaning |
+| `sessionId` | the engine's session id, the same as the file's name |
+| `ticket` | the value of the `foreman-ticket:` line |
+| `desktopSessionId` | the desktop app's session id, from the `CLAUDE_CODE_HOST_SESSION_ID` variable; left out when that variable is unset |
+| `cwd` | the folder the session started in, so the foreman can find the session before it knows the desktop id |
+| `issueKey` | a leading issue key, such as `ABC-123`, of the title last reported through the progress tool, or null when there is none |
+| `issueTitle` | the rest of that title, or the empty string before any report |
+| `stage` | the stage last reported through the progress tool, or null before any report |
+| `stageDone` | the stages done out of nine, as the bar above the prompt counts them: 0 before any report, and all nine once the watched pull request merged |
+| `pr` | `{ repo, number, state, checks }` of the watched pull request, where `state` is `OPEN`, `MERGED` or `CLOSED` and `checks` is `none`, `pending`, `passed` or `failed`; null before a watch has read it |
+| `state` | one of the six states below |
+| `reason` | one line that says why the state holds |
+| `stateSince` | when the state began: the time of the write at which it last changed, kept across a hot reload |
+| `writtenAt` | when the file was written |
+| `cleanup` | `{ failedCalls, lastError }` once the cleanup skill has started, whatever the state; left out before |
+
+Every time is milliseconds since the epoch. The types are `BuildStatus`, `BuildState` and `BuildStage` in `types/index.d.ts`, so the foreman can name builder as a dependency and type-check its reader against them.
+
+The state is the first of these that holds, in this order:
+
+1. `needs-you`: an `AskUserQuestion` call of the session's own is open; or a counsel tally answered that the person must be asked, and since then neither has an `AskUserQuestion` call that started after the tally ended come to an end nor has the person sent a prompt; or a permission prompt is open. A permission prompt counts as open from the classic `PermissionRequest` event until the same loop's call of the same tool returns, or that loop's turn ends, where the loop is the session's own or one subagent's. A new turn of the session's own also closes the session's prompts, and a subagent's prompt no longer counts once its agent has stopped running.
+2. `working`: the session's own turn runs, or an agent, a background task or a tool call of the session's own runs.
+3. `waiting-on-builder`: builder has a look at the pull request scheduled, or a usage-limit hold is on.
+4. `in-cleanup`: the `cleanup` skill, or a plugin's skill whose name ends in `:cleanup`, has started in this session. It lasts until the session ends, even when the cleanup refuses.
+5. `done`: the watched pull request merged.
+6. `idle`: none of the above.
+
+So `done` and `in-cleanup` show only once nothing runs, and the foreman sees `done` only when the merged session has stopped working.
+
+The cleanup record counts every failed tool call since the cleanup skill started, the session's own and its subagents', and keeps the last line of the newest error that is not blank, cleaned of control characters and cut to 200 characters. A line that looks like it holds a secret is replaced by `(withheld: it looks like a secret)`. The record never copies a tool's input, which can hold commands, paths or secrets, and a permission prompt's reason names the tool only.
+
+The permission prompts, the failed calls and the cleanup skill reach the mod through classic events and `skill.prompt`, which the engine does not raise for a plugin a person installs where an organization manages Claude Code. There the file still shows every other state, but never a permission prompt or the cleanup.
+
 ## What it keeps
 
 GitHub is the record. The package and review tools write `package.md`, `diff.patch` and `review.md` under the git folder of the pull request's checkout, in `builder/<sha8>/`, where they are never committed and go away when the worktree is removed. Each time the package tool or the review tool runs, it finds that checkout with `git worktree list`, as the worktree, the main checkout included, that has the pull request's head branch checked out. When no worktree has that branch, or git cannot list the worktrees, it uses the session's folder instead, and the package tool runs its git commands there too. The counsel tool still uses the folder the session started in. `$.store` keeps, per session and pull request, the snapshot last handed to the session, so a restart does not hand the same state over twice, and the time the session last looked at that pull request, refreshed once a day. It also keeps each decision the counsel made on a question that named the watched, open pull request, until a review posted on that pull request lists it, under a key of its own, `counsel-owed:<repo>#<number>:<session id>:<question id>`. Each decision has its own key because the store has no atomic update, so sessions sharing one list per pull request could erase each other's decisions. The review tool lists every key under its pull request, so a restarted session, or another session posting on that pull request, still lists them, and it deletes the keys it listed once gh confirms the review is posted. The turn the mod starts for a pull request that merged or closed, once the prompt is accepted, and the watch tool's answer on such a pull request also list its keys and delete the ones they listed, so a decision owed after the list was read is listed the next time. When a session starts, it prunes the records of pull requests that no session has looked at for two weeks, and each owed decision made more than ninety days ago. An owed decision is kept that much longer because a pull request that ended while no session watched it is learned of only when a session watches it again.
+
+In a session the foreman started, the status file under the configuration folder holds what the session is doing, and it is deleted when the session ends after a merge (see "The status file for the foreman" above).
 
 The counsel tool writes each brief to `<git dir>/builder/counsel/<session id>/<id>/brief.md`, beside the review packages and likewise never committed. The session id is in the path because every session in a checkout shares its git folder. The questions themselves are kept in the `counsel` state in memory for the pane, like the session's other state, so a restart loses them, together with the record of which members were asked again, and a vote in progress must be asked again. A decision already owed to a pull request is not lost, because the store keeps it until a review lists it. A restart begins the ids again at c1, so the tool never writes over a brief that is already there: it skips each id whose folder already holds a brief and takes the next free one, leaving the earlier briefs alone. Only if the next 100 folders all hold briefs does it answer that the counsel could not sit. The state keeps only the newest 20 questions.

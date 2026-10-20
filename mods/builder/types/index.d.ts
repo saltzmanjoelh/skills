@@ -217,6 +217,108 @@ export type LoadedCommit = { commit: string | null; differs: boolean; pending?: 
 // reload but not a restart.
 export type LoadBegun = 'atStart' | 'fromOlderBuild'
 
+// The status file builder writes for the foreman, a mod that runs several
+// /implement sessions from one parent session and reads one file per session.
+// Builder writes it only in a session whose first prompt holds a line
+// `foreman-ticket: <value>`, at `<config>/foreman/builds/<session id>.json`,
+// where `<config>` is CLAUDE_CONFIG_DIR when it is set and `$HOME/.claude`
+// otherwise. The foreman names builder as a dependency and type-checks its
+// reader against these types, so the field names are the ones the two mods
+// agreed and must not change without raising `version`. Every time is
+// milliseconds since the epoch. The README section "The status file for the
+// foreman" describes each field and when the file is written and deleted.
+
+// The stage last reported through the progress tool, one of the nine.
+export type BuildStage = StageId
+
+// What the session is doing, as the foreman shows it. When more than one
+// holds, the first of these holds: needs-you, working, waiting-on-builder,
+// in-cleanup, done, idle. hooks/status.ts lists the rules in that order, and a
+// check there fails the type check when the rules and this list differ.
+export type BuildState = 'working' | 'waiting-on-builder' | 'idle' | 'needs-you' | 'in-cleanup' | 'done'
+
+export type BuildStatus = {
+  // Raised whenever a field changes meaning.
+  version: 1
+  // The engine's session id, the same as the file's name.
+  sessionId: string
+  // The value of the first prompt's `foreman-ticket:` line.
+  ticket: string
+  // The desktop app's session id, from CLAUDE_CODE_HOST_SESSION_ID. It is left
+  // out when that variable is unset, as outside the desktop app.
+  desktopSessionId?: string
+  // The folder the session started in, so the foreman can find the session
+  // before it knows the desktop id.
+  cwd: string
+  // A leading issue key, such as ABC-123, of the title last reported through
+  // the progress tool, or null when the title has none or nothing was reported.
+  issueKey: string | null
+  // The rest of that title, or the empty string before any report.
+  issueTitle: string
+  // The stage last reported, or null before any report.
+  stage: BuildStage | null
+  // The stages done out of nine, as the progress bar counts them: 0 before
+  // any report, and all nine once the watched pull request merged.
+  stageDone: number
+  // The watched pull request, or null before a watch has read it. `checks`
+  // is the checks' overall state as the band shows it, and `none` when the
+  // pull request has no checks.
+  pr: { repo: string; number: number; state: 'OPEN' | 'MERGED' | 'CLOSED'; checks: 'pending' | 'passed' | 'failed' | 'none' } | null
+  state: BuildState
+  // One line that says why the state holds. It names a tool but never copies
+  // a tool's input, which can hold commands, paths or secrets.
+  reason: string
+  // When the state began: the time of the write at which it last changed.
+  stateSince: number
+  // When the file was written.
+  writtenAt: number
+  // Present once the cleanup skill has started, whatever the state: how many
+  // tool calls have failed since, and the last line of the newest failure's
+  // error, cleaned, or the empty string until a call fails.
+  cleanup?: { failedCalls: number; lastError: string }
+}
+
+// The permission prompts of one loop and one tool that are open: `loop` is
+// the empty string for the session's own loop and an agent's id for a
+// subagent's, and `count` is how many prompts are open, since each return of
+// the tool closes one.
+export type OpenPrompt = { loop: string; tool: string; count: number }
+
+// What the status file needs that no other value of the state holds, stamped
+// with the session it belongs to, so a memo of another session (after a
+// /clear whose end was cut off) reads as none. Read through statusMemoIn in
+// hooks/status.ts.
+export type StatusMemo = {
+  // The session id the memo belongs to.
+  sessionId: string
+  // The ticket, or null when the first prompt was looked at and holds none.
+  ticket: string | null
+  // Where the file goes, or null when no safe path could be made from the
+  // configuration folder and the session id, in which case nothing is written.
+  path: string | null
+  // The desktop app's session id, read with the ticket, when it was set.
+  desktopSessionId?: string
+  // The folder the session started in, read with the ticket.
+  cwd: string
+  // The state last written and when it began, or null before the first write.
+  state: BuildState | null
+  stateSince: number
+  // When a counsel tally last sent a question to the person, or null when
+  // none is waiting on them. An AskUserQuestion call that started after it,
+  // once it ends, or a prompt of the person's clears it.
+  askedAt: number | null
+  // The permission prompts that are open.
+  prompts: OpenPrompt[]
+  // The cleanup record, or null before the cleanup skill started.
+  cleanup: { failedCalls: number; lastError: string } | null
+  // The load stamp of the module's copy that owns the memo, which orders the
+  // copies by when they loaded. Only a copy whose stamp is not below it may
+  // take the memo up, and taking it up sets it to that copy's stamp, so a
+  // writer left running by the copy from before a hot reload sees it is not
+  // the newest and stops, and that copy cannot take the memo back.
+  generation: number
+}
+
 // The commits the running mod was loaded from: `session` at the session's
 // first start, for the files the engine reads only then, and `hooks` at the
 // hooks module's last load, for the rest of the hooks folder. `head` is the
@@ -286,6 +388,10 @@ declare module 'claude-code' {
       // How the first load of this build in the session began, or null before
       // it. Read through loadBegunAs in hooks/loaded.ts.
       loadBegun: LoadBegun | null
+      // What the status file for the foreman needs beyond the values above,
+      // or null before the first prompt was looked at for a ticket and after
+      // a /clear. Read through statusMemoIn in hooks/status.ts.
+      statusMemo: StatusMemo | null
     }
   }
 }
