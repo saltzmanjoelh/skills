@@ -44,8 +44,10 @@ survives the parent being closed.
 
 ### Where, and when
 
-4. **The path** is `~/.claude/foreman/builds/<engine session id>.json`, where
-   `~` is the `HOME` variable and the id is `$.session.id()`.
+4. **The path** is `<config>/foreman/builds/<engine session id>.json`, where
+   `<config>` is the `CLAUDE_CONFIG_DIR` variable when it is set and
+   `$HOME/.claude` otherwise, the folder foreman reads, and the id is
+   `$.session.id()`.
 5. **Every write replaces the whole file.** A reader that catches a file in
    the middle of a write sees text that does not parse, and only has to read
    again.
@@ -69,24 +71,29 @@ survives the parent being closed.
 ### The record
 
 10. **The record's type is declared in builder's contract,**
-    `mods/builder/types/index.d.ts`, as `BuildRecord`, with its state as
-    `BuildState`, so that foreman can name builder as a dependency and
-    type-check against it. Its fields:
+    `mods/builder/types/index.d.ts`, as `BuildStatus`, with its state as
+    `BuildState` and its stage as `BuildStage`, so that foreman can name
+    builder as a dependency and type-check against it. The field names are
+    the ones foreman's session proposed, so that the two mods match. Its
+    fields:
 
     | Field | What it holds |
     |---|---|
     | `version` | `1`, raised whenever a field changes meaning |
     | `sessionId` | the engine's session id, the same as the file name |
     | `ticket` | the value of the `foreman-ticket:` line |
-    | `desktopSessionId` | the desktop app's session id, from the `CLAUDE_CODE_HOST_SESSION_ID` variable, or null outside the desktop app |
-    | `issue` | `{ key, title }` from the title last reported through the progress tool: the key is a leading issue key such as `ABC-123`, or null when the title has none, and the title is the rest; null before any report |
-    | `stage` | `{ id, done, total }`: the stage last reported, the stages done as the progress bar counts them, and nine; null before any report |
-    | `pullRequest` | `{ repo, number, state, checks }` of the watched pull request, where `state` is `OPEN`, `MERGED` or `CLOSED` and `checks` is `none`, `pending`, `passed` or `failed`; null before a watch |
+    | `desktopSessionId` | the desktop app's session id, from the `CLAUDE_CODE_HOST_SESSION_ID` variable; left out outside the desktop app |
+    | `cwd` | the folder the session started in, so foreman can find the session before it knows the desktop id |
+    | `issueKey` | a leading issue key, such as `ABC-123`, of the title last reported through the progress tool, or null when there is none |
+    | `issueTitle` | the rest of that title, or the empty string before any report |
+    | `stage` | the stage last reported, or null before any report |
+    | `stageDone` | the stages done out of nine, as the progress bar counts them |
+    | `pr` | `{ repo, number, state, checks }` of the watched pull request, where `state` is `OPEN`, `MERGED` or `CLOSED` and `checks` is `none`, `pending`, `passed` or `failed`; null before a watch |
     | `state` | one of the six states below |
     | `reason` | one line that says why the state holds |
     | `stateSince` | when the state began |
     | `writtenAt` | when the file was written |
-    | `cleanup` | `{ since, failedCalls, lastError }` once the cleanup skill has started, whatever the state, or null |
+    | `cleanup` | `{ failedCalls, lastError }` once the cleanup skill has started, whatever the state, with `lastError` empty until a call fails; left out before |
 
     Every time is milliseconds since the epoch, as `$.clock.now()` gives it.
 
@@ -152,7 +159,7 @@ session shows it.
   unless the transcript is longer than the 4096 entries `$.session.messages()`
   returns, in which case the first entry seen is not the first prompt and no
   ticket is found.
-- **No `HOME`:** nothing is written.
+- **Neither `CLAUDE_CONFIG_DIR` nor `HOME`:** nothing is written.
 - **A cleanup that refuses** (a dirty tree, for example) still leaves the
   session `in-cleanup` until the session ends, as the counsel chose.
 - **The record never copies a tool's input,** which can hold commands, paths
