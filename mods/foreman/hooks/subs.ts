@@ -30,9 +30,10 @@ export type FileRead = { file: string; mtimeMs: number; text: string | null }
 // one. A file the read did not find leaves, and a file that never parsed is
 // not kept. A file whose text is the same as the kept entry's keeps that
 // entry and is not parsed again, since its text parsed when it was kept.
-// `parse` turns a text into its record, as it does for `rowsOf`; the hooks
-// pass the same remembering parse to both, so each new text is parsed once.
-// The result is in file name order.
+// `parse` turns a text into its record, as it does for `rowsOf`. The hooks
+// in register.tsx keep one map of parsed texts, `parsedTexts`, and each read
+// and each drawing makes its own remembering pass from it, so each new text
+// is parsed once. The result is in file name order.
 export function afterRead(kept: readonly ForemanFile[], found: readonly FileRead[], parse: (text: string) => BuildStatus | null = recordIn): ForemanFile[] {
   const before = new Map(kept.map(entry => [entry.file, entry]))
   const next: ForemanFile[] = []
@@ -81,6 +82,9 @@ export function rowsOf(files: readonly ForemanFile[], readAt: number, parse: (te
 // again. `remembered` holds only the texts this pass was handed, whether
 // parsed or found in `previous`, so a text no longer passed is forgotten. A
 // caller keeps `remembered` and hands it in as `previous` on its next pass.
+// The hooks in register.tsx differ in one way: a drawing passes every kept
+// text and so replaces the map with what it remembered, while a read skips
+// the unchanged texts and so adds what it remembered to the map instead.
 export function rememberingParse(
   previous: ReadonlyMap<string, BuildStatus | null>,
   parseText: (text: string) => BuildStatus | null = recordIn,
