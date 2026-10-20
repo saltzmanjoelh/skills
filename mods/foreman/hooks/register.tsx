@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, ResolveInput } from 'claude-code'
 
-import { decide, needsList, type Decision, type Limits, type SessionsLook } from './act'
+import { decide, desktopOf, needsList, PAUSED_SLOT_LOG, slotOutcome, type Decision, type Limits, type SessionsLook } from './act'
 import { isSvgSurface } from './art'
 import { commandOf } from './commands'
 import { failureLine, listSessions, NUDGE_TEXT, openSession, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
@@ -38,6 +38,9 @@ const REDRAW_MS = 1_000
 // the reads.
 export const CALL_TIMEOUT_MS = 30_000
 
+// The words for a call that did not answer in time.
+const NO_ANSWER = `the desktop app did not answer within ${CALL_TIMEOUT_MS / 1000} seconds`
+
 // The soonest the next read may come, when a nudge or a wake falls due.
 const SOONEST_READ_MS = 1_000
 
@@ -67,8 +70,11 @@ let ticker: { cancel: () => void } | undefined
 let reading: Promise<void> | undefined
 // The plugin's options, as register received them.
 let currentOptions: Record<string, unknown> = {}
-// The store write of the ledger under way, so writes go in order.
+// The store write of the ledger under way, so writes go in order, and the
+// ledger this copy of the module last stored, as JSON, so a read that changed
+// nothing writes nothing.
 let persisting: Promise<void> = Promise.resolve()
+let lastStored: string | undefined
 
 // The status folder: under CLAUDE_CONFIG_DIR when it is set, else under the
 // home folder's `.claude`.
@@ -120,7 +126,11 @@ async function writeTickets($: $, change: (t: ForemanTickets) => ForemanTickets)
     return written
   })
   const next = persisting.then(async () => {
-    await $.store.set(ticketsKey(await $.session.id()), ticketsIn(await read($, tickets)))
+    const value = ticketsIn(await read($, tickets))
+    const text = JSON.stringify(value)
+    if (text === lastStored) return
+    await $.store.set(ticketsKey(await $.session.id()), value)
+    lastStored = text
   })
   persisting = next.catch(() => undefined)
   await next.catch(async error => {
@@ -209,8 +219,8 @@ async function readAndSchedule($: $) {
       await update($, files, kept => afterRead(Array.isArray(kept) ? kept : [], found))
       await update($, readAt, () => now)
     }
-    const decision = await decideNow($, listing.exists, now)
-    const usual = nextReadDelay(await shownNow($))
+    const { decision, rows } = await decideNow($, listing.exists, listing.found !== null, now)
+    const usual = nextReadDelay(shownRows(rows, decision.tickets))
     const delay = decision.wakeAt === null ? usual : Math.min(usual, Math.max(decision.wakeAt - now, SOONEST_READ_MS))
     schedule($, delay)
     await update($, nextReadAt, () => now + delay)
@@ -243,14 +253,14 @@ function later($: $, work: () => Promise<unknown>) {
 // a rule needs it, and decides what the read leads to, inside the ledger's
 // update, so the decision and the ledger it was made on are written together
 // and no other writer can claim the same nudge or wake.
-async function decideNow($: $, folderExists: boolean, now: number): Promise<Decision> {
+async function decideNow($: $, folderExists: boolean, listed: boolean, now: number): Promise<{ decision: Decision; rows: SubRow[] }> {
   const rows = await rowsNow($)
   const before = joinOwners(ticketsIn(await read($, tickets)), rows).tickets
   let sessions: SessionsLook = { kind: 'unread' }
   if (needsList(before, rows, now)) {
     const listed = await within($, listSessions(desktopCall($)))
     if (listed === TIMED_OUT || 'reason' in listed) {
-      const why = listed === TIMED_OUT ? 'the desktop app did not answer within 30 seconds' : listed.reason
+      const why = listed === TIMED_OUT ? NO_ANSWER : listed.reason
       sessions = { kind: 'failed' }
       await addLog($, `Could not read the desktop app's list of sessions, so no slot was freed: ${why}.`)
     } else {
@@ -258,7 +268,7 @@ async function decideNow($: $, folderExists: boolean, now: number): Promise<Deci
     }
   }
   const settings = parentIn(await read($, parent))
-  const input = { rows, now, limits: limitsOf(currentOptions), sessions, folderExists, isPaused: settings.isPaused, slots: slotsOf(settings, currentOptions.slots) }
+  const input = { rows, now, limits: limitsOf(currentOptions), sessions, folderExists, listed, isPaused: settings.isPaused, slots: slotsOf(settings, currentOptions.slots) }
   let decision: Decision = { tickets: TICKETS_EMPTY, effects: [], reasons: [], logs: [], wakeAt: null }
   let joinLogs: string[] = []
   await writeTickets($, t => {
@@ -267,7 +277,7 @@ async function decideNow($: $, folderExists: boolean, now: number): Promise<Deci
     decision = decide({ ...input, tickets: joined.tickets })
     return decision.tickets
   })
-  return { ...decision, logs: [...joinLogs, ...decision.logs] }
+  return { decision: { ...decision, logs: [...joinLogs, ...decision.logs] }, rows }
 }
 
 // What `within` answers when the call did not answer in time.
@@ -290,7 +300,7 @@ function within<T>($: $, call: Promise<T>): Promise<T | typeof TIMED_OUT> {
 
 // The words for a message that did not go.
 function sendFailure(result: SendResult | typeof TIMED_OUT): string {
-  if (result === TIMED_OUT) return 'the desktop app did not answer within 30 seconds'
+  if (result === TIMED_OUT) return NO_ANSWER
   return result === 'not-connected' ? REASONS.notConnected : 'the desktop app refused the message'
 }
 
@@ -304,7 +314,7 @@ async function nudge($: $, to: string, name: string, why: string) {
 async function notify($: $, text: string) {
   try {
     const sent = await within($, $.ui.notify(text, { title: 'foreman' }))
-    if (sent === TIMED_OUT) await addLog($, `Could not raise a notification, because it did not go within 30 seconds: ${text}`)
+    if (sent === TIMED_OUT) await addLog($, `Could not raise a notification, because it did not go within ${CALL_TIMEOUT_MS / 1000} seconds: ${text}`)
     else if (sent.isSent) await addLog($, `Raised a notification: ${text}`)
     else await addLog($, `Could not raise a notification (${sent.reason}): ${text}`)
   } catch {
@@ -420,7 +430,7 @@ async function nudgeRow($: $, file: string) {
   const row = (await shownNow($)).find(r => r.file === file && r.isReleased !== true)
   if (row === undefined) return
   const p = ticketsIn(await read($, tickets)).pairings.find(q => ownsTicket(q, row))
-  const to = p?.localId ?? row.record.desktopSessionId ?? null
+  const to = p === undefined ? null : desktopOf(p, row)
   if (to === null) return addLog($, `Could not nudge ${nameOf(row)}: foreman knows no desktop session for it.`)
   await nudge($, to, nameOf(row), ', because Nudge was pressed')
 }
@@ -429,13 +439,12 @@ async function nudgeRow($: $, file: string) {
 // freed while paused. Nothing happens when no slot is free.
 async function slotFreed($: $) {
   const settings = parentIn(await read($, parent))
-  const free = slotsOf(settings, currentOptions.slots) - busyCount(await shownNow($))
-  if (free <= 0) return
-  if (settings.isPaused) {
+  const outcome = slotOutcome(slotsOf(settings, currentOptions.slots) - busyCount(await shownNow($)), settings.isPaused)
+  if (outcome.kind === 'remember') {
     await writeTickets($, t => ({ ...t, freedWhilePaused: true }))
-    return addLog($, 'A slot is free, and foreman will say so when it is resumed.')
+    return addLog($, PAUSED_SLOT_LOG)
   }
-  await wake($, wakeLine([{ kind: 'slot-free', free }])!)
+  if (outcome.kind === 'wake') await wake($, wakeLine([outcome.reason])!)
 }
 
 // The Release button: the row's ticket is released, which frees its slot
@@ -589,7 +598,7 @@ export const register: Register = (on, options) => {
     return startSession($, e as unknown as Record<string, unknown>, next as never) as never
   }).catch(($, e, next) => next(e))
 
-  // The pane. Its presses open a sub session or write the log.
+  // The pane. Its presses open, nudge or release a sub session.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const presses = {
       open: (file: string) => {

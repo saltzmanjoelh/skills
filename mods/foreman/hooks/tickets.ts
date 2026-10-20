@@ -5,6 +5,7 @@
 
 import type { ForemanActs, ForemanPairing, ForemanStanding, ForemanTickets } from '../types'
 import { keyOf, nameOf, type SubRow } from './subs'
+import { byTicket } from './wake'
 
 // The line builder looks for in a sub session's first prompt.
 export const TICKET_LINE = 'foreman-ticket:'
@@ -132,7 +133,7 @@ export function joinOwners(t: ForemanTickets, rows: readonly SubRow[]): { ticket
     if (own !== undefined && own.record.issueKey !== next.issueKey) next = { ...next, issueKey: own.record.issueKey === null ? null : keyOf(own) }
     const forks = byFile.filter(r => r.record.ticket === p.ticket && r.record.sessionId !== next.owner && !next.forks.includes(r.record.sessionId))
     if (forks.length > 0) {
-      const name = own === undefined ? `the sub session with ticket ${p.ticket}` : nameOf(own)
+      const name = own === undefined ? byTicket(p.ticket) : nameOf(own)
       logs.push(...forks.map(() => `Left out a second status file with the ticket of ${name}, as a fork of its session writes.`))
       next = { ...next, forks: [...next.forks, ...forks.map(r => r.record.sessionId)].slice(-MAX_FORKS) }
     }

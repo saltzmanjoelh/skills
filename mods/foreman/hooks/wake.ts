@@ -22,11 +22,15 @@ export type Reason =
 // be words a sub session wrote, so it is never put in the line.
 const KEY_SHAPE = /^[A-Z][A-Z0-9]*-\d+$/
 
+// How a sub session is named when foreman has no key it can use: by its
+// ticket, which foreman made. The log and the wake line both use it.
+export const byTicket = (ticket: string) => `the sub session with ticket ${ticket}`
+
 // How the line names a sub session: by its issue key, cleaned, when the key
-// has the shape of one, and otherwise by its ticket, which foreman made.
+// has the shape of one, and otherwise by its ticket.
 export function whoOf(issueKey: string | null, ticket: string): string {
   const key = issueKey === null ? '' : printable(issueKey, 40)
-  return KEY_SHAPE.test(key) ? key : `the sub session with ticket ${ticket}`
+  return KEY_SHAPE.test(key) ? key : byTicket(ticket)
 }
 
 // Record text as the line quotes it: cleaned of control characters and

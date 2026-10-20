@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { recordIn } from '../hooks/record'
 import type { SubRow } from '../hooks/subs'
-import { briefFor, FORK_REFUSAL, joinOwners, localIdIn, newPairing, shownRows, ticketsIn, TICKETS_EMPTY } from '../hooks/tickets'
+import { briefFor, capped, FORK_REFUSAL, joinOwners, localIdIn, MAX_PAIRINGS, newPairing, shownRows, ticketsIn, TICKETS_EMPTY } from '../hooks/tickets'
 import type { ForemanTickets } from '../types'
 
 const T0 = Date.UTC(2026, 9, 20, 12, 0, 0)
@@ -72,4 +72,17 @@ test('only the rows that own a ticket of this parent show, a released one marked
   joined.pairings[2]!.standing = 'freed'
   const shown = shownRows(rows, joined)
   expect(shown.map(r => [r.file, r.isReleased === true])).toEqual([['a.json', false], ['d.json', true]])
+})
+
+test('past the most pairings kept, the oldest freed and released ones go first and an active one never goes', () => {
+  const active = Array.from({ length: MAX_PAIRINGS }, (_, i) => newPairing(`ft-active-${i}`, null, T0 - i))
+  const done = [
+    { ...newPairing('ft-freed-old', null, T0 - 1000), standing: 'freed' as const },
+    { ...newPairing('ft-released-new', null, T0 + 1000), standing: 'released' as const },
+  ]
+  const kept = capped(withPairings(...done, ...active, newPairing('ft-active-last', null, T0 - 2000)))
+  expect(kept.pairings).toHaveLength(MAX_PAIRINGS + 1)
+  expect(kept.pairings.filter(p => p.standing === 'active')).toHaveLength(MAX_PAIRINGS + 1)
+  const under = withPairings(...done)
+  expect(capped(under)).toBe(under)
 })

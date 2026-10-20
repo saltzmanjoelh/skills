@@ -27,7 +27,7 @@ const paired = (localId: string | null = 'local_a'): ForemanTickets => ({ ...TIC
 // One read: the rows joined to the ledger, then the decision.
 function read(tickets: ForemanTickets, rows: SubRow[], now: number, over: Partial<DecideInput> = {}): Decision {
   const joined = joinOwners(tickets, rows).tickets
-  return decide({ tickets: joined, rows, now, limits: LIMITS, sessions: { kind: 'unread' }, folderExists: true, isPaused: false, slots: 2, ...over })
+  return decide({ tickets: joined, rows, now, limits: LIMITS, sessions: { kind: 'unread' }, folderExists: true, listed: true, isPaused: false, slots: 2, ...over })
 }
 
 // Reads every minute from T0 to `until`, with `rowAt` giving the rows at each
@@ -135,6 +135,9 @@ test('a record whose file leaves frees its slot, but a missing folder frees noth
   expect(missing.reasons).toEqual([])
   expect(missing.logs).toEqual(['The status folder is missing, so foreman frees no slot until it is back.'])
   expect(read(missing.tickets, [], T0 + 2 * MINUTE, { folderExists: false }).logs).toEqual([])
+  const unlisted = read(first.tickets, [], T0 + MINUTE, { listed: false })
+  expect(unlisted.tickets.pairings).toHaveLength(1)
+  expect(unlisted.reasons).toEqual([])
 })
 
 test('a slot that frees while paused wakes nothing and is remembered, and one that frees while every slot is still busy wakes nothing', () => {

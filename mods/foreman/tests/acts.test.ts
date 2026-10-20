@@ -376,3 +376,51 @@ test('a read that fails partway still schedules the next read after two minutes'
   await w.clock.settle()
   expect(w.folder.lists).toBe(lists + 2)
 })
+
+test('the idleMinutes option moves the first nudge', { options: { idleMinutes: 2 } }, async ($, on) => {
+  const w = world(on)
+  const idle = record('ABC-1', 'idle', { desktopSessionId: 'local_a' })
+  w.folder.put('a.json', idle)
+  await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await minutesPass(w, 1, { 'a.json': idle })
+  expect(w.desktop.sent).toEqual([])
+  await minutesPass(w, 1, { 'a.json': idle })
+  expect(w.desktop.sent).toEqual([['local_a', NUDGE]])
+})
+
+test('an idleMinutes or cleanupMinutes that is not a positive number falls back to its default', { options: { idleMinutes: 0, cleanupMinutes: -3 } }, async ($, on) => {
+  const w = world(on)
+  const idle = record('ABC-1', 'idle', { desktopSessionId: 'local_a' })
+  const cleaning = record('ABC-2', 'in-cleanup', { desktopSessionId: 'local_b', cleanup: { failedCalls: 0, lastError: '' } })
+  w.folder.put('a.json', idle)
+  w.folder.put('b.json', cleaning)
+  await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await minutesPass(w, 4, { 'a.json': idle, 'b.json': cleaning })
+  expect(w.desktop.sent).toEqual([])
+  await minutesPass(w, 1, { 'a.json': idle, 'b.json': cleaning })
+  expect(w.desktop.sent).toHaveLength(1)
+  expect(w.engine.prompts).toEqual([])
+  await minutesPass(w, 10, { 'a.json': idle, 'b.json': cleaning })
+  expect(w.engine.prompts.some(p => p.includes('ABC-2 has been in cleanup for 15 minutes'))).toBe(true)
+})
+
+test('after a restart, a first listing that fails frees no slot and forgets no ticket', async ($, on) => {
+  const p = { ...newPairing('ft-ABC-1', 'local_a', T0), owner: 's-ABC-1', ownerFile: 'a.json', issueKey: 'ABC-1' }
+  const w = world(on, {
+    store: {
+      'parent:session-1': { isOn: true, slots: null, isPaused: false },
+      [ticketsKey('session-1')]: { pairings: [p], freedWhilePaused: false, folderMissing: false },
+    },
+  })
+  w.folder.put('a.json', record('ABC-1', 'working', { desktopSessionId: 'local_a' }), T0, false)
+  w.folder.listFails = 'EIO: input/output error'
+  await mountBoth($, on)
+  await start($)
+  await w.clock.settle()
+  expect(w.engine.prompts).toEqual([])
+  expect(ledger(w).pairings.map(q => q.standing)).toEqual(['active'])
+})

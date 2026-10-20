@@ -9,7 +9,7 @@ import type { ForemanActs, ForemanPairing, ForemanTickets } from '../types'
 import { busyCount, nameOf, type SubRow } from './subs'
 import { capped, ownsTicket, shownRows } from './tickets'
 import { printable } from './text'
-import { whoOf, type Reason } from './wake'
+import { byTicket, whoOf, type Reason } from './wake'
 
 // How long an idle stretch and a cleanup may last before foreman acts, in
 // milliseconds, from the `idleMinutes` and `cleanupMinutes` options.
@@ -40,9 +40,12 @@ export type DecideInput = {
   now: number
   limits: Limits
   sessions: SessionsLook
-  // Whether the listing found the status folder. Without it nothing is freed
-  // and nothing is forgotten.
+  // Whether the listing found the status folder, and whether this read's
+  // listing succeeded. A record leaves only when a listing of a folder that
+  // exists succeeded and no longer holds its file, so without both nothing
+  // is freed or forgotten for a file that seems to have left.
   folderExists: boolean
+  listed: boolean
   isPaused: boolean
   slots: number
 }
@@ -73,8 +76,10 @@ function episodeOf(prev: ForemanActs['episode'], row: SubRow, now: number): { st
   return prev !== null && prev.state === state ? prev : { state, since: now }
 }
 
-// The desktop session to nudge, or to look up in the list.
-const desktopOf = (p: ForemanPairing, row: SubRow) => p.localId ?? row.record.desktopSessionId ?? null
+// The desktop session to nudge, or to look up in the list: the one
+// start_session named, else the one the record names. The Nudge button uses
+// it too.
+export const desktopOf = (p: ForemanPairing, row: SubRow) => p.localId ?? row.record.desktopSessionId ?? null
 
 // Whether the list shows the session gone: archived, not running, or not
 // listed.
@@ -192,6 +197,19 @@ function goneRule(s: Step) {
   setActs(s, { goneWokeFor: s.row.mtimeMs })
 }
 
+// The line the log gets when a slot frees while the parent is paused.
+export const PAUSED_SLOT_LOG = 'A slot is free, and foreman will say so when it is resumed.'
+
+// What a freed slot leads to, given how many slots are free now: nothing
+// when none is, the pause remembered while paused, and otherwise a wake with
+// the number free. A read, Release and /foreman resume all decide by it.
+export type SlotOutcome = { kind: 'none' } | { kind: 'remember' } | { kind: 'wake'; reason: Reason }
+
+export function slotOutcome(free: number, isPaused: boolean): SlotOutcome {
+  if (free <= 0) return { kind: 'none' }
+  return isPaused ? { kind: 'remember' } : { kind: 'wake', reason: { kind: 'slot-free', free } }
+}
+
 // Whether this read needs the desktop app's list: some active owned record is
 // done, or its file is older than GONE_MS.
 export function needsList(t: ForemanTickets, rows: readonly SubRow[], now: number): boolean {
@@ -204,24 +222,24 @@ export function needsList(t: ForemanTickets, rows: readonly SubRow[], now: numbe
 // the number of slots free, unless none is free or the parent is paused, in
 // which case the pause is remembered.
 export function decide(input: DecideInput): Decision {
-  const { rows, now, limits, sessions, folderExists } = input
+  const { rows, now, limits, sessions, folderExists, listed } = input
   const effects: Effect[] = []
   const reasons: Reason[] = []
   const logs: string[] = []
   const due: number[] = []
   let freed = 0
-  const files = new Set(rows.map(r => r.file))
+  const byFile = new Map(rows.map(r => [r.file, r]))
   const pairings = input.tickets.pairings.flatMap(p => {
     if (p.owner === null || p.ownerFile === null) return [p]
-    if (!files.has(p.ownerFile)) {
-      if (!folderExists) return [p]
+    const row = byFile.get(p.ownerFile)
+    if (row === undefined) {
+      if (!folderExists || !listed) return [p]
       if (p.standing === 'active') {
         freed += 1
-        logs.push(`${p.issueKey ?? `The sub session with ticket ${p.ticket}`} left the status folder, so its slot is free.`)
+        logs.push(`The slot of ${p.issueKey ?? byTicket(p.ticket)} is free, because its file left the status folder.`)
       }
       return []
     }
-    const row = rows.find(r => r.file === p.ownerFile)!
     if (!ownsTicket(p, row) || p.standing !== 'active') return [p]
     const episode = episodeOf(p.acts.episode, row, now)
     const s: Step = { p: { ...p, acts: { ...p.acts, episode } }, row, now, limits, sessions, effects, reasons, logs, due, freed: 0 }
@@ -234,12 +252,12 @@ export function decide(input: DecideInput): Decision {
   if (!folderExists && !tickets.folderMissing) logs.push('The status folder is missing, so foreman frees no slot until it is back.')
   tickets = { ...tickets, folderMissing: !folderExists }
   if (freed > 0) {
-    const free = input.slots - busyCount(shownRows(rows, tickets))
-    if (free > 0 && input.isPaused) {
+    const outcome = slotOutcome(input.slots - busyCount(shownRows(rows, tickets)), input.isPaused)
+    if (outcome.kind === 'remember') {
       tickets = { ...tickets, freedWhilePaused: true }
-      logs.push('A slot is free, and foreman will say so when it is resumed.')
-    } else if (free > 0) {
-      reasons.push({ kind: 'slot-free', free })
+      logs.push(PAUSED_SLOT_LOG)
+    } else if (outcome.kind === 'wake') {
+      reasons.push(outcome.reason)
     }
   }
   return { tickets, effects, reasons, logs, wakeAt: due.length === 0 ? null : Math.min(...due) }
