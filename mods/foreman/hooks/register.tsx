@@ -73,6 +73,10 @@ let reading: Promise<void> | undefined
 // The plugin's options, as register received them. Everything reads them
 // from here.
 let currentOptions: Record<string, unknown> = {}
+// The session id this copy of the module last took up, with its taking-up,
+// so callers that find the same new id share one. A hot reload drops it, and
+// sessionOf in $.state then says which session $.state holds.
+let adopting: { id: string; done: Promise<void> } | undefined
 // The store write of the ledger under way, so writes go in order, and the
 // ledger this copy of the module last stored, as JSON, so a read that changed
 // nothing writes nothing.
@@ -129,25 +133,23 @@ async function writeTickets($: $, change: (t: ForemanTickets) => ForemanTickets)
   let unchanged = false
   const sessionId = await $.session.id()
   await update($, tickets, raw => {
-    // A ledger another session left in $.state is left alone: this session's
-    // start loads its own from the store and relabels it, so writing here
-    // could only put an empty ledger over the stored one.
     const held = ticketsIn(raw)
-    if (held.sessionId !== null && held.sessionId !== sessionId) {
-      unchanged = true
-      written = held
-      return held
-    }
     const changed = change(held)
     unchanged = changed === held
     written = unchanged || changed.sessionId === sessionId ? changed : { ...changed, sessionId }
     return written
   })
-  if (unchanged) return written
+  if (!unchanged) await persistTickets($)
+  return written
+}
+
+// Writes the ledger $.state holds to the store, after any write already
+// under way, and logs a write that fails. The ledger goes under the key of
+// the session it records, and only while that is still this session, so a
+// write queued before the process went on as another session never lands
+// under the new session's key.
+async function persistTickets($: $) {
   const next = persisting.then(async () => {
-    // The ledger goes under the key of the session it records, and only while
-    // that is still this session, so a write queued before the process went
-    // on as another session never lands under the new session's key.
     const value = ticketsIn(await read($, tickets))
     const text = JSON.stringify(value)
     if (text === lastStored || value.sessionId === null || value.sessionId !== (await $.session.id())) return
@@ -158,7 +160,6 @@ async function writeTickets($: $, change: (t: ForemanTickets) => ForemanTickets)
   await next.catch(async error => {
     await addLog($, `Could not save the tickets: ${reasonOf(error)}.`)
   })
-  return written
 }
 
 // An error as the log gives its reason: its message, cleaned and cut, or
@@ -176,33 +177,68 @@ function limitsOf(options: Record<string, unknown>): Limits {
 
 // Takes up the current session's settings and ledger when $.state holds
 // another session's, as at the first start, after a /clear and after a
-// resume, which go on under a new session id with no new start. The stored
-// ones are taken when there are any. Otherwise a /clear carries the last
-// session's role and tickets over to the new id, since it is the same parent
-// going on, and anything else starts with the role off and no tickets. It
-// does nothing while $.state already holds this session's, so a start that
-// comes again after a hot reload keeps the newer ledger $.state holds.
+// resume, which go on under a new session id with no new start. It does
+// nothing while $.state already holds this session's, so a start that comes
+// again after a hot reload keeps the newer ledger $.state holds. Callers
+// that find the same new id at once share one taking-up, so none of them
+// puts an older ledger over what another took up.
 async function adoptSession($: $) {
   const id = await $.session.id()
+  if (adopting?.id === id) return adopting.done
   if ((await read($, sessionOf)) === id) return
+  // The check and the claim follow each other with no await between, so
+  // only the first caller for an id starts the taking-up. The claim stays
+  // after it finished, because a caller's read of sessionOf can be older
+  // than the taking-up that set it.
+  if (adopting?.id === id) return adopting.done
+  adopting = { id, done: takeUpSession($, id) }
+  return adopting.done
+}
+
+// Where a session's settings or ledger come from when it is taken up: what
+// it stored, the last session's carried over after a /clear, since it is the
+// same parent going on, or nothing, with the role off and no tickets.
+type Source = 'stored' | 'carried' | 'fresh'
+
+async function takeUpSession($: $, id: string) {
   const carry = (await read($, carryOver)) === true
   const rawParent = await $.store.get(storeKey(id))
   const rawTickets = await $.store.get(ticketsKey(id))
-  const hasParent = rawParent !== undefined && rawParent !== null
-  const hasTickets = rawTickets !== undefined && rawTickets !== null
-  const settings = hasParent ? parentIn(rawParent) : carry ? parentIn(await read($, parent)) : PARENT_OFF
+  const sourceOf = (raw: unknown): Source => {
+    if (raw !== undefined && raw !== null) return 'stored'
+    return carry ? 'carried' : 'fresh'
+  }
+  const parentFrom = sourceOf(rawParent)
+  const ticketsFrom = sourceOf(rawTickets)
+
+  let settings = PARENT_OFF
+  if (parentFrom === 'stored') settings = parentIn(rawParent)
+  if (parentFrom === 'carried') settings = parentIn(await read($, parent))
   await update($, parent, () => settings)
-  let ledger = TICKETS_EMPTY
+
+  let previous: string | null = null
   await update($, tickets, heldRaw => {
-    ledger = hasTickets ? { ...ticketsIn(rawTickets), sessionId: id } : carry ? { ...ticketsIn(heldRaw), sessionId: id } : { ...TICKETS_EMPTY, sessionId: id }
-    return ledger
+    const held = ticketsIn(heldRaw)
+    previous = held.sessionId
+    if (ticketsFrom === 'stored') return { ...ticketsIn(rawTickets), sessionId: id }
+    if (ticketsFrom === 'carried') return { ...held, sessionId: id }
+    return { ...TICKETS_EMPTY, sessionId: id }
   })
   await update($, sessionOf, () => id)
   await update($, carryOver, () => false)
-  if (carry && !hasParent && settings.isOn) await $.store.set(storeKey(id), settings).catch(() => undefined)
-  if (carry && !hasTickets && ledger.pairings.length > 0) {
-    await $.store.set(ticketsKey(id), ledger).catch(() => undefined)
-    lastStored = JSON.stringify(ledger)
+
+  if (parentFrom === 'carried' && settings.isOn) {
+    await $.store.set(storeKey(id), settings).catch(error => addLog($, `Could not save the settings: ${reasonOf(error)}.`))
+  }
+  if (ticketsFrom !== 'carried') return
+  await persistTickets($)
+  // The tickets now belong to the conversation that goes on, so the one
+  // that was cleared is left with none, and resuming it later cannot act on
+  // them a second time.
+  const handedOver: string | null = previous
+  if (handedOver !== null && handedOver !== id) {
+    await $.store.set(ticketsKey(handedOver), { ...TICKETS_EMPTY, sessionId: handedOver })
+      .catch(error => addLog($, `Could not save the tickets: ${reasonOf(error)}.`))
   }
 }
 

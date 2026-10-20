@@ -562,7 +562,7 @@ test('a list of sessions that never answers is given up on after 30 seconds and 
   expect(ledger(w).pairings[0]!.standing).toBe('active')
 })
 
-test('a change made after the process went on as another session, before that session\'s start, touches neither ledger', async ($, on) => {
+test('a call after the process went on as another session that stored nothing, with no /clear, gives no ticket and leaves the last session\'s ledger alone', async ($, on) => {
   const w = world(on)
   await start($)
   await foreman($)
@@ -629,4 +629,66 @@ test('after a resume to another conversation that stored nothing, the role is of
   expect(w.engine.started.at(-1)?.prompt).toBe('Run /implement ABC-8.')
   expect(w.stored.has(ticketsKey('session-3'))).toBe(false)
   expect(ticketsIn(w.stored.get(ticketsKey('session-1'))).pairings).toHaveLength(1)
+})
+
+// A role on and one pairing stored for a session id, as a parent leaves them.
+function storedParent(w: World, id: string, ticket: string) {
+  w.stored.set(`parent:${id}`, { isOn: true, slots: null, isPaused: false })
+  w.stored.set(ticketsKey(id), { sessionId: id, pairings: [newPairing(ticket, null, T0)], freedWhilePaused: false, folderMissing: false })
+}
+
+test('after a resume to a conversation that stored its own role and tickets, it takes those up', async ($, on) => {
+  const w = world(on)
+  storedParent(w, 'session-3', 'ft-theirs')
+  await start($)
+  await foreman($)
+  await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh' })
+  await $.session.end({ reason: 'resume', sessionId: 'session-1', resume: { id: 'session-3' } } as never)
+  w.engine.sessionId = 'session-3'
+  await startSession($, { prompt: 'Run /implement ABC-8.', context: 'fresh' })
+  expect(ticketsIn(w.stored.get(ticketsKey('session-3'))).pairings.map(p => p.ticket)[0]).toBe('ft-theirs')
+  expect(ticketsIn(w.stored.get(ticketsKey('session-3'))).pairings).toHaveLength(2)
+  expect(ticketsIn(w.stored.get(ticketsKey('session-1'))).pairings).toHaveLength(1)
+})
+
+test('after a /clear into an id that stored its own, the stored ones win over the carried ones', async ($, on) => {
+  const w = world(on)
+  storedParent(w, 'session-2', 'ft-theirs')
+  await start($)
+  await foreman($)
+  await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh' })
+  await $.session.end({ reason: 'clear', sessionId: 'session-1', resume: { id: 'session-1' } } as never)
+  w.engine.sessionId = 'session-2'
+  await startSession($, { prompt: 'Run /implement ABC-8.', context: 'fresh' })
+  const second = ticketsIn(w.stored.get(ticketsKey('session-2'))).pairings.map(p => p.ticket)
+  expect(second).toHaveLength(2)
+  expect(second[0]).toBe('ft-theirs')
+  expect(ticketsIn(w.stored.get(ticketsKey('session-1'))).pairings).toHaveLength(1)
+})
+
+test('after a /clear carries the tickets over, the cleared conversation keeps none, so resuming it cannot act on them again', async ($, on) => {
+  const w = world(on)
+  await start($)
+  await foreman($)
+  await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh' })
+  await $.session.end({ reason: 'clear', sessionId: 'session-1', resume: { id: 'session-1' } } as never)
+  w.engine.sessionId = 'session-2'
+  await $.prompt.submit({ text: 'next', wait: false, origin: { kind: 'person' } } as never)
+  await w.clock.settle()
+  expect(ticketsIn(w.stored.get(ticketsKey('session-2'))).pairings).toHaveLength(1)
+  expect(ticketsIn(w.stored.get(ticketsKey('session-1'))).pairings).toEqual([])
+})
+
+test('two calls that find the new session id at once take it up once, and neither loses the other\'s pairing', async ($, on) => {
+  const w = world(on)
+  await start($)
+  await foreman($)
+  await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh' })
+  await $.session.end({ reason: 'clear', sessionId: 'session-1', resume: { id: 'session-1' } } as never)
+  w.engine.sessionId = 'session-2'
+  await Promise.all([
+    startSession($, { prompt: 'Run /implement ABC-8.', context: 'fresh' }),
+    startSession($, { prompt: 'Run /implement ABC-9.', context: 'fresh' }),
+  ])
+  expect(ticketsIn(w.stored.get(ticketsKey('session-2'))).pairings).toHaveLength(3)
 })
