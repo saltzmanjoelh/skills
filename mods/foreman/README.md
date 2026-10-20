@@ -37,6 +37,8 @@ A call with `context` set to `fork` is refused with the reason `foreman: start s
 
 Only status files whose ticket this parent issued show in its band and its pane and count toward its slots. The first file foreman joins to a ticket owns it: the one whose desktop session id is the id `start_session` answered, when foreman has that id. A second file with the same ticket, as a fork of the sub session writes, is left out of everything, and the log says so once.
 
+A ticket that no status file has carried for a day, as one given to a proposal card that never started, is forgotten.
+
 A parent that ran the read-only version of foreman has no tickets, so sub sessions it started before the upgrade do not show.
 
 ## The status folder

@@ -209,7 +209,8 @@ first saw it in that state.
   model wrote with a ticket of its own shows no row. The skill of the next
   step tells the model never to write the line itself.
 - A pairing with a null `local_…` id that never gains a record holds no slot,
-  since slots count records.
+  since slots count records. A pairing that no status file has carried for a
+  day is forgotten, so the ledger cannot grow without bound.
 - A hot reload keeps the pairings, the nudge counts and the wake record in
   `$.state`; a restart reads them from the store.
 - The idle clock counts from `stateSince`, so after a restart of the parent an
