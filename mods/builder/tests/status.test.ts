@@ -102,6 +102,11 @@ test('the configuration folder is CLAUDE_CONFIG_DIR when set, else .claude under
   expect(configDirOf(undefined, 'home')).toBeNull()
   expect(configDirOf(undefined, undefined)).toBeNull()
   expect(configDirOf('/', '/home/me')).toBeNull()
+  // A Windows drive path counts as absolute, with its trailing backslashes
+  // dropped, and a drive with no separator after it is relative.
+  expect(configDirOf('C:\\Users\\me\\.claude\\', undefined)).toBe('C:\\Users\\me\\.claude')
+  expect(configDirOf(undefined, 'C:\\Users\\me')).toBe('C:\\Users\\me/.claude')
+  expect(configDirOf('C:config', '/home/me')).toBeNull()
 })
 
 test('the path is the session id under the builds folder, and refused for an id that could leave it', () => {

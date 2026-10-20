@@ -2917,7 +2917,7 @@ async function deleteAfterMerge($: $, sessionId: string, budget: { remainingMs: 
   if (flight !== null) await withinTimeout($, flight, wait).catch(() => undefined)
   const memo = statusMemoIn(await read($, statusMemo), sessionId)
   const isMerged = watchedSnapshotOf(await read($, run), snapshotIn(await read($, pr)))?.state === 'MERGED'
-  if (memo?.path == null || !isMerged) return
+  if (memo === null || memo.path === null || !isMerged) return
   const path = memo.path
   const remove = () => $.process.run(['rm', '-f', path], { timeoutMs: END_WAIT_CAP_MS })
   const unsettled = [...statusWrites]
