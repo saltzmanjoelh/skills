@@ -43,21 +43,32 @@ export function afterRead(kept: readonly ForemanFile[], found: readonly FileRead
   return next.sort((a, b) => byKeyThenFile(null, a.file, null, b.file))
 }
 
+// Compares issue keys with their numbers as numbers, so ABC-9 comes before
+// ABC-10. The locale is fixed, so the order does not depend on the machine.
+const KEYS = new Intl.Collator('en', { numeric: true })
+
 // The order of the rows, which `afterRead` also uses for its files by giving
 // every file no issue key. Rows that have no issue key yet go after every row
-// that has one. Two rows that both have a key go in key order. Rows whose
-// keys are equal, and rows that both have no key, go in file name order.
+// that has one. Two rows that both have a key go in key order, numbers
+// compared as numbers. Rows whose keys are equal, and rows that both have no
+// key, go in file name order.
 export function byKeyThenFile(aKey: string | null, aFile: string, bKey: string | null, bFile: string): number {
   if (aKey === null && bKey !== null) return 1
   if (aKey !== null && bKey === null) return -1
-  if (aKey !== null && bKey !== null && aKey !== bKey) return aKey < bKey ? -1 : 1
+  if (aKey !== null && bKey !== null && aKey !== bKey) {
+    const byKey = KEYS.compare(aKey, bKey)
+    if (byKey !== 0) return byKey
+    return aKey < bKey ? -1 : 1
+  }
   if (aFile === bFile) return 0
   return aFile < bFile ? -1 : 1
 }
 
 // One sub session as the band and the pane show it. It is keyed by the name
-// of its file, whatever session id the record holds.
-export type SubRow = { file: string; record: SubRecord; mtimeMs: number; isStale: boolean }
+// of its file, whatever session id the record holds. `isReleased` marks a
+// row whose ticket the person released, which the pane draws dimmed and
+// foreman takes no action on.
+export type SubRow = { file: string; record: SubRecord; mtimeMs: number; isStale: boolean; isReleased?: boolean }
 
 // The rows for the kept files, judged stale against the read made at
 // `readAt`, in issue-key order and then file name order, with the rows that
@@ -77,9 +88,9 @@ export function nextReadDelay(rows: readonly SubRow[]): number {
   return rows.some(row => row.record.state === 'working' && !row.isStale) ? READ_SOON_MS : READ_LATER_MS
 }
 
-// How many slots are busy: every listed sub session whose state is not done,
-// stale ones included.
-export const busyCount = (rows: readonly SubRow[]) => rows.filter(row => row.record.state !== 'done').length
+// How many slots are busy: every listed sub session that is not released and
+// whose state is not done, stale ones included.
+export const busyCount = (rows: readonly SubRow[]) => rows.filter(row => row.isReleased !== true && row.record.state !== 'done').length
 
 // How a state is shown: red, amber, or the plain text color.
 export type Tone = 'red' | 'amber' | 'plain'

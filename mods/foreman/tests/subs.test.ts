@@ -38,10 +38,10 @@ test('a read keeps each good file, keeps the last good read of a file that does 
   ])
 })
 
-test('rows are in issue-key order, keyed by the file name, each judged stale against the read', () => {
-  const files = [kept('z.json', record('ABC-9', 'working'), 0), kept('y.json', record('ABC-10', 'idle', { sessionId: 'other' }), 5 * MIN)]
+test('rows are in issue-key order with numbers compared as numbers, keyed by the file name, each judged stale against the read', () => {
+  const files = [kept('y.json', record('ABC-10', 'idle', { sessionId: 'other' }), 5 * MIN), kept('z.json', record('ABC-9', 'working'), 0)]
   const rows = rowsOf(files, 6 * MIN)
-  expect(rows.map(row => [row.file, row.record.issueKey, row.isStale])).toEqual([['y.json', 'ABC-10', false], ['z.json', 'ABC-9', true]])
+  expect(rows.map(row => [row.file, row.record.issueKey, row.isStale])).toEqual([['z.json', 'ABC-9', true], ['y.json', 'ABC-10', false]])
   // A row with no issue yet sorts after the keyed rows, by file name.
   const unkeyed = rowsOf([
     kept('b.json', record('ABC-2', 'idle', { issueKey: null }), 0),
