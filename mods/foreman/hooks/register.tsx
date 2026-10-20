@@ -124,14 +124,19 @@ async function writeTickets($: $, change: (t: ForemanTickets) => ForemanTickets)
   let unchanged = false
   const sessionId = await $.session.id()
   await update($, tickets, raw => {
-    // A ledger another session left in $.state is never changed and relabelled
-    // as this one's: the change goes to an empty ledger of this session.
+    // A ledger another session left in $.state is left alone: this session's
+    // start loads its own from the store and relabels it, so writing here
+    // could only put an empty ledger over the stored one.
     const held = ticketsIn(raw)
-    const before = held.sessionId === null || held.sessionId === sessionId ? held : { ...TICKETS_EMPTY, sessionId }
-    const changed = change(before)
+    if (held.sessionId !== null && held.sessionId !== sessionId) {
+      unchanged = true
+      written = held
+      return held
+    }
+    const changed = change(held)
     unchanged = changed === held
-    written = changed.sessionId === sessionId ? changed : { ...changed, sessionId }
-    return unchanged ? held : written
+    written = unchanged || changed.sessionId === sessionId ? changed : { ...changed, sessionId }
+    return written
   })
   if (unchanged) return written
   const next = persisting.then(async () => {
@@ -598,17 +603,18 @@ export const register: Register = (on, options) => {
     // session cannot put an older stored ledger over a newer one. Otherwise
     // the stored ledger, or an empty one, takes its place, so a process that
     // goes on as another session never keeps the last session's tickets.
-    const stored = rawTickets === undefined || rawTickets === null ? TICKETS_EMPTY : ticketsIn(rawTickets)
+    const storedTickets = ticketsIn(rawTickets)
     await update($, tickets, heldRaw => {
       const held = ticketsIn(heldRaw)
       const isOurs = held.sessionId === id && (held.pairings.length > 0 || hasWork(held.outbox))
-      return isOurs ? held : { ...stored, sessionId: id }
+      return isOurs ? held : { ...storedTickets, sessionId: id }
     })
-    if (rawParent !== undefined && rawParent !== null) {
-      const stored = parentIn(rawParent)
-      await update($, parent, () => stored)
-      if (stored.isOn) await ensureArmed($)
-    }
+    // The settings are this session's stored ones, or off when it stored
+    // none, so a process that goes on as another session does not keep the
+    // last session's role.
+    const storedParent = rawParent === undefined || rawParent === null ? PARENT_OFF : parentIn(rawParent)
+    await update($, parent, () => storedParent)
+    if (storedParent.isOn) await ensureArmed($)
     return next(e)
   })
 
@@ -631,14 +637,15 @@ export const register: Register = (on, options) => {
     void ensureArmed($).catch(() => undefined)
     return next(e)
   }).catch(($, e, next) => next(e))
+  // Whether a turn of the session's own loop runs decides how a wake goes in,
+  // so the end of a turn and the start of one below keep turnRuns. A
+  // subagent's turn raises both events too, and is passed over.
   on('turn.complete', async ($, e, next) => {
     void ensureArmed($).catch(() => undefined)
     if (e.agentId === undefined && (await isOn($))) await update($, turnRuns, () => false)
     return next(e)
   }).catch(($, e, next) => next(e))
 
-  // Whether a turn of the session's own loop runs decides how a wake goes in.
-  // A subagent's turn raises these events too, and is passed over.
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined && (await isOn($))) await update($, turnRuns, () => true)
     return next(e)

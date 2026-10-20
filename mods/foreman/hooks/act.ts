@@ -228,7 +228,9 @@ export function needsList(t: ForemanTickets, rows: readonly SubRow[], now: numbe
   const active = new Map(t.pairings.flatMap(p => (p.owner !== null && p.standing === 'active' ? [[p.owner, p] as const] : [])))
   return rows.some(r => {
     const p = active.get(r.record.sessionId)
-    return p !== undefined && ownsTicket(p, r) && (r.record.state === 'done' || now - r.mtimeMs > GONE_MS)
+    // An old file whose gone wake already went needs no list, as goneRule
+    // would pass it by.
+    return p !== undefined && ownsTicket(p, r) && (r.record.state === 'done' || (now - r.mtimeMs > GONE_MS && p.acts.goneWokeFor !== r.mtimeMs))
   })
 }
 

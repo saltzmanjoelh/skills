@@ -520,7 +520,7 @@ test('a session start that comes again in a running session keeps the newer ledg
   expect(ledger(w).pairings).toHaveLength(2)
 })
 
-test('a process that goes on as another session starts that session with its own ledger, not the last session\'s', async ($, on) => {
+test('a process that goes on as another session starts that session with its own ledger and role, not the last session\'s', async ($, on) => {
   const w = world(on)
   await start($)
   await foreman($)
@@ -530,6 +530,9 @@ test('a process that goes on as another session starts that session with its own
   await start($)
   await w.clock.settle()
   await startSession($, { prompt: 'Run /implement ABC-8.', context: 'fresh' })
+  expect(w.engine.started.at(-1)?.prompt).toBe('Run /implement ABC-8.')
+  await foreman($)
+  await startSession($, { prompt: 'Run /implement ABC-9.', context: 'fresh' })
   expect(ticketsIn(w.stored.get(ticketsKey('session-2'))).pairings).toHaveLength(1)
   expect(ledger(w).pairings).toHaveLength(1)
 })
@@ -559,17 +562,16 @@ test('a list of sessions that never answers is given up on after 30 seconds and 
   expect(ledger(w).pairings[0]!.standing).toBe('active')
 })
 
-test('a change made after the process went on as another session goes to that session\'s own ledger, never to the last one\'s', async ($, on) => {
+test('a change made after the process went on as another session, before that session\'s start, touches neither ledger', async ($, on) => {
   const w = world(on)
   await start($)
   await foreman($)
   await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh' })
   w.engine.sessionId = 'session-2'
   await startSession($, { prompt: 'Run /implement ABC-8.', context: 'fresh' })
-  const second = ticketsIn(w.stored.get(ticketsKey('session-2')))
-  expect(second.pairings).toHaveLength(1)
-  expect(second.sessionId).toBe('session-2')
+  expect(w.stored.has(ticketsKey('session-2'))).toBe(false)
   expect(ticketsIn(w.stored.get(ticketsKey('session-1'))).pairings).toHaveLength(1)
+  expect(ledger(w).sessionId).toBe('session-1')
 })
 
 test('an answer to start_session with no text still pairs the ticket with the local_ id in its result', async ($, on) => {
@@ -579,4 +581,26 @@ test('an answer to start_session with no text still pairs the ticket with the lo
   await foreman($)
   await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh' })
   expect(ledger(w).pairings.map(p => p.localId)).toEqual(['local_new1'])
+})
+
+test('a subagent\'s turn start does not count as the parent\'s turn, and the end of the parent\'s turn sends wakes back to a prompt', async ($, on) => {
+  const w = world(on)
+  w.folder.put('a.json', record('ABC-1', 'working', { desktopSessionId: 'local_a' }))
+  w.folder.put('b.json', record('ABC-2', 'working', { desktopSessionId: 'local_b' }))
+  on('turn.start', ($, e) => ({ turnId: (e as { turnId?: string }).turnId }) as never)
+  on('turn.complete', ($, e) => ({ text: e.answer }) as never)
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await $.turn.start({ text: 'go', turnId: 't1', agentId: 'agent-1' } as never)
+  await ui.pane.press({ key: 'release-a.json' })
+  await w.clock.settle()
+  expect(w.engine.prompts).toHaveLength(1)
+  expect(w.engine.appended).toEqual([])
+  await $.turn.start({ text: 'go', turnId: 't2' } as never)
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't2', reason: 'answer' } as never)
+  await ui.pane.press({ key: 'release-b.json' })
+  await w.clock.settle()
+  expect(w.engine.prompts).toHaveLength(2)
+  expect(w.engine.appended).toEqual([])
 })

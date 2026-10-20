@@ -175,6 +175,8 @@ test('the session list is needed only for a done record or a file older than the
   expect(needsList(t, [row()], T0 + MINUTE)).toBe(false)
   expect(needsList(t, [row({ state: 'done' })], T0)).toBe(true)
   expect(needsList(t, [row()], T0 + GONE_MS + 1)).toBe(true)
+  const woke = { ...t, pairings: t.pairings.map(p => ({ ...p, acts: { ...p.acts, goneWokeFor: T0 } })) }
+  expect(needsList(woke, [row()], T0 + GONE_MS + 1)).toBe(false)
 })
 
 test('a pairing that no status file carried for a day is forgotten, and a younger one is kept', () => {
