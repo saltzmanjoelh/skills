@@ -278,6 +278,8 @@ const STATES: readonly BuildState[] = STATE_RULES.map(rule => rule.state)
 const isFiniteTime = (t: unknown): t is number => typeof t === 'number' && Number.isFinite(t)
 const isCount = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0
 
+// The memo's open permission prompts, or null when the stored value is not a
+// list of well-formed prompts. An empty list is a valid value.
 function promptsIn(raw: unknown): OpenPrompt[] | null {
   if (!Array.isArray(raw)) return null
   const prompts: OpenPrompt[] = []
@@ -289,6 +291,9 @@ function promptsIn(raw: unknown): OpenPrompt[] | null {
   return prompts
 }
 
+// The memo's cleanup record, or undefined when the stored value cannot be
+// read. Unlike promptsIn, null here is a valid value: it means the cleanup
+// skill has not started, so an unreadable value needs undefined instead.
 function cleanupIn(raw: unknown): StatusMemo['cleanup'] | undefined {
   if (raw === null) return null
   const c = raw as { failedCalls?: unknown; lastError?: unknown } | undefined

@@ -103,8 +103,8 @@ survives the parent being closed.
     1. `needs-you`: an `AskUserQuestion` call of the session's own is open;
        or a counsel tally answered that the person must be asked, and since
        then neither has an `AskUserQuestion` call that started after the
-       tally ended nor has the person sent a prompt; or a permission prompt
-       is open.
+       tally ended come to an end nor has the person sent a prompt; or a
+       permission prompt is open.
     2. `working`: the session's own turn runs, or an agent, a background
        task or a tool call of the session's own runs.
     3. `waiting-on-builder`: builder has a look at the pull request scheduled,
