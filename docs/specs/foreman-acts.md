@@ -85,13 +85,24 @@ first saw it in that state.
    session with the desktop app's `send_message` tool, called through
    `$.mcp.call('ccd_session_mgmt', 'send_message', …)`, addressed to the
    pairing's `local_…` id, or the record's `desktopSessionId` when the pairing
-   has none. It sends a second nudge once the episode has lasted twice the
-   threshold. Once it has lasted three times the threshold, after two nudges,
-   it wakes the parent's model. A nudge that fails, because the tool answered
-   an error or is not connected, still counts toward the two, so a session
-   that cannot be reached reaches the parent instead of being nudged forever,
-   and the failure is logged. A record with neither id cannot be nudged; it
-   wakes the parent at the same moment the second nudge would have gone.
+   has none. A nudge that works makes the sub session take a turn and then
+   go idle again with a new `stateSince`, so the nudges are counted over a
+   stretch without progress rather than over one idle episode. The stretch
+   begins when a record enters idle, continues through a working episode that
+   follows, and ends when the record's issue key, stage, stages done, or pull
+   request number or state changes, when the record enters a state other than
+   idle or working, or when a working episode lasts at least the idle
+   threshold. The second nudge, and then the wake after two nudges, are each
+   due one threshold after whichever came later, the start of the current
+   idle episode or the last nudge. In one idle episode with no answer, that
+   is a nudge at one threshold, a nudge at two and the wake at three, and
+   never a third nudge. A nudge that fails, because the tool answered an
+   error or is not connected, still counts toward the two, so a session that
+   cannot be reached reaches the parent instead of being nudged forever, and
+   the failure is logged. A record with neither id cannot be nudged; it wakes
+   the parent at two thresholds, when the second nudge would have gone.
+   Foreman schedules its next read for the moment the next nudge or wake is
+   due when that comes before the usual read, so each lands at its time.
 7. **needs-you.** Once per episode, foreman raises a native notification with
    `$.ui.notify`, saying which sub session needs the person, and never wakes
    the parent's model. A notification the engine could not send is logged.
@@ -105,7 +116,12 @@ first saw it in that state.
    freed, the row leaves, and the log says so.
 10. **A record that leaves.** When an owned record's file leaves the folder
     while its pairing is active, as builder deletes it at the end of a session
-    whose pull request merged, foreman frees the slot the same way.
+    whose pull request merged, foreman frees the slot the same way. A record
+    leaves only when a listing of a folder that exists succeeds and no longer
+    holds its file. A folder that does not exist frees nothing, forgets no
+    pairing and wakes nothing, because builder never removes the folder, so
+    its absence means something unusual happened rather than that every sub
+    session finished.
 11. **gone.** When an owned record that is not done has a file older than 5
     minutes, `list_sessions` does not show its session running, and its pull
     request has not merged, foreman wakes the parent's model once per such
@@ -121,8 +137,13 @@ first saw it in that state.
 13. **A slot frees** when a done session's slot is freed, a record leaves, or
     the person presses Release. When foreman is not paused, freeing a slot
     wakes the parent's model with `one slot free; pick the next issue and start
-    it`. While paused, it remembers that a slot freed, and `/foreman resume`
-    then wakes the parent once with the same words if any slot is free.
+    it.` The number is the slots free at that moment, the slot count less the
+    slots busy, written in words up to twenty, so two free slots read `two
+    slots free; pick the next issues and start them.` A read that frees a slot
+    while every slot is still busy, because the slot count went down, wakes
+    nothing. While paused, it remembers that a slot freed, and `/foreman
+    resume` then wakes the parent once with the same words if any slot is
+    free.
 14. **Release** marks the pairing released, which frees the slot without
     archiving the session or touching its file. The released row stays in
     the pane, dimmed, with `released` in place of its state, and its issue
@@ -142,7 +163,10 @@ first saw it in that state.
     `$.prompt.submit` when no turn of the parent runs, and with
     `$.session.append` as a user-role row while a turn runs. Foreman knows
     whether a turn runs from its own `turn.start` and `turn.complete` hooks.
-18. Each reason wakes the parent at most once per sub session per episode.
+18. Each reason wakes the parent at most once per sub session per episode,
+    except the idle wake, which comes at most once per stretch without
+    progress (rule 6), and the gone wake, at most once per stretch in which
+    the file stays unchanged.
     Foreman records the reasons it woke for in `$.state` and in the store with
     the pairings, so a reload does not wake again. A wake that the engine
     refused, or that threw, is logged and not tried again for that reason.
@@ -201,7 +225,10 @@ first saw it in that state.
 ## Failure modes
 
 - The desktop app's tools are not connected, as in a terminal session: nudges
-  fail and count, the list fails and frees nothing, both logged.
+  fail and count, the list fails and frees nothing, both logged. A desktop
+  tool that never answers is given up on after 30 seconds and counts as
+  failed, so it cannot stop the reads.
+- The status folder is missing: nothing is freed or forgotten.
 - Where an organization manages Claude Code, an installed mod gets no classic
   events, so a sub session's file never reads `needs-you` for a permission
   prompt or `in-cleanup`, and the rules for those states never fire there.
@@ -212,16 +239,19 @@ first saw it in that state.
 - `claude plugin test` in `mods/foreman` drives each state from fixture files
   on the mocked clock and checks: the ticket added to `start_session` and the
   `local_…` id recorded against it; the filter and the owner rule; the two
-  nudges at one and two thresholds, the wake at three, and no third nudge; the
+  nudges at one and two thresholds, the wake at three, and no third nudge,
+  also when the sub session takes a short turn after a nudge; the
   notification for needs-you and no wake; the cleanup wake by time and by
   failed calls; slot freeing for done, for a file that leaves, and for
-  Release, with the slot-free wake once and none while paused; the gone wake;
+  Release, with the slot-free wake once and none while paused; a missing
+  folder freeing nothing; the gone wake;
   one joined line for several reasons; `prompt.submit` when idle and
   `session.append` during a turn; and the quoting of record text.
 - The four gates pass for both mods.
 - By hand, in the desktop app: a parent runs `/foreman` with one slot and
   starts a sub session on a throwaway issue. The row appears; left idle, the
-  sub session gets exactly one `what's next?` after the threshold; an
+  sub session gets exactly one `what's next?` after the threshold, and no
+  second one before twice the threshold; an
   `AskUserQuestion` in the sub session turns its row red with no turn in the
   parent; pressing the issue opens the sub session; archiving it frees the
   slot and wakes the parent once.
