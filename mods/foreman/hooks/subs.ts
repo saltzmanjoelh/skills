@@ -29,14 +29,15 @@ export type FileRead = { file: string; mtimeMs: number; text: string | null }
 // when that parses as a record, else the last good read of it when there is
 // one. A file the read did not find leaves, and a file that never parsed is
 // not kept. A file whose text is the same as the kept entry's keeps that
-// entry and is not parsed again, since its text parsed when it was kept.
-// The result is in file name order.
+// entry and is not parsed again, since its text parsed when it was kept, but
+// takes the new modification time, since a file rewritten with the same text
+// is as fresh as any other. The result is in file name order.
 export function afterRead(kept: readonly ForemanFile[], found: readonly FileRead[]): ForemanFile[] {
   const before = new Map(kept.map(entry => [entry.file, entry]))
   const next: ForemanFile[] = []
   for (const f of found) {
     const last = before.get(f.file)
-    if (last !== undefined && f.text === last.text) next.push(last)
+    if (last !== undefined && f.text === last.text) next.push(last.mtimeMs === f.mtimeMs ? last : { ...last, mtimeMs: f.mtimeMs })
     else if (f.text !== null && recordIn(f.text) !== null) next.push({ file: f.file, text: f.text, mtimeMs: f.mtimeMs })
     else if (last !== undefined) next.push(last)
   }

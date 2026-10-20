@@ -4,6 +4,7 @@
 
 import type { McpToolResult } from 'claude-code'
 
+import type { Listed } from './act'
 import type { SubRecord } from './record'
 
 export type DesktopCall = (server: string, tool: string, args?: Record<string, unknown>) => Promise<McpToolResult>
@@ -13,6 +14,10 @@ export const WINDOW_SERVER = 'ccd_window'
 export const OPEN_TOOL = 'open_session_in'
 export const SESSIONS_SERVER = 'ccd_session_mgmt'
 export const LIST_TOOL = 'list_sessions'
+export const SEND_TOOL = 'send_message'
+
+// The nudge foreman sends an idle sub session.
+export const NUDGE_TEXT = 'what\'s next?'
 // How many sessions to ask the list for. The list answers the most recently
 // active ones, twenty when not told otherwise, and a sub session that has been
 // quiet a while could fall outside twenty.
@@ -96,4 +101,40 @@ export async function openSession(call: DesktopCall, record: Pick<SubRecord, 'de
   if (answer === 'not-connected') return { reason: REASONS.notConnected }
   if (answer === 'refused') return { reason: REASONS.openRefused }
   return { opened: found.id }
+}
+
+// How a message to a sub session went: sent, or why not.
+export type SendResult = 'sent' | 'not-connected' | 'refused'
+
+// Sends `text` to the desktop session `sessionId` with the desktop app's
+// send_message tool, which needs no permission when called through
+// $.mcp.call.
+export async function sendMessage(call: DesktopCall, sessionId: string, text: string): Promise<SendResult> {
+  const answer = await answerOf(call, SESSIONS_SERVER, SEND_TOOL, { session_id: sessionId, message: text })
+  return answer === 'not-connected' || answer === 'refused' ? answer : 'sent'
+}
+
+// The desktop app's sessions, archived ones included, each with whether it
+// is archived and whether it runs, or why they could not be read. An entry
+// whose flags are not true or false reads as not archived and running, so a
+// doubtful entry frees no slot and wakes no one.
+export async function listSessions(call: DesktopCall): Promise<{ sessions: Listed[] } | { reason: string }> {
+  const answer = await answerOf(call, SESSIONS_SERVER, LIST_TOOL, { limit: LIST_LIMIT, include_archived: true })
+  if (answer === 'not-connected') return { reason: REASONS.notConnected }
+  if (answer === 'refused') return { reason: REASONS.listRefused }
+  const block = answer.content.find(b => b.type === 'text') as { text?: unknown } | undefined
+  let raw: unknown
+  try {
+    raw = typeof block?.text === 'string' ? JSON.parse(block.text) : null
+  } catch {
+    raw = null
+  }
+  if (!Array.isArray(raw)) return { reason: REASONS.listUnreadable }
+  return {
+    sessions: raw.flatMap(entry => {
+      const s = entry as { sessionId?: unknown; isArchived?: unknown; isRunning?: unknown } | null
+      if (typeof s?.sessionId !== 'string') return []
+      return [{ sessionId: s.sessionId, isArchived: s.isArchived === true, isRunning: s.isRunning !== false }]
+    }),
+  }
 }
