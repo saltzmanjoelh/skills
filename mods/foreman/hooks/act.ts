@@ -33,10 +33,6 @@ export const UNOWNED_FOR_MS = 24 * 60 * 60_000
 // needed it, failed, or read.
 export type SessionsLook = { kind: 'unread' } | { kind: 'failed' } | { kind: 'read'; sessions: Listed[] }
 
-// What to do outside the ledger. A nudge goes to a desktop session id and
-// names the sub session for the log; a notification carries its text.
-export type Effect = ForemanEffect
-
 export type DecideInput = {
   tickets: ForemanTickets
   // The rows of this read, joined to the ledger by joinOwners.
@@ -56,7 +52,7 @@ export type DecideInput = {
 
 export type Decision = {
   tickets: ForemanTickets
-  effects: Effect[]
+  effects: ForemanEffect[]
   reasons: Reason[]
   logs: string[]
   // The earliest time a rule falls due, a nudge, a wake or a cleanup
@@ -103,7 +99,7 @@ type Step = {
   now: number
   limits: Limits
   sessions: SessionsLook
-  effects: Effect[]
+  effects: ForemanEffect[]
   reasons: Reason[]
   logs: string[]
   due: number[]
@@ -241,7 +237,7 @@ export function needsList(t: ForemanTickets, rows: readonly SubRow[], now: numbe
 // which case the pause is remembered.
 export function decide(input: DecideInput): Decision {
   const { rows, now, limits, sessions, folderExists, listed } = input
-  const effects: Effect[] = []
+  const effects: ForemanEffect[] = []
   const reasons: Reason[] = []
   const logs: string[] = []
   const due: number[] = []

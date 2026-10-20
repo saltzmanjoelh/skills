@@ -149,17 +149,19 @@ export const RELEASED = 'released'
 function subTree(ui: Elements, row: SubRow, now: number, columns: number | undefined, presses: PanePresses) {
   const { Box, Text, Button } = ui
   const tone = STATE_LOOK[row.record.state].tone
+  const issue = <Button key={`open-${row.file}`} variant="primary" label={`→ ${keyOf(row)} · ${pullRequestWords(row)}`} onPress={() => presses.open(row.file)} />
+  const bar = barRow(ui, row, columns)
   if (row.isReleased === true) {
     return [
-      <Button key={`open-${row.file}`} variant="primary" label={`→ ${keyOf(row)} · ${pullRequestWords(row)}`} onPress={() => presses.open(row.file)} />,
-      barRow(ui, row, columns),
+      issue,
+      bar,
       <Text key={`state-${row.file}`} dimColor>{RELEASED}</Text>,
       <Text key={`gap-${row.file}`}> </Text>,
     ]
   }
   return [
-    <Button key={`open-${row.file}`} variant="primary" label={`→ ${keyOf(row)} · ${pullRequestWords(row)}`} onPress={() => presses.open(row.file)} />,
-    barRow(ui, row, columns),
+    issue,
+    bar,
     row.isStale
       ? <Text key={`state-${row.file}`} dimColor>{stateWords(row, now)}</Text>
       : <Text key={`state-${row.file}`} color={TONE_COLOR[tone]}>{stateWords(row, now)}</Text>,

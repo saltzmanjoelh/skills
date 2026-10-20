@@ -506,3 +506,16 @@ test('a read that changes nothing writes nothing to the store, and a store write
   await w.clock.settle()
   expect(await ui.paneText()).toMatch(/Could not save the tickets: .*the store is full\./)
 })
+
+test('a session start that comes again in a running session keeps the newer ledger in $.state over an older stored one', async ($, on) => {
+  const w = world(on)
+  await start($)
+  await foreman($)
+  await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh' })
+  expect(ledger(w).pairings).toHaveLength(1)
+  w.stored.set(ticketsKey('session-1'), { pairings: [], freedWhilePaused: false, folderMissing: false })
+  await start($)
+  await w.clock.settle()
+  await startSession($, { prompt: 'Run /implement ABC-8.', context: 'fresh' })
+  expect(ledger(w).pairings).toHaveLength(2)
+})

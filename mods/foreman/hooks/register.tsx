@@ -138,10 +138,16 @@ async function writeTickets($: $, change: (t: ForemanTickets) => ForemanTickets)
   })
   persisting = next.catch(() => undefined)
   await next.catch(async error => {
-    const why = printable(error instanceof Error ? error.message : String(error), 160)
-    await addLog($, `Could not save the tickets: ${why === '' ? 'no reason was given' : why}.`)
+    await addLog($, `Could not save the tickets: ${reasonOf(error)}.`)
   })
   return written
+}
+
+// An error as the log gives its reason: its message, cleaned and cut, or
+// words saying that it gave none.
+function reasonOf(error: unknown): string {
+  const why = printable(error instanceof Error ? error.message : String(error), 160)
+  return why === '' ? 'no reason was given' : why
 }
 
 // The thresholds in force, from the options when they are positive numbers.
@@ -163,10 +169,25 @@ async function rowsNow($: $): Promise<SubRow[]> {
   return rowsOf(list, typeof at === 'number' ? at : await $.clock.now())
 }
 
+// The ledger as $.state holds it, read through ticketsIn once for each value
+// the atom holds: the band and the pane are drawn every second, and the
+// ledger changes only at a read, a press or a start_session call.
+const ledgers = new WeakMap<object, ForemanTickets>()
+async function ledgerNow($: $): Promise<ForemanTickets> {
+  const raw = await read($, tickets)
+  if (typeof raw !== 'object' || raw === null) return ticketsIn(raw)
+  let ledger = ledgers.get(raw)
+  if (ledger === undefined) {
+    ledger = ticketsIn(raw)
+    ledgers.set(raw, ledger)
+  }
+  return ledger
+}
+
 // The rows the band and the pane show: those that own a ticket of this
 // parent that was not freed.
 async function shownNow($: $): Promise<SubRow[]> {
-  return shownRows(await rowsNow($), ticketsIn(await read($, tickets)))
+  return shownRows(await rowsNow($), await ledgerNow($))
 }
 
 // Lists the folder and reads each `.json` file in it. A listing that fails
@@ -180,8 +201,7 @@ async function readFolder($: $): Promise<{ found: FileRead[] | null; exists: boo
     entries = await $.fs.list(folder)
   } catch (error) {
     if (!(await $.fs.exists(folder).catch(() => true))) return { found: [], exists: false }
-    const why = printable(error instanceof Error ? error.message : String(error), 160)
-    await addLog($, `Could not read the status folder: ${why === '' ? 'no reason was given' : why}.`)
+    await addLog($, `Could not read the status folder: ${reasonOf(error)}.`)
     return { found: null, exists: true }
   }
   const wanted = entries.filter(entry => entry.kind === 'file' && entry.name.endsWith('.json'))
@@ -360,8 +380,7 @@ async function wake($: $, line: string) {
     }
     await addLog($, `Woke the parent: ${line}`)
   } catch (error) {
-    const why = printable(error instanceof Error ? error.message : String(error), 120)
-    await addLog($, why === '' ? `Could not wake the parent: ${line}` : `Could not wake the parent (${why}): ${line}`)
+    await addLog($, `Could not wake the parent (${reasonOf(error)}): ${line}`)
   }
 }
 
@@ -551,7 +570,6 @@ async function runCommand($: $, args: string): Promise<string> {
     // The wake goes in the outbox and is carried out from a timer, so the
     // command answers at once.
     if (await isOn($)) await resumeWake($)
-    else await writeTickets($, t => (t.freedWhilePaused ? { ...t, freedWhilePaused: false } : t))
     return 'This parent is no longer paused.'
   }
   await writeParent($, p => ({ ...p, isOn: true }))
@@ -579,9 +597,15 @@ export const register: Register = (on, options) => {
     const id = await $.session.id()
     const raw = await $.store.get(storeKey(id))
     const rawTickets = await $.store.get(ticketsKey(id))
+    // The stored ledger is taken only while $.state holds none of its own,
+    // so a start that comes again in a running session cannot put an older
+    // ledger over a newer one.
     if (rawTickets !== undefined && rawTickets !== null) {
       const stored = ticketsIn(rawTickets)
-      await update($, tickets, () => stored)
+      await update($, tickets, raw => {
+        const held = ticketsIn(raw)
+        return held.pairings.length === 0 && !hasWork(held.outbox) ? stored : held
+      })
     }
     if (raw !== undefined && raw !== null) {
       const stored = parentIn(raw)
