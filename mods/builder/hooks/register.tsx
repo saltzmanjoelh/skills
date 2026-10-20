@@ -2650,9 +2650,10 @@ let statusFlight: Promise<void> | null = null
 const statusWrites = new Set<Promise<void>>()
 // The generation this copy of the module writes under. Two counters share
 // the word: the memo's stored `generation`, which survives a hot reload, and
-// this module variable. Each start of the hooks raises the stored one and sets
-// this one to match, so a writer that a copy from before a hot reload left
-// running finds the stored generation is not its own and stops. The session's
+// this module variable. Each start of the hooks, and each look for the ticket
+// that takes a memo up, raises the stored one and sets this one to match, so
+// a writer that a copy from before a hot reload left running finds the
+// stored generation is not its own and stops. The session's
 // end raises only this module variable, so a writer of the ended session that
 // captured the old value stops, and the stored generation stays as it is until
 // the next conversation writes a memo of its own.
@@ -2834,18 +2835,40 @@ function adoptMemo($: $, memo: StatusMemo) {
   }
 }
 
+// Takes a memo of this session up for this copy of the module: the memo as it
+// stands when it is written is raised to a new generation, which this copy
+// then writes under, and its answer is taken. Only the generation is raised,
+// so a change that landed since the memo was last read is kept. When the
+// session has no memo by then, `found` is written instead and taken, or,
+// when `found` is null, nothing is written or taken. The start of the hooks
+// and the look at a prompt both take a memo up through here, so that a copy
+// whose start failed, or that found no memo at its start because the copy
+// before it wrote one later, still writes under the stored generation.
+async function takeUpMemo($: $, sessionId: string, found: StatusMemo | null) {
+  const taken = statusMemoIn(await update($, statusMemo, raw => {
+    const memo = statusMemoIn(raw, sessionId)
+    if (memo === null) return found ?? raw
+    return { ...memo, generation: memo.generation + 1 }
+  }), sessionId)
+  if (taken === null) return
+  statusGen = taken.generation
+  adoptMemo($, taken)
+}
+
 // Looks for the ticket at a prompt, once per session id. The answer a memo of
-// this session holds is taken as it is, so a hot reload does not look again.
-// Otherwise the first prompt is the first user message of the transcript, or
-// the prompt being submitted when the transcript holds none or cannot be
-// read. The configuration folder and the desktop id are read only when there
-// is a ticket, so a session without one reads nothing more.
+// this session holds is taken up as it is, so a hot reload does not look
+// again. Otherwise the first prompt is the first user message of the
+// transcript, or the prompt being submitted when the transcript holds none
+// or cannot be read. The configuration folder and the desktop id are read
+// only when there is a ticket, so a session without one reads nothing more.
+// A memo of this session that another prompt, or the copy of the module
+// from before a hot reload, wrote while this one looked is taken up rather
+// than written over.
 async function lookForTicket($: $, submitted: string) {
   const sessionId = await $.session.id()
   if (ticketKnown !== undefined && ticketFor === sessionId) return
-  const stored = statusMemoIn(await read($, statusMemo), sessionId)
-  if (stored !== null) {
-    adoptMemo($, stored)
+  if (statusMemoIn(await read($, statusMemo), sessionId) !== null) {
+    await takeUpMemo($, sessionId, null)
     return
   }
   let first = submitted
@@ -2865,27 +2888,17 @@ async function lookForTicket($: $, submitted: string) {
         cwd: (await read($, cwd)) ?? (await $.session.cwd()),
         generation: statusGen,
       })
-  await update($, statusMemo, () => found)
-  adoptMemo($, found)
+  await takeUpMemo($, sessionId, found)
 }
 
-// At each start of the hooks, the session's start and every hot reload: a
-// memo of this session is raised to a new generation, which this copy of the
-// module then writes under, and its answer is taken. Only the generation is
-// raised, on the memo as it stands when it is written, so a change that lands
-// between the first read and the write, such as one from the copy before the
-// reload, is kept. The memo is read first, because `update` writes even when
-// its change hands back the value it was given.
+// At each start of the hooks, the session's start and every hot reload, a
+// memo of this session is taken up (see takeUpMemo). The memo is read first,
+// because `update` writes even when its change hands back the value it was
+// given.
 async function startStatus($: $) {
   const sessionId = await $.session.id()
   if (statusMemoIn(await read($, statusMemo), sessionId) === null) return
-  const raised = statusMemoIn(await update($, statusMemo, raw => {
-    const memo = statusMemoIn(raw, sessionId)
-    return memo === null ? raw : { ...memo, generation: memo.generation + 1 }
-  }), sessionId)
-  if (raised === null) return
-  statusGen = raised.generation
-  adoptMemo($, raised)
+  await takeUpMemo($, sessionId, null)
 }
 
 // At the session's end nothing more is written. Writing is closed and this
@@ -3088,8 +3101,9 @@ export const register: Register = on => {
       },
     })
     // A memo of this session, kept across a hot reload, is taken up again
-    // first, so the writes below already count for the status file. A
-    // failure here costs the status file and nothing else.
+    // first, so the writes below already count for the status file. When
+    // this fails, the next prompt takes the memo up instead (see
+    // lookForTicket), and until then the file is not written.
     await startStatus($).catch(() => undefined)
     await update($, cwd, () => e.cwd)
     // The hooks start again after a hot reload too, which drops every call in

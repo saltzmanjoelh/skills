@@ -9943,3 +9943,54 @@ test('a new session id with no end of the old session, as after a /clear whose e
   expect(s.statusAt('/home/me/.claude/foreman/builds/session-2.json')).toMatchObject({ sessionId: 'session-2', ticket: 'slot-2', state: 'idle' })
   expect(s.writesOf()).toBe(oldWrites)
 })
+
+test('a session that takes its memo up at a prompt, with its own generation not the memo\'s and the reload\'s raise refused, writes the file again', async ($, on) => {
+  const refusal = refusedWrites(on, 'statusMemo')
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  // A hot reload that gets through raises the memo's stored generation
+  // above 0.
+  await reloads($, s.clock)
+  // The kit runs one copy of the module, so a new copy, which starts with
+  // its own generation at 0 and no ticket known, cannot be loaded. An end of
+  // the session whose reset of the memo is refused stands in for one: it
+  // forgets the ticket and leaves this copy's generation not the memo's,
+  // while the memo stays this session's. The hot reload after it then has
+  // its raise of the memo refused, as a failed start of the hooks would.
+  refusal.writes = 1
+  await endSession($, 'resume')
+  refusal.writes = 1
+  await reloads($, s.clock)
+  expect(refusal.refusals).toBe(2)
+
+  await s.clock.advance(MINUTE / 2)
+  await $.prompt.submit({ text: 'Carry on.', origin: { kind: 'composer' } } as never)
+  await s.clock.settle()
+  expect(s.statusAt()).toMatchObject({ ticket: 'slot-1', writtenAt: S0 + MINUTE / 2 })
+  await s.clock.advance(MINUTE)
+  expect(s.statusAt()?.writtenAt).toBe(S0 + (3 * MINUTE) / 2)
+})
+
+test('a prompt that found no memo keeps the memo of this session that another prompt wrote while it looked, rather than write its own over it', async ($, on) => {
+  const late = answerWaits(on, 'state.get', 'statusMemo')
+  const s = foremanSession(on)
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await s.clock.settle()
+
+  // The first prompt's read of the memo answers that there is none and is
+  // held, while a second prompt finds the ticket, writes the memo and moves
+  // the state on.
+  late.arm()
+  const first = $.prompt.submit({ text: TICKETED, origin: { kind: 'composer' } } as never)
+  await s.clock.settle()
+  await $.prompt.submit({ text: TICKETED, origin: { kind: 'composer' } } as never)
+  await s.clock.settle()
+  await $.skill.prompt({ skill: 'cleanup', text: 'clean' } as never)
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('in-cleanup')
+
+  late.release()
+  await first
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('in-cleanup')
+})
