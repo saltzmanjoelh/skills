@@ -4,6 +4,7 @@ import type { Engine } from 'claude-code/testing'
 
 import { RUNS_JQ, snapshotOf, type GhPullRequest } from '../hooks/github'
 import { NOTHING_WATCHED, STALE_WARNING } from '../hooks/pane'
+import type { BuildStatus } from '../types'
 
 const A = 'a'.repeat(40)
 const C = 'c'.repeat(40)
@@ -772,13 +773,16 @@ function memoryStore(on: On, entries: [string, unknown][] = []) {
 
 // A file system in memory that records writes, holding a project whose
 // CLAUDE.md names an architecture document that exists. `writes.refused`,
-// when set, refuses every write, as a full disk does. `dirs` holds the
+// when set, refuses every write, as a full disk does. `writes.log` lists the
+// path of every write that was not refused, in the order the writes began,
+// and `writes.hold`, when set, keeps the next write waiting until it
+// resolves, and the file then holds that write's text. `dirs` holds the
 // folders that exist, so a test can add another checkout beside `/repo`.
 function fakeFiles(on: On) {
   const files = new Map<string, string>([['/repo/CLAUDE.md', 'Architecture document: docs/arch.md\n'], ['/repo/docs/arch.md', 'x']])
   const links = new Map<string, string>()
   const dirs = new Set(['/repo'])
-  const writes = { refused: false }
+  const writes = { refused: false, log: [] as string[], hold: null as Promise<void> | null }
   on('fs.read', ($, e) => (files.has(e.path) ? { value: files.get(e.path) as string } : { deny: 'missing' }))
   on('fs.exists', ($, e) => ({ value: files.has(e.path) || dirs.has(e.path) }))
   // `links` maps a path to where it really points. A path that is none of the
@@ -788,8 +792,12 @@ function fakeFiles(on: On) {
     const realPath = links.get(e.path) ?? e.path
     return { value: { kind: dirs.has(e.path) ? 'dir' as const : 'file' as const, size: 1, mtimeMs: 0, isLink: links.has(e.path), realPath } }
   })
-  on('fs.write', ($, e) => {
+  on('fs.write', async ($, e) => {
     if (writes.refused) return { deny: 'disk full' }
+    writes.log.push(e.path)
+    const hold = writes.hold
+    writes.hold = null
+    if (hold !== null) await hold
     files.set(e.path, e.text)
     return { value: undefined }
   })
@@ -9202,4 +9210,422 @@ test('a turn end during a usage-limit hold still finds that builder changed on d
   await ownTurn($, 't2', 'error')
   await clock.settle()
   expect((await line()).startsWith(STALE_WARNING)).toBe(true)
+})
+
+// The status file for the foreman. Each test starts a session in /repo whose
+// first prompt carries a ticket, unless it says otherwise, with HOME set to
+// /home/me and the desktop app's session id set, and reads the file the mod
+// wrote through the fake file system.
+
+const BUILD = '/home/me/.claude/foreman/builds/session-1.json'
+const TICKETED = 'Implement the next issue.\nforeman-ticket: slot-1\n'
+const S0 = Date.parse('2026-10-12T00:00:00Z')
+
+// What the engine answers beneath the mod for a session the foreman started:
+// the registrations, the session's id (which a test may change, as a /clear
+// does), its start and end, its prompts and turns, its skills, the classic
+// events the tests raise, and the transcript, which is `messages` or refused.
+// `env` is the environment the mod reads.
+function foremanSession(on: On, over: { env?: Record<string, string>; messages?: object[] | 'refused' } = {}) {
+  const clock = mock.clock(on, { now: S0 })
+  mock.store(on)
+  mock.env(on, over.env ?? { HOME: '/home/me', CLAUDE_CODE_HOST_SESSION_ID: 'desk-1' })
+  const ids = { current: 'session-1' }
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('tool.register', ($, e) => ({ value: { tool: `mcp__builder__${e.name}` } }))
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('session.id', () => ({ value: ids.current }))
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+  on('session.messages', () => (over.messages === 'refused' ? { deny: 'the transcript could not be read' } : { value: (over.messages ?? []) as never }))
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  on('skill.prompt', ($, e) => ({ text: e.text }))
+  on('classic.PermissionRequest', () => ({}))
+  on('classic.PostToolUseFailure', () => ({}))
+  stops(on)
+  sessionTurns(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  const statusAt = (path = BUILD) => {
+    const text = files.get(path)
+    return text === undefined ? undefined : JSON.parse(text) as BuildStatus
+  }
+  const writesOf = (path = BUILD) => files.writes.log.filter(written => written === path).length
+  return { clock, ids, world, files, statusAt, writesOf }
+}
+
+// Starts the session and submits its first prompt, typed by the person.
+async function firstPrompt($: Engine, clock: ReturnType<typeof mock.clock>, text = TICKETED) {
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await $.prompt.submit({ text, origin: { kind: 'composer' } } as never)
+  await clock.settle()
+}
+
+const endSession = ($: Engine, reason: string, sessionId = 'session-1') =>
+  $.session.end({ reason, sessionId, resume: { id: sessionId } } as never)
+
+const mergedPullRequest = () => openPullRequest({ state: 'MERGED' })
+
+// Watches #7 and lets a poll find it merged, which also ends the watch's looks.
+async function watchUntilMerged($: Engine, s: ReturnType<typeof foremanSession>) {
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await s.clock.settle()
+  s.world.pr = mergedPullRequest()
+  await s.clock.advance(10 * MINUTE)
+}
+
+test('a session whose first prompt holds a ticket writes its record under the configuration folder, idle, with its ticket, ids and folder', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+
+  expect(s.statusAt()).toEqual({
+    version: 1, sessionId: 'session-1', ticket: 'slot-1', desktopSessionId: 'desk-1', cwd: '/repo', issueKey: null, issueTitle: '',
+    stage: null, stageDone: 0, pr: null, state: 'idle', reason: 'Nothing runs and nothing is waiting.', stateSince: S0, writtenAt: S0,
+  })
+})
+
+test('a session with no ticket writes no status file and deletes none, whatever it does', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock, 'Implement the next issue.')
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await $.skill.prompt({ skill: 'cleanup', text: 'clean' } as never)
+  await turnEnds($, 't1')
+  await s.clock.advance(5 * MINUTE)
+  await endSession($, 'prompt_input_exit')
+
+  expect(s.files.writes.log.filter(path => path.includes('/foreman/'))).toEqual([])
+  expect(s.world.calls.filter(call => call.startsWith('rm '))).toEqual([])
+})
+
+test('a ticket in the first prompt of a resumed transcript counts, though the prompt being submitted has none', async ($, on) => {
+  const s = foremanSession(on, { messages: [
+    { role: 'assistant', text: 'Resumed.', toolUses: [] },
+    { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 'x', text: 'ok', isError: false }] },
+    { role: 'user', text: TICKETED, toolUses: [] },
+  ] })
+  await firstPrompt($, s.clock, 'Carry on.')
+  expect(s.statusAt()?.ticket).toBe('slot-1')
+})
+
+test('when the transcript cannot be read, the prompt being submitted is checked for the ticket instead', async ($, on) => {
+  const s = foremanSession(on, { messages: 'refused' })
+  await firstPrompt($, s.clock)
+  expect(s.statusAt()?.ticket).toBe('slot-1')
+})
+
+test('CLAUDE_CONFIG_DIR is preferred to HOME, and the desktop id is left out when it is unset', async ($, on) => {
+  const s = foremanSession(on, { env: { CLAUDE_CONFIG_DIR: '/config', HOME: '/home/me' } })
+  await firstPrompt($, s.clock)
+
+  expect(s.statusAt()).toBeUndefined()
+  const record = s.statusAt('/config/foreman/builds/session-1.json')
+  expect(record?.ticket).toBe('slot-1')
+  expect(record !== undefined && 'desktopSessionId' in record).toBe(false)
+})
+
+test('the session\'s own turn reads working, and its end reads idle again from that moment', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  await s.clock.advance(MINUTE / 2)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  expect(s.statusAt()).toMatchObject({ state: 'working', reason: 'The session\'s own turn is running.', stateSince: S0 + MINUTE / 2 })
+
+  await s.clock.advance(MINUTE / 4)
+  await turnEnds($, 't1')
+  await s.clock.settle()
+  expect(s.statusAt()).toMatchObject({ state: 'idle', stateSince: S0 + (3 * MINUTE) / 4 })
+})
+
+test('a held tool call of the session\'s own reads working, naming the tool and never its command', async ($, on) => {
+  const s = foremanSession(on)
+  const tools = heldTools(on)
+  await firstPrompt($, s.clock)
+
+  const ran = loose($)({ tool: 'Bash', tool_use_id: 'u1', command: 'npm test', description: 'Run the suite' })
+  await s.clock.settle()
+  expect(s.statusAt()).toMatchObject({ state: 'working', reason: 'A Bash call of the session\'s own is running.' })
+  expect(JSON.stringify(s.statusAt())).not.toContain('npm test')
+  tools.get('u1')!.finish()
+  await ran
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('idle')
+})
+
+test('a running agent reads working', async ($, on) => {
+  const s = foremanSession(on)
+  await spawnAgents($, on, ['Explore'])
+  await firstPrompt($, s.clock)
+  expect(s.statusAt()).toMatchObject({ state: 'working', reason: '1 agent is running.' })
+})
+
+test('a watch reads waiting on builder with the pull request, and the poll that finds it merged reads done', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  await loose($)({ tool: 'mcp__builder__progress', title: 'ABC-123 short issue name', stage: 'review' })
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await s.clock.settle()
+  expect(s.statusAt()).toMatchObject({
+    state: 'waiting-on-builder', reason: 'Builder has a look at the pull request scheduled.', issueKey: 'ABC-123', issueTitle: 'short issue name',
+    stage: 'review', stageDone: 7, pr: { repo: 'o/r', number: 7, state: 'OPEN', checks: 'passed' },
+  })
+
+  s.world.pr = mergedPullRequest()
+  await s.clock.advance(10 * MINUTE)
+  expect(s.statusAt()).toMatchObject({ state: 'done', reason: 'The pull request o/r#7 merged.', stageDone: 9, pr: { state: 'MERGED' } })
+})
+
+test('a usage-limit hold reads waiting on builder until the session resumes', async ($, on) => {
+  const s = foremanSession(on)
+  const usage = usageAnswers(on)
+  usage.rateLimits = [fiveHourAt('2026-10-12T02:00:00Z')]
+  await firstPrompt($, s.clock)
+  // A hold is kept only while /implement works on something.
+  await loose($)({ tool: 'mcp__builder__progress', title: 'ABC-123 short issue name', stage: 'build' })
+  await ownTurn($, 't1', 'error')
+  await s.clock.settle()
+
+  expect(s.statusAt()).toMatchObject({ state: 'waiting-on-builder', reason: 'A usage-limit hold is on; builder resumes the session at 2026-10-12T02:01:00.000Z.' })
+})
+
+test('the cleanup skill reads in cleanup, with an empty cleanup record, and a question open during it reads needs you', async ($, on) => {
+  const s = foremanSession(on)
+  const tools = heldTools(on)
+  await firstPrompt($, s.clock)
+  await $.skill.prompt({ skill: 'builder-tools:cleanup', text: 'clean' } as never)
+  await s.clock.settle()
+  expect(s.statusAt()).toMatchObject({ state: 'in-cleanup', reason: 'The cleanup skill has started in this session.', cleanup: { failedCalls: 0, lastError: '' } })
+
+  const asked = loose($)({ tool: 'AskUserQuestion', tool_use_id: 'q1', questions: [{ question: 'Remove the branch?' }] })
+  await s.clock.settle()
+  expect(s.statusAt()).toMatchObject({ state: 'needs-you', reason: 'An AskUserQuestion call is waiting on the person\'s answer.' })
+  tools.get('q1')!.finish({ result: { answers: {} } })
+  await asked
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('in-cleanup')
+})
+
+test('a merged pull request reads working while a turn runs, and in cleanup once the cleanup skill started', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  await watchUntilMerged($, s)
+  expect(s.statusAt()?.state).toBe('done')
+
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('working')
+  await $.skill.prompt({ skill: 'cleanup', text: 'clean' } as never)
+  await turnEnds($, 't1')
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('in-cleanup')
+})
+
+// Puts a question to the counsel and tallies a split round with no proposal,
+// which sends the question to the person.
+async function counselAsks($: Engine, clock: ReturnType<typeof mock.clock>) {
+  await loose($)(brief)
+  const ran = await loose($)({ tool: TALLY, id: 'c1', round: 1, votes: ballots(['1', '1', '1', '2', '2', '2', 'none']) })
+  expect(String(ran.result)).toContain('AskUserQuestion')
+  await clock.settle()
+}
+
+test('a tally that sends the question to the person reads needs you until a question that started after it ends', async ($, on) => {
+  const s = foremanSession(on)
+  const tools = heldTools(on)
+  await firstPrompt($, s.clock)
+  const before = loose($)({ tool: 'AskUserQuestion', tool_use_id: 'q1', questions: [{ question: 'Something else?' }] })
+  await s.clock.advance(1000)
+  await counselAsks($, s.clock)
+
+  // The question that was already open when the tally ended does not clear it.
+  tools.get('q1')!.finish({ result: { answers: {} } })
+  await before
+  await s.clock.settle()
+  expect(s.statusAt()).toMatchObject({ state: 'needs-you', reason: 'The counsel sent a question to the person, and it has not been asked yet.' })
+
+  await s.clock.advance(1000)
+  const asked = loose($)({ tool: 'AskUserQuestion', tool_use_id: 'q2', questions: [{ question: 'How often should the mod poll?' }] })
+  await s.clock.settle()
+  expect(s.statusAt()?.reason).toBe('An AskUserQuestion call is waiting on the person\'s answer.')
+  tools.get('q2')!.finish({ result: { answers: {} } })
+  await asked
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('idle')
+})
+
+test('after a tally sends the question to the person, a prompt of the person\'s clears needs you and a plugin\'s prompt does not', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  await counselAsks($, s.clock)
+
+  await $.prompt.submit({ text: 'a plugin speaks', origin: { kind: 'plugin', plugin: 'other' } } as never)
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('needs-you')
+  await $.prompt.submit({ text: 'Use a 90-second poll.', origin: { kind: 'composer' } } as never)
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('idle')
+})
+
+test('a permission prompt reads needs you, naming the tool and never its input, until the call returns, and two prompts need two returns', async ($, on) => {
+  const s = foremanSession(on)
+  const tools = heldTools(on)
+  await firstPrompt($, s.clock)
+  const first = loose($)({ tool: 'Bash', tool_use_id: 'u1', command: 'echo hunter2' })
+  const second = loose($)({ tool: 'Bash', tool_use_id: 'u2', command: 'echo hunter3' })
+  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: { command: 'echo hunter2' } } as never)
+  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: { command: 'echo hunter3' } } as never)
+  await s.clock.settle()
+  expect(s.statusAt()).toMatchObject({ state: 'needs-you', reason: 'A permission prompt for Bash in the session is waiting on the person.' })
+  expect(s.files.get(BUILD)).not.toContain('hunter')
+
+  tools.get('u1')!.finish()
+  await first
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('needs-you')
+  tools.get('u2')!.finish()
+  await second
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('idle')
+})
+
+test('the session\'s own turn end closes its permission prompts, and a subagent\'s prompt closes at that agent\'s end, not at a return of the session\'s own', async ($, on) => {
+  const s = foremanSession(on)
+  const tools = heldTools(on)
+  await firstPrompt($, s.clock)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await $.classic.PermissionRequest({ tool_name: 'Edit', tool_input: {} } as never)
+  await turnEnds($, 't1')
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('idle')
+
+  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {}, agent_id: 'agent-9' } as never)
+  await s.clock.settle()
+  expect(s.statusAt()?.reason).toBe('A permission prompt for Bash in a subagent is waiting on the person.')
+  const own = loose($)({ tool: 'Bash', tool_use_id: 'u1', command: 'ls' })
+  await s.clock.settle()
+  tools.get('u1')!.finish()
+  await own
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('needs-you')
+
+  await $.turn.complete({ answer: 'Done.', durationMs: 1, isAborted: false, turnId: 't-agent', reason: 'answer', agentId: 'agent-9' } as never)
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('idle')
+})
+
+test('the cleanup record counts the failed calls since the skill started and keeps the newest error\'s last line, withholding a secret', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  await $.classic.PostToolUseFailure({ tool_name: 'Bash', tool_input: {}, tool_use_id: 'u0', error: 'before cleanup' } as never)
+  await $.skill.prompt({ skill: 'cleanup', text: 'clean' } as never)
+  await $.classic.PostToolUseFailure({ tool_name: 'Bash', tool_input: {}, tool_use_id: 'u1', error: 'first\nfatal: the worktree is dirty' } as never)
+  await $.classic.PostToolUseFailure({ tool_name: 'Bash', tool_input: {}, tool_use_id: 'u2', error: 'git push\nerror: branch is checked out\n\n', agent_id: 'agent-1' } as never)
+  await s.clock.settle()
+  expect(s.statusAt()?.cleanup).toEqual({ failedCalls: 2, lastError: 'error: branch is checked out' })
+
+  await $.classic.PostToolUseFailure({ tool_name: 'Bash', tool_input: {}, tool_use_id: 'u3', error: `remote: ghp_${'A'.repeat(36)} is not valid` } as never)
+  await s.clock.settle()
+  expect(s.statusAt()?.cleanup).toEqual({ failedCalls: 3, lastError: '(withheld: it looks like a secret)' })
+})
+
+test('a minute later the file is written again with a new write time and the same state time, and an event that changes nothing writes nothing', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  expect(s.writesOf()).toBe(1)
+
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [] } as never)
+  await s.clock.advance(MINUTE - 1000)
+  expect(s.writesOf()).toBe(1)
+  await s.clock.advance(1000)
+  expect(s.writesOf()).toBe(2)
+  expect(s.statusAt()).toMatchObject({ state: 'idle', stateSince: S0, writtenAt: S0 + MINUTE })
+})
+
+test('a refused write is tried again at the next minute', async ($, on) => {
+  const s = foremanSession(on)
+  s.files.writes.refused = true
+  await firstPrompt($, s.clock)
+  expect(s.statusAt()).toBeUndefined()
+
+  s.files.writes.refused = false
+  await s.clock.advance(MINUTE)
+  expect(s.statusAt()).toMatchObject({ state: 'idle', writtenAt: S0 + MINUTE })
+})
+
+test('after a merge the session\'s end deletes the file, and nothing is written after the end', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  await watchUntilMerged($, s)
+  const writes = s.writesOf()
+  await endSession($, 'prompt_input_exit')
+  await s.clock.advance(5 * MINUTE)
+
+  expect(s.world.calls).toContain(`rm -f ${BUILD}`)
+  expect(s.writesOf()).toBe(writes)
+})
+
+test('without a merge the session\'s end leaves the file in place', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await s.clock.settle()
+  await endSession($, 'prompt_input_exit')
+
+  expect(s.world.calls.filter(call => call.startsWith('rm '))).toEqual([])
+  expect(s.statusAt()?.state).toBe('waiting-on-builder')
+})
+
+test('with one write held, two changes write once more after it, last, with the newest state', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  let release = () => {}
+  s.files.writes.hold = new Promise(resolve => {
+    release = resolve
+  })
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  await turnEnds($, 't1')
+  await $.skill.prompt({ skill: 'cleanup', text: 'clean' } as never)
+  await s.clock.settle()
+  expect(s.writesOf()).toBe(2)
+
+  release()
+  await s.clock.settle()
+  expect(s.writesOf()).toBe(3)
+  expect(s.statusAt()?.state).toBe('in-cleanup')
+})
+
+test('after a /clear and a new session id, a first prompt with no ticket writes nothing', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  const writes = s.writesOf()
+  await endSession($, 'clear')
+  s.ids.current = 'session-2'
+  await $.prompt.submit({ text: 'Something new.', origin: { kind: 'composer' } } as never)
+  await $.turn.start({ text: 'go', turnId: 't2' } as never)
+  await s.clock.advance(5 * MINUTE)
+
+  expect(s.writesOf()).toBe(writes)
+  expect(s.files.writes.log.filter(path => path.includes('session-2'))).toEqual([])
+})
+
+test('after a /clear and a new session id, the new conversation\'s own ticket writes its own file and the old file is left alone', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  const oldWrites = s.writesOf()
+  await endSession($, 'clear')
+  s.ids.current = 'session-2'
+  await $.prompt.submit({ text: 'foreman-ticket: slot-2', origin: { kind: 'composer' } } as never)
+  await s.clock.advance(5 * MINUTE)
+
+  expect(s.statusAt('/home/me/.claude/foreman/builds/session-2.json')).toMatchObject({ sessionId: 'session-2', ticket: 'slot-2', state: 'idle' })
+  expect(s.writesOf()).toBe(oldWrites)
+})
+
+test('a ticket with neither CLAUDE_CONFIG_DIR nor HOME set writes nothing', async ($, on) => {
+  const s = foremanSession(on, { env: {} })
+  await firstPrompt($, s.clock)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.advance(2 * MINUTE)
+
+  expect(s.files.writes.log.filter(path => path.includes('/foreman/'))).toEqual([])
 })

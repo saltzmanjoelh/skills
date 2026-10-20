@@ -257,8 +257,8 @@ export type BuildStatus = {
   issueTitle: string
   // The stage last reported, or null before any report.
   stage: BuildStage | null
-  // The stages done out of nine, as the progress bar counts them, and 0
-  // before any report.
+  // The stages done out of nine, as the progress bar counts them: 0 before
+  // any report, and all nine once the watched pull request merged.
   stageDone: number
   // The watched pull request, or null before a watch has read it. `checks`
   // is the checks' overall state as the band shows it, and `none` when the

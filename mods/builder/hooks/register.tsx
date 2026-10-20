@@ -2001,6 +2001,11 @@ async function serveTally($: $, input: TallyInput): Promise<string> {
   }
   await update($, counsel, list => list.map(question => question.id === q.id ? recorded : question))
   $.ui.invalidate('ui.render')
+  // A question sent to the person shows in the status file until it is asked.
+  if (t.outcome === 'ask') {
+    const at = await $.clock.now()
+    await changeMemo($, memo => afterCounselAsk(memo, at)).catch(() => undefined)
+  }
   return `${note}${counselAnswer(recorded, t, counted.unreadable, await neverStartedIn($, recorded, t, counted.unreadable), state)}`
 }
 
@@ -2058,6 +2063,7 @@ async function asking<T>($: $, question: string | undefined, call: () => Promise
   } finally {
     await update($, questions, list => list.map(q => q.at === at ? { ...q, answered: true } : q))
     void inLabelQueue(() => takeOffAnsweredLabels($))
+    await changeMemo($, memo => afterQuestionEnd(memo, at)).catch(() => undefined)
   }
 }
 
@@ -2767,9 +2773,10 @@ function armStatusTick($: $) {
 }
 
 // Takes the answer a memo of this session already holds: the ticket, or that
-// there is none. A memo with a ticket starts the tick and a write.
+// there is none. A ticket with no path to write to counts as none, since
+// nothing can be written. A memo with a ticket starts the tick and a write.
 function adoptMemo($: $, memo: StatusMemo) {
-  ticketKnown = memo.ticket === null ? 'none' : 'some'
+  ticketKnown = memo.ticket === null || memo.path === null ? 'none' : 'some'
   ticketFor = memo.sessionId
   if (ticketKnown === 'some') {
     armStatusTick($)
@@ -2996,6 +3003,10 @@ export const register: Register = on => {
         required: ['title', 'stage'],
       },
     })
+    // A memo of this session, kept across a hot reload, is taken up again
+    // first, so the writes below already count for the status file. A
+    // failure here costs the status file and nothing else.
+    await startStatus($).catch(() => undefined)
     await update($, cwd, () => e.cwd)
     // The hooks start again after a hot reload too, which drops every call in
     // flight from this module, so the records of them go. A question still
@@ -3032,11 +3043,17 @@ export const register: Register = on => {
   // because the line names the question and the agent already. After a push
   // or merge of the session's own that succeeded, the mod looks at the pull
   // request soon, even while the turn goes on.
+  // However the call ends, its return closes one permission prompt of its
+  // loop and tool for the status file.
   on('tool.call', async ($, e, next) => {
-    if (e.agentId !== undefined || UNNAMED_TOOLS.has(String(e.tool))) return route($, e, next)
-    const ran = await foreground($, e, () => route($, e, next))
-    if (e.tool === 'Bash' && succeeded(ran) && isPushOrMerge(String(e.command), mergePattern)) armCommandLooks($)
-    return ran
+    try {
+      if (e.agentId !== undefined || UNNAMED_TOOLS.has(String(e.tool))) return await route($, e, next)
+      const ran = await foreground($, e, () => route($, e, next))
+      if (e.tool === 'Bash' && succeeded(ran) && isPushOrMerge(String(e.command), mergePattern)) armCommandLooks($)
+      return ran
+    } finally {
+      await changeMemo($, memo => afterCallReturn(memo, e.agentId ?? '', String(e.tool))).catch(() => undefined)
+    }
   }).catch(($, e, next) => {
     // Once the call went on, a failure is the tool's own, not the fence's.
     if (next.called) return next(e)
@@ -3072,6 +3089,9 @@ export const register: Register = on => {
     turnRunning = true
     rateLimitSeen = false
     pendingErrorTurn = null
+    // A new turn means the last one ended, so the session's own permission
+    // prompts are closed for the status file.
+    void changeMemo($, memo => afterLoopEnd(memo, '')).catch(() => undefined)
     await update($, busy, () => true)
     refreshLater($)
     return next(e)
@@ -3110,8 +3130,14 @@ export const register: Register = on => {
 
   // The desktop app wakes the session for a CI failure or a merge conflict.
   // The turn it starts gets the rest of the pull request's state with it.
+  //
+  // The first prompt the mod sees for a session id is where it looks for the
+  // foreman's ticket, and a prompt of the person's answers whatever question
+  // the counsel left for them.
   on('prompt.submit', async ($, e, next) => {
     void ensureArmed($)
+    await lookForTicket($, e.text).catch(() => undefined)
+    if (isPersonPrompt(e.origin, e.text)) await changeMemo($, afterPersonPrompt).catch(() => undefined)
     await personPromptResets($, e.origin, e.text).catch(() => undefined)
     if (e.origin.kind !== 'sdk' || !isCiMonitorEvent(e.text)) return next(e)
     const r0 = await read($, run)
@@ -3188,6 +3214,8 @@ export const register: Register = on => {
       // turnRunning; both rely on this order: either that check sees the held
       // change, or the handover sees the turn ended.
       turnRunning = false
+      // The turn's end closes the session's own permission prompts.
+      void changeMemo($, memo => afterLoopEnd(memo, '')).catch(() => undefined)
       await update($, busy, () => false)
       refreshLater($)
       void ensureArmed($)
@@ -3225,6 +3253,8 @@ export const register: Register = on => {
     // A subagent's card records how it ended. An agent the mod has no card
     // for (it started before the hooks were loaded) gets a placeholder card.
     const agentId = e.agentId
+    // The agent's end closes its permission prompts.
+    void changeMemo($, memo => afterLoopEnd(memo, agentId)).catch(() => undefined)
     const now = await $.clock.now()
     const ended = { status: statusOf(e.isAborted, e.reason), durationMs: e.durationMs, summary: summaryOf(e.answer), endedAt: now }
     await update($, agents, list => {
@@ -3239,6 +3269,36 @@ export const register: Register = on => {
     refreshLater($)
     return next(e)
   })
+
+  // A permission prompt is open from here until the same loop's call of the
+  // same tool returns, or that loop's turn ends. The loop is the session's
+  // own, or the subagent the event's agent_id names. The status file names
+  // the tool and never copies its input.
+  on('classic.PermissionRequest', async ($, e, next) => {
+    await changeMemo($, memo => afterPermissionRequest(memo, e.agent_id ?? '', String(e.tool_name)))
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // Every failed call, the session's own and its subagents', counts in the
+  // status file's cleanup record once the cleanup skill has started.
+  on('classic.PostToolUseFailure', async ($, e, next) => {
+    await changeMemo($, memo => afterFailedCall(memo, e.error))
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // The cleanup skill starting puts the status file in cleanup until the
+  // session ends. The skill's text is passed on unchanged.
+  on('skill.prompt', async ($, e, next) => {
+    if (isCleanupSkill(e.skill)) await changeMemo($, afterCleanupSkill)
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // The session's end stops the status file, and deletes it after a merge,
+  // within the engine's short budget for ending a session.
+  on('session.end', async ($, e, next) => {
+    await endStatus($, e.reason, e.sessionId, next.budget).catch(() => undefined)
+    return next(e)
+  }).catch(($, e, next) => next(e))
 
   // The pane. Pressing the fold folds or unfolds the finished agents.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
