@@ -2693,7 +2693,9 @@ const END_WAIT_CAP_MS = 1_000
 // has no ticket, or none known yet, and nothing once the session has ended.
 // Asks that arrive while a writer is scheduled or running are folded into
 // it: the writer reads the state again before it finishes, so the newest
-// record is always the last one written.
+// record is normally the last one written. A write given up after
+// STATUS_WRITE_TIMEOUT_MS can still land later, over a newer record, and the
+// next change or the next minute's write replaces it.
 function statusChanged($: $, force = false) {
   if (ticketKnown !== 'some' || statusClosed) return
   statusDirty = true
