@@ -8,6 +8,11 @@
       "name": "builder",
       "source": "./mods/builder",
       "description": "Watches the pull request an /implement session is working on, shows its state and its agents, and wakes the session when the pull request changes"
+    },
+    {
+      "name": "foreman",
+      "source": "./mods/foreman",
+      "description": "Shows a parent session every /implement sub session at a glance, in a band above the prompt and a pane, and opens a sub session beside the parent when its issue is pressed"
     }
   ]
 }
