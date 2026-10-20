@@ -11,12 +11,14 @@ The review agents live in the builder mod, in `mods/builder/agents`. The
 builder mod used to be called pilot. Its README says how to replace an old
 link or install, and that builder starts with an empty store.
 
-The foreman mod, in `mods/foreman`, lets one parent session see every
-`/implement` sub session at a glance. It reads the status files that builder
-writes, one per sub session, shows them in a band above the prompt and in a
-pane, and opens a sub session beside the parent when its issue is pressed.
-It does nothing in a session until that session runs `/foreman`. Its README
-says how to install it and what it shows.
+The foreman mod, in `mods/foreman`, lets one parent session run several
+`/implement` sub sessions. It gives each sub session the parent starts a
+ticket, reads the status files that builder writes, one per sub session,
+and shows them in a band above the prompt and in a pane. It nudges a sub
+session that sits idle, notifies the person when one needs them, frees a
+slot when one finishes, and wakes the parent's model with one line only when
+there is a decision to make. It does nothing in a session until that session
+runs `/foreman`. Its README says how to install it and what it does.
 
 ## Project facts
 
