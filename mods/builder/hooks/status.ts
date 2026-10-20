@@ -92,6 +92,9 @@ export function errorLineOf(error: unknown): string {
 // Whether a path is absolute, on a Unix-like system or with a Windows drive.
 const isAbsolute = (path: string) => path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path)
 
+// A path with the slashes at its end dropped.
+const withoutTrailingSlashes = (path: string) => path.replace(/[\\/]+$/, '')
+
 // The configuration folder the foreman reads from: CLAUDE_CONFIG_DIR when it
 // is set and not empty, and otherwise `.claude` under HOME. A folder that is
 // not an absolute path, including a CLAUDE_CONFIG_DIR that is set but
@@ -99,10 +102,13 @@ const isAbsolute = (path: string) => path.startsWith('/') || /^[A-Za-z]:[\\/]/.t
 // that depends on the folder the session runs in. Trailing slashes are
 // dropped.
 export function configDirOf(configDir: string | undefined, home: string | undefined): string | null {
-  const chosen = configDir !== undefined && configDir !== '' ? configDir : home !== undefined && home !== '' ? `${home.replace(/[\\/]+$/, '')}/.claude` : null
-  if (chosen === null || !isAbsolute(chosen)) return null
-  const trimmed = chosen.replace(/[\\/]+$/, '')
-  return trimmed === '' ? null : trimmed
+  if (configDir !== undefined && configDir !== '') {
+    if (!isAbsolute(configDir)) return null
+    const trimmed = withoutTrailingSlashes(configDir)
+    return trimmed === '' ? null : trimmed
+  }
+  if (home === undefined || home === '' || !isAbsolute(home)) return null
+  return `${withoutTrailingSlashes(home)}/.claude`
 }
 
 // A session id that can name a file inside the builds folder and nothing
@@ -134,10 +140,12 @@ export type StatusFacts = {
 
 // The snapshot of the pull request the watch follows, or null when nothing
 // is watched or the stored snapshot is of another pull request.
-function watchedOf(f: StatusFacts): Snapshot | null {
-  if (f.run === null || f.pr === null) return null
-  return f.pr.repo === f.run.repo && f.pr.number === f.run.number ? f.pr : null
+export function watchedSnapshotOf(run: BuilderRun | null, pr: Snapshot | null): Snapshot | null {
+  if (run === null || pr === null) return null
+  return pr.repo === run.repo && pr.number === run.number ? pr : null
 }
+
+const watchedOf = (f: StatusFacts) => watchedSnapshotOf(f.run, f.pr)
 
 // The permission prompts that still count as open: the session's own, and a
 // subagent's while its agent runs. A subagent the mod has no card for counts,
@@ -256,10 +264,11 @@ export function recordOf(f: StatusFacts, writtenAt: number): BuildStatus {
   return record
 }
 
-// Whether two records hold the same values in every field but the write
-// time, so the second needs no write of its own.
-export function isSameRecord(a: BuildStatus, b: BuildStatus): boolean {
-  return JSON.stringify({ ...a, writtenAt: 0 }) === JSON.stringify({ ...b, writtenAt: 0 })
+// The text two records are compared by: the record with its write time left
+// out. Two records whose texts are equal hold the same values in every field
+// but the write time, so the second needs no write of its own.
+export function comparedTextOf(record: BuildStatus): string {
+  return JSON.stringify({ ...record, writtenAt: 0 })
 }
 
 const STATES: readonly BuildState[] = STATE_RULES.map(rule => rule.state)

@@ -13,14 +13,15 @@ All the rules about the record live in a new pure module,
 lives in `hooks/register.tsx`. The record's types go in the contract,
 `types/index.d.ts`.
 
-1. **Every atom write republishes.** `register.tsx` imports the engine's
-   `update` as `updateAtom` and declares a local
-   `update<T>($, target: Atom<T>, change): Promise<T>` that awaits it,
-   marks the status as needing work, and returns the engine's value, which
-   the agents refresh uses. Every existing call site keeps working
-   unchanged, and a future writer of state cannot forget to republish. The
-   status memo, below, is written with `updateAtom`, so the writer never
-   triggers itself.
+1. **Every atom write republishes.** `register.tsx` hooks its own
+   `state.set` event: after each write of one of the mod's values lands, the
+   hook marks the status as needing work. Every existing call site keeps
+   working unchanged, and a future writer of state cannot forget to
+   republish. The hook leaves out writes of the status memo, below, so the
+   writer never triggers itself. The plan first chose a local wrapper around
+   the engine's `update`, but it could not be built: the engine reads which
+   values a module writes from the atom named at each call site, and refuses
+   a call whose atom is a parameter, as it would be inside a wrapper.
 2. **One memo atom, stamped with its session.** `status: StatusMemo | null`
    holds what no other atom holds: the session id it belongs to, the
    ticket (or null when it was looked for and none was found), the
@@ -30,7 +31,13 @@ lives in `hooks/register.tsx`. The record's types go in the contract,
    permission prompts with a count for each loop and tool, the cleanup
    record, and the writer's generation. A memo whose session id is not
    `$.session.id()` reads as empty, which covers a `/clear` whose end was
-   cut off. `statusMemoIn` validates it field by field.
+   cut off. `statusMemoIn` validates it field by field. Two module
+   variables mirror the memo's answer: `ticketKnown`, whether the session
+   has a ticket, and `ticketFor`, the session id that answer belongs to.
+   They let every write of state ask for a write of the file without an
+   await. A hot reload resets them, so `startStatus`, which runs at every
+   start of the hooks, sets them again from the memo, and the memo stays
+   the source of truth.
 3. **One coalescing writer.** `statusChanged($, force?)` returns at once in
    a session known to have no ticket. Otherwise it sets a dirty flag and,
    unless a loop is pending, starts one from `$.clock.after(0)`. The loop
@@ -51,8 +58,11 @@ lives in `hooks/register.tsx`. The record's types go in the contract,
 6. **The session's end.** `session.end` marks the session closed
    synchronously and cancels the tick, waits for the write in flight within
    the engine's budget, and then, when the watched pull request's snapshot
-   reads merged, runs `rm -f <path>` through `$.process.run`. On `clear` it
-   resets the memo.
+   reads merged, runs `rm -f <path>` through `$.process.run`. A write that
+   has not settled by then deletes the file again when it settles. When the
+   end's reason is `clear` or `resume`, the process goes on under another
+   session id, so the end resets the memo and the mirrored variables, and
+   the new conversation looks for a ticket in its own first prompt.
 7. **The states are an ordered table.** `status.ts` lists the six states in
    the counsel's order, each with a rule that answers its reason or null,
    and a type-level check fails the type check when the table and the
@@ -72,17 +82,16 @@ lives in `hooks/register.tsx`. The record's types go in the contract,
 - From the most extensible plan: the session id must match `^[A-Za-z0-9_-]+$`,
   and the configuration folder, from `CLAUDE_CONFIG_DIR` or `HOME`, must be
   an absolute path, so the path cannot leave its folder.
-- From the simplest plan: the wrapper returns the engine's value, which the
-  agents refresh reads.
 
 ## Rejected alternatives
 
 - **The existing `oneAtATime` queue without coalescing** (simplest plan): a
   hung write lets the queue grow with every atom write, and nothing stops a
   write queued after the delete from bringing the file back.
-- **A module variable that mirrors the ticket** (simplest plan): a hot
-  reload resets it, and the session would go quiet until something seeded
-  it again.
+- **A module variable as the only record of the ticket** (simplest plan): a
+  hot reload resets it, and the session would go quiet until something
+  seeded it again. The code does mirror the ticket in module variables, but
+  only beside the memo, which `startStatus` reseeds them from.
 - **Five separate atoms, each compared with the session id** (most
   extensible plan): the same effect as one stamped memo, with five places
   to forget the check.
@@ -91,7 +100,7 @@ lives in `hooks/register.tsx`. The record's types go in the contract,
 - **A seam named for a later push channel**: the spec lists that channel as
   a non-goal, so no comment promises it.
 - **Explicit publish calls at each of the sixteen or so places that write
-  state**: the wrapper covers them all and every future one.
+  state**: the `state.set` hook covers them all and every future one.
 
 ## Beyond the spec, said in the pull request
 
@@ -107,12 +116,12 @@ lives in `hooks/register.tsx`. The record's types go in the contract,
    `PluginState`, each with a comment.
 2. `hooks/status.ts` and `tests/status.test.ts`: `ticketIn`,
    `firstPromptOf`, `issueOf`, `isCleanupSkill`, `errorLineOf`, the rule
-   table and `stateOf`, `recordOf`, `isSameRecord`, `statusMemoIn`,
+   table and `stateOf`, `recordOf`, `comparedTextOf`, `statusMemoIn`,
    `buildPathOf`, and the reducers over the memo for a permission request,
    a call's return, a loop's end, the cleanup skill, a failed call, the
    counsel's ask, a question's start and end, and a person's prompt.
-3. `register.tsx`: the wrapper, the memo atom, `statusFacts`, the writer
-   loop and the tick, then the whole existing suite, to show nothing
+3. `register.tsx`: the `state.set` hook, the memo atom, `statusFacts`, the
+   writer loop and the tick, then the whole existing suite, to show nothing
    changes for a session with no ticket.
 4. The ticket lookup in `prompt.submit` (awaited, in its own try and catch),
    and the hooks: `classic.PermissionRequest`, a `finally` around the

@@ -9629,3 +9629,87 @@ test('a ticket with neither CLAUDE_CONFIG_DIR nor HOME set writes nothing', asyn
 
   expect(s.files.writes.log.filter(path => path.includes('/foreman/'))).toEqual([])
 })
+
+test('a call that returns with no permission prompt open, and a turn that starts with none, leave the memo unwritten', async ($, on) => {
+  const s = foremanSession(on)
+  const memos: string[] = []
+  on('state.set', ($, e, next) => {
+    if (e.plugin === 'builder' && e.key === 'status') memos.push(JSON.stringify(e.value))
+    return next(e)
+  })
+  const tools = heldTools(on)
+  await firstPrompt($, s.clock)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  const ran = loose($)({ tool: 'Bash', tool_use_id: 'u1', command: 'ls' })
+  await s.clock.settle()
+  tools.get('u1')!.finish()
+  await ran
+  await turnEnds($, 't1')
+  await s.clock.settle()
+
+  // Each write of the memo after the first changes it: the ones the writer
+  // makes when the state moves, and none from a change that changed nothing.
+  expect(memos.length).toBeGreaterThan(1)
+  expect(memos.filter((memo, i) => i > 0 && memo === memos[i - 1])).toEqual([])
+})
+
+test('after a merge, a write still held when the session ends is followed by a second rm once it lands', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  await watchUntilMerged($, s)
+  let release = () => {}
+  s.files.writes.hold = new Promise(resolve => {
+    release = resolve
+  })
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  const ended = endSession($, 'prompt_input_exit')
+  await s.clock.advance(1000)
+  await ended
+  const rms = () => s.world.calls.filter(call => call === `rm -f ${BUILD}`).length
+  expect(rms()).toBe(1)
+
+  release()
+  await s.clock.settle()
+  expect(rms()).toBe(2)
+})
+
+test('after a resume and a new session id, a prompt with no ticket writes nothing', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  const writes = s.writesOf()
+  await endSession($, 'resume')
+  s.ids.current = 'session-2'
+  await $.prompt.submit({ text: 'Something new.', origin: { kind: 'composer' } } as never)
+  await $.turn.start({ text: 'go', turnId: 't2' } as never)
+  await s.clock.advance(5 * MINUTE)
+
+  expect(s.writesOf()).toBe(writes)
+  expect(s.files.writes.log.filter(path => path.includes('session-2'))).toEqual([])
+})
+
+test('after a resume and a new session id, the new conversation\'s own ticket writes its own file', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  await endSession($, 'resume')
+  s.ids.current = 'session-2'
+  await $.prompt.submit({ text: 'foreman-ticket: slot-2', origin: { kind: 'composer' } } as never)
+  await s.clock.settle()
+
+  expect(s.statusAt('/home/me/.claude/foreman/builds/session-2.json')).toMatchObject({ sessionId: 'session-2', ticket: 'slot-2', state: 'idle' })
+})
+
+test('a write that never settles is given up on after its timeout, and the next minute writes again', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  s.files.writes.hold = new Promise(() => {})
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  const writes = s.writesOf()
+  expect(s.statusAt()?.writtenAt).toBe(S0)
+
+  await s.clock.advance(31_000)
+  await s.clock.advance(MINUTE)
+  expect(s.writesOf()).toBeGreaterThan(writes)
+  expect(s.statusAt()).toMatchObject({ state: 'working', writtenAt: S0 + MINUTE })
+})

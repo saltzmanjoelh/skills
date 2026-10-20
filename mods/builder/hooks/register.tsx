@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Next, PromptOrigin, Register, ResolveInput, ToolCallInput, ToolCallResult } from 'claude-code'
 
-import type { AgentCard, BackgroundTask, BuilderRun, BuildStatus, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, StatusMemo, Wake } from '../types'
+import type { AgentCard, BackgroundTask, BuilderRun, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, StatusMemo, Wake } from '../types'
 import { isSvgSurface } from './art'
 import { checkoutSentence, worktreeWithBranch, type Checkout } from './checkout'
 import { afterAskAgain, afterTally, askAgainAnswer, briefAnswer, briefFactsOf, briefRefusal, briefText, counselAnswer, decisionLine, destinationOf, endedDecisionLines, FOLLOW_UP_OPTIONS, followUpAnswer, followUpAskAgainAnswer, followUpsRefusal, followUpStepOf, followUpVotesOf, keepCounsel, MAX_BRIEF_OPTIONS, MAX_FOLLOW_UPS, MIN_OPTIONS, neverStartedCandidatesOf, neverStartedOf, type PullRequestRef, reviewParagraph, stepOf, type UnreadableVote, votesOf } from './counsel'
@@ -12,7 +12,7 @@ import { afterReport, endedOf, plannedOf, progressIn, reportAnswer, reportOf, st
 import { changePrompt, ciEventContext, resumePrompt, stateLines, stuckPrompt } from './prompts'
 import { factIn, packageText, secretIn, verdictsLine, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
-import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, buildPathOf, configDirOf, firstPromptOf, isCleanupSkill, isSameRecord, newMemo, recordOf, statusMemoIn, ticketIn, type StatusFacts } from './status'
+import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, buildPathOf, comparedTextOf, configDirOf, firstPromptOf, isCleanupSkill, newMemo, recordOf, statusMemoIn, ticketIn, watchedSnapshotOf, type StatusFacts } from './status'
 import { timeOfDay } from './text'
 
 type $ = EngineInterface
@@ -1874,7 +1874,7 @@ async function counselDestination($: $, named: unknown): Promise<ReturnType<type
   const r = await read($, run)
   const s = await read($, pr)
   const watched = r === null ? null : { repo: r.repo, number: r.number }
-  const state = s !== null && r !== null && s.repo === r.repo && s.number === r.number ? s.state : null
+  const state = watchedSnapshotOf(r, s)?.state ?? null
   return destinationOf(named, watched, state)
 }
 
@@ -2636,14 +2636,18 @@ let statusForced = false
 // the session's end waits on.
 let statusPending = false
 let statusFlight: Promise<void> | null = null
+// Every write of the file that has not settled, including one the writer gave
+// up on after its timeout, so the session's end can delete the file again
+// after a write that lands once it was deleted.
+const statusWrites = new Set<Promise<void>>()
 // The memo's generation this copy of the module writes under. The memo's is
 // raised at each start of the hooks, so a writer that a copy from before a
 // hot reload left running finds the memo's generation is not its own and
 // stops.
 let statusGen = 0
-// The record last written, to compare the next one with. A hot reload
-// forgets it, which costs one write.
-let lastWritten: BuildStatus | null = null
+// The text of the record last written, as comparedTextOf gives it, to
+// compare the next one with. A hot reload forgets it, which costs one write.
+let lastWrittenText: string | null = null
 // The minute's tick, and whether the session has ended, after which nothing
 // more is written.
 let statusTick: { cancel: () => void } | undefined
@@ -2656,6 +2660,12 @@ const STATUS_EVERY_MS = 60_000
 // that never settles cannot stop writing for good. A write that finishes
 // after the writer gave up on it, over a newer one, is put right by the next.
 const STATUS_WRITE_TIMEOUT_MS = 30_000
+// The time the session's end leaves of the engine's budget for ending a
+// session, for the reads and the delete that follow its wait.
+const END_MARGIN_MS = 250
+// The longest the session's end waits for the write in flight, and the
+// longest it lets each `rm -f` run.
+const END_WAIT_CAP_MS = 1_000
 
 // Asks for the file to be worked out again and written when it changed, or
 // written in any case when `force` is set. It does nothing in a session that
@@ -2696,10 +2706,11 @@ async function writeStatus($: $, gen: number): Promise<void> {
       const facts = await statusFacts($)
       if (facts === null || facts.memo.generation !== gen || facts.memo.path === null) return
       const record = recordOf(facts, await $.clock.now())
-      if (!force && lastWritten !== null && isSameRecord(lastWritten, record)) continue
+      const text = comparedTextOf(record)
+      if (!force && text === lastWrittenText) continue
       if (statusClosed) return
-      await withinTimeout($, $.fs.write(facts.memo.path, JSON.stringify(record)), STATUS_WRITE_TIMEOUT_MS)
-      lastWritten = record
+      await withinTimeout($, trackedWrite($, facts.memo.path, JSON.stringify(record)), STATUS_WRITE_TIMEOUT_MS)
+      lastWrittenText = text
       if (facts.memo.state === record.state && facts.memo.stateSince === record.stateSince) continue
       const { sessionId } = facts.memo
       await update($, statusMemo, raw => {
@@ -2713,6 +2724,18 @@ async function writeStatus($: $, gen: number): Promise<void> {
     statusPending = false
     if (statusDirty) statusChanged($)
   }
+}
+
+// Writes the file, keeping the write among the unsettled ones until it
+// settles.
+function trackedWrite($: $, path: string, text: string): Promise<void> {
+  const write = $.fs.write(path, text).then(() => undefined)
+  statusWrites.add(write)
+  const settled = () => {
+    statusWrites.delete(write)
+  }
+  write.then(settled, settled)
+  return write
 }
 
 // Settles as `work` does, or rejects once `ms` have passed.
@@ -2753,15 +2776,24 @@ async function statusFacts($: $): Promise<StatusFacts | null> {
 }
 
 // Applies an event's change to the memo and asks for a write. It does nothing
-// in a session that has no ticket, or none known yet.
+// in a session that has no ticket, or none known yet. The changes return the
+// memo they were given when they change nothing, as after most calls and at
+// every turn's start and end; then the memo is left as it is and no write is
+// asked for. The memo is read first, because `update` writes even when its
+// change hands back the value it was given.
 async function changeMemo($: $, change: (memo: StatusMemo) => StatusMemo) {
   if (ticketKnown !== 'some') return
   const sessionId = await $.session.id()
+  const stored = statusMemoIn(await read($, statusMemo), sessionId)
+  if (stored === null || change(stored) === stored) return
+  let changed = false
   await update($, statusMemo, raw => {
     const memo = statusMemoIn(raw, sessionId)
-    return memo === null ? raw : change(memo)
+    const next = memo === null ? memo : change(memo)
+    changed = next !== memo
+    return changed ? next : raw
   })
-  statusChanged($)
+  if (changed) statusChanged($)
 }
 
 // Starts the minute's tick, or starts it again. Each tick works the record
@@ -2836,7 +2868,10 @@ async function startStatus($: $) {
 // for the write in flight, within the engine's short budget for ending a
 // session, and then, when the watched pull request merged, deletes the file
 // with `rm -f`, since the engine's file interface has no delete. Without a
-// merge the file stays for the foreman to read. When the process goes on
+// merge the file stays for the foreman to read. A write that has not settled
+// by the delete, because it took longer than the wait or the writer gave up
+// on it, could still land and bring the file back with an older record, so
+// each one deletes the file again when it settles. When the process goes on
 // under another session id, after a /clear or a resume, the memo is reset,
 // and the new conversation looks for a ticket in its own first prompt.
 async function endStatus($: $, reason: string, sessionId: string, budget: { remainingMs: number }) {
@@ -2847,18 +2882,23 @@ async function endStatus($: $, reason: string, sessionId: string, budget: { rema
   try {
     if (wasTicketed) {
       const flight = statusFlight
-      if (flight !== null) await withinTimeout($, flight, Math.max(0, Math.min(budget.remainingMs - 250, 1_000))).catch(() => undefined)
+      const wait = Math.max(0, Math.min(budget.remainingMs - END_MARGIN_MS, END_WAIT_CAP_MS))
+      if (flight !== null) await withinTimeout($, flight, wait).catch(() => undefined)
       const memo = statusMemoIn(await read($, statusMemo), sessionId)
-      const r = await read($, run)
-      const s = snapshotIn(await read($, pr))
-      const isMerged = r !== null && s !== null && s.repo === r.repo && s.number === r.number && s.state === 'MERGED'
-      if (memo?.path != null && isMerged) await $.process.run(['rm', '-f', memo.path], { timeoutMs: 1_000 })
+      const isMerged = watchedSnapshotOf(await read($, run), snapshotIn(await read($, pr)))?.state === 'MERGED'
+      if (memo?.path != null && isMerged) {
+        const path = memo.path
+        const remove = () => $.process.run(['rm', '-f', path], { timeoutMs: END_WAIT_CAP_MS })
+        const unsettled = [...statusWrites]
+        await remove()
+        for (const write of unsettled) void write.catch(() => undefined).then(remove).catch(() => undefined)
+      }
     }
   } finally {
     if (reason === 'clear' || reason === 'resume') {
       ticketKnown = undefined
       ticketFor = undefined
-      lastWritten = null
+      lastWrittenText = null
       statusDirty = false
       statusForced = false
       statusClosed = false

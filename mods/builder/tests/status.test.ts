@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import { snapshotOf } from '../hooks/github'
 import {
   afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite,
-  buildPathOf, configDirOf, ERROR_CHARS, errorLineOf, firstPromptOf, isCleanupSkill, isSameRecord, issueOf, newMemo, recordOf, STATE_RULES, stateOf,
+  buildPathOf, comparedTextOf, configDirOf, ERROR_CHARS, errorLineOf, firstPromptOf, isCleanupSkill, issueOf, newMemo, recordOf, STATE_RULES, stateOf,
   statusMemoIn, ticketIn, WITHHELD, type StatusFacts,
 } from '../hooks/status'
 import type { AgentCard, StatusMemo } from '../types'
@@ -187,8 +187,8 @@ test('the state keeps the time it began while it holds, and begins again when it
 test('two records are the same when only the write time differs', () => {
   const one = recordOf(facts(), NOW)
   const written = memo({ ...afterWrite(memo(), one) })
-  expect(isSameRecord(one, recordOf(facts({ memo: written }), NOW + 60_000))).toBe(true)
-  expect(isSameRecord(one, recordOf(facts({ memo: written, busy: true }), NOW))).toBe(false)
+  expect(comparedTextOf(recordOf(facts({ memo: written }), NOW + 60_000))).toBe(comparedTextOf(one))
+  expect(comparedTextOf(recordOf(facts({ memo: written, busy: true }), NOW))).not.toBe(comparedTextOf(one))
 })
 
 test('a stored memo reads back only for its own session and only when every field is sound', () => {
