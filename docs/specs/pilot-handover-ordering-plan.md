@@ -1,17 +1,18 @@
 # Plan: the pilot mod hands the session the newest state once, at the right time
 
-Spec: `docs/specs/pilot-handover-ordering.md` (SAL-244). Written 2026-10-12.
+Spec: `docs/specs/pilot-handover-ordering.md`. Written 2026-10-12.
 
 ## Chosen approach
 
-The most-robust plan won, trimmed in two places and with ideas grafted from
-the other two. Its deciding idea is that `deliver` chooses which read to hand
-over after its last await before the prompt, not when `lookAt` checks whether
-it was overtaken. The other two plans chose at `lookAt`'s check, which leaves
-a narrower form of SAL-219 open: a poll that was not overtaken at that check
-enters `deliver`, waits on the told record and on `busy`, a newer observing
-look stores a newer read meanwhile, and the poll then submits its own older
-state. Every round of the SAL-160 review found a race of exactly that shape.
+The most-robust plan won, trimmed in two places and with ideas grafted from the
+other two. Its deciding idea is that `deliver` chooses which read to hand over
+after its last await before the prompt, not when `lookAt` checks whether it was
+overtaken. The other two plans chose at `lookAt`'s check, which leaves a
+narrower form of the overtaken-look race open: a poll that was not overtaken at
+that check enters `deliver`, waits on the told record and on `busy`, a newer
+observing look stores a newer read meanwhile, and the poll then submits its own
+older state. Every round of the review of the change that
+`pilot-shows-what-runs.md` describes found a race of exactly that shape.
 
 ### `mods/pilot/hooks/github.ts`
 

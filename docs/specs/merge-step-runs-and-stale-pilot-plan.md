@@ -1,6 +1,6 @@
 # Plan: a skipped run hides no real run, and a session knows when its pilot is stale
 
-Spec: `docs/specs/merge-step-runs-and-stale-pilot.md` (SAL-282). Written
+Spec: `docs/specs/merge-step-runs-and-stale-pilot.md`. Written
 2026-10-14 from a tournament of three plans: simplest thing, most robust
 and most extensible. The judge chose the most-extensible plan, scoring it 7.5
 of 10, against 6.5 for the most robust and 6 for the simplest. It said no
@@ -41,7 +41,7 @@ text of `skills/implement/SKILL.md`, step 9.
 
 5. **From the most-robust plan, after review: the diff names the commit
    read.** The plan first rejected this to follow spec point 9 word for
-   word, but the review of pull request #42 found that a checkout moving
+   word, but the review of the pull request found that a checkout moving
    away and back between the two reads of `HEAD` slips past the second
    read. The diff now names the commit read, and spec point 9 says so.
 
@@ -188,7 +188,8 @@ text of `skills/implement/SKILL.md`, step 9.
    - the yes bullet says "merge after **Read again before merging on a
      yes**".
 10. **The gates**, in `CLAUDE.md` order, reporting how the type check ran,
-    since the first gate fails on Claude Code 2.1.299 (SAL-285).
+    since the first gate fails on Claude Code 2.1.299 (see
+    `pilot-type-gate-watch.md`).
 
 ## Test plan, against the spec's Verification
 

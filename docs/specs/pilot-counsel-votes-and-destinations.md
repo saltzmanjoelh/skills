@@ -1,25 +1,26 @@
 # The counsel reads votes forgivingly and sends decisions where the session says
 
-Issue: SAL-283, covering SAL-183, SAL-200 and SAL-182. Written 2026-10-14.
+Written 2026-10-14.
 
 ## Goal
 
 Two faults in the pilot mod's counsel can send a question to the person for no
 reason, or file its decision in the wrong place.
 
-- **Votes that mean an option but are not a bare number** (SAL-183, SAL-200).
-  `readVote` in `mods/pilot/hooks/counsel.ts` accepts only `none`, `abstain`
-  or a bare whole number. A member that writes `VOTE: 2 (a 5-minute poll)`,
-  `VOTE: option 2`, `VOTE: **2**` or `VOTE: none .` has no vote. Since
-  SAL-205 such a member is launched again, and a second unreadable vote sends
-  the question to the person whatever the other five voted. Nothing tells the
-  session or the person what the member actually wrote.
-- **Decisions sent to an unrelated pull request** (SAL-182).
-  `counselPullRequest` in `mods/pilot/hooks/register.tsx` owes a decision to
-  the watched pull request whenever it is open, whatever the session is doing.
-  A session that runs `/spec` for its next issue while its earlier pull
-  request is still open has the interview's decisions listed in that pull
-  request's next review, and they never reach the new spec.
+- **Votes that mean an option but are not a bare number.** `readVote` in
+  `mods/pilot/hooks/counsel.ts` accepts only `none`, `abstain` or a bare whole
+  number. A member that writes `VOTE: 2 (a 5-minute poll)`, `VOTE: option 2`,
+  `VOTE: **2**` or `VOTE: none .` has no vote. Under the rule "Every member
+  votes" in `pilot-counsel.md`, such a member is launched again, and a second
+  unreadable vote sends the question to the person whatever the other five
+  voted. Nothing tells the session or the person what the member actually
+  wrote.
+- **Decisions sent to an unrelated pull request.** `counselPullRequest` in
+  `mods/pilot/hooks/register.tsx` owes a decision to the watched pull request
+  whenever it is open, whatever the session is doing. A session that runs
+  `/spec` for its next issue while its earlier pull request is still open has
+  the interview's decisions listed in that pull request's next review, and they
+  never reach the new spec.
 
 ## Users and trigger
 
@@ -34,8 +35,8 @@ them, and in the reviews on their pull requests.
 
 1. **The text is tidied first.** The text after `VOTE:` is trimmed, one
    trailing full stop is removed, and it is trimmed again, so `none .`,
-   `abstain .` and `2 .` read as `none`, `abstain` and `2` (SAL-200). Letter
-   case is ignored, as today.
+   `abstain .` and `2 .` read as `none`, `abstain` and `2`. Letter case is
+   ignored, as today.
 2. **Markdown emphasis is removed** when it wraps the whole vote or the option
    number: one or two `*` or `_` on each side, the same on both. So `**2**`,
    `*none*` and `**option 2**` read as `2`, `none` and `2`.
@@ -171,7 +172,8 @@ Each item is a mod test in `mods/pilot/tests/counsel.test.ts` or
   still has "no readable vote".
 - The recorded tally after an unreadable vote holds no text from it.
 - With an open pull request watched and no `pull_request`, a decision is
-  recorded in the spec and nothing is owed (the `/spec` case of SAL-182).
+  recorded in the spec and nothing is owed (the `/spec` case of decisions
+  sent to an unrelated pull request).
 - With `pull_request` naming the watched open pull request, the decision is
   owed to it and listed in its next review, as before.
 - `pull_request` naming another number, a merged or closed pull request, or

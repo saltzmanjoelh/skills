@@ -1,6 +1,6 @@
 # Plan: a merge reaches the checkout that new sessions load
 
-Spec: `docs/specs/merged-updates-linked-checkout.md` (SAL-186). Written
+Spec: `docs/specs/merged-updates-linked-checkout.md`. Written
 2026-10-08 from a tournament of three plans: simplest, most robust and most
 extensible.
 
@@ -56,7 +56,8 @@ Exploring the machine showed three facts the wording has to handle:
   robust). The spec limits the change to the Merged step, and the step's
   own wording already asks for the check.
 - **A named, reusable sub-procedure** (most extensible). It builds for the
-  SAL-160 follow-up and `/cleanup`, which the spec puts out of scope.
+  follow-up that tells a running session its mod is out of date and for
+  `/cleanup`, which the spec puts out of scope.
 - **Comparing names ignoring letter case** (most robust). `nameWithOwner` is
   GitHub's own form, so an exact comparison is what the spec states.
 - **A test of two concurrent runs** (most robust). It cannot be made

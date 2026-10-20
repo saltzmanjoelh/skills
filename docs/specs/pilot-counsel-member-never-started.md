@@ -2,15 +2,18 @@
 
 Date: 2026-10-14
 
-Issue: SAL-289, item 1 (item 2 is dropped; see "Decided by the counsel").
+This spec covers the first of two problems that were raised together; the
+second, how old tallies show the advocate, is dropped (see "Decided by the
+counsel").
 
 ## Goal
 
-SAL-286 (pull request 40) added `pilot:owners-advocate` as the seventh counsel
-member. A session reloads the pilot mod's hooks while it runs, but it loads
-agent files only when it starts. So a session that was running when the
-advocate joined has a tally that needs the advocate's vote, while the session
-cannot launch the advocate: the Agent tool answers "Agent type
+The change described in the section "The owner's advocate" of
+`pilot-counsel.md` added `pilot:owners-advocate` as the
+seventh counsel member. A session reloads the pilot mod's hooks while it runs,
+but it loads agent files only when it starts. So a session that was running
+when the advocate joined has a tally that needs the advocate's vote, while the
+session cannot launch the advocate: the Agent tool answers "Agent type
 'pilot:owners-advocate' not found". The advocate is asked again, still has no
 vote, and the question goes to the person. Every counsel question in that
 session then goes to the person until the session restarts, and nothing tells
@@ -88,7 +91,7 @@ vote and never started.
 - Changing when members are asked again, or skipping the second ask for a
   member that never started.
 - Marking members that never started in the pane.
-- Changing how old tallies show the advocate (SAL-289 item 2, dropped).
+- Changing how old tallies show the advocate (dropped; see "Decided by the counsel").
 - Pull request 42's general warning that the pilot mod changed on disk; this
   change neither needs it nor changes it.
 
@@ -130,6 +133,6 @@ vote and never started.
 
 - When a counsel member gives no vote, how should the tally's answer tell the person that the member could not be launched because the session started before that member joined the counsel, and that restarting the session fixes it? The counsel chose The mod detects it: for each member without a vote, it checks its own record of agents started since the members were launched, and only for a member of which no agent started does the answer say that the member never started, that a session started before the member joined cannot launch it (the Agent tool answers that the type is not found), and that restarting the session fixes it., 5 of 7.
 - Should this change also stop old tallies from listing the owner's advocate as having "no readable vote", by recording on each tally which members sat on the counsel, or should that part of the issue be dropped? The counsel chose Drop it: change nothing about old tallies, and leave the spec's "Old records" rule and the README sentence as they are., 7 of 7.
-- Where should the change that tells the person a counsel member never started (and that a restart fixes it) be built: in its own pull request on main, or inside pull request 42 (SAL-282), which warns when the pilot mod changed on disk? The counsel chose Its own pull request from main: the check lives in the counsel's tally answers and uses only the mod's agents record and each question's launch time, which main already has., 7 of 7.
+- Where should the change that tells the person a counsel member never started (and that a restart fixes it) be built: in its own pull request on main, or inside pull request 42 (`merge-step-runs-and-stale-pilot.md`), which warns when the pilot mod changed on disk? The counsel chose Its own pull request from main: the check lives in the counsel's tally answers and uses only the mod's agents record and each question's launch time, which main already has., 7 of 7.
 - Which of the counsel's outputs should carry the message that a member never started and that restarting the session fixes it? The counsel chose Only the answer that sends the question to the person, in the member's line under "Without a vote" and in an opening sentence for the question., 6 of 7.
 - How should the answer that sends the question to the person word the message for a member that never started, given that the session itself saw what the Agent tool answered when it tried to launch that member? The counsel chose Conditioned on what the session saw: it says the member never started even after being asked again, and tells the session to add that a restart fixes it only if the Agent tool answered that the member's type is not found; otherwise the session says only that the member never started., 7 of 7.

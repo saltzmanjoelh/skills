@@ -1,6 +1,6 @@
 # Delete the old review skills and agents that the pilot mod replaced
 
-Issue: SAL-174. Written 2026-10-10.
+Written 2026-10-10.
 
 ## Goal
 
@@ -8,7 +8,8 @@ The pilot mod's agents (`mods/pilot/agents`) replace the old standalone review
 tools, but the old ones are still installed and still appear as skills and
 agent types in every session. After this change they are gone from the
 repository and from `~/.claude`, nothing live names them, and the two hygiene
-searches that SAL-175 had to run with these folders excluded print nothing
+searches that the change making the remaining skills generic (see
+`generic-skills.md`) had to run with these folders excluded print nothing
 with no exclusion at all.
 
 ## Users and trigger
@@ -97,8 +98,9 @@ this session; no skill gains a general rule for it.
 - The specs and plans under `docs/specs/` keep naming the old tools. They are
   the record of why each change was made, and the hard rules allow them to
   name things.
-- `CLAUDE.md` keeps its opening line and its hard rules unchanged, and SAL-199
-  (deleting the hard rule that mentions SAL-174 and SAL-175) is separate work.
+- `CLAUDE.md` keeps its opening line and its hard rules unchanged, and
+  deleting the hard rule that mentions this change and the change that made
+  the remaining skills generic is separate work.
 - Nothing else in the pilot mod changes besides the one symbol.
 
 ## Failure modes
@@ -119,7 +121,7 @@ this session; no skill gains a general rule for it.
   hits in `docs/specs/generic-skills.md`, which shows the search ran:
   `git grep -n -w -E 'lens-review|edge-hunt|debug-panel|skeptic|repro-hunter|security-lens|maintainer-lens|perf-lens|data-lens' -- . ':!docs/specs'`
 - This prints nothing:
-  `git grep -n -i -E '<project, client and product names>|SAL-|develop|check-spec-first|grill-me|adopt-project|iOS|Android|Linear|~/Projects/' -- skills mods README.md`
+  `git grep -n -i -E '<project, client and product names>|[A-Z]{2,}-[0-9]+|develop|check-spec-first|grill-me|adopt-project|iOS|Android|Linear|~/Projects/' -- skills mods README.md`
 - This prints nothing: `git grep -n '—' -- skills mods README.md`
 - `git ls-files agents skills/lens-review skills/edge-hunt skills/debug-panel`
   prints nothing.
@@ -137,8 +139,8 @@ this session; no skill gains a general rule for it.
 
 ## Decided by the counsel
 
-- The issue's comment asks that `git grep -n '—' -- skills mods README.md` print nothing once SAL-174 lands. After the deletions it still prints hits in the pilot mod: `mods/pilot/hooks/progress.ts:219` and `:228` return `'—'` as the symbol the pane shows for an unknown model, the tests in `mods/pilot/tests/pane.test.ts`, `progress.test.ts` and `register.test.ts` expect that symbol, and `mods/pilot/README.md:59` describes it. What should SAL-174 do about these hits? The counsel chose Change the pane's unknown-model symbol from an em dash to another character (such as a hyphen or a question mark) in progress.ts, its tests and the mod's README, so the grep over skills, mods and README.md prints nothing as written., 4 of 6.
-- Done-when item 4 of SAL-174 says a grep for `lens-review`, `edge-hunt`, `debug-panel`, `skeptic`, `repro-hunter`, `security-lens`, `maintainer-lens`, `perf-lens` and `data-lens` "over the repository finds nothing". After the deletions and edits, the only hits left are in `docs/specs/`: the SAL-175 spec and plan (`generic-skills.md`, `generic-skills-plan.md`) record that these were left for SAL-174, and SAL-174's own new spec and plan must name what they delete. Which files should that grep cover? The counsel chose Everything in the repository except `docs/specs/`: run `git grep -n -E '<names>' -- . ':!docs/specs'`. Specs and plans are the record of why a change was made, which the hard rules allow to name things, so they keep the old names; every live file (skills, mods, README.md, CLAUDE.md, agents) must be clean., 6 of 6.
+- The issue's comment asks that `git grep -n '—' -- skills mods README.md` print nothing once this change lands. After the deletions it still prints hits in the pilot mod: `mods/pilot/hooks/progress.ts:219` and `:228` return `'—'` as the symbol the pane shows for an unknown model, the tests in `mods/pilot/tests/pane.test.ts`, `progress.test.ts` and `register.test.ts` expect that symbol, and `mods/pilot/README.md:59` describes it. What should this change do about these hits? The counsel chose Change the pane's unknown-model symbol from an em dash to another character (such as a hyphen or a question mark) in progress.ts, its tests and the mod's README, so the grep over skills, mods and README.md prints nothing as written., 4 of 6.
+- Done-when item 4 of the issue says a grep for `lens-review`, `edge-hunt`, `debug-panel`, `skeptic`, `repro-hunter`, `security-lens`, `maintainer-lens`, `perf-lens` and `data-lens` "over the repository finds nothing". After the deletions and edits, the only hits left are in `docs/specs/`: the spec and plan that made the remaining skills generic (`generic-skills.md`, `generic-skills-plan.md`) record that these were left for this change, and this change's own new spec and plan must name what they delete. Which files should that grep cover? The counsel chose Everything in the repository except `docs/specs/`: run `git grep -n -E '<names>' -- . ':!docs/specs'`. Specs and plans are the record of why a change was made, which the hard rules allow to name things, so they keep the old names; every live file (skills, mods, README.md, CLAUDE.md, agents) must be clean., 6 of 6.
 - `skills/plan-tournament/SKILL.md` step 5 ("Deliver") ends: "Offer to proceed (implement → /verify-loop → /lens-review)." Once `/lens-review` is deleted, what should that sentence offer instead? The counsel chose Offer to build the plan and then run `/verify-loop`, and drop the review step from the sentence, because `/implement` already runs the pilot mod's reviewers on the pull request and plan-tournament usually runs inside `/implement`., 5 of 6.
-- After SAL-174 deletes every file in `agents/`, the folder no longer exists in git. The README still says "Personal Claude Code skills and review agents, in one place. `~/.claude/skills/<name>` and `~/.claude/agents/<name>.md` are symlinks into this repository" and keeps an "Agents:" line, and the project's `CLAUDE.md` says "This repository holds generic skills, agents and mods" (line 3), "No gate reads `skills/`, `agents/`, `docs/` or `README.md`" (line 22), and names "the agents" in two hard rules (lines 29 and 38). How far should SAL-174 go in updating that text? The counsel chose Update both: in the README, drop the `~/.claude/agents` link sentence and the Agents line, and say in one sentence that the review agents now live in the pilot mod (`mods/pilot/agents`); in `CLAUDE.md`, drop `agents/` from the line-22 list of paths no gate reads, and leave lines 3, 29 and 38, which still hold because the mod's agents are agents in this repository., 6 of 6.
-- Done-when item 2 of SAL-174 says the links `~/.claude/skills/lens-review`, `edge-hunt`, `debug-panel` and the six `~/.claude/agents/*.md` links are removed and no dangling link remains. They point into the main checkout (`~/Projects/skills`), which stays on `main` until the pull request merges and `/implement`'s Merged step fast-forwards it. When should the session remove them? The counsel chose After the merge, in `/implement`'s Merged step, right after the linked checkout is fast-forwarded: remove the nine links by name with `rm` (never `rm -r`, and only after `readlink` shows each one points at the deleted path), then confirm `find ~/.claude/skills ~/.claude/agents -maxdepth 1 -type l ! -exec test -e {} \; -print` prints nothing., 6 of 6.
+- After this change deletes every file in `agents/`, the folder no longer exists in git. The README still says "Personal Claude Code skills and review agents, in one place. `~/.claude/skills/<name>` and `~/.claude/agents/<name>.md` are symlinks into this repository" and keeps an "Agents:" line, and the project's `CLAUDE.md` says "This repository holds generic skills, agents and mods" (line 3), "No gate reads `skills/`, `agents/`, `docs/` or `README.md`" (line 22), and names "the agents" in two hard rules (lines 29 and 38). How far should this change go in updating that text? The counsel chose Update both: in the README, drop the `~/.claude/agents` link sentence and the Agents line, and say in one sentence that the review agents now live in the pilot mod (`mods/pilot/agents`); in `CLAUDE.md`, drop `agents/` from the line-22 list of paths no gate reads, and leave lines 3, 29 and 38, which still hold because the mod's agents are agents in this repository., 6 of 6.
+- Done-when item 2 of the issue says the links `~/.claude/skills/lens-review`, `edge-hunt`, `debug-panel` and the six `~/.claude/agents/*.md` links are removed and no dangling link remains. They point into the main checkout (`~/Projects/skills`), which stays on `main` until the pull request merges and `/implement`'s Merged step fast-forwards it. When should the session remove them? The counsel chose After the merge, in `/implement`'s Merged step, right after the linked checkout is fast-forwarded: remove the nine links by name with `rm` (never `rm -r`, and only after `readlink` shows each one points at the deleted path), then confirm `find ~/.claude/skills ~/.claude/agents -maxdepth 1 -type l ! -exec test -e {} \; -print` prints nothing., 6 of 6.

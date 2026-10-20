@@ -1,7 +1,6 @@
 # Plan: follow-ups are fixed, dropped or filed once
 
-Spec: `docs/specs/follow-ups-sorted.md`. Issue: SAL-280, with SAL-199 and
-SAL-210. Written 2026-10-14.
+Spec: `docs/specs/follow-ups-sorted.md`. Written 2026-10-14.
 
 ## Chosen approach
 
@@ -17,7 +16,8 @@ from this plan" says:
   `mods/pilot/agents/adversarial-reviewer.md` gain the `If never fixed:`
   part under **Each finding**, and the sentence in **Rounds** that defines
   `FOLLOW-UP:` points to it.
-- The root `CLAUDE.md` loses the sentence naming SAL-174 and SAL-175.
+- The root `CLAUDE.md` loses the sentence naming the two clean-up issues,
+  the ones behind `old-review-tools-deleted.md` and `generic-skills.md`.
 - `skills/storypr/SKILL.md` step 1 fetches the base and diffs with three
   dots.
 
@@ -94,11 +94,12 @@ own safeguards rather than adjusting them.
 
 Each step is one commit.
 
-1. **SAL-199.** In `CLAUDE.md`, replace the bullet that begins "Some files
-   name a project today" with "A reviewer applies these rules to the text a
-   pull request adds or changes."
-2. **SAL-210.** In `skills/storypr/SKILL.md` step 1, say to fetch the base
-   first and why, and use:
+1. **The hard rule no longer names the clean-up issues.** In `CLAUDE.md`,
+   replace the bullet that begins "Some files name a project today" with "A
+   reviewer applies these rules to the text a pull request adds or changes."
+2. **storypr fetches the base and diffs with three dots.** In
+   `skills/storypr/SKILL.md` step 1, say to fetch the base first and why,
+   and use:
    ```bash
    git fetch origin <base branch>
    git log --oneline origin/<base branch>..HEAD
@@ -195,10 +196,10 @@ by reading, and the report says so.
 - ``grep -rn "for each \`FOLLOW-UP:\`" skills mods`` prints nothing.
 - `grep -n "If never fixed" mods/pilot/agents/*.md` finds exactly the two
   verdict reviewers.
-- `grep -n "SAL-17" CLAUDE.md` prints nothing.
+- `grep -n "Some files name a project today" CLAUDE.md` prints nothing.
 - `grep -n "fetch origin\|\.\.\.HEAD" skills/storypr/SKILL.md` shows the
   fetch and both three-dot diffs.
-- `grep -rnE "SAL-[0-9]" skills mods/pilot/agents` finds nothing in added
+- `grep -rnE "[A-Z]{2,}-[0-9]+" skills mods/pilot/agents` finds nothing in added
   text.
 - A dry run of the inert commands in a scratch repository: a commit that
   changes one spec line and one `//` comment shows only those lines; adding

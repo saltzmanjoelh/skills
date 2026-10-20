@@ -1,6 +1,6 @@
 # The pilot mod's type gate writes the installed version's types again
 
-Issue: SAL-285. Written 2026-10-14.
+Written 2026-10-14.
 
 ## Goal
 

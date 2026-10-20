@@ -1,6 +1,6 @@
 # Plan: pilot shows its progress from the moment /implement starts
 
-Spec: `docs/specs/pilot-progress.md` (SAL-215). Written 2026-10-10.
+Spec: `docs/specs/pilot-progress.md`. Written 2026-10-10.
 
 ## Chosen approach
 
@@ -207,8 +207,9 @@ Mapped to the spec's Verification list.
    sets the fake pull request to merged or closed, polls, and finds both rows,
    the bar at 9 of 9 `merged` or its count with `closed`. A new title reported
    after the merge shows its own count.
-4. **The second row equals SAL-160's line** for watched views at several
-   widths, including ones narrow enough to drop names (`pane.test.ts`).
+4. **The second row equals the line that `pilot-shows-what-runs.md` added**
+   for watched views at several widths, including ones narrow enough to drop
+   names (`pane.test.ts`).
 5. **Drawings.** `register.test.ts` mounts `AbovePrompt` and `Pane` on
    `desktop` with `bodyColumns`: the band has no `Text`, one `Svg` and two
    buttons; the pane's header and agent rows are `Svg`, and no agent's

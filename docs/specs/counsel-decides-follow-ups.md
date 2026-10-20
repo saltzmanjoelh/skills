@@ -1,9 +1,8 @@
 # The counsel decides each follow-up
 
-Issue: SAL-288. Written 2026-10-14. It builds on
-`follow-ups-sorted.md` (SAL-280), which it changes only where it says so,
-and on the counsel of seven members and the 4 of 7 rule in
-`pilot-counsel.md` (SAL-286).
+Written 2026-10-14. It builds on `follow-ups-sorted.md`, which it changes
+only where it says so, and on the counsel of seven members and the 4 of 7
+rule in the section "The owner's advocate" of `pilot-counsel.md`.
 
 ## Goal
 
@@ -19,9 +18,9 @@ follow-up.
 
 Every `/implement` session, in the second half of a review round where both
 verdicts approve, and the person who later reads the issue tracker. The
-trigger: after SAL-280 the session itself sorts follow-ups into cheap,
-dropped and to file, so its own view of its own code still decides what is
-worth keeping. Four runs once filed 27 issues, and the owner labelled about
+trigger: since `follow-ups-sorted.md`, the session itself sorts follow-ups into
+cheap, dropped and to file, so its own view of its own code still decides what
+is worth keeping. Four runs once filed 27 issues, and the owner labelled about
 twenty of them `not-worthy`; the owner's position is that there is no point
 putting up issues that are not worth doing.
 
@@ -80,18 +79,19 @@ VOTE 1: <fix|file|drop|none>
 REASON 1: <one sentence>
 ```
 
-A vote is read the way a vote is read today, except that it is one of the
-words `fix`, `file`, `drop` or `none`, or the number of one of the three
-options. A member whose report lacks a readable vote for any follow-up has
-no vote, and the tally asks for it again once, as today. A member asked
-again that still lacks a vote for some follow-up does not send the question
-to the person, which is the one place a follow-ups question departs from
-SAL-205's rule: each follow-up is counted from the votes that exist, so a
-follow-up with 4 votes for one option is decided whatever the missing
-member would have said, and every other follow-up is undecided and dropped,
-listed with its tally and the members without a vote. A missing vote can
-only take a vote away, so it never changes a follow-up that already has
-four. No member proposes options on such a question, so it never reruns.
+A vote is read the way a vote is read today, except that it is one of the words
+`fix`, `file`, `drop` or `none`, or the number of one of the three options. A
+member whose report lacks a readable vote for any follow-up has no vote, and
+the tally asks for it again once, as today. A member asked again that still
+lacks a vote for some follow-up does not send the question to the person, which
+is the one place a follow-ups question departs from the rule in the section
+"Every member votes" of `pilot-counsel.md`: each follow-up is counted from the
+votes that exist, so a follow-up with 4 votes for one option is decided
+whatever the missing member would have said, and every other follow-up is
+undecided and dropped, listed with its tally and the members without a vote. A
+missing vote can only take a vote away, so it never changes a follow-up that
+already has four. No member proposes options on such a question, so it never
+reruns.
 
 ### Each follow-up is decided on its own
 
@@ -174,7 +174,7 @@ to fix in this pull request and could not.
 
 ## Non-goals
 
-- The existing `not-worthy` backlog, which SAL-290 decides separately.
+- The existing `not-worthy` backlog, which a separate issue decides.
 - Any change to which findings block, to the rule for rounds, to the
   focused reviewers, or to the cheap fixes the session makes itself.
 - Any change to how an ordinary counsel question, one with `options`, is
@@ -232,8 +232,9 @@ the **Merged** step files only what the counsel decided to file.
 ## Decided by the person
 
 - The counsel's answer on a member still without a vote, above, departs from
-  SAL-205's rule that such a member sends the question to the person, and
-  that rule is one the owner decided directly. The owner's advocate
-  dissented on that ground, so the owner was asked, and chose to count from
-  the votes that exist for follow-ups questions. SAL-205's rule still holds
-  for every other counsel question.
+  the rule in the section "Every member votes" of `pilot-counsel.md` that such
+  a member sends the question to the person, and that rule is one the owner
+  decided directly. The owner's advocate dissented on that ground, so the owner
+  was asked, and chose to count from the votes that exist for follow-ups
+  questions. The rule in "Every member votes" still holds for every other
+  counsel question.

@@ -4,14 +4,13 @@ Date: 2026-10-12
 
 ## Goal
 
-`docs/specs/pilot-command-throws.md`, merged in pull request 29, has an edge
-case that says "A throw while the watch tool reads the pull request leaves the
-pull request that was watched before still watched, as a failed read already
-does." The test that pull request added for a throwing read, "the watch tool
-answers that gh could not read the pull request when the read throws", checks
-only the answer text. Nothing would notice if a later change made a throwing
-read drop or replace the pull request that was watched before. This change adds
-a test that guards that edge case.
+`docs/specs/pilot-command-throws.md` has an edge case that says "A throw while
+the watch tool reads the pull request leaves the pull request that was watched
+before still watched, as a failed read already does." The test that change
+added for a throwing read, "the watch tool answers that gh could not read the
+pull request when the read throws", checks only the answer text. Nothing would
+notice if a later change made a throwing read drop or replace the pull request
+that was watched before. This change adds a test that guards that edge case.
 
 ## Users and trigger
 

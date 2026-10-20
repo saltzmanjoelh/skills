@@ -1,7 +1,6 @@
 # Follow-ups are fixed, dropped or filed once
 
-Issue: SAL-280, with SAL-199 and SAL-210 in the same run. Written
-2026-10-14.
+Written 2026-10-14.
 
 ## Goal
 
@@ -15,11 +14,13 @@ record on the pull request.
 
 Every `/implement` session, at the point where reviews raise follow-ups and
 at the **Merged** step, and the person who reads the issue tracker
-afterwards. The trigger: four runs (SAL-174, SAL-176, SAL-244 and SAL-245)
-merged and filed 27 issues, and the owner labelled about twenty of them
-`not-worthy`, because they were wording in specs and comments, tests that
-could be stronger, code structure, and problems nobody had seen happen. The
-cause is in `skills/implement/SKILL.md`: the verdict reviewers class every
+afterwards. The trigger: four runs (the ones behind
+`old-review-tools-deleted.md`, `implement-runs-unattended.md`,
+`pilot-handover-ordering.md` and `pilot-checks-and-runs.md`) merged and
+filed 27 issues, and the owner labelled about twenty of them `not-worthy`,
+because they were wording in specs and comments, tests that could be
+stronger, code structure, and problems nobody had seen happen. The cause is
+in `skills/implement/SKILL.md`: the verdict reviewers class every
 non-blocking finding as `FOLLOW-UP:` (from round 3, almost every finding), a
 speculative finding also becomes a follow-up, and the **Merged** step files
 one issue "for each `FOLLOW-UP:` in the reviews". Nothing asks whether a
@@ -131,20 +132,19 @@ nothing when an issue has it, so a resumed session never files a second.
 
 ### The hard rule no longer names the clean-up issues
 
-SAL-199: the hard rule in the root `CLAUDE.md` loses its first sentence
-("Some files name a project today, and SAL-174 and SAL-175 are cleaning
-them up."), because both issues have merged. The second sentence, that a
-reviewer applies the rules to the text a pull request adds or changes,
-stays.
+The hard rule in the root `CLAUDE.md` loses its first sentence, which said
+that some files name a project today and that two issues, the ones behind
+`old-review-tools-deleted.md` and `generic-skills.md`, were cleaning them
+up, because both issues have merged. The second sentence, that a reviewer
+applies the rules to the text a pull request adds or changes, stays.
 
 ### storypr fetches the base and diffs with three dots
 
-SAL-210: `storypr` first runs `git fetch origin <base branch>`, then reads
-the log with `git log --oneline origin/<base branch>..HEAD` and both diffs
-with three dots, `git diff --stat origin/<base branch>...HEAD` and
+`storypr` first runs `git fetch origin <base branch>`, then reads the log
+with `git log --oneline origin/<base branch>..HEAD` and both diffs with
+three dots, `git diff --stat origin/<base branch>...HEAD` and
 `git diff origin/<base branch>...HEAD`. A stale local base branch then
-neither hides commits nor shows the base's own new commits as the
-branch's.
+neither hides commits nor shows the base's own new commits as the branch's.
 
 ## Edge cases
 
@@ -227,7 +227,7 @@ the mod.
 - `mods/pilot/agents/spec-reviewer.md` and
   `mods/pilot/agents/adversarial-reviewer.md`: the finding format has the
   `If never fixed:` part for a `FOLLOW-UP:`.
-- `CLAUDE.md` no longer names SAL-174 and SAL-175.
+- `CLAUDE.md` no longer names the two clean-up issues.
 - `skills/storypr/SKILL.md` fetches the base and diffs with three dots.
 - `grep -rn "for each \`FOLLOW-UP:\`" skills mods` finds nothing.
 

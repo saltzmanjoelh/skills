@@ -1,6 +1,6 @@
 # Plan: the pilot line and pane show the true state
 
-Spec: `pilot-true-state.md` (SAL-295). Written 2026-10-14 from a plan
+Spec: `pilot-true-state.md`. Written 2026-10-14 from a plan
 tournament of three planners (simplest thing, most robust, most extensible)
 and a judge. The simplest plan won; the grafts below come from the other two
 and from the judge.

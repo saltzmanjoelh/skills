@@ -1,6 +1,6 @@
 # The pilot line always says what the session is doing
 
-Issue: SAL-160. Written 2026-10-09.
+Written 2026-10-09.
 
 ## Goal
 
@@ -13,16 +13,16 @@ background task and what each is working on.
 ## Users and trigger
 
 A person watching an `/implement` session, at the desk or from another device.
-Seen on 2026-10-08 while a session drove #11, the line read
-`pilot: #11 open · checks none · 0 agents running · waiting on owner` while a
+Seen on 2026-10-08 while a session drove a pull request, the line read
+`pilot: #N open · checks none · 0 agents running · waiting on owner` while a
 builder agent resumed with SendMessage was working, a background shell command
 was running, and no question was open. Seen on 2026-10-09, in screenshots from
 the person:
 
 - sessions in the spec and plan stages with "3 running tasks" and messages
   from subagents, and no pilot line at all, because nothing was watched yet;
-- the desktop banner saying #20 had merged while the line still read
-  `pilot: #20 open · checks none · nothing to hand over · next look in 7m`,
+- the desktop banner saying the pull request had merged while the line still
+  read `pilot: #N open · checks none · nothing to hand over · next look in 7m`,
   because the session merged inside a turn that went on;
 - Claude Code's own "Running a command 1m 7s" beside a line that said
   `nothing to hand over`, with nothing saying that the command was the gates.
@@ -85,7 +85,7 @@ main things this mod is for.
    otherwise a task). The whole line is shortened to the width the band
    gives it, cutting the list of names first and ending it with `…`.
 7. **Plural agreement.** `1 agent`, never `1 agents`. This replaces the
-   plural that the SAL-159 spec (`pilot-next-look.md`) pinned.
+   plural that `pilot-next-look.md` pinned.
 8. **With a pull request watched**, the line reads
    `pilot: #<n> <state> · checks <ci> · <running part> · <what is next>` when
    anything runs, and as today otherwise. The `<k> agents running` phrase of

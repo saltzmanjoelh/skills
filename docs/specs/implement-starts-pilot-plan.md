@@ -1,6 +1,6 @@
 # Plan: /implement starts the pilot mod before it checks the issue
 
-Spec: `docs/specs/implement-starts-pilot.md` (SAL-204). Written 2026-10-08.
+Spec: `docs/specs/implement-starts-pilot.md`. Written 2026-10-08.
 
 ## Chosen approach
 

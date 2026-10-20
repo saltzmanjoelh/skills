@@ -41,7 +41,7 @@ the references inside the section, which the build updates.
 - Step 1 says that after **no links found** the later steps do not run, so
   a session cannot go on and report **not linked**.
 - The limit rule keeps the words "renames and rewrapping included", which
-  is the point of SAL-299.
+  is the point of the spec's section "The limit rule".
 
 ## Rejected
 

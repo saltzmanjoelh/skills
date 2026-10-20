@@ -1,6 +1,6 @@
 # Plan: the counsel decides before the person is asked
 
-Spec: `docs/specs/pilot-counsel.md` (SAL-167). Written 2026-10-07.
+Spec: `docs/specs/pilot-counsel.md`. Written 2026-10-07.
 
 ## Chosen approach
 

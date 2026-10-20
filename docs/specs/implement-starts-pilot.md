@@ -1,6 +1,6 @@
 # /implement starts the pilot mod before it checks the issue
 
-Issue: SAL-204. Written 2026-10-08.
+Written 2026-10-08.
 
 ## Goal
 
@@ -112,7 +112,7 @@ step 1 says to turn Remote Control on "first".
 
 ## Decided by the counsel
 
-- SAL-204 says that /implement should "start the pilot mod" right after it turns on Remote Control and before it checks the issue. What should starting the mod mean in the skill? The counsel chose Add a session tool to the pilot mod that opens its pane (calling $.ui.open, as the /pilot command already does). Step 1 of /implement calls that tool right after Remote Control. If the tool is missing, the mod is not loaded, and the session stops and says so., 3 of 3; security-reviewer, performance-reviewer and data-reviewer abstained.
+- The issue behind this spec says that /implement should "start the pilot mod" right after it turns on Remote Control and before it checks the issue. What should starting the mod mean in the skill? The counsel chose Add a session tool to the pilot mod that opens its pane (calling $.ui.open, as the /pilot command already does). Step 1 of /implement calls that tool right after Remote Control. If the tool is missing, the mod is not loaded, and the session stops and says so., 3 of 3; security-reviewer, performance-reviewer and data-reviewer abstained.
 - Where in /implement's ordered startup should the session read the project's facts and say the base branch, gates and limits in one line, now that the order must be Remote Control, then starting the pilot mod, then checking the issue? The counsel chose Inside step 1, right after the pilot mod starts and before the worktree is made: Remote Control, start the mod, read the facts and say them in one line, make the worktree, read the architecture and gotchas documents. The facts section keeps its table but no longer says when to speak., 3 of 4; performance-reviewer and data-reviewer abstained.
 - Should `/implement --resume #N` also turn Remote Control on and start the pilot mod (open its pane through the new tool) before it does anything else, the way a fresh /implement now does? The counsel chose Yes: the Resuming section begins with the same two actions as step 1, Remote Control and then starting the mod, before it finds the branch and worktree., 3 of 3; security-reviewer, performance-reviewer and data-reviewer abstained.
 - When turning Remote Control on fails or is refused (by a permission check, or because the app reports it unavailable), what should /implement do before going on to start the pilot mod? The counsel chose Carry on: say in one sentence that Remote Control is off and why, then start the mod and continue. The session works without it; only following from another device is lost., 4 of 4; performance-reviewer and data-reviewer abstained.

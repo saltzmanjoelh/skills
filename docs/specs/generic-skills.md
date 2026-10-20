@@ -1,6 +1,6 @@
 # Make the remaining skills generic
 
-Issue: SAL-175. Written 2026-10-08.
+Written 2026-10-08.
 
 ## Goal
 
@@ -121,12 +121,14 @@ particular:
 
 - `skills/lens-review`, `skills/edge-hunt`, `skills/debug-panel`, everything in
   `agents/`, and the `skeptic`, `repro-hunter` and `/lens-review` references in
-  `pr-comments` and `plan-tournament`. SAL-174 deletes or rewrites those, so
-  this change leaves them alone, and the item-5 grep excludes the three folders
-  until SAL-174 merges.
+  `pr-comments` and `plan-tournament`. The separate change that deletes the
+  old review tools (see `old-review-tools-deleted.md`) deletes or rewrites
+  those, so this change leaves them alone, and the item-5 grep excludes the
+  three folders until that change merges.
 - Changing `implement`'s table or behavior.
-- The root `CLAUDE.md` sentence naming SAL-174 and SAL-175, which SAL-199
-  removes.
+- The root `CLAUDE.md` sentence that names this change and the change that
+  deletes the old review tools, which the later change described in
+  `follow-ups-sorted.md` removes.
 - Em dashes in `docs/`, which the issue's grep does not cover.
 - A gate that checks the skills' text.
 
@@ -135,9 +137,10 @@ particular:
 - **A skill's default drifts from the README.** No gate reads `skills/` or
   `README.md`, so only reviewers catch it. The verification below compares
   every key's default in every file that states it.
-- **The full grep still hits after this merges**, in the three folders SAL-174
-  deletes. That is expected until SAL-174 merges. A follow-up asks SAL-174 to
-  run the same grep with nothing excluded.
+- **The full grep still hits after this merges**, in the three folders that
+  the change deleting the old review tools deletes. That is expected until
+  that change merges. A follow-up asks that change to run the same grep with
+  nothing excluded.
 - **A rewritten sentence changes what a skill tells the model to do.** The
   diff is reviewed hunk by hunk against the old text. Only the facts, the
   report format, the approval section and wording change.
@@ -145,7 +148,7 @@ particular:
 ## Verification
 
 - This prints nothing:
-  `git grep -n -i -E '<project, client and product names>|SAL-|develop|check-spec-first|grill-me|adopt-project|iOS|Android|Linear|~/Projects/' -- skills mods README.md ':!skills/lens-review' ':!skills/edge-hunt' ':!skills/debug-panel'`
+  `git grep -n -i -E '<project, client and product names>|[A-Z]{2,}-[0-9]+|develop|check-spec-first|grill-me|adopt-project|iOS|Android|Linear|~/Projects/' -- skills mods README.md ':!skills/lens-review' ':!skills/edge-hunt' ':!skills/debug-panel'`
 - This prints nothing:
   `git grep -n '—' -- skills mods README.md ':!skills/lens-review' ':!skills/edge-hunt' ':!skills/debug-panel'`
 - For each key in the README's table, `git grep -n '<key>' -- skills README.md`
@@ -166,10 +169,10 @@ particular:
 
 ## Decided by the counsel
 
-- SAL-175 item 6 says the README documents the project-facts contract once (each key and its default), and each skill names only the keys it reads. Where should each fact's default be written? The counsel chose The README holds the full table of every key and its default, and says it is the contract. Each skill also lists the keys it reads with their defaults, because a skill is loaded alone into another project and cannot rely on finding this README; the README says the skills restate their defaults and must agree with it., 3 of 4; performance-reviewer and data-reviewer abstained.
-- SAL-175 item 5 requires a grep over skills, mods and README.md for project names and em dashes to print nothing. Today it also hits skills/lens-review, skills/edge-hunt and skills/debug-panel, which SAL-174 (not started) deletes outright, and the `skeptic` references in skills/pr-comments, which SAL-174 also rewrites. How should this pull request treat those files? The counsel chose Leave every file SAL-174 deletes or rewrites alone. Verify item 5 with the three folders SAL-174 deletes excluded, say in the spec and the pull request that the full grep passes only once SAL-174 merges, and do not wait for it., 2 of 3; security-reviewer, performance-reviewer and data-reviewer abstained.
-- SAL-175 item 3 says skills/pr-comments "loses its 'In <project> specifically' section and uses generic approval wording". What should replace that section? The counsel chose A short generic section, such as 'When the project requires approvals': when the project's CLAUDE.md names reviewers whose approval a pull request needs, treat every such reviewer's threads alike, and after pushing fixes say which commit they landed in, because an approval refers to the commit it was written against and each required reviewer must approve again., 3 of 4; performance-reviewer and data-reviewer abstained.
-- SAL-175 item 2 says skills/verify-loop "reads the gates from the project's ## Gates section and reports counts, not verdicts". What exactly should its report contain, and what happens to the word "green"? The counsel chose The report lists every gate in order with the command, the counts its own output gives (for example tests passed, failed and skipped, or the number of type errors), or its exit status when the tool prints no count, and then every gate that did not run with the reason. "Green" stays only as the loop's stopping condition (every gate passed in the final full pass) and never appears in the report as a summary., 3 of 3; security-reviewer, performance-reviewer and data-reviewer abstained.
+- Item 6 of the issue says the README documents the project-facts contract once (each key and its default), and each skill names only the keys it reads. Where should each fact's default be written? The counsel chose The README holds the full table of every key and its default, and says it is the contract. Each skill also lists the keys it reads with their defaults, because a skill is loaded alone into another project and cannot rely on finding this README; the README says the skills restate their defaults and must agree with it., 3 of 4; performance-reviewer and data-reviewer abstained.
+- Item 5 of the issue requires a grep over skills, mods and README.md for project names and em dashes to print nothing. Today it also hits skills/lens-review, skills/edge-hunt and skills/debug-panel, which the change that deletes the old review tools (not started) deletes outright, and the `skeptic` references in skills/pr-comments, which that change also rewrites. How should this pull request treat those files? The counsel chose Leave every file that change deletes or rewrites alone. Verify item 5 with the three folders it deletes excluded, say in the spec and the pull request that the full grep passes only once that change merges, and do not wait for it., 2 of 3; security-reviewer, performance-reviewer and data-reviewer abstained.
+- Item 3 of the issue says skills/pr-comments "loses its 'In <project> specifically' section and uses generic approval wording". What should replace that section? The counsel chose A short generic section, such as 'When the project requires approvals': when the project's CLAUDE.md names reviewers whose approval a pull request needs, treat every such reviewer's threads alike, and after pushing fixes say which commit they landed in, because an approval refers to the commit it was written against and each required reviewer must approve again., 3 of 4; performance-reviewer and data-reviewer abstained.
+- Item 2 of the issue says skills/verify-loop "reads the gates from the project's ## Gates section and reports counts, not verdicts". What exactly should its report contain, and what happens to the word "green"? The counsel chose The report lists every gate in order with the command, the counts its own output gives (for example tests passed, failed and skipped, or the number of type errors), or its exit status when the tool prints no count, and then every gate that did not run with the reason. "Green" stays only as the loop's stopping condition (every gate passed in the final full pass) and never appears in the report as a summary., 3 of 3; security-reviewer, performance-reviewer and data-reviewer abstained.
 
 ## Decided by the person
 

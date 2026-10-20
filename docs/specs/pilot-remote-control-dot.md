@@ -1,6 +1,6 @@
 # The pilot line and Remote Control
 
-Issue: SAL-287. Written 2026-10-14.
+Written 2026-10-14.
 
 ## Goal
 
@@ -29,10 +29,10 @@ The engine types that Claude Code 2.1.299 writes for the mod
 Code program itself were searched for a call, an event, a session field or a
 setting that holds the session's Remote Control state. On `main` at the time
 of writing, the first gate does not produce that file, because Claude Code
-2.1.299 writes the types only when the gate sets the variable that SAL-285
-adds. The copy searched was the one that version wrote into the SAL-285
-worktree on 2026-10-14; its first line reads "Written by Claude Code
-2.1.299."
+2.1.299 writes the types only when the gate sets the variable that
+`pilot-type-gate-watch.md` adds. The copy searched was the one that version
+wrote into that change's worktree on 2026-10-14; its first line reads
+"Written by Claude Code 2.1.299."
 
 - **No call, event or session field names it.** The identifiers
   `remoteControl`, `RemoteControl`, `isRemote` and `bridgeState` appear
@@ -72,10 +72,10 @@ cannot reach the session.
    the company as it stands. It names no project, client or person, describes
    no private incident, and asks for two things: a read of the session's
    Remote Control state, and an event when that state changes.
-4. When this pull request merges, SAL-287 is marked done, and one new issue
-   is filed that holds the dot itself. It says it waits on Claude Code
-   exposing the session's Remote Control state, and it links the merged pull
-   request and the upstream request.
+4. When this pull request merges, this spec's issue is marked done, and one
+   new issue is filed that holds the dot itself. It says it waits on Claude
+   Code exposing the session's Remote Control state, and it links the merged
+   pull request and the upstream request.
 
 ## Edge cases
 
@@ -110,10 +110,11 @@ cannot reach the session.
   `docs/`.
 - The mod's tests and `claude plugin validate` still pass, which shows only
   that the mod is unchanged. The load gate and the type check fail on `main`
-  for the reason SAL-285 tracks, whatever this change does.
+  for the reason `pilot-type-gate-watch.md` describes, whatever this change
+  does.
 - Behavior 4 cannot be checked before the merge. It is confirmed afterwards
-  by SAL-287 being done and the new issue linking the merged pull request
-  and the request file.
+  by this spec's issue being done and the new issue linking the merged pull
+  request and the request file.
 
 ## Decided by the owner
 
@@ -123,6 +124,6 @@ cannot reach the session.
 
 ## Decided by the counsel
 
-- SAL-287 asks for a green or red dot on the pilot line showing whether Remote Control is on for the session. Claude Code 2.1.299 gives a mod no direct way to know that. Which outcome should this pull request ship? The counsel chose Ship the issue's fallback: the line shows no dot, nothing about Remote Control is guessed, and a short upstream request is drafted for the owner asking the engine to expose the session's Remote Control state (and an event when it changes) to mods., 6 of 6.
-- When the SAL-287 pull request merges (spec, plan and upstream request document only, no mod code), what should happen to the Linear issue SAL-287, which asked for the dot itself? The counsel chose Mark SAL-287 done, and file one new issue that holds the dot itself, to be picked up when Claude Code exposes the session's Remote Control state., 6 of 6.
-- Where in the skills repository should the SAL-287 upstream request (the text asking Claude Code to expose the session's Remote Control state and a change event to mods) live? The counsel chose In its own file next to the spec, docs/specs/pilot-remote-control-dot-upstream-request.md, which the spec links., 6 of 6.
+- The issue behind this spec asks for a green or red dot on the pilot line showing whether Remote Control is on for the session. Claude Code 2.1.299 gives a mod no direct way to know that. Which outcome should this pull request ship? The counsel chose Ship the issue's fallback: the line shows no dot, nothing about Remote Control is guessed, and a short upstream request is drafted for the owner asking the engine to expose the session's Remote Control state (and an event when it changes) to mods., 6 of 6.
+- When this spec's pull request merges (spec, plan and upstream request document only, no mod code), what should happen to the issue behind this spec, which asked for the dot itself? The counsel chose Mark that issue done, and file one new issue that holds the dot itself, to be picked up when Claude Code exposes the session's Remote Control state., 6 of 6.
+- Where in the skills repository should this spec's upstream request (the text asking Claude Code to expose the session's Remote Control state and a change event to mods) live? The counsel chose In its own file next to the spec, docs/specs/pilot-remote-control-dot-upstream-request.md, which the spec links., 6 of 6.

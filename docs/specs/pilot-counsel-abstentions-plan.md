@@ -1,8 +1,8 @@
 # Plan: counsel abstentions
 
-Spec: `docs/specs/pilot-counsel.md`, section "Abstentions" (SAL-196).
-Written 2026-10-08 from a tournament of three plans: simplest, most robust
-and most extensible. The simplest plan won, with grafts from the other two.
+Spec: `docs/specs/pilot-counsel.md`, section "Abstentions". Written 2026-10-08
+from a tournament of three plans: simplest, most robust and most extensible.
+The simplest plan won, with grafts from the other two.
 
 ## Chosen approach
 

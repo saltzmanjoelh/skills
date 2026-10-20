@@ -1,6 +1,6 @@
 # The pilot mod waits on a fix when a check fails, and wakes when a check completes again
 
-Issue: SAL-158. Written 2026-10-07.
+Written 2026-10-07.
 
 ## Goal
 

@@ -1,6 +1,6 @@
 # Plan: finished work leaves the pilot line and pane
 
-Spec: `pilot-finished-work-leaves.md` (SAL-284). Written 2026-10-14.
+Spec: `pilot-finished-work-leaves.md`. Written 2026-10-14.
 
 ## Chosen approach
 
