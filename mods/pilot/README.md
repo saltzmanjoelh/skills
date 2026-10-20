@@ -2,12 +2,25 @@
 
 A Claude Code mod that watches the pull request a session names through its watch tool, as `/implement` does once it opens one. It wakes the session when the pull request changes, shows how far through `/implement` the work is above the prompt, shows the pull request and the session's agents in a pane, and owns the reviewer agents.
 
-Install it by linking this folder into the skills folder, with the path to
-your clone of this repository in place of the placeholder:
+Install it from this repository's marketplace, which needs Claude Code 2.1.275
+or later:
+
+```
+/plugin install pilot --marketplace saltzmanjoelh/skills
+```
+
+To work on the mod itself, link this folder into the skills folder instead,
+with the path to your clone of this repository in place of the placeholder.
+The link loads the mod straight from your clone, so an edit takes effect
+without reinstalling:
 
 ```bash
 ln -s <path to this repository>/mods/pilot ~/.claude/skills/pilot
 ```
+
+Use one way or the other, not both. When both are present, the installed copy
+takes precedence and Claude Code skips the linked folder, so edits in your
+clone stop taking effect until you uninstall the marketplace copy.
 
 A session picks up the agents when it starts. A change to the hooks reloads in a running session.
 
