@@ -168,6 +168,9 @@ const toolName = (tool: string) => printable(tool, 60) || 'a tool'
 // Each rule answers the reason its state holds, or null when it does not.
 type StateRule = { state: BuildState; reasonOf: (f: StatusFacts) => string | null }
 
+// Why the session is idle: the reason of the last rule, which always answers.
+const IDLE_REASON = 'Nothing runs and nothing is waiting.'
+
 // The six states in the order the counsel chose: the first whose rule
 // answers a reason is the state. So done and in-cleanup show only once
 // nothing runs, and the foreman sees done only when the merged session has
@@ -215,7 +218,7 @@ export const STATE_RULES = [
   },
   {
     state: 'idle',
-    reasonOf: () => 'Nothing runs and nothing is waiting.',
+    reasonOf: () => IDLE_REASON,
   },
 ] as const satisfies readonly StateRule[]
 
@@ -233,7 +236,7 @@ export function stateOf(f: StatusFacts): { state: BuildState; reason: string } {
     const reason = rule.reasonOf(f)
     if (reason !== null) return { state: rule.state, reason }
   }
-  return { state: 'idle', reason: 'Nothing runs and nothing is waiting.' }
+  return { state: 'idle', reason: IDLE_REASON }
 }
 
 // The record to write at `writtenAt`. The state keeps the time it began when

@@ -9225,7 +9225,8 @@ const S0 = Date.parse('2026-10-12T00:00:00Z')
 // the registrations, the session's id (which a test may change, as a /clear
 // does), its start and end, its prompts and turns, its skills, the classic
 // events the tests raise, and the transcript, which is `messages` or refused.
-// `env` is the environment the mod reads.
+// `env` is the environment the mod reads. `transcriptReads` counts the reads
+// of the transcript.
 function foremanSession(on: On, over: { env?: Record<string, string>; messages?: object[] | 'refused' } = {}) {
   const clock = mock.clock(on, { now: S0 })
   mock.store(on)
@@ -9236,7 +9237,11 @@ function foremanSession(on: On, over: { env?: Record<string, string>; messages?:
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.id', () => ({ value: ids.current }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
-  on('session.messages', () => (over.messages === 'refused' ? { deny: 'the transcript could not be read' } : { value: (over.messages ?? []) as never }))
+  const transcript = { reads: 0 }
+  on('session.messages', () => {
+    transcript.reads += 1
+    return over.messages === 'refused' ? { deny: 'the transcript could not be read' } : { value: (over.messages ?? []) as never }
+  })
   on('prompt.submit', ($, e) => ({ text: e.text }))
   on('skill.prompt', ($, e) => ({ text: e.text }))
   on('classic.PermissionRequest', () => ({}))
@@ -9250,7 +9255,8 @@ function foremanSession(on: On, over: { env?: Record<string, string>; messages?:
     return text === undefined ? undefined : JSON.parse(text) as BuildStatus
   }
   const writesOf = (path = BUILD) => files.writes.log.filter(written => written === path).length
-  return { clock, ids, world, files, statusAt, writesOf }
+  const transcriptReads = () => transcript.reads
+  return { clock, ids, world, files, statusAt, writesOf, transcriptReads }
 }
 
 // Starts the session and submits its first prompt, typed by the person.
@@ -9712,4 +9718,54 @@ test('a write that never settles is given up on after its timeout, and the next 
   await s.clock.advance(MINUTE)
   expect(s.writesOf()).toBeGreaterThan(writes)
   expect(s.statusAt()).toMatchObject({ state: 'working', writtenAt: S0 + MINUTE })
+})
+
+test('after a merge, a write whose read is held across the end of a session ended by /clear never writes once the read answers', async ($, on) => {
+  // Holds the answer to the writer's last read of the state, the usage
+  // hold's, so the writer has read the memo before the end resets it.
+  const late = answerWaits(on, 'state.get', 'usageHold')
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  await watchUntilMerged($, s)
+  late.arm()
+  await s.clock.advance(MINUTE)
+  const writes = s.writesOf()
+  const ended = endSession($, 'clear')
+  await s.clock.advance(1000)
+  await ended
+  s.ids.current = 'session-2'
+  expect(s.world.calls).toContain(`rm -f ${BUILD}`)
+
+  late.release()
+  await s.clock.settle()
+  expect(s.writesOf()).toBe(writes)
+})
+
+test('a hot reload takes the ticket from the memo without reading the transcript again, keeps the state\'s start time, and starts the minute\'s write again', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  expect(s.transcriptReads()).toBe(1)
+
+  await s.clock.advance(MINUTE / 2)
+  await reloads($, s.clock)
+  await $.prompt.submit({ text: 'Carry on.', origin: { kind: 'composer' } } as never)
+  await s.clock.settle()
+  expect(s.transcriptReads()).toBe(1)
+  expect(s.statusAt()).toMatchObject({ ticket: 'slot-1', state: 'idle', stateSince: S0, writtenAt: S0 + MINUTE / 2 })
+
+  // The tick runs a minute after the reload, not a minute after the start.
+  await s.clock.advance(MINUTE)
+  expect(s.statusAt()).toMatchObject({ state: 'idle', stateSince: S0, writtenAt: S0 + (3 * MINUTE) / 2 })
+})
+
+test('a turn that starts closes a permission prompt raised while no turn ran, so the file reads working', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} } as never)
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('needs-you')
+
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  expect(s.statusAt()).toMatchObject({ state: 'working', reason: 'The session\'s own turn is running.' })
 })

@@ -2708,7 +2708,7 @@ async function writeStatus($: $, gen: number): Promise<void> {
       const record = recordOf(facts, await $.clock.now())
       const text = comparedTextOf(record)
       if (!force && text === lastWrittenText) continue
-      if (statusClosed) return
+      if (statusClosed || gen !== statusGen) return
       await withinTimeout($, trackedWrite($, facts.memo.path, JSON.stringify(record)), STATUS_WRITE_TIMEOUT_MS)
       lastWrittenText = text
       if (facts.memo.state === record.state && facts.memo.stateSince === record.stateSince) continue
@@ -2873,10 +2873,14 @@ async function startStatus($: $) {
 // on it, could still land and bring the file back with an older record, so
 // each one deletes the file again when it settles. When the process goes on
 // under another session id, after a /clear or a resume, the memo is reset,
-// and the new conversation looks for a ticket in its own first prompt.
+// and the new conversation looks for a ticket in its own first prompt. The
+// generation is raised first, so a writer of the ended session that is still
+// awaiting a read stops before it writes, even once the new conversation
+// writes again, and writing opens again only after the memo was reset.
 async function endStatus($: $, reason: string, sessionId: string, budget: { remainingMs: number }) {
   const wasTicketed = ticketKnown === 'some'
   statusClosed = true
+  statusGen += 1
   statusTick?.cancel()
   statusTick = undefined
   try {
@@ -2901,8 +2905,8 @@ async function endStatus($: $, reason: string, sessionId: string, budget: { rema
       lastWrittenText = null
       statusDirty = false
       statusForced = false
-      statusClosed = false
       await update($, statusMemo, () => null)
+      statusClosed = false
     }
   }
 }
