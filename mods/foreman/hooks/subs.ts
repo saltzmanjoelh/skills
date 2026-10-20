@@ -5,7 +5,7 @@
 // so the tests can check each rule without the engine.
 
 import type { ForemanFile } from '../types'
-import { recordIn, type StatusRecord, type SubState } from './record'
+import { recordIn, type BuildStatus, type BuildState } from './record'
 import { stageLabel } from './stages'
 import { printable } from './text'
 
@@ -44,10 +44,11 @@ export function afterRead(kept: readonly ForemanFile[], found: readonly FileRead
 
 // One sub session as the band and the pane show it. It is keyed by the name
 // of its file, whatever session id the record holds.
-export type SubRow = { file: string; record: StatusRecord; mtimeMs: number; isStale: boolean }
+export type SubRow = { file: string; record: BuildStatus; mtimeMs: number; isStale: boolean }
 
 // The rows for the kept files, judged stale against the read made at
-// `readAt`, in issue-key order and then file name order. A kept text that no
+// `readAt`, in issue-key order and then file name order, with the rows that
+// have no issue yet after every row that has one. A kept text that no
 // longer parses, as one an older build kept might not, is left out.
 export function rowsOf(files: readonly ForemanFile[], readAt: number): SubRow[] {
   const rows: SubRow[] = []
@@ -56,7 +57,8 @@ export function rowsOf(files: readonly ForemanFile[], readAt: number): SubRow[] 
     if (record !== null) rows.push({ file: f.file, record, mtimeMs: f.mtimeMs, isStale: isStale(f.mtimeMs, readAt) })
   }
   const order = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
-  return rows.sort((a, b) => order(a.record.issueKey, b.record.issueKey) || order(a.file, b.file))
+  const keyOrder = (a: string | null, b: string | null) => (a === null ? (b === null ? 0 : 1) : b === null ? -1 : order(a, b))
+  return rows.sort((a, b) => keyOrder(a.record.issueKey, b.record.issueKey) || order(a.file, b.file))
 }
 
 // How long until the next read, given the rows the read found.
@@ -73,7 +75,7 @@ export type Tone = 'red' | 'amber' | 'plain'
 
 // Every state's words and tone. It is typed over every state, so a state
 // added to the record fails the type check until it has an entry here.
-export const STATE_LOOK: Record<SubState, { words: string; tone: Tone }> = {
+export const STATE_LOOK: Record<BuildState, { words: string; tone: Tone }> = {
   'working': { words: 'working', tone: 'plain' },
   'waiting-on-builder': { words: 'waiting on builder', tone: 'plain' },
   'idle': { words: 'idle', tone: 'amber' },
@@ -99,8 +101,12 @@ export function untilWords(ms: number): string | null {
 // says it.
 export const staleWords = (row: SubRow, now: number) => `no update for ${ageWords(now - row.mtimeMs)}`
 
-// The issue key, cleaned, as every row and chip shows it.
-export const keyOf = (row: SubRow) => printable(row.record.issueKey, 40)
+// What a row with no issue yet shows where the key would go.
+export const NO_ISSUE = 'no issue yet'
+
+// The issue key, cleaned, as every row and chip shows it, or the words for a
+// row with no issue yet.
+export const keyOf = (row: SubRow) => (row.record.issueKey === null ? NO_ISSUE : printable(row.record.issueKey, 40))
 
 // A chip's text: the issue key, then the stage while the sub session works or
 // waits on builder and has reported one, else the state in words. A stale

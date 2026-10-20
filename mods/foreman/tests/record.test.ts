@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { recordIn, STATES, type StatusRecord } from '../hooks/record'
+import { recordIn, STATES, type BuildStatus } from '../hooks/record'
 
 // A whole record as builder writes it, which each test changes.
 const WHOLE = {
@@ -12,7 +12,7 @@ const WHOLE = {
   issueTitle: 'Make the thing',
   stage: 'build',
   stageDone: 4,
-  pr: { number: 12, state: 'open', checks: 'passed' },
+  pr: { repo: 'acme/example-app', number: 12, state: 'open', checks: 'passed' },
   state: 'working',
   reason: 'building',
   stateSince: 1000,
@@ -26,7 +26,7 @@ const text = (over: Record<string, unknown> = {}, drop: string[] = []) => {
 }
 
 test('a whole record reads back field for field', () => {
-  const expected: StatusRecord = { ...WHOLE, stage: 'build', state: 'working' }
+  const expected: BuildStatus = { ...WHOLE, stage: 'build', state: 'working' }
   expect(recordIn(text())).toEqual(expected)
 })
 
@@ -34,7 +34,7 @@ test('text that is not a JSON object does not parse', () => {
   for (const bad of ['', '{', '{"sessionId": "a", "issueKey": ', 'null', '[]', '3', '"text"']) expect(recordIn(bad)).toBeNull()
 })
 
-test('a record without a session id, an issue key or a known state does not parse', () => {
+test('a record without a session id, an issue key field or a known state does not parse', () => {
   expect(recordIn(text({}, ['sessionId']))).toBeNull()
   expect(recordIn(text({ sessionId: '' }))).toBeNull()
   expect(recordIn(text({ sessionId: 7 }))).toBeNull()
@@ -45,6 +45,13 @@ test('a record without a session id, an issue key or a known state does not pars
   expect(recordIn(text({}, ['state']))).toBeNull()
   expect(recordIn(text({ state: 'gone' }))).toBeNull()
   expect(recordIn(text({ state: 'WORKING' }))).toBeNull()
+})
+
+test('a null issue key, as before the first progress report, parses with an empty title', () => {
+  const r = recordIn(text({ issueKey: null, issueTitle: '' }))
+  expect(r?.issueKey).toBeNull()
+  expect(r?.issueTitle).toBe('')
+  expect(r?.sessionId).toBe('session-a')
 })
 
 test('each of the six states parses', () => {
@@ -84,13 +91,14 @@ test('a pull request needs a whole number, and its state and checks fall back to
   expect(recordIn(text({ pr: null }))?.pr).toBeNull()
   expect(recordIn(text({ pr: { number: 1.5, state: 'open', checks: 'passed' } }))?.pr).toBeNull()
   expect(recordIn(text({ pr: { number: 0, state: 'open', checks: 'passed' } }))?.pr).toBeNull()
-  expect(recordIn(text({ pr: { number: 9 } }))?.pr).toEqual({ number: 9, state: 'unknown', checks: 'unknown' })
+  expect(recordIn(text({ pr: { number: 9 } }))?.pr).toEqual({ repo: '', number: 9, state: 'unknown', checks: 'unknown' })
 })
 
-test('the cleanup counts are read in the in-cleanup state only', () => {
+test('the cleanup counts are read in any state once present, and are absent until then', () => {
   const cleanup = { failedCalls: 2, lastError: 'the folder is in use' }
   expect(recordIn(text({ state: 'in-cleanup', cleanup }))?.cleanup).toEqual(cleanup)
-  expect(recordIn(text({ state: 'working', cleanup }))?.cleanup).toBeUndefined()
+  expect(recordIn(text({ state: 'done', cleanup: { failedCalls: 0, lastError: '' } }))?.cleanup).toEqual({ failedCalls: 0, lastError: '' })
   expect(recordIn(text({ state: 'in-cleanup', cleanup: { failedCalls: 'two' } }))?.cleanup).toEqual({ failedCalls: 0, lastError: '' })
-  expect(recordIn(text({ state: 'in-cleanup' }))?.cleanup).toEqual({ failedCalls: 0, lastError: '' })
+  expect(recordIn(text({ state: 'in-cleanup' }))?.cleanup).toBeUndefined()
+  expect(recordIn(text({ state: 'working', cleanup: 'soon' }))?.cleanup).toBeUndefined()
 })

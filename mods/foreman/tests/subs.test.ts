@@ -43,6 +43,13 @@ test('rows are in issue-key order, keyed by the file name, each judged stale aga
   const files = [kept('z.json', record('ABC-9', 'working'), 0), kept('y.json', record('ABC-10', 'idle', { sessionId: 'other' }), 5 * MIN)]
   const rows = rowsOf(files, 6 * MIN)
   expect(rows.map(row => [row.file, row.record.issueKey, row.isStale])).toEqual([['y.json', 'ABC-10', false], ['z.json', 'ABC-9', true]])
+  // A row with no issue yet sorts after the keyed rows, by file name.
+  const unkeyed = rowsOf([
+    kept('b.json', record('ABC-2', 'idle', { issueKey: null }), 0),
+    kept('a.json', record('ABC-1', 'idle', { issueKey: null }), 0),
+    kept('c.json', record('ABC-3', 'idle'), 0),
+  ], 0)
+  expect(unkeyed.map(row => row.file)).toEqual(['c.json', 'a.json', 'b.json'])
   // A kept file whose text no longer parses is left out rather than thrown on.
   expect(rowsOf([kept('x.json', '{', 0)], 0)).toEqual([])
 })
@@ -90,6 +97,9 @@ test('a chip holds the issue key and the stage while working or waiting on build
   expect(chipText(idle!, at)).toBe('ABC-3 needs you')
   expect(chipText(stale!, at + MIN)).toBe('ABC-4 working · no update for 6m')
   expect(chipText(unstaged!, at)).toBe('ABC-5 working')
+  // A row with no issue yet says so where the key would go.
+  const [unkeyed] = rowsOf([kept('n.json', record('ABC-6', 'working', { issueKey: null, stage: 'grounding' }), at)], at)
+  expect(chipText(unkeyed!, at)).toBe('no issue yet grounding')
   // Text in a record is cleaned before it is drawn.
   const [marked] = rowsOf([kept('m.json', record('ABC-\u001b[31m7', 'idle'), at)], at)
   expect(chipText(marked!, at)).toBe('ABC-7 idle')
