@@ -1,9 +1,9 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { ForemanFile } from '../types'
-import { STATES } from '../hooks/record'
+import { recordIn, STATES } from '../hooks/record'
 import {
-  afterRead, ageWords, busyCount, byKeyThenFile, chipText, fitChips, isStale, nextReadDelay, READ_LATER_MS, READ_SOON_MS, rowsOf,
+  afterRead, ageWords, busyCount, byKeyThenFile, chipText, fitChips, isStale, nextReadDelay, READ_LATER_MS, READ_SOON_MS, rememberingParse, rowsOf,
   STALE_MS, STATE_LOOK, untilWords,
 } from '../hooks/subs'
 
@@ -161,4 +161,49 @@ test('the rows come from the parse they are given, which is handed each kept tex
   const rows = rowsOf(files, 0, parse)
   expect(texts).toEqual([files[0]!.text, files[1]!.text])
   expect(rows.map(r => r.file)).toEqual(['b.json'])
+})
+
+test('a remembering parse parses an unchanged text once across two passes, parses a changed text again, and forgets a text no longer passed', () => {
+  const texts: string[] = []
+  const counting = (text: string) => {
+    texts.push(text)
+    return recordIn(text)
+  }
+  const one = record('ABC-1', 'working')
+  const two = record('ABC-2', 'idle')
+  const first = rememberingParse(new Map(), counting)
+  expect(first.parse(one)?.issueKey).toBe('ABC-1')
+  expect(first.parse(two)?.issueKey).toBe('ABC-2')
+  expect(texts).toEqual([one, two])
+
+  const changed = record('ABC-2', 'done')
+  const second = rememberingParse(first.remembered, counting)
+  expect(second.parse(one)?.issueKey).toBe('ABC-1')
+  expect(second.parse(changed)?.state).toBe('done')
+  expect(texts).toEqual([one, two, changed])
+  expect([...second.remembered.keys()]).toEqual([one, changed])
+
+  // A text that did not parse is remembered as not parsing, and parsed once.
+  const third = rememberingParse(second.remembered, counting)
+  expect(third.parse('{')).toBeNull()
+  expect(third.parse('{')).toBeNull()
+  expect(texts).toEqual([one, two, changed, '{'])
+  expect([...third.remembered.keys()]).toEqual(['{'])
+})
+
+test('a read does not parse a file whose text is unchanged, and still keeps the last good read of a file that does not parse', () => {
+  const a = record('ABC-1', 'working')
+  const b = record('ABC-2', 'idle')
+  const before = [kept('a.json', a, 1), kept('b.json', b, 2)]
+  const texts: string[] = []
+  const parse = (text: string) => {
+    texts.push(text)
+    return recordIn(text)
+  }
+  const after = afterRead(before, [
+    { file: 'a.json', mtimeMs: 10, text: a },
+    { file: 'b.json', mtimeMs: 20, text: '{"sessionId": "s-ABC-2", "issu' },
+  ], parse)
+  expect(texts).toEqual(['{"sessionId": "s-ABC-2", "issu'])
+  expect(after).toEqual([kept('a.json', a, 1), kept('b.json', b, 2)])
 })

@@ -383,6 +383,18 @@ test('a slots or pause command before /foreman is kept and takes effect once the
   expect(await ui.bandText()).toContain('0 of 5 slots busy')
 })
 
+test('slots and pause stored before /foreman survive a resume, and /foreman then keeps them in the band and the store', async ($, on) => {
+  const w = world(on, { store: { 'parent:session-1': { isOn: false, slots: 3, isPaused: true } } })
+  const ui = await mountBoth($, on)
+  await start($)
+  expect(w.folder.lists).toBe(0)
+  await foreman($)
+  const band = await ui.bandText()
+  expect(band).toContain('0 of 3 slots busy')
+  expect(band).toContain('paused')
+  expect(w.stored.get('parent:session-1')).toEqual({ isOn: true, slots: 3, isPaused: true })
+})
+
 test('the slots option sets the count when no command has', { options: { slots: 4 } }, async ($, on) => {
   world(on)
   const ui = await mountBoth($, on)
