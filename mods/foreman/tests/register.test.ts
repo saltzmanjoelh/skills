@@ -331,6 +331,16 @@ test('after a reload whose read is not yet due, the end of a turn arms the timer
   expect(w.folder.lists).toBe(1)
 })
 
+test('after a reload that lost the timer, a /foreman subcommand arms it again', async ($, on) => {
+  const w = world(on)
+  leftInState(on, { parent: { isOn: true, slots: null, isPaused: false }, nextReadAt: T0 + 20 * SECOND, readAt: T0 - 100 * SECOND })
+  await foreman($, 'pause')
+  await w.clock.advance(19 * SECOND)
+  expect(w.folder.lists).toBe(0)
+  await w.clock.advance(SECOND)
+  expect(w.folder.lists).toBe(1)
+})
+
 test('/foreman slots sets the count, a count outside 1 to 20 is refused and changes nothing, and pause adds paused until resume', async ($, on) => {
   world(on)
   const ui = await mountBoth($, on)

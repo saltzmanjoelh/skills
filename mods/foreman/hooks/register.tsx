@@ -264,8 +264,13 @@ export const register: Register = (on, options) => {
   })
 
   // The host already puts the mod's name in front of a command's output.
+  // Every /foreman command also arms the timers again when a hot reload has
+  // dropped them, as the hooks below do. Arming does nothing while the role
+  // is off or the timers are already armed, so a plain /foreman, which armed
+  // them in runCommand before opening the pane, changes nothing here.
   on('command.run', { command: 'foreman' }, async ($, e) => {
     const text = await runCommand($, typeof e.args === 'string' ? e.args : '')
+    await ensureArmed($).catch(() => undefined)
     return { text }
   })
 
