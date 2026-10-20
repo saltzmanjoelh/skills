@@ -54,7 +54,7 @@ test('an idle sub session that never answers is nudged at one and two thresholds
 
 test('a nudge goes to the local_ id start_session named, and the next due time is the next threshold', () => {
   const d = read(paired(), [row()], T0 + T)
-  expect(d.effects).toEqual([{ kind: 'nudge', ticket: 'ft-a', to: 'local_a', name: 'ABC-1' }])
+  expect(d.effects).toEqual([{ kind: 'nudge', to: 'local_a', name: 'ABC-1' }])
   expect(d.nextDueAt).toBe(T0 + 2 * T)
 })
 
@@ -184,4 +184,6 @@ test('a pairing that no status file carried for a day is forgotten, and a younge
   expect(old.tickets.pairings).toEqual([])
   expect(old.logs).toEqual(['Forgot ticket ft-a, because no status file carried it for a day.'])
   expect(old.reasons).toEqual([])
+  expect(read(paired(), [], T0 + 25 * 60 * MINUTE, { folderExists: false }).tickets.pairings).toHaveLength(1)
+  expect(read(paired(), [], T0 + 25 * 60 * MINUTE, { listed: false }).tickets.pairings).toHaveLength(1)
 })

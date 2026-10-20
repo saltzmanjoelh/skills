@@ -474,7 +474,7 @@ test('work a read decided before a reload dropped its timer is carried out once 
   leftInState(on, {
     tickets: {
       ...ticketsIn(w.stored.get(ticketsKey('session-1'))),
-      outbox: { logs: ['A line decided before the reload.'], effects: [{ kind: 'nudge', ticket: 'ft-ABC-1', to: 'local_a', name: 'ABC-1' }], lines: ['foreman: one slot free; pick the next issue and start it.'] },
+      outbox: { logs: ['A line decided before the reload.'], effects: [{ kind: 'nudge', to: 'local_a', name: 'ABC-1' }], lines: ['foreman: one slot free; pick the next issue and start it.'] },
     },
     parent: { isOn: true, slots: null, isPaused: false },
     nextReadAt: T0 + 20 * SECOND,
@@ -488,4 +488,21 @@ test('work a read decided before a reload dropped its timer is carried out once 
   expect(w.engine.prompts).toEqual(['foreman: one slot free; pick the next issue and start it.'])
   expect(await ui.paneText()).toContain('A line decided before the reload.')
   expect(ledger(w).outbox).toEqual({ logs: [], effects: [], lines: [] })
+})
+
+test('a read that changes nothing writes nothing to the store, and a store write that fails is logged', async ($, on) => {
+  const w = world(on)
+  const working = record('ABC-1', 'working', { desktopSessionId: 'local_a' })
+  w.folder.put('a.json', working)
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await minutesPass(w, 1, { 'a.json': working })
+  const writes = w.store.writes.get(ticketsKey('session-1')) ?? 0
+  await minutesPass(w, 3, { 'a.json': working })
+  expect(w.store.writes.get(ticketsKey('session-1'))).toBe(writes)
+  w.store.refused.add(ticketsKey('session-1'))
+  await ui.pane.press({ key: 'release-a.json' })
+  await w.clock.settle()
+  expect(await ui.paneText()).toMatch(/Could not save the tickets: .*the store is full\./)
 })

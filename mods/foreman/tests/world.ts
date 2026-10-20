@@ -152,12 +152,16 @@ export function engine(on: On) {
 
 // The usual world: the clock at T0, a store in memory that the test can read,
 // empty unless one is given, HOME set, the folder, the desktop app and the
-// engine.
+// engine. `store.writes` counts the store writes by key, and a key in
+// `store.refused` has its writes refused.
 export function world(on: On, options: { store?: Record<string, unknown>; env?: Record<string, string>; at?: string } = {}) {
   const clock = mock.clock(on, { now: T0 })
   const stored = new Map<string, unknown>(Object.entries(options.store ?? {}))
   on('store.get', ($, e) => ({ value: stored.get(e.key) }))
+  const store = { writes: new Map<string, number>(), refused: new Set<string>() }
   on('store.set', ($, e) => {
+    store.writes.set(e.key, (store.writes.get(e.key) ?? 0) + 1)
+    if (store.refused.has(e.key)) return { deny: 'the store is full' }
     stored.set(e.key, e.value)
     return { value: undefined }
   })
@@ -165,7 +169,7 @@ export function world(on: On, options: { store?: Record<string, unknown>; env?: 
   const folder = statusFolder(on, options.at, stored)
   const desktop = desktopApp(on)
   const { toasts, panes, answers } = engine(on)
-  return { clock, folder, desktop, toasts, panes, stored, engine: answers }
+  return { clock, folder, desktop, toasts, panes, stored, store, engine: answers }
 }
 
 // Stands in for what the mod left in $.state before a reload, as builder's

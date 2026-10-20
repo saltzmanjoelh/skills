@@ -5,7 +5,7 @@
 
 import type { ForemanActs, ForemanEffect, ForemanOutbox, ForemanPairing, ForemanStanding, ForemanTickets } from '../types'
 import { byKeyThenFile, keyOf, nameOf, type SubRow } from './subs'
-import { byTicket as ticketName } from './wake'
+import { byTicket } from './wake'
 
 // The line builder looks for in a sub session's first prompt.
 export const TICKET_LINE = 'foreman-ticket:'
@@ -53,8 +53,8 @@ const strings = (raw: unknown): string[] => (Array.isArray(raw) ? raw.filter((x)
 function effectIn(raw: unknown): ForemanEffect | null {
   const e = objectOf(raw)
   if (e?.kind === 'notify' && typeof e.text === 'string') return { kind: 'notify', text: e.text }
-  if (e?.kind === 'nudge' && typeof e.ticket === 'string' && typeof e.to === 'string' && typeof e.name === 'string') {
-    return { kind: 'nudge', ticket: e.ticket, to: e.to, name: e.name }
+  if (e?.kind === 'nudge' && typeof e.to === 'string' && typeof e.name === 'string') {
+    return { kind: 'nudge', to: e.to, name: e.name }
   }
   return null
 }
@@ -148,13 +148,15 @@ export function joinOwners(t: ForemanTickets, rows: readonly SubRow[]): { ticket
   const logs: string[] = []
   // The rows of each ticket, in file name order, so each pairing looks only
   // at its own.
-  const byTicket = new Map<string, SubRow[]>()
+  const rowsByTicket = new Map<string, SubRow[]>()
   for (const r of [...rows].sort((a, b) => byKeyThenFile(null, a.file, null, b.file))) {
     if (r.record.ticket === null) continue
-    byTicket.set(r.record.ticket, [...(byTicket.get(r.record.ticket) ?? []), r])
+    const list = rowsByTicket.get(r.record.ticket)
+    if (list === undefined) rowsByTicket.set(r.record.ticket, [r])
+    else list.push(r)
   }
   const pairings = t.pairings.map(p => {
-    const mine = byTicket.get(p.ticket)
+    const mine = rowsByTicket.get(p.ticket)
     if (mine === undefined) return p
     let next = p
     if (next.owner === null) {
@@ -169,7 +171,7 @@ export function joinOwners(t: ForemanTickets, rows: readonly SubRow[]): { ticket
     if (key !== next.issueKey) next = { ...next, issueKey: key }
     const forks = mine.filter(r => r.record.sessionId !== next.owner && !next.forks.includes(r.record.sessionId))
     if (forks.length > 0) {
-      const name = own === undefined ? ticketName(p.ticket) : nameOf(own)
+      const name = own === undefined ? byTicket(p.ticket) : nameOf(own)
       logs.push(...forks.map(() => `Left out a second status file with the ticket of ${name}, as a fork of its session writes.`))
       next = { ...next, forks: [...next.forks, ...forks.map(r => r.record.sessionId)].slice(-MAX_FORKS) }
     }

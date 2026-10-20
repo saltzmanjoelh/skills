@@ -67,7 +67,7 @@ export type ForemanPairing = {
 
 // Something to do outside the ledger: a nudge to a desktop session, naming
 // the sub session for the log, or a notification with its text.
-export type ForemanEffect = { kind: 'nudge'; ticket: string; to: string; name: string } | { kind: 'notify'; text: string }
+export type ForemanEffect = { kind: 'nudge'; to: string; name: string } | { kind: 'notify'; text: string }
 
 // What foreman decided and has not yet carried out: log lines, effects, and
 // lines that wake the parent. A read puts its decision here in the same

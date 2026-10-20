@@ -56,10 +56,10 @@ async function answerOf(call: DesktopCall, server: string, tool: string, args: R
 // root stays `/`.
 const folderOf = (path: string) => path.replace(/\/+$/, '') || '/'
 
-// The sessions in the list's answer: the first text block parsed as a JSON
-// array, each entry kept when it has a string session id and folder. Null
-// when the answer is not such a list.
-function sessionsIn(result: McpToolResult): { sessionId: string; cwd: string }[] | null {
+// The entries of the list's answer: its first text block parsed as a JSON
+// array, or null when the answer is not such a list. Each caller picks the
+// fields it needs from the entries.
+function entriesIn(result: McpToolResult): unknown[] | null {
   const block = result.content.find(b => b.type === 'text') as { text?: unknown } | undefined
   if (block === undefined || typeof block.text !== 'string') return null
   let raw: unknown
@@ -68,7 +68,14 @@ function sessionsIn(result: McpToolResult): { sessionId: string; cwd: string }[]
   } catch {
     return null
   }
-  if (!Array.isArray(raw)) return null
+  return Array.isArray(raw) ? raw : null
+}
+
+// The sessions in the list's answer, each kept when it has a string session
+// id and folder, or null when the answer is not a list.
+function sessionsIn(result: McpToolResult): { sessionId: string; cwd: string }[] | null {
+  const raw = entriesIn(result)
+  if (raw === null) return null
   return raw.flatMap(entry => {
     const s = entry as { sessionId?: unknown; cwd?: unknown } | null
     return typeof s?.sessionId === 'string' && typeof s.cwd === 'string' ? [{ sessionId: s.sessionId, cwd: s.cwd }] : []
@@ -125,14 +132,8 @@ export async function listSessions(call: DesktopCall): Promise<{ sessions: Liste
   const answer = await answerOf(call, SESSIONS_SERVER, LIST_TOOL, { limit: LIST_LIMIT, include_archived: true })
   if (answer === 'not-connected') return { reason: REASONS.notConnected }
   if (answer === 'refused') return { reason: REASONS.listRefused }
-  const block = answer.content.find(b => b.type === 'text') as { text?: unknown } | undefined
-  let raw: unknown
-  try {
-    raw = typeof block?.text === 'string' ? JSON.parse(block.text) : null
-  } catch {
-    raw = null
-  }
-  if (!Array.isArray(raw)) return { reason: REASONS.listUnreadable }
+  const raw = entriesIn(answer)
+  if (raw === null) return { reason: REASONS.listUnreadable }
   return {
     sessions: raw.flatMap(entry => {
       const s = entry as { sessionId?: unknown; isArchived?: unknown; isRunning?: unknown } | null

@@ -188,7 +188,7 @@ function idleRule(s: Step) {
     return
   }
   if (stretch.nudges < 2) {
-    s.effects.push({ kind: 'nudge', ticket: s.p.ticket, to, name: nameOf(s.row) })
+    s.effects.push({ kind: 'nudge', to, name: nameOf(s.row) })
     setActs(s, { stretch: { ...stretch, nudges: stretch.nudges + 1, lastNudgeAt: s.now } })
     s.due.push(s.now + s.limits.idleMs)
     return
@@ -225,11 +225,17 @@ export function slotOutcome(free: number, isPaused: boolean): SlotOutcome {
 // Whether this read needs the desktop app's list: some active owned record is
 // done, or its file is older than GONE_MS.
 export function needsList(t: ForemanTickets, rows: readonly SubRow[], now: number): boolean {
-  return t.pairings.some(p => p.standing === 'active' && rows.some(r => ownsTicket(p, r) && (r.record.state === 'done' || now - r.mtimeMs > GONE_MS)))
+  const active = new Map(t.pairings.flatMap(p => (p.owner !== null && p.standing === 'active' ? [[p.owner, p] as const] : [])))
+  return rows.some(r => {
+    const p = active.get(r.record.sessionId)
+    return p !== undefined && ownsTicket(p, r) && (r.record.state === 'done' || now - r.mtimeMs > GONE_MS)
+  })
 }
 
 // Decides everything one read leads to. A pairing whose owner's file left the
-// folder is forgotten, freeing its slot when it was active. A released or
+// folder is forgotten, freeing its slot when it was active, and a pairing
+// that no status file has carried for a day is forgotten and logged; neither
+// happens unless this read listed a folder that exists. A released or
 // freed pairing gets no action. When a slot freed, the parent is woken with
 // the number of slots free, unless none is free or the parent is paused, in
 // which case the pause is remembered.
@@ -243,7 +249,7 @@ export function decide(input: DecideInput): Decision {
   const byFile = new Map(rows.map(r => [r.file, r]))
   const pairings = input.tickets.pairings.flatMap(p => {
     if (p.owner === null || p.ownerFile === null) {
-      if (now - p.pairedAt <= UNOWNED_FOR_MS) return [p]
+      if (!folderExists || !listed || now - p.pairedAt <= UNOWNED_FOR_MS) return [p]
       logs.push(`Forgot ticket ${p.ticket}, because no status file carried it for a day.`)
       return []
     }

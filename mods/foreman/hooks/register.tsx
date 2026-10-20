@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, ResolveInput } from 'claude-code'
 
-import { decide, desktopOf, needsList, PAUSED_SLOT_LOG, slotOutcome, type Decision, type Limits, type SessionsLook } from './act'
+import { decide, desktopOf, needsList, PAUSED_SLOT_LOG, slotOutcome, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
 import { isSvgSurface } from './art'
 import { commandOf } from './commands'
 import { failureLine, listSessions, NUDGE_TEXT, openSession, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
@@ -451,27 +451,35 @@ async function nudgeRow($: $, file: string) {
   await nudge($, to, nameOf(row), ', because Nudge was pressed')
 }
 
-// Puts the wake with the number of slots free in the outbox, or remembers
-// that a slot freed while paused, and then carries the outbox out, as a read
-// does, so a reload in between loses nothing. Nothing happens when no slot is
-// free. On resume it acts only when a slot freed while paused, and clears
-// that in the same update.
-async function slotFreed($: $, onResume = false) {
+// What a freed slot leads to now, from the slots free and the pause.
+async function slotOutcomeNow($: $) {
   const settings = parentIn(await read($, parent))
-  const outcome = slotOutcome(slotsOf(settings, currentOptions.slots) - busyCount(await shownNow($)), settings.isPaused)
-  let remembered = false
-  await writeTickets($, t => {
-    remembered = false
-    if (onResume && !t.freedWhilePaused) return t
-    const base = onResume ? { ...t, freedWhilePaused: false } : t
-    if (outcome.kind === 'remember') {
-      remembered = true
-      return { ...base, freedWhilePaused: true }
-    }
-    if (outcome.kind === 'none') return base
-    return { ...base, outbox: addWork(base.outbox, { logs: [], effects: [], lines: [wakeLine([outcome.reason])!] }) }
-  })
-  if (remembered) await addLog($, PAUSED_SLOT_LOG)
+  return slotOutcome(slotsOf(settings, currentOptions.slots) - busyCount(await shownNow($)), settings.isPaused)
+}
+
+// The ledger with a freed slot's outcome applied: the pause remembered, or
+// the slot wake put in the outbox, which carryOut then sends, as a read's
+// wakes are, so a reload before it is sent loses nothing.
+function withSlotOutcome(t: ForemanTickets, outcome: SlotOutcome): ForemanTickets {
+  if (outcome.kind === 'remember') return { ...t, freedWhilePaused: true }
+  if (outcome.kind === 'none') return t
+  return { ...t, outbox: addWork(t.outbox, { logs: [], effects: [], lines: [wakeLine([outcome.reason])!] }) }
+}
+
+// After Release freed a slot: the parent is woken with the number of slots
+// free, or the pause remembers it. Nothing happens when no slot is free.
+async function slotFreed($: $) {
+  const outcome = await slotOutcomeNow($)
+  await writeTickets($, t => withSlotOutcome(t, outcome))
+  if (outcome.kind === 'remember') await addLog($, PAUSED_SLOT_LOG)
+  later($, () => carryOut($))
+}
+
+// On /foreman resume: when a slot freed while paused, the mark is cleared and
+// the parent is woken with the number of slots free, in one update.
+async function resumeWake($: $) {
+  const outcome = await slotOutcomeNow($)
+  await writeTickets($, t => (t.freedWhilePaused ? withSlotOutcome({ ...t, freedWhilePaused: false }, outcome) : t))
   later($, () => carryOut($))
 }
 
@@ -542,7 +550,7 @@ async function runCommand($: $, args: string): Promise<string> {
     await writeParent($, p => ({ ...p, isPaused: false }))
     // The wake goes in the outbox and is carried out from a timer, so the
     // command answers at once.
-    if (await isOn($)) await slotFreed($, true)
+    if (await isOn($)) await resumeWake($)
     else await writeTickets($, t => (t.freedWhilePaused ? { ...t, freedWhilePaused: false } : t))
     return 'This parent is no longer paused.'
   }
