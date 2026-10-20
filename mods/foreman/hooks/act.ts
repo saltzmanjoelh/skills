@@ -5,7 +5,7 @@
 // hooks/register.tsx carries them out. Every function is pure.
 
 import type { BuildState } from './record'
-import type { ForemanActs, ForemanPairing, ForemanTickets } from '../types'
+import type { ForemanActs, ForemanEffect, ForemanPairing, ForemanTickets } from '../types'
 import { busyCount, nameOf, type SubRow } from './subs'
 import { capped, ownsTicket, shownRows } from './tickets'
 import { printable } from './text'
@@ -31,7 +31,7 @@ export type SessionsLook = { kind: 'unread' } | { kind: 'failed' } | { kind: 're
 
 // What to do outside the ledger. A nudge goes to a desktop session id and
 // names the sub session for the log; a notification carries its text.
-export type Effect = { kind: 'nudge'; ticket: string; to: string; name: string } | { kind: 'notify'; text: string }
+export type Effect = ForemanEffect
 
 export type DecideInput = {
   tickets: ForemanTickets
@@ -169,12 +169,19 @@ function idleRule(s: Step) {
   const who = whoOf(s.row.record.issueKey, s.p.ticket)
   if (to === null) {
     const due = since + 2 * s.limits.idleMs
-    if (s.now < due) return void s.due.push(due)
+    if (s.now < due) {
+      s.due.push(due)
+      return
+    }
     s.reasons.push({ kind: 'idle', who, nudged: false, minutes: minutesOf(s.now - since) })
-    return setActs(s, { stretch: { ...stretch, woke: true } })
+    setActs(s, { stretch: { ...stretch, woke: true } })
+    return
   }
   const due = Math.max(since, stretch.lastNudgeAt ?? since) + s.limits.idleMs
-  if (s.now < due) return void s.due.push(due)
+  if (s.now < due) {
+    s.due.push(due)
+    return
+  }
   if (stretch.nudges < 2) {
     s.effects.push({ kind: 'nudge', ticket: s.p.ticket, to, name: nameOf(s.row) })
     setActs(s, { stretch: { ...stretch, nudges: stretch.nudges + 1, lastNudgeAt: s.now } })

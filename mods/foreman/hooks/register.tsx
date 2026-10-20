@@ -10,7 +10,7 @@ import type { ForemanParent, ForemanTickets } from '../types'
 import { PARENT_OFF, parentIn, slotsOf, storeKey } from './parent'
 import { afterRead, busyCount, nameOf, nextReadDelay, READ_LATER_MS, rowsOf, type FileRead, type SubRow } from './subs'
 import { printable } from './text'
-import { briefFor, joinOwners, localIdIn, newPairing, ownsTicket, shownRows, ticketsIn, ticketsKey, TICKETS_EMPTY } from './tickets'
+import { addWork, briefFor, hasWork, joinOwners, localIdIn, newPairing, OUTBOX_EMPTY, ownsTicket, shownRows, ticketsIn, ticketsKey, TICKETS_EMPTY } from './tickets'
 import { wakeLine } from './wake'
 
 type $ = EngineInterface
@@ -224,7 +224,7 @@ async function readAndSchedule($: $) {
     const delay = decision.wakeAt === null ? usual : Math.min(usual, Math.max(decision.wakeAt - now, SOONEST_READ_MS))
     schedule($, delay)
     await update($, nextReadAt, () => now + delay)
-    later($, () => carryOut($, decision))
+    later($, () => carryOut($))
   } catch {
     // A read that failed partway still schedules the next one, after the
     // slow interval, so a parent left alone keeps refreshing. Only when that
@@ -258,13 +258,13 @@ async function decideNow($: $, folderExists: boolean, listed: boolean, now: numb
   const before = joinOwners(ticketsIn(await read($, tickets)), rows).tickets
   let sessions: SessionsLook = { kind: 'unread' }
   if (needsList(before, rows, now)) {
-    const listed = await within($, listSessions(desktopCall($)))
-    if (listed === TIMED_OUT || 'reason' in listed) {
-      const why = listed === TIMED_OUT ? NO_ANSWER : listed.reason
+    const sessionList = await within($, listSessions(desktopCall($)))
+    if (sessionList === TIMED_OUT || 'reason' in sessionList) {
+      const why = sessionList === TIMED_OUT ? NO_ANSWER : sessionList.reason
       sessions = { kind: 'failed' }
       await addLog($, `Could not read the desktop app's list of sessions, so no slot was freed: ${why}.`)
     } else {
-      sessions = { kind: 'read', sessions: listed.sessions }
+      sessions = { kind: 'read', sessions: sessionList.sessions }
     }
   }
   const settings = parentIn(await read($, parent))
@@ -275,9 +275,11 @@ async function decideNow($: $, folderExists: boolean, listed: boolean, now: numb
     const joined = joinOwners(t, rows)
     joinLogs = joined.logs
     decision = decide({ ...input, tickets: joined.tickets })
-    return decision.tickets
+    const line = wakeLine(decision.reasons)
+    const work = { logs: [...joinLogs, ...decision.logs], effects: decision.effects, lines: line === null ? [] : [line] }
+    return { ...decision.tickets, outbox: addWork(decision.tickets.outbox, work) }
   })
-  return { decision: { ...decision, logs: [...joinLogs, ...decision.logs] }, rows }
+  return { decision, rows }
 }
 
 // What `within` answers when the call did not answer in time.
@@ -301,7 +303,7 @@ function within<T>($: $, call: Promise<T>): Promise<T | typeof TIMED_OUT> {
 // The words for a message that did not go.
 function sendFailure(result: SendResult | typeof TIMED_OUT): string {
   if (result === TIMED_OUT) return NO_ANSWER
-  return result === 'not-connected' ? REASONS.notConnected : 'the desktop app refused the message'
+  return result === 'not-connected' ? REASONS.notConnected : REASONS.sendRefused
 }
 
 // Sends the nudge to one sub session and logs how it went.
@@ -322,15 +324,22 @@ async function notify($: $, text: string) {
   }
 }
 
-// Carries out a decision: its log lines, then its nudges and notifications,
-// then the one line that wakes the parent, each logged with how it went.
-async function carryOut($: $, decision: Decision) {
-  for (const line of decision.logs) await addLog($, line)
-  await Promise.all(decision.effects.map(effect => (effect.kind === 'nudge'
+// Carries out what the ledger's outbox holds: its log lines, then its nudges
+// and notifications, then the lines that wake the parent, each logged with
+// how it went. The outbox is emptied first, in one update, so two callers
+// never carry out the same work.
+async function carryOut($: $) {
+  let work = OUTBOX_EMPTY
+  await writeTickets($, t => {
+    work = t.outbox
+    return hasWork(t.outbox) ? { ...t, outbox: OUTBOX_EMPTY } : t
+  })
+  if (!hasWork(work)) return
+  for (const line of work.logs) await addLog($, line)
+  await Promise.all(work.effects.map(effect => (effect.kind === 'nudge'
     ? nudge($, effect.to, effect.name, ', because it has been idle').catch(() => undefined)
     : notify($, effect.text).catch(() => undefined))))
-  const line = wakeLine(decision.reasons)
-  if (line !== null) await wake($, line)
+  for (const line of work.lines) await wake($, line)
 }
 
 // Wakes the parent's model with one line: appended to the turn that runs, or
@@ -368,6 +377,9 @@ async function ensureArmed($: $) {
   if (armed || !(await isOn($))) return
   armed = true
   ticker ??= $.clock.every(REDRAW_MS, () => $.ui.invalidate('ui.render'))
+  // Work a read decided before a reload dropped the timer that would have
+  // carried it out is carried out now.
+  if (hasWork(ticketsIn(await read($, tickets)).outbox)) later($, () => carryOut($))
   const due = await read($, nextReadAt)
   const now = await $.clock.now()
   if (typeof due === 'number' && Number.isFinite(due) && due > now) schedule($, due - now)

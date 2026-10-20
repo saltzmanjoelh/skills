@@ -65,10 +65,21 @@ export type ForemanPairing = {
   acts: ForemanActs
 }
 
-// Every pairing of this parent, and whether a slot freed while it was
-// paused, so /foreman resume can wake the parent for it. `folderMissing`
-// says the last read found no status folder, so the log says so once.
-export type ForemanTickets = { pairings: ForemanPairing[]; freedWhilePaused: boolean; folderMissing: boolean }
+// Something to do outside the ledger: a nudge to a desktop session, naming
+// the sub session for the log, or a notification with its text.
+export type ForemanEffect = { kind: 'nudge'; ticket: string; to: string; name: string } | { kind: 'notify'; text: string }
+
+// What foreman decided and has not yet carried out: log lines, effects, and
+// lines that wake the parent. A read puts its decision here in the same
+// update that records it, and carrying it out takes it back out, so a hot
+// reload that drops the timer in between loses nothing.
+export type ForemanOutbox = { logs: string[]; effects: ForemanEffect[]; lines: string[] }
+
+// Every pairing of this parent, whether a slot freed while it was paused, so
+// /foreman resume can wake the parent for it, and what is still to be
+// carried out. `folderMissing` says the last read found no status folder, so
+// the log says so once.
+export type ForemanTickets = { pairings: ForemanPairing[]; freedWhilePaused: boolean; folderMissing: boolean; outbox: ForemanOutbox }
 
 declare module 'claude-code' {
   interface PluginState {

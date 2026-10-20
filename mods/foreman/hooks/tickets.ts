@@ -3,8 +3,8 @@
 // answer, the ledger as the store keeps it, which record owns each ticket,
 // and which rows show. Every function is pure.
 
-import type { ForemanActs, ForemanPairing, ForemanStanding, ForemanTickets } from '../types'
-import { keyOf, nameOf, type SubRow } from './subs'
+import type { ForemanActs, ForemanEffect, ForemanOutbox, ForemanPairing, ForemanStanding, ForemanTickets } from '../types'
+import { byKeyThenFile, keyOf, nameOf, type SubRow } from './subs'
 import { byTicket } from './wake'
 
 // The line builder looks for in a sub session's first prompt.
@@ -36,7 +36,34 @@ export function localIdIn(text: string): string | null {
 // The store key that holds a parent's ledger.
 export const ticketsKey = (sessionId: string) => `tickets:${sessionId}`
 
-export const TICKETS_EMPTY: ForemanTickets = { pairings: [], freedWhilePaused: false, folderMissing: false }
+export const OUTBOX_EMPTY: ForemanOutbox = { logs: [], effects: [], lines: [] }
+
+export const TICKETS_EMPTY: ForemanTickets = { pairings: [], freedWhilePaused: false, folderMissing: false, outbox: OUTBOX_EMPTY }
+
+// Whether the outbox holds anything to carry out.
+export const hasWork = (o: ForemanOutbox) => o.logs.length > 0 || o.effects.length > 0 || o.lines.length > 0
+
+// The outbox with `more` added after what it already holds.
+export const addWork = (o: ForemanOutbox, more: ForemanOutbox): ForemanOutbox => (hasWork(more)
+  ? { logs: [...o.logs, ...more.logs], effects: [...o.effects, ...more.effects], lines: [...o.lines, ...more.lines] }
+  : o)
+
+const strings = (raw: unknown): string[] => (Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : [])
+
+function effectIn(raw: unknown): ForemanEffect | null {
+  const e = objectOf(raw)
+  if (e?.kind === 'notify' && typeof e.text === 'string') return { kind: 'notify', text: e.text }
+  if (e?.kind === 'nudge' && typeof e.ticket === 'string' && typeof e.to === 'string' && typeof e.name === 'string') {
+    return { kind: 'nudge', ticket: e.ticket, to: e.to, name: e.name }
+  }
+  return null
+}
+
+function outboxIn(raw: unknown): ForemanOutbox {
+  const o = objectOf(raw)
+  if (o === null) return OUTBOX_EMPTY
+  return { logs: strings(o.logs), effects: Array.isArray(o.effects) ? o.effects.flatMap(e => effectIn(e) ?? []) : [], lines: strings(o.lines) }
+}
 
 export const ACTS_FRESH: ForemanActs = { episode: null, stretch: null, notifiedFor: null, cleanupWokeFor: null, goneWokeFor: null }
 
@@ -95,7 +122,7 @@ export function ticketsIn(raw: unknown): ForemanTickets {
   const t = objectOf(raw)
   if (t === null) return TICKETS_EMPTY
   const pairings = Array.isArray(t.pairings) ? t.pairings.flatMap(p => pairingIn(p) ?? []) : []
-  return { pairings, freedWhilePaused: t.freedWhilePaused === true, folderMissing: t.folderMissing === true }
+  return { pairings, freedWhilePaused: t.freedWhilePaused === true, folderMissing: t.folderMissing === true, outbox: outboxIn(t.outbox) }
 }
 
 // The ledger with the pairings past MAX_PAIRINGS dropped, freed and released
@@ -119,7 +146,7 @@ export const ownsTicket = (p: ForemanPairing, row: SubRow) => p.owner !== null &
 // the log.
 export function joinOwners(t: ForemanTickets, rows: readonly SubRow[]): { tickets: ForemanTickets; logs: string[] } {
   const logs: string[] = []
-  const byFile = [...rows].sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0))
+  const byFile = [...rows].sort((a, b) => byKeyThenFile(null, a.file, null, b.file))
   const pairings = t.pairings.map(p => {
     let next = p
     if (next.owner === null) {

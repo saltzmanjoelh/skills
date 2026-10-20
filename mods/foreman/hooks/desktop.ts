@@ -33,6 +33,7 @@ export const REASONS = {
   listRefused: 'the desktop app could not list its sessions',
   listUnreadable: 'the desktop app\'s list of sessions could not be read',
   openRefused: 'the desktop app refused to open it, as it does for a session this one did not start or while this session is not on screen',
+  sendRefused: 'the desktop app refused the message',
 } as const
 
 export type OpenResult = { opened: string } | { reason: string }

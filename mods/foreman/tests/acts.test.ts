@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
+import { REASONS } from '../hooks/desktop'
 import { DATA_NOTE } from '../hooks/wake'
 import { FORK_REFUSAL, newPairing, ticketsIn, ticketsKey } from '../hooks/tickets'
 import { foreman, leftInState, MINUTE, mountBoth, record, SECOND, start, T0, world } from './world'
@@ -423,4 +424,68 @@ test('after a restart, a first listing that fails frees no slot and forgets no t
   await w.clock.settle()
   expect(w.engine.prompts).toEqual([])
   expect(ledger(w).pairings.map(q => q.standing)).toEqual(['active'])
+})
+
+test('a list of sessions that fails frees no slot and says so in the log', async ($, on) => {
+  const w = world(on)
+  const done = record('ABC-1', 'done', { desktopSessionId: 'local_a' })
+  w.folder.put('a.json', done)
+  w.desktop.list = 'error'
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await w.clock.settle()
+  expect(await ui.paneText()).toContain(`Could not read the desktop app's list of sessions, so no slot was freed: ${REASONS.listRefused}.`)
+  expect(ledger(w).pairings[0]!.standing).toBe('active')
+  expect(w.engine.prompts).toEqual([])
+})
+
+test('a notification that throws, and a nudge the desktop app refuses, are logged', async ($, on) => {
+  const w = world(on)
+  w.folder.put('a.json', record('ABC-1', 'needs-you', { desktopSessionId: 'local_a' }))
+  w.folder.put('b.json', record('ABC-2', 'idle', { desktopSessionId: 'local_b' }))
+  w.engine.notify = 'throws'
+  w.desktop.send = 'error'
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await w.clock.settle()
+  expect(await ui.paneText()).toContain('Could not raise a notification: ABC-1 needs you.')
+  await ui.pane.press({ key: 'nudge-b.json' })
+  await w.clock.settle()
+  expect(await ui.newestLog()).toBe(`Could not nudge ABC-2: ${REASONS.sendRefused}.`)
+})
+
+test('a notification that never answers is given up on after 30 seconds', async ($, on) => {
+  const w = world(on)
+  w.folder.put('a.json', record('ABC-1', 'needs-you', { desktopSessionId: 'local_a' }))
+  w.engine.notify = 'hang'
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await w.clock.advance(31 * SECOND)
+  await w.clock.settle()
+  expect(await ui.paneText()).toContain('Could not raise a notification, because it did not go within 30 seconds: ABC-1 needs you.')
+})
+
+test('work a read decided before a reload dropped its timer is carried out once the timers are armed again', async ($, on) => {
+  const w = world(on)
+  w.folder.put('a.json', record('ABC-1', 'working', { desktopSessionId: 'local_a' }))
+  leftInState(on, {
+    tickets: {
+      ...ticketsIn(w.stored.get(ticketsKey('session-1'))),
+      outbox: { logs: ['A line decided before the reload.'], effects: [{ kind: 'nudge', ticket: 'ft-ABC-1', to: 'local_a', name: 'ABC-1' }], lines: ['foreman: one slot free; pick the next issue and start it.'] },
+    },
+    parent: { isOn: true, slots: null, isPaused: false },
+    nextReadAt: T0 + 20 * SECOND,
+    readAt: T0 - 10 * SECOND,
+  })
+  on('turn.complete', ($, e) => ({ text: e.answer }) as never)
+  const ui = await mountBoth($, on)
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as never)
+  await w.clock.settle()
+  expect(w.desktop.sent).toEqual([['local_a', NUDGE]])
+  expect(w.engine.prompts).toEqual(['foreman: one slot free; pick the next issue and start it.'])
+  expect(await ui.paneText()).toContain('A line decided before the reload.')
+  expect(ledger(w).outbox).toEqual({ logs: [], effects: [], lines: [] })
 })

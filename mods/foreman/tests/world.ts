@@ -111,13 +111,14 @@ export function engine(on: On) {
     prompts: [] as string[],
     appended: [] as string[],
     started: [] as Record<string, unknown>[],
-    notify: 'sent' as 'sent' | 'off' | 'throws',
+    notify: 'sent' as 'sent' | 'off' | 'throws' | 'hang',
     submit: 'ok' as 'ok' | 'dropped',
     startAnswer: 'Started the session local_new1 (name: example).',
     startFails: false,
   }
   on('ui.notify', ($, n) => {
     if (e.notify === 'throws') throw new Error('no channel')
+    if (e.notify === 'hang') return new Promise<never>(() => {})
     e.notices.push(n.text)
     return { value: e.notify === 'sent' ? { isSent: true, channel: 'terminal' } : { isSent: false, reason: 'disabled' } } as never
   })

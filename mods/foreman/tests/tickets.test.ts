@@ -40,6 +40,8 @@ test('a stored ledger in any other shape reads as empty, and a pairing with a ba
   expect(read.pairings[0]!.standing).toBe('active')
   expect(read.pairings[0]!.localId).toBeNull()
   expect(read.pairings[0]!.acts.stretch).toBeNull()
+  const outbox = ticketsIn({ outbox: { logs: ['a', 3], effects: [{ kind: 'notify', text: 'n' }, { kind: 'nudge', to: 'x' }], lines: 'no' } }).outbox
+  expect(outbox).toEqual({ logs: ['a'], effects: [{ kind: 'notify', text: 'n' }], lines: [] })
 })
 
 test('the record whose desktop session is the one start_session named owns the ticket, even when another sorts first', () => {
