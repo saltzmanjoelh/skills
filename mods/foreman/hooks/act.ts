@@ -84,8 +84,8 @@ export const desktopOf = (p: ForemanPairing, row: SubRow) => p.localId ?? row.re
 
 // Whether the list shows the session gone: archived, not running, or not
 // listed.
-function endedIn(sessions: Listed[], id: string | null): string | null {
-  const entry = id === null ? undefined : sessions.find(s => s.sessionId === id)
+function endedIn(byId: ReadonlyMap<string, Listed>, id: string | null): string | null {
+  const entry = id === null ? undefined : byId.get(id)
   if (entry === undefined) return 'is no longer listed'
   if (entry.isArchived) return 'is archived'
   if (!entry.isRunning) return 'is no longer running'
@@ -101,7 +101,8 @@ type Step = {
   row: SubRow
   now: number
   limits: Limits
-  sessions: SessionsLook
+  // The desktop app's sessions by id, or null when the list was not read.
+  listed: ReadonlyMap<string, Listed> | null
   effects: ForemanEffect[]
   reasons: Reason[]
   logs: string[]
@@ -144,8 +145,8 @@ const STATE_RULES: Record<BuildState, (s: Step) => void> = {
   },
   'done': s => {
     setActs(s, { stretch: null })
-    if (s.sessions.kind !== 'read') return
-    const ended = endedIn(s.sessions.sessions, desktopOf(s.p, s.row))
+    if (s.listed === null) return
+    const ended = endedIn(s.listed, desktopOf(s.p, s.row))
     if (ended === null) return
     s.p = { ...s.p, standing: 'freed' }
     s.freed += 1
@@ -200,10 +201,10 @@ function idleRule(s: Step) {
 // does not show the session running, and the pull request has not merged.
 // One stretch is one unchanged modification time.
 function goneRule(s: Step) {
-  if (s.row.record.state === 'done' || s.sessions.kind !== 'read') return
+  if (s.row.record.state === 'done' || s.listed === null) return
   if (s.now - s.row.mtimeMs <= GONE_MS || s.p.acts.goneWokeFor === s.row.mtimeMs) return
   if (/^merged$/i.test(s.row.record.pr?.state ?? '')) return
-  if (endedIn(s.sessions.sessions, desktopOf(s.p, s.row)) === null) return
+  if (endedIn(s.listed, desktopOf(s.p, s.row)) === null) return
   s.reasons.push({ kind: 'gone', who: whoOf(s.row.record.issueKey, s.p.ticket), minutes: minutesOf(s.now - s.row.mtimeMs) })
   setActs(s, { goneWokeFor: s.row.mtimeMs })
 }
@@ -240,6 +241,7 @@ export function needsList(t: ForemanTickets, rows: readonly SubRow[], now: numbe
 // which case the pause is remembered.
 export function decide(input: DecideInput): Decision {
   const { rows, now, limits, sessions, folderExists, listed } = input
+  const byId = sessions.kind === 'read' ? new Map(sessions.sessions.map(x => [x.sessionId, x])) : null
   const effects: ForemanEffect[] = []
   const reasons: Reason[] = []
   const logs: string[] = []
@@ -263,7 +265,7 @@ export function decide(input: DecideInput): Decision {
     }
     if (!ownsTicket(p, row) || p.standing !== 'active') return [p]
     const episode = episodeOf(p.acts.episode, row, now)
-    const s: Step = { p: { ...p, acts: { ...p.acts, episode } }, episode, row, now, limits, sessions, effects, reasons, logs, due, freed: 0 }
+    const s: Step = { p: { ...p, acts: { ...p.acts, episode } }, episode, row, now, limits, listed: byId, effects, reasons, logs, due, freed: 0 }
     STATE_RULES[row.record.state](s)
     goneRule(s)
     freed += s.freed

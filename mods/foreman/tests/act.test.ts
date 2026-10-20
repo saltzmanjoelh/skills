@@ -187,3 +187,9 @@ test('a pairing that no status file carried for a day is forgotten, and a younge
   expect(read(paired(), [], T0 + 25 * 60 * MINUTE, { folderExists: false }).tickets.pairings).toHaveLength(1)
   expect(read(paired(), [], T0 + 25 * 60 * MINUTE, { listed: false }).tickets.pairings).toHaveLength(1)
 })
+
+test('a record with no stateSince counts its episode from the read that first saw the state, and again from a change of state', () => {
+  expect(readEvery(paired(), () => [row({ stateSince: null })], T0 + 6 * MINUTE)).toEqual([{ at: 5, nudges: 1, reasons: [] }])
+  const changed = (now: number) => [row({ stateSince: null, state: (now - T0) / MINUTE < 3 ? 'working' : 'idle' })]
+  expect(readEvery(paired(), changed, T0 + 9 * MINUTE)).toEqual([{ at: 8, nudges: 1, reasons: [] }])
+})

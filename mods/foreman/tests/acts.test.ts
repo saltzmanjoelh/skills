@@ -533,3 +533,28 @@ test('a process that goes on as another session starts that session with its own
   expect(ticketsIn(w.stored.get(ticketsKey('session-2'))).pairings).toHaveLength(1)
   expect(ledger(w).pairings).toHaveLength(1)
 })
+
+test('the Nudge button on a sub session with no desktop session sends nothing and says why', async ($, on) => {
+  const w = world(on)
+  w.folder.put('a.json', record('ABC-1', 'idle'))
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await ui.pane.press({ key: 'nudge-a.json' })
+  await w.clock.settle()
+  expect(await ui.newestLog()).toBe('Could not nudge ABC-1: foreman knows no desktop session for it.')
+  expect(w.desktop.sent).toEqual([])
+})
+
+test('a list of sessions that never answers is given up on after 30 seconds and frees no slot', async ($, on) => {
+  const w = world(on)
+  w.folder.put('a.json', record('ABC-1', 'done', { desktopSessionId: 'local_a' }))
+  w.desktop.list = 'hang'
+  const ui = await mountBoth($, on)
+  await start($)
+  void foreman($)
+  await w.clock.advance(31 * SECOND)
+  await w.clock.settle()
+  expect(await ui.paneText()).toContain('Could not read the desktop app\'s list of sessions, so no slot was freed: the desktop app did not answer within 30 seconds.')
+  expect(ledger(w).pairings[0]!.standing).toBe('active')
+})

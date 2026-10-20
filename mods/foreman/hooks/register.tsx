@@ -132,10 +132,13 @@ async function writeTickets($: $, change: (t: ForemanTickets) => ForemanTickets)
   })
   if (unchanged) return written
   const next = persisting.then(async () => {
+    // The ledger goes under the key of the session it records, and only while
+    // that is still this session, so a write queued before the process went
+    // on as another session never lands under the new session's key.
     const value = ticketsIn(await read($, tickets))
     const text = JSON.stringify(value)
-    if (text === lastStored) return
-    await $.store.set(ticketsKey(await $.session.id()), value)
+    if (text === lastStored || value.sessionId === null || value.sessionId !== (await $.session.id())) return
+    await $.store.set(ticketsKey(value.sessionId), value)
     lastStored = text
   })
   persisting = next.catch(() => undefined)
@@ -622,7 +625,7 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
   on('turn.complete', async ($, e, next) => {
     void ensureArmed($).catch(() => undefined)
-    if ((e as { agentId?: string }).agentId === undefined && (await isOn($))) await update($, turnRuns, () => false)
+    if (e.agentId === undefined && (await isOn($))) await update($, turnRuns, () => false)
     return next(e)
   }).catch(($, e, next) => next(e))
 

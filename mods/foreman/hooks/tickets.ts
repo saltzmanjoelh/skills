@@ -71,8 +71,6 @@ export const ACTS_FRESH: ForemanActs = { episode: null, stretch: null, notifiedF
 // oldest first; an active pairing is never dropped.
 export const MAX_PAIRINGS = 200
 
-// How many other session ids with the same ticket a pairing remembers.
-const MAX_FORKS = 10
 
 export function newPairing(ticket: string, localId: string | null, at: number): ForemanPairing {
   return { ticket, localId, pairedAt: at, owner: null, ownerFile: null, issueKey: null, standing: 'active', forks: [], acts: ACTS_FRESH }
@@ -110,7 +108,7 @@ function pairingIn(raw: unknown): ForemanPairing | null {
     ownerFile: textOr(p.ownerFile, null),
     issueKey: textOr(p.issueKey, null),
     standing: STANDINGS.includes(p.standing as ForemanStanding) ? p.standing as ForemanStanding : 'active',
-    forks: Array.isArray(p.forks) ? p.forks.filter((f): f is string => typeof f === 'string').slice(-MAX_FORKS) : [],
+    forks: Array.isArray(p.forks) ? p.forks.filter((f): f is string => typeof f === 'string') : [],
     acts: actsIn(p.acts),
   }
 }
@@ -173,7 +171,7 @@ export function joinOwners(t: ForemanTickets, rows: readonly SubRow[]): { ticket
     if (forks.length > 0) {
       const name = own === undefined ? byTicket(p.ticket) : nameOf(own)
       logs.push(...forks.map(() => `Left out a second status file with the ticket of ${name}, as a fork of its session writes.`))
-      next = { ...next, forks: [...next.forks, ...forks.map(r => r.record.sessionId)].slice(-MAX_FORKS) }
+      next = { ...next, forks: [...next.forks, ...forks.map(r => r.record.sessionId)] }
     }
     return next
   })
