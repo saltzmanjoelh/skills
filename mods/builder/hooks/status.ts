@@ -333,6 +333,16 @@ export function statusMemoIn(raw: unknown, sessionId: string): StatusMemo | null
   }
 }
 
+// The generation a stored memo holds, whichever session the memo belongs to,
+// or null when the stored value is not an object or its generation is missing
+// or not a finite number. Only the generation is read, so a memo whose other
+// fields an older build wrote still gives its generation.
+export function generationIn(raw: unknown): number | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const generation = (raw as { generation?: unknown }).generation
+  return isFiniteTime(generation) ? generation : null
+}
+
 // A new memo for a session whose first prompt was just looked at, with
 // nothing written yet and nothing open.
 export function newMemo(found: Pick<StatusMemo, 'sessionId' | 'ticket' | 'path' | 'cwd' | 'generation'> & { desktopSessionId?: string }): StatusMemo {

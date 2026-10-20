@@ -9564,15 +9564,27 @@ test('the cleanup record counts the failed calls since the skill started and kee
 
 test('a minute later the file is written again with a new write time and the same state time, and an event that changes nothing writes nothing', async ($, on) => {
   const s = foremanSession(on)
+  const progressWrites = { count: 0 }
+  on('state.set', ($, e, next) => {
+    if (e.plugin === 'builder' && e.key === 'progress') progressWrites.count += 1
+    return next(e)
+  })
   await firstPrompt($, s.clock)
-  expect(s.writesOf()).toBe(1)
-
-  await $.classic.Stop({ stop_hook_active: false, background_tasks: [] } as never)
-  await s.clock.advance(MINUTE - 1000)
-  expect(s.writesOf()).toBe(1)
-  await s.clock.advance(1000)
+  await loose($)({ tool: PROGRESS, title: 'ABC-123 short issue name', stage: 'build' })
+  await s.clock.settle()
   expect(s.writesOf()).toBe(2)
-  expect(s.statusAt()).toMatchObject({ state: 'idle', stateSince: S0, writtenAt: S0 + MINUTE })
+
+  // The same report again writes the builder state, which asks for the file
+  // to be worked out again, but the record comes out as the one last written.
+  const before = progressWrites.count
+  await loose($)({ tool: PROGRESS, title: 'ABC-123 short issue name', stage: 'build' })
+  await s.clock.settle()
+  expect(progressWrites.count).toBe(before + 1)
+  await s.clock.advance(MINUTE - 1000)
+  expect(s.writesOf()).toBe(2)
+  await s.clock.advance(1000)
+  expect(s.writesOf()).toBe(3)
+  expect(s.statusAt()).toMatchObject({ state: 'idle', stage: 'build', stateSince: S0, writtenAt: S0 + MINUTE })
 })
 
 test('a refused write is tried again at the next minute', async ($, on) => {
@@ -9778,6 +9790,35 @@ test('after a merge, a write whose read is held across the end of a session ende
   await ended
   s.ids.current = 'session-2'
   expect(s.world.calls).toContain(`rm -f ${BUILD}`)
+
+  late.release()
+  await s.clock.settle()
+  expect(s.writesOf()).toBe(writes)
+})
+
+test('after a merge, a write whose read is held across a /clear whose reset of the memo is refused never writes once the read answers', async ($, on) => {
+  // The end's reset of the memo is refused, so the memo of the ended session
+  // stays, with this copy's generation, and writing opens again once the
+  // reset has failed. The writer's last read of the state, the usage hold's,
+  // is held, so the writer has read the memo before the end. No new
+  // conversation takes a memo up before the read answers, so only the end's
+  // raise of this copy's generation keeps the writer from writing the old
+  // file again.
+  const refusal = refusedWrites(on, 'statusMemo', value => value === null)
+  const late = answerWaits(on, 'state.get', 'usageHold')
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  await watchUntilMerged($, s)
+  late.arm()
+  await s.clock.advance(MINUTE)
+  const writes = s.writesOf()
+  refusal.writes = 1
+  const ended = endSession($, 'clear')
+  await s.clock.advance(1000)
+  await ended
+  expect(refusal.refusals).toBe(1)
+  expect(s.world.calls).toContain(`rm -f ${BUILD}`)
+  s.ids.current = 'session-2'
 
   late.release()
   await s.clock.settle()
@@ -10051,7 +10092,9 @@ test('a copy whose load stamp is lower than the memo\'s generation does not take
   await $.prompt.submit({ text: TICKETED, origin: { kind: 'composer' } } as never)
   await s.clock.advance(5 * MINUTE)
   expect(s.files.writes.log.filter(path => path.includes('/foreman/'))).toEqual([])
-  expect(owner.writes.every(written => written.generation === S0 + 1 && written.ticket === 'slot-9')).toBe(true)
+  // The one write of the memo is this copy's take-up, which finds the memo
+  // owned by the newer copy and writes it back exactly as it was.
+  expect(owner.writes).toEqual([owner.newer])
   expect(s.transcriptReads()).toBe(0)
 })
 
@@ -10073,7 +10116,9 @@ test('a prompt that found no memo does not write its own over the memo of this s
 
   expect(s.transcriptReads()).toBe(1)
   expect(s.files.writes.log.filter(path => path.includes('/foreman/'))).toEqual([])
-  expect(owner.writes.every(written => written.generation === S0 + 1 && written.ticket === 'slot-9')).toBe(true)
+  // The one write of the memo is this copy's take-up, which finds the memo
+  // owned by the newer copy and writes it back exactly as it was.
+  expect(owner.writes).toEqual([owner.newer])
 })
 
 test('a hot reload whose clock has not moved past the memo\'s generation still takes the memo up under a larger generation', async ($, on) => {

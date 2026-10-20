@@ -190,7 +190,11 @@ list:
   with the newest state; after `/clear` and a new session id, a prompt with
   no ticket writes nothing.
 
-The generation guard against a writer left in an old module copy is argued
-from the engine's types, because the test kit cannot run two copies of the
-module; the pull request says so. No gate reads the README, so the report
-says its reviewers alone checked it.
+A writer left in an old copy of the module is kept from the file by a load
+stamp: each copy stamps itself when it loads, and a copy writes only while
+the memo's generation is not above its own stamp. The test kit runs only one
+copy of the module, so the tests stand in for a newer copy by answering reads
+of the memo with a higher generation than this copy's stamp, through the
+helpers `raisedMemo` and `newerOwnersMemo`, and check that the older copy
+then writes neither the file nor the memo. No gate reads the README, so the
+report says its reviewers alone checked it.

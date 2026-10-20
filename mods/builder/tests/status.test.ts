@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import { snapshotOf } from '../hooks/github'
 import {
   afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite,
-  buildPathOf, comparedTextOf, configDirOf, ERROR_CHARS, errorLineOf, firstPromptOf, isCleanupSkill, issueOf, newMemo, recordOf, STATE_RULES, stateOf,
+  buildPathOf, comparedTextOf, configDirOf, ERROR_CHARS, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, issueOf, newMemo, recordOf, STATE_RULES, stateOf,
   statusMemoIn, ticketIn, WITHHELD, type StatusFacts,
 } from '../hooks/status'
 import type { AgentCard, StatusMemo } from '../types'
@@ -206,6 +206,21 @@ test('a stored memo reads back only for its own session and only when every fiel
   expect(statusMemoIn({ ...good, prompts: [{ loop: '', tool: 'Bash', count: -1 }] }, 'session-1')).toBeNull()
   expect(statusMemoIn({ ...good, cleanup: { failedCalls: 'one', lastError: '' } }, 'session-1')).toBeNull()
   expect(statusMemoIn({ ...good, generation: Number.NaN }, 'session-1')).toBeNull()
+})
+
+test('a stored memo gives its generation whichever session it belongs to, and null when the generation is missing or not finite', () => {
+  const good = memo({ generation: NOW })
+  expect(generationIn(good)).toBe(NOW)
+  expect(generationIn({ ...good, sessionId: 'session-2' })).toBe(NOW)
+  expect(generationIn({ generation: NOW })).toBe(NOW)
+  const missing: Partial<StatusMemo> = { ...good }
+  delete missing.generation
+  expect(generationIn(missing)).toBeNull()
+  expect(generationIn({ ...good, generation: Number.NaN })).toBeNull()
+  expect(generationIn({ ...good, generation: Number.POSITIVE_INFINITY })).toBeNull()
+  expect(generationIn({ ...good, generation: String(NOW) })).toBeNull()
+  expect(generationIn(null)).toBeNull()
+  expect(generationIn(NOW)).toBeNull()
 })
 
 test('permission prompts are counted per loop and tool, each return closes one, and a loop\'s end closes all of its own', () => {

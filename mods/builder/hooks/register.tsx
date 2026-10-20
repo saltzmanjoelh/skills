@@ -12,7 +12,7 @@ import { afterReport, endedOf, plannedOf, progressIn, reportAnswer, reportOf, st
 import { changePrompt, ciEventContext, resumePrompt, stateLines, stuckPrompt } from './prompts'
 import { factIn, packageText, secretIn, verdictsLine, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
-import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, buildPathOf, comparedTextOf, configDirOf, firstPromptOf, isCleanupSkill, newMemo, recordOf, statusMemoIn, ticketIn, watchedSnapshotOf, type StatusFacts } from './status'
+import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, buildPathOf, comparedTextOf, configDirOf, firstPromptOf, generationIn, isCleanupSkill, newMemo, recordOf, statusMemoIn, ticketIn, watchedSnapshotOf, type StatusFacts } from './status'
 import { timeOfDay } from './text'
 
 type $ = EngineInterface
@@ -2854,9 +2854,7 @@ function adoptMemo($: $, memo: StatusMemo) {
 async function stampLoad($: $) {
   let stored = 0
   try {
-    const raw: unknown = await read($, statusMemo)
-    const generation = typeof raw === 'object' && raw !== null ? (raw as { generation?: unknown }).generation : undefined
-    if (typeof generation === 'number' && Number.isFinite(generation)) stored = generation
+    stored = generationIn(await read($, statusMemo)) ?? 0
   } catch {
     // The time of the load stands alone, as said above.
   }
@@ -2878,11 +2876,12 @@ async function stampLoad($: $) {
 // a copy whose start failed, or that found no memo at its start because the
 // copy before it wrote one later, still takes the memo up.
 async function takeUpMemo($: $, sessionId: string, found: StatusMemo | null) {
-  const taken = statusMemoIn(await update($, statusMemo, raw => {
+  const stored = await update($, statusMemo, raw => {
     const memo = statusMemoIn(raw, sessionId)
     if (memo === null) return found ?? raw
     return memo.generation > loadStamp ? raw : { ...memo, generation: loadStamp }
-  }), sessionId)
+  })
+  const taken = statusMemoIn(stored, sessionId)
   if (taken === null || taken.generation !== loadStamp) return
   statusGen = loadStamp
   adoptMemo($, taken)

@@ -62,7 +62,12 @@ survives the parent being closed.
    new write time even when nothing else changed. A file whose write time
    stops moving means the session is gone or hung.
 8. **Writes go one at a time.** A change that arrives while a write runs is
-   written after it, so the newest record is always the last one written.
+   written after it, so the newest record is normally the last one written.
+   The one exception is a write that has run for 30 seconds without
+   finishing: builder gives up waiting for it and goes on to the next write,
+   so the slow write can still land after a newer record and put an older
+   record in the file. The next change, or the next minute's write, which
+   happens even when nothing changed, then writes the newest record over it.
 9. **When the session ends** after its pull request merged, builder deletes
    the file. The engine's file interface has no delete, so builder runs
    `rm -f <path>` through `$.process.run`. When the session ends without a
