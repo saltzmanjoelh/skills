@@ -1,9 +1,8 @@
 // The parent's settings: whether this session is the parent, its slot count
 // and whether it is paused. They are kept in $.state for the drawings and in
 // $.store under the session's id, so a resume or a reload finds them again.
-
-import { atom, update } from 'claude-code'
-import type { EngineInterface } from 'claude-code'
+// writeParent in hooks/register.tsx writes both, because the engine reads a
+// module's state only through atoms declared in the file that uses them.
 
 import type { ForemanParent } from '../types'
 import { MAX_SLOTS, MIN_SLOTS } from './commands'
@@ -13,8 +12,6 @@ export const PARENT_OFF: ForemanParent = { isOn: false, slots: null, isPaused: f
 
 // The slot count when neither /foreman slots nor the option sets one.
 export const DEFAULT_SLOTS = 2
-
-export const parent = atom({ plugin: 'foreman', key: 'parent' } as const, PARENT_OFF)
 
 // The store key that holds a session's settings.
 export const storeKey = (sessionId: string) => `parent:${sessionId}`
@@ -35,18 +32,4 @@ export function parentIn(raw: unknown): ForemanParent {
 export function slotsOf(settings: ForemanParent, option: unknown): number {
   if (settings.slots !== null) return settings.slots
   return isSlotCount(option) ? option : DEFAULT_SLOTS
-}
-
-// Changes the settings in $.state and then writes the result to the store
-// under this session's id. The change is applied inside `update`, which may
-// run it again when another write got in first, so it must not have side
-// effects. Answers the settings as written.
-export async function writeParent($: EngineInterface, change: (settings: ForemanParent) => ForemanParent): Promise<ForemanParent> {
-  let written = PARENT_OFF
-  await update($, parent, raw => {
-    written = change(parentIn(raw))
-    return written
-  })
-  await $.store.set(storeKey(await $.session.id()), written)
-  return written
 }

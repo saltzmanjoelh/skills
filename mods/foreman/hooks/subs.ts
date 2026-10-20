@@ -108,6 +108,10 @@ export const NO_ISSUE = 'no issue yet'
 // row with no issue yet.
 export const keyOf = (row: SubRow) => (row.record.issueKey === null ? NO_ISSUE : printable(row.record.issueKey, 40))
 
+// How a sentence names a row: by its issue key, cleaned, or as the sub
+// session with no issue yet.
+export const nameOf = (row: SubRow) => (row.record.issueKey === null ? `the sub session with ${NO_ISSUE}` : keyOf(row))
+
 // A chip's text: the issue key, then the stage while the sub session works or
 // waits on builder and has reported one, else the state in words. A stale
 // chip shows its last state and how long it has gone without an update.
