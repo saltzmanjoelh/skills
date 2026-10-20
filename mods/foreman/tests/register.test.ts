@@ -320,6 +320,19 @@ test('after a reload that lost the timer, the end of a turn arms it again and re
   expect(w.folder.lists).toBe(2)
 })
 
+test('after a reload that lost the timer, a submitted prompt arms it again and reads at once when the read is overdue', async ($, on) => {
+  const w = world(on)
+  twoSubs(w.folder)
+  leftInState(on, { parent: { isOn: true, slots: null, isPaused: false }, nextReadAt: T0 - SECOND, readAt: T0 - 31 * SECOND })
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  const passed = await $.prompt.submit({ text: 'next', wait: false, origin: { kind: 'person' } } as never)
+  expect((passed as { text: string }).text).toBe('next')
+  await w.clock.settle()
+  expect(w.folder.lists).toBe(1)
+  await w.clock.advance(30 * SECOND)
+  expect(w.folder.lists).toBe(2)
+})
+
 test('after a reload whose read is not yet due, the end of a turn arms the timer for the saved time', async ($, on) => {
   const w = world(on)
   leftInState(on, { parent: { isOn: true, slots: null, isPaused: false }, nextReadAt: T0 + 20 * SECOND, readAt: T0 - 100 * SECOND })

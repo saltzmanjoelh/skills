@@ -45,7 +45,7 @@ let reading: Promise<void> | undefined
 
 // The status folder: under CLAUDE_CONFIG_DIR when it is set, else under the
 // home folder's `.claude`.
-async function folderOf($: $): Promise<string> {
+async function statusFolderOf($: $): Promise<string> {
   const config = await $.env.get('CLAUDE_CONFIG_DIR')
   const base = typeof config === 'string' && config !== '' ? config : `${(await $.env.get('HOME')) ?? ''}/.claude`
   return `${base.replace(/\/+$/, '')}/foreman/builds`
@@ -88,7 +88,7 @@ async function rowsNow($: $): Promise<SubRow[]> {
 // on a folder that does not exist reads as no files; any other failure keeps
 // the last good read and logs why, and answers null.
 async function readFolder($: $): Promise<FileRead[] | null> {
-  const folder = await folderOf($)
+  const folder = await statusFolderOf($)
   let entries: Awaited<ReturnType<$['fs']['list']>>
   try {
     entries = await $.fs.list(folder)
@@ -275,13 +275,15 @@ export const register: Register = (on, options) => {
   })
 
   // After a hot reload, whichever of these hooks comes first arms the timers
-  // again. Each passes the event on unchanged.
-  on('prompt.submit', async ($, e, next) => {
-    await ensureArmed($).catch(() => undefined)
+  // again. Each passes the event on unchanged and does not wait for the
+  // arming, as builder's do, because arming may read the whole status folder
+  // and the person's prompt or the turn's end should not wait for that read.
+  on('prompt.submit', ($, e, next) => {
+    void ensureArmed($).catch(() => undefined)
     return next(e)
   }).catch(($, e, next) => next(e))
-  on('turn.complete', async ($, e, next) => {
-    await ensureArmed($).catch(() => undefined)
+  on('turn.complete', ($, e, next) => {
+    void ensureArmed($).catch(() => undefined)
     return next(e)
   }).catch(($, e, next) => next(e))
 
