@@ -134,6 +134,15 @@ async function writeTickets($: $, change: (t: ForemanTickets) => ForemanTickets)
   const sessionId = await $.session.id()
   await update($, tickets, raw => {
     const held = ticketsIn(raw)
+    // The id can change between the taking-up above and this update, when a
+    // /clear or a resume lands in between. A ledger that is not this
+    // writer's session's is then left as it is, never relabelled, and the
+    // change is dropped; the next hook takes the new session up.
+    if (held.sessionId !== null && held.sessionId !== sessionId) {
+      unchanged = true
+      written = held
+      return held
+    }
     const changed = change(held)
     unchanged = changed === held
     written = unchanged || changed.sessionId === sessionId ? changed : { ...changed, sessionId }
@@ -147,18 +156,22 @@ async function writeTickets($: $, change: (t: ForemanTickets) => ForemanTickets)
 // under way, and logs a write that fails. The ledger goes under the key of
 // the session it records, and only while that is still this session, so a
 // write queued before the process went on as another session never lands
-// under the new session's key.
-async function persistTickets($: $) {
+// under the new session's key. Answers whether the store now holds the
+// ledger, written now or already, under the current session's key.
+async function persistTickets($: $): Promise<boolean> {
   const next = persisting.then(async () => {
     const value = ticketsIn(await read($, tickets))
     const text = JSON.stringify(value)
-    if (text === lastStored || value.sessionId === null || value.sessionId !== (await $.session.id())) return
+    if (value.sessionId === null || value.sessionId !== (await $.session.id())) return false
+    if (text === lastStored) return true
     await $.store.set(ticketsKey(value.sessionId), value)
     lastStored = text
+    return true
   })
-  persisting = next.catch(() => undefined)
-  await next.catch(async error => {
+  persisting = next.then(() => undefined, () => undefined)
+  return next.catch(async error => {
     await addLog($, `Could not save the tickets: ${reasonOf(error)}.`)
+    return false
   })
 }
 
@@ -231,10 +244,13 @@ async function takeUpSession($: $, id: string) {
     await $.store.set(storeKey(id), settings).catch(error => addLog($, `Could not save the settings: ${reasonOf(error)}.`))
   }
   if (ticketsFrom !== 'carried') return
-  await persistTickets($)
-  // The tickets now belong to the conversation that goes on, so the one
-  // that was cleared is left with none, and resuming it later cannot act on
-  // them a second time.
+  // The tickets now belong to the conversation that goes on, so once they
+  // are stored under its key, the one that was cleared is left with none,
+  // and resuming it later cannot act on them a second time. Until they are,
+  // the cleared one keeps them, so a failed save loses nothing.
+  if (!(await persistTickets($))) return
+  // `previous` is set inside the update's change, which the type check does
+  // not follow, so it is read again here with its type.
   const handedOver: string | null = previous
   if (handedOver !== null && handedOver !== id) {
     await $.store.set(ticketsKey(handedOver), { ...TICKETS_EMPTY, sessionId: handedOver })

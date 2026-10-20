@@ -692,3 +692,16 @@ test('two calls that find the new session id at once take it up once, and neithe
   ])
   expect(ticketsIn(w.stored.get(ticketsKey('session-2'))).pairings).toHaveLength(3)
 })
+
+test('after a /clear whose save under the new id fails, the cleared conversation keeps its tickets', async ($, on) => {
+  const w = world(on)
+  await start($)
+  await foreman($)
+  await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh' })
+  await $.session.end({ reason: 'clear', sessionId: 'session-1', resume: { id: 'session-1' } } as never)
+  w.engine.sessionId = 'session-2'
+  w.store.refused.add(ticketsKey('session-2'))
+  await $.prompt.submit({ text: 'next', wait: false, origin: { kind: 'person' } } as never)
+  await w.clock.settle()
+  expect(ticketsIn(w.stored.get(ticketsKey('session-1'))).pairings).toHaveLength(1)
+})

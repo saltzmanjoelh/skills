@@ -71,7 +71,8 @@ export const ACTS_FRESH: ForemanActs = { episode: null, stretch: null, notifiedF
 // oldest first; an active pairing is never dropped.
 export const MAX_PAIRINGS = 200
 
-
+// A pairing for a ticket just issued: active, with no owner yet and no
+// action memory.
 export function newPairing(ticket: string, localId: string | null, at: number): ForemanPairing {
   return { ticket, localId, pairedAt: at, owner: null, ownerFile: null, issueKey: null, standing: 'active', forks: [], acts: ACTS_FRESH }
 }
