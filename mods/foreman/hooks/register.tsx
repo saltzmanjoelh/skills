@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, ResolveInput } from 'claude-code'
+import type { EngineInterface, Register, ResolveInput, ToolCallResult } from 'claude-code'
 
 import { decide, desktopOf, needsList, PAUSED_SLOT_LOG, slotOutcome, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
 import { isSvgSurface } from './art'
@@ -124,11 +124,14 @@ async function writeTickets($: $, change: (t: ForemanTickets) => ForemanTickets)
   let unchanged = false
   const sessionId = await $.session.id()
   await update($, tickets, raw => {
-    const before = ticketsIn(raw)
+    // A ledger another session left in $.state is never changed and relabelled
+    // as this one's: the change goes to an empty ledger of this session.
+    const held = ticketsIn(raw)
+    const before = held.sessionId === null || held.sessionId === sessionId ? held : { ...TICKETS_EMPTY, sessionId }
     const changed = change(before)
-    unchanged = changed === before
-    written = unchanged || changed.sessionId === sessionId ? changed : { ...changed, sessionId }
-    return written
+    unchanged = changed === held
+    written = changed.sessionId === sessionId ? changed : { ...changed, sessionId }
+    return unchanged ? held : written
   })
   if (unchanged) return written
   const next = persisting.then(async () => {
@@ -517,16 +520,21 @@ async function releaseRow($: $, file: string) {
 // refused, a call with a brief gets the ticket line, and once the call
 // answered without an error the ticket is paired with the desktop session id
 // the answer names, or with none for a proposal card.
-async function startSession($: $, e: Record<string, unknown>, next: (e: never) => Promise<unknown>) {
+// The call is typed as the engine gives an MCP tool's, with the tool's
+// arguments spread on it, so briefFor can read `prompt` and `context`.
+async function startSession<E extends Record<string, unknown>>($: $, e: E, next: (e: E) => Promise<ToolCallResult>): Promise<ToolCallResult> {
   const brief = briefFor(e, crypto.randomUUID())
   if (brief.kind === 'deny') {
     await addLog($, 'Refused a start_session call with forked context, because its sub session could not find its ticket.').catch(() => undefined)
     return { deny: brief.text }
   }
-  if (brief.kind === 'pass') return next(e as never)
-  const out = await next({ ...e, prompt: brief.prompt } as never) as { deny?: string; isError?: boolean; text?: unknown; result?: unknown }
+  if (brief.kind === 'pass') return next(e)
+  const out = await next({ ...e, prompt: brief.prompt })
   try {
     if (out.deny === undefined && out.isError !== true) {
+      // Core answers the text the model reads beside the tool's result; a
+      // hook beneath may answer the result alone, whose text blocks hold the
+      // id then.
       const localId = localIdIn(typeof out.text === 'string' ? out.text : JSON.stringify(out.result ?? ''))
       const at = await $.clock.now()
       await writeTickets($, t => ({ ...t, pairings: [...t.pairings, newPairing(brief.ticket, localId, at)] }))
@@ -641,7 +649,7 @@ export const register: Register = (on, options) => {
   // call on as it came.
   on('tool.call', { tool: START_TOOL }, async ($, e, next) => {
     if (!(await isOn($))) return next(e)
-    return startSession($, e as unknown as Record<string, unknown>, next as never) as never
+    return startSession($, e, next)
   }).catch(($, e, next) => {
     // Before the call went on, it goes on as it came, without a ticket. Once
     // it went on, a failure is the tool's own, and next hands back its

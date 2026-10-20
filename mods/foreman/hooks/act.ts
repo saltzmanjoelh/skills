@@ -102,7 +102,7 @@ type Step = {
   now: number
   limits: Limits
   // The desktop app's sessions by id, or null when the list was not read.
-  listed: ReadonlyMap<string, Listed> | null
+  sessionsById: ReadonlyMap<string, Listed> | null
   effects: ForemanEffect[]
   reasons: Reason[]
   logs: string[]
@@ -145,8 +145,8 @@ const STATE_RULES: Record<BuildState, (s: Step) => void> = {
   },
   'done': s => {
     setActs(s, { stretch: null })
-    if (s.listed === null) return
-    const ended = endedIn(s.listed, desktopOf(s.p, s.row))
+    if (s.sessionsById === null) return
+    const ended = endedIn(s.sessionsById, desktopOf(s.p, s.row))
     if (ended === null) return
     s.p = { ...s.p, standing: 'freed' }
     s.freed += 1
@@ -201,10 +201,10 @@ function idleRule(s: Step) {
 // does not show the session running, and the pull request has not merged.
 // One stretch is one unchanged modification time.
 function goneRule(s: Step) {
-  if (s.row.record.state === 'done' || s.listed === null) return
+  if (s.row.record.state === 'done' || s.sessionsById === null) return
   if (s.now - s.row.mtimeMs <= GONE_MS || s.p.acts.goneWokeFor === s.row.mtimeMs) return
   if (/^merged$/i.test(s.row.record.pr?.state ?? '')) return
-  if (endedIn(s.listed, desktopOf(s.p, s.row)) === null) return
+  if (endedIn(s.sessionsById, desktopOf(s.p, s.row)) === null) return
   s.reasons.push({ kind: 'gone', who: whoOf(s.row.record.issueKey, s.p.ticket), minutes: minutesOf(s.now - s.row.mtimeMs) })
   setActs(s, { goneWokeFor: s.row.mtimeMs })
 }
@@ -265,7 +265,7 @@ export function decide(input: DecideInput): Decision {
     }
     if (!ownsTicket(p, row) || p.standing !== 'active') return [p]
     const episode = episodeOf(p.acts.episode, row, now)
-    const s: Step = { p: { ...p, acts: { ...p.acts, episode } }, episode, row, now, limits, listed: byId, effects, reasons, logs, due, freed: 0 }
+    const s: Step = { p: { ...p, acts: { ...p.acts, episode } }, episode, row, now, limits, sessionsById: byId, effects, reasons, logs, due, freed: 0 }
     STATE_RULES[row.record.state](s)
     goneRule(s)
     freed += s.freed

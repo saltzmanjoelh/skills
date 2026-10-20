@@ -108,7 +108,7 @@ function pairingIn(raw: unknown): ForemanPairing | null {
     ownerFile: textOr(p.ownerFile, null),
     issueKey: textOr(p.issueKey, null),
     standing: STANDINGS.includes(p.standing as ForemanStanding) ? p.standing as ForemanStanding : 'active',
-    forks: Array.isArray(p.forks) ? p.forks.filter((f): f is string => typeof f === 'string') : [],
+    forks: strings(p.forks),
     acts: actsIn(p.acts),
   }
 }

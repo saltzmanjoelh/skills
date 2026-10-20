@@ -114,6 +114,8 @@ export function engine(on: On) {
     notify: 'sent' as 'sent' | 'off' | 'throws' | 'hang',
     submit: 'ok' as 'ok' | 'dropped',
     startAnswer: 'Started the session local_new1 (name: example).',
+    // Whether start_session's answer leaves out the text, giving the result alone.
+    startResultOnly: false,
     startFails: false,
     // The session id the engine answers.
     sessionId: 'session-1',
@@ -135,7 +137,9 @@ export function engine(on: On) {
   })
   on('tool.call', { tool: 'mcp__ccd_session__start_session' }, ($, call) => {
     answers.started.push({ ...call })
-    return { result: { content: [{ type: 'text', text: answers.startAnswer }], isError: answers.startFails }, text: answers.startAnswer, ...(answers.startFails ? { isError: true } : {}) } as never
+    const result = { content: [{ type: 'text', text: answers.startAnswer }], isError: answers.startFails }
+    if (answers.startResultOnly) return { result } as never
+    return { result, text: answers.startAnswer, ...(answers.startFails ? { isError: true } : {}) } as never
   })
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))

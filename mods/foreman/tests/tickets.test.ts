@@ -91,7 +91,7 @@ test('past the most pairings kept, the oldest freed and released ones go first a
   expect(capped(under)).toBe(under)
 })
 
-test('a ticket carried by more than ten other status files settles after one read, logging each fork once', () => {
+test('a ticket carried by many fork files settles after one read, logging each fork once', () => {
   const rows = [row('a.json', { desktopSessionId: 'local_a' }), ...Array.from({ length: 12 }, (_, i) => row(`f${i}.json`, { desktopSessionId: `local_f${i}` }))]
   const first = joinOwners(withPairings(newPairing('ft-a', 'local_a', T0)), rows)
   expect(first.logs).toHaveLength(12)

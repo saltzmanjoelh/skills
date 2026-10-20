@@ -558,3 +558,25 @@ test('a list of sessions that never answers is given up on after 30 seconds and 
   expect(await ui.paneText()).toContain('Could not read the desktop app\'s list of sessions, so no slot was freed: the desktop app did not answer within 30 seconds.')
   expect(ledger(w).pairings[0]!.standing).toBe('active')
 })
+
+test('a change made after the process went on as another session goes to that session\'s own ledger, never to the last one\'s', async ($, on) => {
+  const w = world(on)
+  await start($)
+  await foreman($)
+  await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh' })
+  w.engine.sessionId = 'session-2'
+  await startSession($, { prompt: 'Run /implement ABC-8.', context: 'fresh' })
+  const second = ticketsIn(w.stored.get(ticketsKey('session-2')))
+  expect(second.pairings).toHaveLength(1)
+  expect(second.sessionId).toBe('session-2')
+  expect(ticketsIn(w.stored.get(ticketsKey('session-1'))).pairings).toHaveLength(1)
+})
+
+test('an answer to start_session with no text still pairs the ticket with the local_ id in its result', async ($, on) => {
+  const w = world(on)
+  w.engine.startResultOnly = true
+  await start($)
+  await foreman($)
+  await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh' })
+  expect(ledger(w).pairings.map(p => p.localId)).toEqual(['local_new1'])
+})
