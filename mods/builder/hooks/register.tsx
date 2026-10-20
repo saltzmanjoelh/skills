@@ -2705,6 +2705,11 @@ function statusChanged($: $, force = false) {
 // times out is dropped: the next change or the next tick tries again, and
 // nothing here can stop a hook. It stops when the memo belongs to another
 // session, holds no ticket or no path, or was raised to a newer generation.
+// A copy of the module from before a hot reload keeps running the writer it
+// had in flight, so the memo's generation is read again right before the
+// file is written, with no await between that read and the start of the
+// write, and once more inside the memo's update. Its own `statusGen` cannot
+// tell it that a newer copy has started.
 async function writeStatus($: $, gen: number): Promise<void> {
   try {
     while (statusDirty && !statusClosed && gen === statusGen) {
@@ -2716,14 +2721,15 @@ async function writeStatus($: $, gen: number): Promise<void> {
       const record = recordOf(facts, await $.clock.now())
       const text = comparedTextOf(record)
       if (!force && text === lastWrittenText) continue
-      if (statusClosed || gen !== statusGen) return
-      await withinTimeout($, trackedWrite($, facts.memo.path, JSON.stringify(record)), STATUS_WRITE_TIMEOUT_MS)
+      const { sessionId, path } = facts.memo
+      const current = statusMemoIn(await read($, statusMemo), sessionId)
+      if (statusClosed || gen !== statusGen || current?.generation !== gen) return
+      await withinTimeout($, trackedWrite($, path, JSON.stringify(record)), STATUS_WRITE_TIMEOUT_MS)
       lastWrittenText = text
       if (facts.memo.state === record.state && facts.memo.stateSince === record.stateSince) continue
-      const { sessionId } = facts.memo
       await update($, statusMemo, raw => {
         const memo = statusMemoIn(raw, sessionId)
-        return memo === null ? raw : afterWrite(memo, record)
+        return memo === null || memo.generation !== gen ? raw : afterWrite(memo, record)
       })
     }
   } catch {
@@ -2861,31 +2867,30 @@ async function lookForTicket($: $, submitted: string) {
 
 // At each start of the hooks, the session's start and every hot reload: a
 // memo of this session is raised to a new generation, which this copy of the
-// module then writes under, and its answer is taken.
+// module then writes under, and its answer is taken. Only the generation is
+// raised, on the memo as it stands when it is written, so a change that lands
+// between the first read and the write, such as one from the copy before the
+// reload, is kept. The memo is read first, because `update` writes even when
+// its change hands back the value it was given.
 async function startStatus($: $) {
   const sessionId = await $.session.id()
-  const stored = statusMemoIn(await read($, statusMemo), sessionId)
-  if (stored === null) return
-  statusGen = stored.generation + 1
-  const raised = { ...stored, generation: statusGen }
-  await update($, statusMemo, () => raised)
+  if (statusMemoIn(await read($, statusMemo), sessionId) === null) return
+  const raised = statusMemoIn(await update($, statusMemo, raw => {
+    const memo = statusMemoIn(raw, sessionId)
+    return memo === null ? raw : { ...memo, generation: memo.generation + 1 }
+  }), sessionId)
+  if (raised === null) return
+  statusGen = raised.generation
   adoptMemo($, raised)
 }
 
-// At the session's end nothing more is written. A session with a ticket waits
-// for the write in flight, within the engine's short budget for ending a
-// session, and then, when the watched pull request merged, deletes the file
-// with `rm -f`, since the engine's file interface has no delete. Without a
-// merge the file stays for the foreman to read. A write that has not settled
-// by the delete, because it took longer than the wait or the writer gave up
-// on it, could still land and bring the file back with an older record, so
-// each one deletes the file again when it settles. When the process goes on
-// under another session id, after a /clear or a resume, the memo is reset,
-// and the new conversation looks for a ticket in its own first prompt. The
-// generation is raised first, so a writer of the ended session that is still
-// awaiting a read stops before it writes, even once the new conversation
-// writes again, and writing opens again only once the memo's reset has
-// settled, whether it landed or failed.
+// At the session's end nothing more is written. Writing is closed and the
+// generation raised first, so a writer of the ended session that is still
+// awaiting a read stops before it writes, even once a new conversation writes
+// again. A session with a ticket then deletes the file after a merge, and
+// when the process goes on under another session id, after a /clear or a
+// resume, everything is made ready for the new conversation, whether or not
+// the delete got through.
 async function endStatus($: $, reason: string, sessionId: string, budget: { remainingMs: number }) {
   const wasTicketed = ticketKnown === 'some'
   statusClosed = true
@@ -2893,37 +2898,50 @@ async function endStatus($: $, reason: string, sessionId: string, budget: { rema
   statusTick?.cancel()
   statusTick = undefined
   try {
-    if (wasTicketed) {
-      const flight = statusFlight
-      const wait = Math.max(0, Math.min(budget.remainingMs - END_MARGIN_MS, END_WAIT_CAP_MS))
-      if (flight !== null) await withinTimeout($, flight, wait).catch(() => undefined)
-      const memo = statusMemoIn(await read($, statusMemo), sessionId)
-      const isMerged = watchedSnapshotOf(await read($, run), snapshotIn(await read($, pr)))?.state === 'MERGED'
-      if (memo?.path != null && isMerged) {
-        const path = memo.path
-        const remove = () => $.process.run(['rm', '-f', path], { timeoutMs: END_WAIT_CAP_MS })
-        const unsettled = [...statusWrites]
-        await remove()
-        for (const write of unsettled) void write.catch(() => undefined).then(remove).catch(() => undefined)
-      }
-    }
+    if (wasTicketed) await deleteAfterMerge($, sessionId, budget)
   } finally {
-    if (reason === 'clear' || reason === 'resume') {
-      ticketKnown = undefined
-      ticketFor = undefined
-      lastWrittenText = null
-      statusDirty = false
-      statusForced = false
-      // Writing opens again even when the reset fails. That is safe, because
-      // a memo left under the ended session's id reads as none for the new
-      // one (see statusMemoIn), and the new conversation looks for its own
-      // ticket and writes a memo of its own.
-      try {
-        await update($, statusMemo, () => null)
-      } finally {
-        statusClosed = false
-      }
-    }
+    if (reason === 'clear' || reason === 'resume') await reopenForNextConversation($)
+  }
+}
+
+// Waits for the write in flight, within the engine's short budget for ending
+// a session, and then, when the watched pull request merged, deletes the file
+// with `rm -f`, since the engine's file interface has no delete. Without a
+// merge the file stays for the foreman to read. A write that has not settled
+// by the delete, because it took longer than the wait or the writer gave up
+// on it, could still land and bring the file back with an older record, so
+// each one deletes the file again when it settles.
+async function deleteAfterMerge($: $, sessionId: string, budget: { remainingMs: number }) {
+  const flight = statusFlight
+  const wait = Math.max(0, Math.min(budget.remainingMs - END_MARGIN_MS, END_WAIT_CAP_MS))
+  if (flight !== null) await withinTimeout($, flight, wait).catch(() => undefined)
+  const memo = statusMemoIn(await read($, statusMemo), sessionId)
+  const isMerged = watchedSnapshotOf(await read($, run), snapshotIn(await read($, pr)))?.state === 'MERGED'
+  if (memo?.path == null || !isMerged) return
+  const path = memo.path
+  const remove = () => $.process.run(['rm', '-f', path], { timeoutMs: END_WAIT_CAP_MS })
+  const unsettled = [...statusWrites]
+  await remove()
+  for (const write of unsettled) void write.catch(() => undefined).then(remove).catch(() => undefined)
+}
+
+// After a /clear or a resume the memo is reset, and the new conversation
+// looks for a ticket in its own first prompt. Writing opens again only once
+// the memo's reset has settled, whether it landed or failed.
+async function reopenForNextConversation($: $) {
+  ticketKnown = undefined
+  ticketFor = undefined
+  lastWrittenText = null
+  statusDirty = false
+  statusForced = false
+  // Writing opens again even when the reset fails. That is safe, because a
+  // memo left under the ended session's id reads as none for the new one (see
+  // statusMemoIn), and the new conversation looks for its own ticket and
+  // writes a memo of its own.
+  try {
+    await update($, statusMemo, () => null)
+  } finally {
+    statusClosed = false
   }
 }
 

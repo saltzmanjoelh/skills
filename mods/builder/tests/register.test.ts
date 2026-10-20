@@ -9264,10 +9264,7 @@ function foremanSession(on: On, over: { env?: Record<string, string>; messages?:
   mock.store(on)
   mock.env(on, over.env ?? { HOME: '/home/me', CLAUDE_CODE_HOST_SESSION_ID: 'desk-1' })
   const ids = { current: 'session-1' }
-  on('command.register', ($, e) => ({ value: { command: e.name } }))
-  on('tool.register', ($, e) => ({ value: { tool: `mcp__builder__${e.name}` } }))
-  on('session.start', ($, e) => ({ cwd: e.cwd }))
-  on('session.id', () => ({ value: ids.current }))
+  engine(on, undefined, async () => ({ value: ids.current }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   const transcript = { reads: 0 }
   on('session.messages', () => {
@@ -9833,4 +9830,116 @@ test('a subagent\'s own tool call that returns closes the permission prompt that
   await call
   await s.clock.settle()
   expect(s.statusAt()?.state).not.toBe('needs-you')
+})
+
+// Once `raise()` is called, every read of the memo answers with its
+// generation one above the one stored, as the memo reads to a copy of the
+// module from before a hot reload once the new copy has raised it. The kit
+// runs one copy of the module, so this stands in for the new copy.
+// `raiseAtRead(key)` raises it instead at the next read of the builder value
+// `key`, once that read has answered. `writes` holds the value of every write
+// of the memo after the raise.
+function raisedMemo(on: On) {
+  const memo = {
+    isRaised: false,
+    raiseAt: null as string | null,
+    raise: () => { memo.isRaised = true },
+    raiseAtRead: (key: string) => { memo.raiseAt = key },
+    writes: [] as { state: string | null }[],
+  }
+  on('state.get', async ($, e, next) => {
+    const answer = await next(e)
+    if (e.plugin === 'builder' && e.key === memo.raiseAt) {
+      memo.raiseAt = null
+      memo.isRaised = true
+    }
+    if (!memo.isRaised || e.plugin !== 'builder' || e.key !== 'statusMemo') return answer
+    const held = answer as { value: { value: { generation: number } | null; version: number } | null }
+    if (held.value?.value == null) return answer
+    return { value: { ...held.value, value: { ...held.value.value, generation: held.value.value.generation + 1 } } } as never
+  })
+  on('state.set', ($, e, next) => {
+    if (memo.isRaised && e.plugin === 'builder' && e.key === 'statusMemo') memo.writes.push(e.value as { state: string | null })
+    return next(e)
+  })
+  return memo
+}
+
+test('a writer that finds the memo raised to a newer generation while it read the state writes neither the file nor the memo', async ($, on) => {
+  const memo = raisedMemo(on)
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  const writes = s.writesOf()
+
+  // The memo is raised at the writer's last read of the state, the usage
+  // hold's, after the writer has read the memo. The minute's tick writes
+  // even when nothing changed, so only the raise can keep it from writing.
+  memo.raiseAtRead('usageHold')
+  await s.clock.advance(MINUTE)
+  expect(memo.isRaised).toBe(true)
+  expect(s.writesOf()).toBe(writes)
+  expect(memo.writes).toEqual([])
+})
+
+test('a writer whose memo is raised to a newer generation while its write runs leaves the memo\'s state as it was', async ($, on) => {
+  const memo = raisedMemo(on)
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  let release = () => {}
+  s.files.writes.hold = new Promise(resolve => {
+    release = resolve
+  })
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+
+  memo.raise()
+  release()
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('working')
+  expect(memo.writes.map(written => written.state).filter(state => state !== 'idle')).toEqual([])
+})
+
+test('a change to the memo made while a hot reload reads it survives the reload\'s raise of its generation', async ($, on) => {
+  const late = answerWaits(on, 'state.get', 'statusMemo')
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+
+  late.arm()
+  const started = $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await s.clock.settle()
+  const seen = late.seen
+  await $.skill.prompt({ skill: 'cleanup', text: 'clean' } as never)
+  await s.clock.settle()
+  expect(late.seen).toBeGreaterThan(seen)
+
+  late.release()
+  await started
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('in-cleanup')
+})
+
+test('a new session id with no end of the old session, as after a /clear whose end was cut off, writes nothing for either id after prompts with no ticket', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  const writes = s.writesOf()
+  s.ids.current = 'session-2'
+  await $.prompt.submit({ text: 'Something new.', origin: { kind: 'composer' } } as never)
+  await s.clock.advance(5 * MINUTE)
+  await $.prompt.submit({ text: 'Something else.', origin: { kind: 'composer' } } as never)
+  await s.clock.advance(5 * MINUTE)
+
+  expect(s.writesOf()).toBe(writes)
+  expect(s.files.writes.log.filter(path => path.includes('session-2'))).toEqual([])
+})
+
+test('a new session id with no end of the old session, as after a /clear whose end was cut off, looks for the ticket again, so the new conversation\'s own ticket writes its own file', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  const oldWrites = s.writesOf()
+  s.ids.current = 'session-2'
+  await $.prompt.submit({ text: 'foreman-ticket: slot-2', origin: { kind: 'composer' } } as never)
+  await s.clock.advance(5 * MINUTE)
+
+  expect(s.statusAt('/home/me/.claude/foreman/builds/session-2.json')).toMatchObject({ sessionId: 'session-2', ticket: 'slot-2', state: 'idle' })
+  expect(s.writesOf()).toBe(oldWrites)
 })
