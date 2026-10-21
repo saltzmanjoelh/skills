@@ -4,6 +4,7 @@ import { decide, GONE_MS, needsList, type DecideInput, type Decision, type Sessi
 import { recordIn } from '../hooks/record'
 import type { SubRow } from '../hooks/subs'
 import { joinOwners, newPairing, TICKETS_EMPTY } from '../hooks/tickets'
+import { wakeLine } from '../hooks/wake'
 import type { ForemanStanding, ForemanTickets } from '../types'
 
 const T0 = Date.UTC(2026, 9, 20, 12, 0, 0)
@@ -174,7 +175,10 @@ test('a sub session whose file stopped and whose session is not running wakes th
   d = read(d.tickets, stopped, later + MINUTE, { sessions: notRunning })
   expect(d.reasons).toEqual([])
   expect(read(paired(), stopped, later, { sessions: running }).reasons).toEqual([])
-  expect(read(paired(), [row({ state: 'working', pr: { repo: 'o/r', number: 7, state: 'MERGED', checks: 'passed' } })], later, { sessions: notRunning }).reasons).toEqual([])
+  // A merged pull request gets no gone wake. A new pairing that first reads
+  // it is told of the opening and the merge instead.
+  expect(read(paired(), [row({ state: 'working', pr: { repo: 'o/r', number: 7, state: 'MERGED', checks: 'passed' } })], later, { sessions: notRunning }).reasons.map(r => r.kind))
+    .toEqual(['opened', 'merged'])
   expect(read(paired(), stopped, later, { sessions: { kind: 'failed' } }).reasons).toEqual([])
 })
 
@@ -213,4 +217,126 @@ test('a held key needs the list, and only a list that was read releases it, with
   expect(d.tickets.held).toEqual([])
   expect(d.logs).toEqual(['Stopped holding ABC-7, because the desktop app\'s list shows a session for it.'])
   for (const sessions of [{ kind: 'unread' }, { kind: 'failed' }] as SessionsLook[]) expect(read(holding, [], T0, { sessions }).tickets.held).toEqual(['ABC-7'])
+})
+
+// A pull request in a record, and a verdict pair whose sha is the character
+// `c` forty times.
+const pr = (number: number, state = 'OPEN', verdicts: unknown = null) => ({ repo: 'o/r', number, state, checks: 'passed', verdicts })
+const pair = (c: string, spec = 'APPROVE', adversarial = 'APPROVE') => ({ sha: c.repeat(40), spec, adversarial })
+
+// Reads each record in turn, a minute apart, as a working record unless the
+// case says otherwise, and answers the wake line of each read, or null, with
+// the ledger after the last read.
+function linesOf(records: Record<string, unknown>[], tickets = paired()) {
+  let t = tickets
+  const lines = records.map((over, i) => {
+    const d = read(t, [row({ state: 'working', ...over })], T0 + i * MINUTE)
+    t = d.tickets
+    return wakeLine(d.reasons)
+  })
+  return { lines, tickets: t }
+}
+
+const OPENED = 'ABC-1 opened pull request #7.'
+const verdictWords = (c: string, spec: string, adversarial: string) => `ABC-1's pull request #7 has verdicts at ${c.repeat(7)}: spec ${spec}, adversarial ${adversarial}.`
+const line = (...sentences: string[]) => `foreman: ${sentences.join(' ')}`
+
+test('a new pairing whose record gains a pull request wakes once with the opened sentence, and not on the next read', () => {
+  expect(linesOf([{}, { pr: pr(7) }, { pr: pr(7) }]).lines).toEqual([null, line(OPENED), null])
+})
+
+test('a new verdict pair wakes once, with each verdict in words', () => {
+  const pairs = [{ pr: pr(7) }, { pr: pr(7, 'OPEN', pair('a', 'REQUEST_CHANGES', 'APPROVE')) }, { pr: pr(7, 'OPEN', pair('a', 'REQUEST_CHANGES', 'APPROVE')) }]
+  expect(linesOf(pairs).lines).toEqual([line(OPENED), line(verdictWords('a', 'requests changes', 'approves')), null])
+})
+
+test('an approval carried over to a new head after an announced approval wakes nothing and is not recorded, nor is a fresh round that approves again', () => {
+  const { lines, tickets } = linesOf([{ pr: pr(7, 'OPEN', pair('a')) }, { pr: pr(7, 'OPEN', pair('b')) }, { pr: pr(7, 'OPEN', pair('c')) }])
+  expect(lines).toEqual([line(OPENED, verdictWords('a', 'approves', 'approves')), null, null])
+  expect(tickets.pairings[0]!.acts.announced?.verdicts).toEqual(pair('a'))
+})
+
+test('two rounds that request changes in a row both wake, and so do an approval after them and a request for changes after that', () => {
+  const rounds = [
+    { pr: pr(7, 'OPEN', pair('a', 'REQUEST_CHANGES', 'REQUEST_CHANGES')) },
+    { pr: pr(7, 'OPEN', pair('b', 'REQUEST_CHANGES', 'APPROVE')) },
+    { pr: pr(7, 'OPEN', pair('c')) },
+    { pr: pr(7, 'OPEN', pair('d', 'APPROVE', 'REQUEST_CHANGES')) },
+  ]
+  expect(linesOf(rounds).lines).toEqual([
+    line(OPENED, verdictWords('a', 'requests changes', 'requests changes')),
+    line(verdictWords('b', 'requests changes', 'approves')),
+    line(verdictWords('c', 'approves', 'approves')),
+    line(verdictWords('d', 'approves', 'requests changes')),
+  ])
+})
+
+test('a head with no verdicts yet, as after a push, changes nothing, and the same pair coming back wakes nothing', () => {
+  const reads = [{ pr: pr(7, 'OPEN', pair('a', 'REQUEST_CHANGES', 'APPROVE')) }, { pr: pr(7) }, { pr: pr(7, 'OPEN', pair('a', 'REQUEST_CHANGES', 'APPROVE')) }, { pr: pr(7, 'OPEN', pair('b')) }]
+  expect(linesOf(reads).lines).toEqual([line(OPENED, verdictWords('a', 'requests changes', 'approves')), null, null, line(verdictWords('b', 'approves', 'approves'))])
+})
+
+test('a merge wakes once, and a close without merging wakes once', () => {
+  expect(linesOf([{ pr: pr(7) }, { pr: pr(7, 'MERGED') }, { pr: pr(7, 'MERGED') }]).lines).toEqual([line(OPENED), line('ABC-1\'s pull request #7 merged.'), null])
+  expect(linesOf([{ pr: pr(7) }, { pr: pr(7, 'CLOSED') }, { pr: pr(7, 'CLOSED') }]).lines)
+    .toEqual([line(OPENED), line('ABC-1\'s pull request #7 was closed without merging.'), null])
+})
+
+test('a pull request reopened after a close wakes nothing, and a second close wakes again', () => {
+  const closed = line('ABC-1\'s pull request #7 was closed without merging.')
+  const { lines, tickets } = linesOf([{ pr: pr(7) }, { pr: pr(7, 'CLOSED') }, { pr: pr(7, 'OPEN') }, { pr: pr(7, 'OPEN') }, { pr: pr(7, 'CLOSED') }])
+  expect(lines).toEqual([line(OPENED), closed, null, null, closed])
+  expect(tickets.pairings[0]!.acts.announced?.state).toBe('CLOSED')
+})
+
+test('a first read that already shows a merged pull request with verdicts gives the opened, verdict and merged sentences in one line', () => {
+  expect(linesOf([{ pr: pr(7, 'MERGED', pair('a')) }]).lines).toEqual([line(OPENED, verdictWords('a', 'approves', 'approves'), 'ABC-1\'s pull request #7 merged.')])
+})
+
+test('a second pull request gets its own opened sentence, and its verdicts and close are judged afresh', () => {
+  const reads = [{ pr: pr(7, 'OPEN', pair('a')) }, { pr: pr(7, 'CLOSED', pair('a')) }, { pr: pr(8, 'OPEN', pair('b')) }, { pr: pr(8, 'CLOSED', pair('b')) }]
+  expect(linesOf(reads).lines).toEqual([
+    line(OPENED, verdictWords('a', 'approves', 'approves')),
+    line('ABC-1\'s pull request #7 was closed without merging.'),
+    line('ABC-1 opened pull request #8.', 'ABC-1\'s pull request #8 has verdicts at bbbbbbb: spec approves, adversarial approves.'),
+    line('ABC-1\'s pull request #8 was closed without merging.'),
+  ])
+})
+
+test('a state foreman cannot read, or no pull request at all, between two reads changes nothing', () => {
+  const merged = line(OPENED, 'ABC-1\'s pull request #7 merged.')
+  expect(linesOf([{ pr: pr(7, 'MERGED') }, { pr: { number: 7 } }, { pr: pr(7, 'MERGED') }]).lines).toEqual([merged, null, null])
+  expect(linesOf([{ pr: pr(7, 'MERGED') }, { pr: pr(7, 'DRAFT') }, { pr: pr(7, 'merged') }]).lines).toEqual([merged, null, null])
+  expect(linesOf([{ pr: pr(7) }, { pr: null }, { pr: pr(7) }]).lines).toEqual([line(OPENED), null, null])
+})
+
+test('a pairing stored without a milestone memory takes its first read as announced and wakes only for what changes after', () => {
+  const stored = (t: ForemanTickets): ForemanTickets => ({ ...t, pairings: t.pairings.map(p => ({ ...p, acts: { ...p.acts, announced: null } })) })
+  const open = { pr: pr(7, 'OPEN', pair('a', 'REQUEST_CHANGES', 'APPROVE')) }
+  const old = linesOf([open, open, { pr: pr(7, 'MERGED', pair('a', 'REQUEST_CHANGES', 'APPROVE')) }], stored(paired()))
+  expect(old.lines).toEqual([null, null, line('ABC-1\'s pull request #7 merged.')])
+  expect(linesOf([open], stored(paired())).tickets.pairings[0]!.acts.announced).toEqual({ number: 7, state: 'OPEN', verdicts: pair('a', 'REQUEST_CHANGES', 'APPROVE') })
+  expect(linesOf([open]).lines).toEqual([line(OPENED, verdictWords('a', 'requests changes', 'approves'))])
+  const before = linesOf([{}, { pr: pr(7) }], stored(paired()))
+  expect(before.lines).toEqual([null, line(OPENED)])
+})
+
+test('the milestone sentences come after the state and gone sentences of the same pairing, and before the slot-free sentence', () => {
+  const cleaning = row({ state: 'in-cleanup', cleanup: { failedCalls: 3, lastError: '' }, pr: pr(7, 'MERGED') })
+  expect(read(paired(), [cleaning], T0).reasons.map(r => r.kind)).toEqual(['cleanup', 'opened', 'merged'])
+  const notRunning: SessionsLook = { kind: 'read', sessions: [{ sessionId: 'local_a', isArchived: false, isRunning: false, title: null, surelyUnarchived: true }] }
+  const stopped = row({ state: 'working', pr: pr(7) }, 'a.json', T0)
+  expect(read(paired(), [stopped], T0 + GONE_MS + MINUTE, { sessions: notRunning }).reasons.map(r => r.kind)).toEqual(['gone', 'opened'])
+  const done = row({ state: 'done', pr: pr(7, 'MERGED') })
+  expect(read(paired(), [done], T0, { sessions: { kind: 'read', sessions: [] } }).reasons.map(r => r.kind)).toEqual(['opened', 'merged', 'slot-free'])
+})
+
+test('a released or freed pairing, or a record that does not own the ticket, wakes nothing for its pull request', () => {
+  for (const standing of ['released', 'freed'] as const) {
+    const t = joinOwners(paired(), [row({ state: 'working' })]).tickets
+    t.pairings[0]!.standing = standing
+    expect(linesOf([{ pr: pr(7, 'MERGED', pair('a')) }], t).lines).toEqual([null])
+  }
+  expect(linesOf([{ ticket: 'ft-other', pr: pr(7, 'MERGED', pair('a')) }]).lines).toEqual([null])
+  expect(linesOf([{ pr: pr(7, 'MERGED', pair('a')) }]).lines).not.toEqual([null])
 })

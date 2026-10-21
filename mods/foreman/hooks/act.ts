@@ -6,7 +6,7 @@
 
 import type { Listed } from './desktop'
 import { releasedBy } from './held'
-import type { BuildState } from './record'
+import { prStateOf, type BuildState, type RecordVerdicts } from './record'
 import type { ForemanActs, ForemanEffect, ForemanPairing, ForemanTickets } from '../types'
 import { busyCount, nameOf, type SubRow } from './subs'
 import { capped, ownsTicket, shownRows } from './tickets'
@@ -219,6 +219,50 @@ function goneRule(s: Step) {
   setActs(s, { goneWokeFor: s.row.mtimeMs })
 }
 
+const bothApprove = (v: RecordVerdicts) => v.spec === 'APPROVE' && v.adversarial === 'APPROVE'
+
+// The pull request milestones the parent has not been told about, in the
+// order opened, verdicts, then merged or closed, with the memory of what was
+// told brought up to date. A pairing with no memory yet, as one stored before
+// foreman kept it has, takes this read as already told and answers none. A
+// record with no pull request changes nothing. A new number is a new pull
+// request, so its verdicts and state are judged afresh. A verdict pair at a
+// new head wakes, except one in which both approve after an announced pair in
+// which both approved, which is the same review carried over to a new head
+// and is not recorded. A state foreman cannot read changes nothing, and a
+// pull request that opens again wakes nothing but is remembered as open, so a
+// second close wakes again.
+function milestoneRule(s: Step): Reason[] {
+  const { pr } = s.row.record
+  const announced = s.p.acts.announced
+  if (announced === null) {
+    setActs(s, { announced: pr === null ? { number: null, state: null, verdicts: null } : { number: pr.number, state: prStateOf(pr), verdicts: pr.verdicts } })
+    return []
+  }
+  if (pr === null) return []
+  const who = whoOf(s.row.record.issueKey, s.p.ticket)
+  const { number } = pr
+  const reasons: Reason[] = []
+  let next = announced
+  if (number !== next.number) {
+    reasons.push({ kind: 'opened', who, number })
+    next = { number, state: null, verdicts: null }
+  }
+  const pair = pr.verdicts
+  if (pair !== null && pair.sha !== next.verdicts?.sha && !(bothApprove(pair) && next.verdicts !== null && bothApprove(next.verdicts))) {
+    reasons.push({ kind: 'verdicts', who, number, ...pair })
+    next = { ...next, verdicts: pair }
+  }
+  const state = prStateOf(pr)
+  if (state !== null && state !== next.state) {
+    if (state === 'MERGED') reasons.push({ kind: 'merged', who, number })
+    if (state === 'CLOSED') reasons.push({ kind: 'closed', who, number })
+    next = { ...next, state }
+  }
+  if (next !== announced) setActs(s, { announced: next })
+  return reasons
+}
+
 // What a freed slot leads to, given how many slots are free now: nothing
 // when none is, and otherwise a wake with the number free. A read and Release
 // both decide by it.
@@ -249,9 +293,10 @@ export function slotsNeedList(t: ForemanTickets, rows: readonly SubRow[], now: n
 // folder is forgotten, freeing its slot when it was active, and a pairing
 // that no status file has carried for a day is forgotten and logged; neither
 // happens unless this read listed a folder that exists. A released or
-// freed pairing gets no action. When a slot freed, the parent is woken with
-// the number of slots free, unless none is free. A list that was read
-// releases each held key that a session in it shows started.
+// freed pairing gets no action. An active pairing's pull request
+// milestones wake the parent after its other reasons. When a slot freed, the
+// parent is woken with the number of slots free, unless none is free. A list
+// that was read releases each held key that a session in it shows started.
 export function decide(input: DecideInput): Decision {
   const { rows, now, limits, sessions, folderExists, listed } = input
   const byId = sessions.kind === 'read' ? new Map(sessions.sessions.map(x => [x.sessionId, x])) : null
@@ -279,8 +324,12 @@ export function decide(input: DecideInput): Decision {
     if (!ownsTicket(p, row) || p.standing !== 'active') return [p]
     const episode = episodeOf(p.acts.episode, row, now)
     const s: Step = { p: { ...p, acts: { ...p.acts, episode } }, episode, row, now, limits, sessionsById: byId, effects, reasons, logs, due, freed: 0 }
+    // The milestone sentences follow this pairing's other sentences, so that
+    // the slot-free sentence, added after every pairing, stays last.
+    const milestones = milestoneRule(s)
     STATE_RULES[row.record.state](s)
     goneRule(s)
+    reasons.push(...milestones)
     freed += s.freed
     return [s.p]
   })
