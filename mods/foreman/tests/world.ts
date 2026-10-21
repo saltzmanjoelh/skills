@@ -25,16 +25,21 @@ export const record = (issueKey: string | null, state: string, over: Record<stri
 
 // The status folder, answered from memory: each file's text and modification
 // time, whether the folder exists, and a refusal every listing meets when
-// `listFails` is set. It counts the listings and the reads. A file put in it
-// also pairs its record's ticket with the parent in `stored`, as though the
-// parent had started that sub session, unless `pair` is false.
+// `listFails` is set. It counts the listings and every read, of the folder or
+// of any other file. A file put in it also pairs its record's ticket with the
+// parent in `stored`, as though the parent had started that sub session,
+// unless `pair` is false. `project` holds the text of files outside the
+// folder by their full path, such as a project's CLAUDE.md, and
+// `projectReads` records the path of every read outside the folder.
 export function statusFolder(on: On, at = FOLDER, stored = new Map<string, unknown>()) {
   const w = {
     files: new Map<string, { text: string; mtimeMs: number }>(),
+    project: new Map<string, string>(),
     exists: true,
     listFails: null as string | null,
     lists: 0,
     reads: 0,
+    projectReads: [] as string[],
     put(name: string, text: string, mtimeMs = T0, pair = true) {
       w.files.set(name, { text, mtimeMs })
       let ticket: unknown
@@ -58,7 +63,12 @@ export function statusFolder(on: On, at = FOLDER, stored = new Map<string, unkno
   on('fs.exists', ($, e) => ({ value: w.exists && e.path === at }))
   on('fs.read', ($, e) => {
     w.reads += 1
-    const f = e.path.startsWith(`${at}/`) ? w.files.get(e.path.slice(at.length + 1)) : undefined
+    if (!e.path.startsWith(`${at}/`)) {
+      w.projectReads.push(e.path)
+      const text = w.project.get(e.path)
+      return text === undefined ? { deny: `ENOENT: no such file or directory, open '${e.path}'` } : { value: text }
+    }
+    const f = w.files.get(e.path.slice(at.length + 1))
     return f === undefined ? { deny: `ENOENT: no such file or directory, open '${e.path}'` } : { value: f.text }
   })
   return w
@@ -226,7 +236,10 @@ export async function mountBoth($: Engine, on: On, surface: 'terminal' | 'deskto
   }
 }
 
-export const start = ($: Engine) => $.session.start({ cwd: '/work/parent', surface: null, isInteractive: true })
+// The parent session's working folder.
+export const PARENT_DIR = '/work/parent'
+
+export const start = ($: Engine) => $.session.start({ cwd: PARENT_DIR, surface: null, isInteractive: true })
 export const foreman = ($: Engine, args = '') => $.command.run({ command: 'start-foreman', args } as never) as Promise<{ text: string }>
 
 // The desktop app's notes to a parent, in the exact wording foreman's parser

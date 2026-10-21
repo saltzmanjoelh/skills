@@ -6,9 +6,10 @@ import type { Elements as EngineElements } from 'claude-code'
 
 import type { ForemanLogLine } from '../types'
 import { BAR_SVG_HEIGHT, barSvg, fitBar, hasSvg, svgWidth, type Bar } from './art'
+import { linkOf } from './links'
 import { STAGES, stageLabel } from './stages'
 import {
-  busyCount, chipText, fitChips, keyOf, moreWords, SEPARATOR, STATE_LOOK, staleWords, untilWords, type SubRow, type Tone,
+  busyCount, chipParts, chipText, fitChips, keyOf, moreWords, SEPARATOR, STATE_LOOK, staleWords, untilWords, type SubRow, type Tone,
 } from './subs'
 import { printable, timeOfDay } from './text'
 
@@ -26,11 +27,14 @@ export type View = {
   // When the next read is due, or null when none is scheduled.
   nextReadAt: number | null
   log: ForemanLogLine[]
+  // The project's usable issue address while the session is a parent, else
+  // null, which draws every key as plain text.
+  issueLink: string | null
 }
 
 // The elements the band and the pane draw with, as hooks/register.tsx builds
 // them: `Svg` is there only on a surface that draws images.
-export type Elements = Pick<EngineElements['terminal'], 'Box' | 'Text' | 'Button'> & { Svg?: EngineElements['desktop']['Svg'] }
+export type Elements = Pick<EngineElements['terminal'], 'Box' | 'Text' | 'Button' | 'Link'> & { Svg?: EngineElements['desktop']['Svg'] }
 
 // The theme color each tone is drawn in; plain text takes no color.
 const TONE_COLOR: Record<Tone, string | undefined> = { red: 'error', amber: 'warning', plain: undefined }
@@ -47,18 +51,30 @@ export function bandHead(v: View): string {
   return `foreman: ${busyCount(v.rows)} of ${v.slots} slots busy`
 }
 
+// The link to a row's issue, or null when there is no address or the row's
+// key is not linked. The key is linked only when it is drawn as the record
+// holds it, so a key that `printable` cut or cleaned of an escape sequence
+// stays plain text.
+export function rowLink(row: SubRow, address: string | null): string | null {
+  const key = row.record.issueKey
+  return keyOf(row) === key ? linkOf(address, key) : null
+}
+
 export type BandPresses = { open: (file: string) => void }
 
 // The band, in a parent only: the head, a chip for each sub session that
 // fits `width` with `+N more` for the rest, and when the next read is due.
 // Each chip is a button that opens its sub session; it is colored by its
-// state's tone, or dimmed and uncolored when its file is stale. A released
-// sub session has no chip. Null in a session that is not a parent, so the
-// host draws what it would without foreman.
+// state's tone, or dimmed and uncolored when its file is stale. A chip whose
+// issue has a link draws its key as that link, then a space as its own text,
+// then the button holding the rest of the chip. The chips are fitted by their
+// whole text either way. A released sub session has no chip. Null in a
+// session that is not a parent, so the host draws what it would without
+// foreman.
 export function bandTree(ui: Elements, view: View, width: number | undefined, presses: BandPresses) {
   if (!view.isOn) return null
   const v = { ...view, rows: view.rows.filter(row => row.isReleased !== true) }
-  const { Box, Text, Button } = ui
+  const { Box, Text, Button, Link } = ui
   const head = bandHead(v)
   const tail = `${SEPARATOR}${nextReadWords(v)}`
   if (v.rows.length === 0) {
@@ -67,15 +83,24 @@ export function bandTree(ui: Elements, view: View, width: number | undefined, pr
   const chips = v.rows.map(row => chipText(row, v.now))
   const room = width === undefined ? Infinity : width - head.length - tail.length
   const { shown, more } = fitChips(chips, room)
+  const chip = (row: SubRow, text: string) => (row.isStale
+    ? <Button key={`chip-${row.file}`} plain dimColor onPress={() => presses.open(row.file)}><Text dimColor>{text}</Text></Button>
+    : <Button key={`chip-${row.file}`} plain onPress={() => presses.open(row.file)}><Text color={TONE_COLOR[STATE_LOOK[row.record.state].tone]}>{text}</Text></Button>)
   return (
     <Box key="foreman-band" flexDirection="row">
       <Text>{head}</Text>
-      {v.rows.slice(0, shown).flatMap((row, i) => [
-        <Text key={`gap-${row.file}`}>{SEPARATOR}</Text>,
-        row.isStale
-          ? <Button key={`chip-${row.file}`} plain dimColor onPress={() => presses.open(row.file)}><Text dimColor>{chips[i]!}</Text></Button>
-          : <Button key={`chip-${row.file}`} plain onPress={() => presses.open(row.file)}><Text color={TONE_COLOR[STATE_LOOK[row.record.state].tone]}>{chips[i]!}</Text></Button>,
-      ])}
+      {v.rows.slice(0, shown).flatMap((row, i) => {
+        const gap = <Text key={`gap-${row.file}`}>{SEPARATOR}</Text>
+        const link = rowLink(row, v.issueLink)
+        if (link === null) return [gap, chip(row, chips[i]!)]
+        const { key, rest } = chipParts(row, v.now)
+        return [
+          gap,
+          <Link key={`link-${row.file}`} href={link}>{key}</Link>,
+          <Text key={`chip-gap-${row.file}`}> </Text>,
+          chip(row, rest),
+        ]
+      })}
       {more > 0 && <Text key="more">{`${SEPARATOR}${moreWords(more)}`}</Text>}
       <Text key="next">{tail}</Text>
     </Box>
@@ -139,14 +164,31 @@ export type PanePresses = { open: (file: string) => void; nudge: (file: string) 
 // The words a released row shows in place of its state.
 export const RELEASED = 'released'
 
-// One sub session in the pane: the issue button, the bar, the state, and the
+// The issue row: the button that opens the sub session, naming its key and
+// its pull request. When the issue has a link, the row is the key as that
+// link, a space, and the button naming the pull request alone.
+function issueRow(ui: Elements, row: SubRow, address: string | null, presses: PanePresses) {
+  const { Box, Text, Button, Link } = ui
+  const open = () => presses.open(row.file)
+  const link = rowLink(row, address)
+  if (link === null) return <Button key={`open-${row.file}`} variant="primary" label={`→ ${keyOf(row)} · ${pullRequestWords(row)}`} onPress={open} />
+  return (
+    <Box key={`issue-${row.file}`} flexDirection="row">
+      <Link href={link}>{keyOf(row)}</Link>
+      <Text> </Text>
+      <Button key={`open-${row.file}`} variant="primary" label={`→ ${pullRequestWords(row)}`} onPress={open} />
+    </Box>
+  )
+}
+
+// One sub session in the pane: the issue row, the bar, the state, and the
 // Nudge and Release buttons. A released one shows `released`, dimmed, in
 // place of its state and has no Nudge or Release button; its issue button
 // still opens it.
-function subTree(ui: Elements, row: SubRow, now: number, columns: number | undefined, presses: PanePresses) {
+function subTree(ui: Elements, row: SubRow, now: number, address: string | null, columns: number | undefined, presses: PanePresses) {
   const { Box, Text, Button } = ui
   const tone = STATE_LOOK[row.record.state].tone
-  const issue = <Button key={`open-${row.file}`} variant="primary" label={`→ ${keyOf(row)} · ${pullRequestWords(row)}`} onPress={() => presses.open(row.file)} />
+  const issue = issueRow(ui, row, address, presses)
   const bar = barRow(ui, row, columns)
   if (row.isReleased === true) {
     return [
@@ -182,7 +224,7 @@ export function paneTree(ui: Elements, v: View, presses: PanePresses, columns?: 
   return (
     <Box key="foreman-pane" flexDirection="column">
       {v.rows.length === 0 ? [<Text key="none" dimColor>{NO_SUBS}</Text>, <Text key="none-gap"> </Text>] : null}
-      {v.rows.flatMap(row => subTree(ui, row, v.now, columns, presses))}
+      {v.rows.flatMap(row => subTree(ui, row, v.now, v.issueLink, columns, presses))}
       <Text key="log-head" bold>Log</Text>
       {v.log.length === 0
         ? <Text key="log-none" dimColor>Nothing yet.</Text>

@@ -5,6 +5,7 @@ import { decide, desktopOf, needsList, slotOutcome, type Decision, type Limits, 
 import { isSvgSurface } from './art'
 import { becameParentAnswer, COMMAND, commandOf, PASSED_ON, slotsAnswer, type Command } from './commands'
 import { failureLine, listSessions, NUDGE_TEXT, openSession, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
+import { ignoredLine, readIssueLink } from './links'
 import { keptLine, keptNames, NOTED, NOTES_KEPT, notesIn } from './notes'
 import { bandTree, PANE, paneTree, type Elements, type View } from './pane'
 import type { ForemanParent, ForemanTickets } from '../types'
@@ -77,6 +78,14 @@ let currentOptions: Record<string, unknown> = {}
 // nothing writes nothing.
 let persisting: Promise<void> = Promise.resolve()
 let lastStored: string | undefined
+// The session's working folder, kept at every session start without reading
+// anything, so that a session that becomes a parent later can read its
+// project's facts from there. Null until a session start names it.
+let workingFolder: string | null = null
+// The project's usable issue address, as the last read of the fact in a
+// parent found it, or null when the project names none or names one that
+// cannot be used.
+let issueAddress: string | null = null
 
 // The status folder: under CLAUDE_CONFIG_DIR when it is set, else under the
 // home folder's `.claude`.
@@ -108,6 +117,26 @@ async function addLogs($: $, texts: readonly string[]) {
     }
     return kept
   })
+}
+
+// Reads the Issue link fact from the session's working folder, keeps what it
+// found, and, when the fact was ignored, says why once with a toast and the
+// same line in the log. Only a parent reads it, so a session that is not one
+// reads no file. Nothing here throws, so the read can never stop a session
+// from starting or becoming the parent; a failure leaves the keys plain.
+async function readLinkFact($: $, dir: string | null) {
+  if (dir === null) return
+  const found = await readIssueLink(path => $.fs.read(path), dir)
+  issueAddress = found.address
+  if (found.ignored === null) return
+  const line = ignoredLine('foreman', found.ignored)
+  try {
+    $.ui.toast(line)
+    await addLog($, line)
+  } catch {
+    // The toast and the line are only a courtesy, since the keys are plain
+    // either way.
+  }
 }
 
 // Changes the parent's settings in $.state and then writes the result to the
@@ -424,6 +453,7 @@ async function view($: $): Promise<View> {
     now: await $.clock.now(),
     nextReadAt: typeof due === 'number' && Number.isFinite(due) ? due : null,
     log: Array.isArray(lines) ? lines : [],
+    issueLink: settings.isOn ? issueAddress : null,
   }
 }
 
@@ -432,9 +462,9 @@ async function view($: $): Promise<View> {
 // every element on every surface and draws one the surface lacks as nothing.
 function elementsOf($: $, e: ResolveInput): Elements {
   const ui = $.ui.resolve(e)
-  const { Box, Text, Button } = ui
-  if (!isSvgSurface(e.surface)) return { Box, Text, Button }
-  return { Box, Text, Button, Svg: (ui as { Svg: NonNullable<Elements['Svg']> }).Svg }
+  const { Box, Text, Button, Link } = ui
+  if (!isSvgSurface(e.surface)) return { Box, Text, Button, Link }
+  return { Box, Text, Button, Link, Svg: (ui as { Svg: NonNullable<Elements['Svg']> }).Svg }
 }
 
 // The columns the engine gives a band or a pane, when they are a number.
@@ -638,9 +668,12 @@ async function applyCommand($: $, command: Exclude<Command, { kind: 'refused' }>
   return 'This session is now the parent, and foreman shows its sub sessions above the prompt and in its pane.'
 }
 
-// Turns the role on, reads the status folder and opens the pane.
+// Turns the role on, reads the Issue link fact when the session was not
+// already the parent, reads the status folder and opens the pane.
 async function becomeParent($: $) {
+  const wasOn = await isOn($)
   await writeParent($, p => ({ ...p, isOn: true }))
+  if (!wasOn) await readLinkFact($, workingFolder)
   // Arming makes the first read of the status folder, so it has to come
   // before the pane opens. Opened first, the pane would draw from no read at
   // all and say that the folder holds no sub sessions until the read landed.
@@ -652,8 +685,10 @@ export const register: Register = (on, options) => {
   currentOptions = options
   // At the start of a session, and of a resumed one, the store says whether
   // this session is the parent. The role is turned back on from it.
-  // The timers are armed only when the role is on.
+  // The timers are armed only when the role is on, and only then is the
+  // Issue link fact read, before the first read draws the band.
   on('session.start', async ($, e, next) => {
+    workingFolder = e.cwd
     const id = await $.session.id()
     const rawParent = await $.store.get(storeKey(id))
     const rawTickets = await $.store.get(ticketsKey(id))
@@ -670,7 +705,10 @@ export const register: Register = (on, options) => {
     if (rawParent !== undefined && rawParent !== null) {
       const storedParent = parentIn(rawParent)
       await update($, parent, () => storedParent)
-      if (storedParent.isOn) await ensureArmed($)
+      if (storedParent.isOn) {
+        await readLinkFact($, workingFolder)
+        await ensureArmed($)
+      }
     }
     return next(e)
   })
