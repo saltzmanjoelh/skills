@@ -74,7 +74,9 @@ what the parent will do on their behalf.
 6. **Deciding**, taking the first that holds:
    - more than one open pull request, or more than one branch: tell the
      person in one line;
-   - the issue was closed or moved to done: ask the person in one line;
+   - the issue was closed or moved to done, and no pull request for it
+     merged: ask the person in one line; when one merged, the merged choice
+     decides, because merging usually moves the issue to done;
    - an open pull request: start `/implement --resume #N` with it;
    - a merged pull request: tell the person the issue is finished, starting
      nothing, only when no branch remains, no pull request closed without

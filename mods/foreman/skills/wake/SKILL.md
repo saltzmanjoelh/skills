@@ -172,7 +172,10 @@ letter case, with no letter or digit directly before or after it. So
 step below that matches the key uses this rule. Put every path and branch name
 in single quotes in every command, and never put a name in a command when it
 holds a character the cleanup case does not allow. When a git or gh command in
-these steps fails, tell the person in one line, naming the issue, and stop.
+these steps fails, tell the person in one line, naming the issue, and stop. A
+command that answers no through its exit status, such as
+`git merge-base --is-ancestor` for a branch that is not reachable, has not
+failed.
 
 1. **List pull requests.** Run
    `gh pr list --state all --author @me --json number,state,title,headRefName,headRefOid,isCrossRepository --limit 100`,
@@ -242,8 +245,9 @@ these steps fails, tell the person in one line, naming the issue, and stop.
 7. **Decide**, taking the first of these that holds:
    - More than one open pull request, or more than one branch: tell the person
      in one line.
-   - The issue was closed or moved to done: ask the person in one line what to
-     do.
+   - The issue was closed or moved to done, and no pull request for it merged:
+     ask the person in one line what to do. When one merged, the merged
+     choice below decides, because merging usually moves the issue to done.
    - An open pull request: start a session whose brief runs
      `/implement --resume #N` with that pull request's number, even when an
      older one for the issue merged or was closed.
