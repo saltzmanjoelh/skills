@@ -162,8 +162,14 @@ const setActs = (s: Step, change: Partial<ForemanActs>) => {
 // Idle: a nudge once the idle episode has lasted the threshold, a second one
 // threshold after the first, and the wake one threshold after that, counted
 // over a stretch without progress. A record with no desktop session wakes the
-// parent at two thresholds instead.
+// parent at two thresholds instead. A record whose pull request was closed
+// without merging has stopped on purpose, so the rule ends any stretch and
+// neither nudges nor wakes until the pull request opens again.
 function idleRule(s: Step) {
+  if (prStateOf(s.row.record.pr) === 'CLOSED') {
+    setActs(s, { stretch: null })
+    return
+  }
   const progress = progressOf(s.row)
   let stretch = s.p.acts.stretch
   if (stretch === null || stretch.progress !== progress) stretch = { progress, nudges: 0, lastNudgeAt: null, woke: false }

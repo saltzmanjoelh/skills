@@ -340,3 +340,35 @@ test('a released or freed pairing, or a record that does not own the ticket, wak
   expect(linesOf([{ ticket: 'ft-other', pr: pr(7, 'MERGED', pair('a')) }]).lines).toEqual([null])
   expect(linesOf([{ pr: pr(7, 'MERGED', pair('a')) }]).lines).not.toEqual([null])
 })
+
+test('an idle record whose pull request is closed gets no nudge and no idle wake past three thresholds, and the same record with it open still does', () => {
+  expect(readEvery(paired(), () => [row({ pr: pr(7, 'CLOSED') })], T0 + 30 * MINUTE)).toEqual([{ at: 0, nudges: 0, reasons: ['opened', 'closed'] }])
+  expect(readEvery(paired(), () => [row({ pr: pr(7, 'OPEN') })], T0 + 30 * MINUTE)).toEqual([
+    { at: 0, nudges: 0, reasons: ['opened'] },
+    { at: 5, nudges: 1, reasons: [] },
+    { at: 10, nudges: 1, reasons: [] },
+    { at: 15, nudges: 0, reasons: ['idle'] },
+  ])
+})
+
+test('a close ends the idle stretch being counted, and a reopened pull request is counted again', () => {
+  const rowAt = (now: number) => {
+    const m = (now - T0) / MINUTE
+    if (m < 7) return [row({ pr: pr(7, 'OPEN') })]
+    if (m < 20) return [row({ pr: pr(7, 'CLOSED') })]
+    return [row({ pr: pr(7, 'OPEN'), stateSince: T0 + 20 * MINUTE })]
+  }
+  const t = paired()
+  const seen = readEvery(t, rowAt, T0 + 40 * MINUTE)
+  expect(seen).toEqual([
+    { at: 0, nudges: 0, reasons: ['opened'] },
+    { at: 5, nudges: 1, reasons: [] },
+    { at: 7, nudges: 0, reasons: ['closed'] },
+    { at: 25, nudges: 1, reasons: [] },
+    { at: 30, nudges: 1, reasons: [] },
+    { at: 35, nudges: 0, reasons: ['idle'] },
+  ])
+  const nudged = read(t, [row({ pr: pr(7, 'OPEN') })], T0 + T)
+  expect(nudged.tickets.pairings[0]!.acts.stretch?.nudges).toBe(1)
+  expect(read(nudged.tickets, [row({ pr: pr(7, 'CLOSED') })], T0 + T + MINUTE).tickets.pairings[0]!.acts.stretch).toBeNull()
+})
