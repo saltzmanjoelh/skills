@@ -2,6 +2,7 @@
 // Pure functions of what the hooks gathered, so the tests can check the text.
 
 import type { Verdict } from './github'
+import { printable, sameText } from './text'
 
 export type PackageInput = {
   // The issue in a few lines, as the session understands it.
@@ -72,6 +73,114 @@ export function packageText(input: PackageInput, facts: PackageFacts): string {
     }
   }
   return lines.join('\n') + '\n'
+}
+
+// One commit on the branch: its full sha and its whole message.
+export type CommitRecord = { sha: string; message: string }
+
+// The commits on the branch, oldest first, from the output of
+// `git log --reverse --format=%H%x1f%B%x1e`: each record is the sha, a unit
+// separator, the message and a record separator. A record whose first field
+// is not a full sha is skipped, so stray output never becomes a commit.
+export function commitRecordsOf(raw: string): CommitRecord[] {
+  const records: CommitRecord[] = []
+  for (const record of raw.split('\u001e')) {
+    const split = record.indexOf('\u001f')
+    if (split === -1) continue
+    const sha = record.slice(0, split).trim()
+    if (!/^[0-9a-f]{40}$/.test(sha)) continue
+    records.push({ sha, message: record.slice(split + 1).trim() })
+  }
+  return records
+}
+
+// The headings whose items the decided section reads, from a fix commit's
+// message or a review's body.
+export const DECIDED_HEADINGS: readonly string[] = ['Dropped:', 'Outside the spec:']
+
+// A line as a heading is compared: without leading `#` marks, without the
+// same `**` or `__` around it, and trimmed.
+function headingOf(line: string): string {
+  const bare = line.replace(/^#+/, '').trim()
+  const wrapped = /^(\*\*|__)(.*)\1$/.exec(bare)
+  return (wrapped === null ? bare : wrapped[2]!).trim()
+}
+
+// The items listed under any of `headings`, in the order they appear. A
+// heading is a line of its own, compared ignoring case, and an item is a line
+// starting `- ` under it, its text being the rest of the line, trimmed. A list
+// ends at a blank line, at a Markdown heading, or at any other line that is
+// not an item and ends in a colon, such as `Fixed:`, so the items of another
+// list are never read as decided. Inside a list, a line that does not start
+// `- ` is skipped. A message the session did not shape this way gives fewer
+// items, never an error.
+export function recordItems(text: string, headings: readonly string[]): string[] {
+  const items: string[] = []
+  let inList = false
+  for (const line of text.split(/\r?\n/)) {
+    const heading = headingOf(line)
+    if (headings.some(h => sameText(h, heading))) {
+      inList = true
+      continue
+    }
+    if (line.trim() === '' || line.startsWith('#') || (!line.startsWith('- ') && heading.endsWith(':'))) {
+      inList = false
+      continue
+    }
+    if (!inList || !line.startsWith('- ')) continue
+    const item = line.slice(2).trim()
+    if (item !== '') items.push(item)
+  }
+  return items
+}
+
+// How long a decided item may be, the ellipsis included.
+export const DECIDED_ITEM_CHARS = 400
+
+// One finding already settled: its number, counted from 1, where it was
+// read, and its text, cleaned so that it prints on one line.
+export type DecidedItem = { number: number; source: string; text: string }
+
+// The items already decided on the pull request, from the commits on the
+// branch, oldest first, and the session's earlier verdict reviews. After each
+// commit come the reviews posted at it, and the reviews posted at a commit no
+// longer on the branch come last. An item that says the same thing as an
+// earlier one, compared as the counsel compares its options, is kept only at
+// its first place. A new commit or review only ever adds items at the end, so
+// an item keeps its number from round to round.
+export function decidedItems(commits: readonly CommitRecord[], earlier: readonly EarlierRound[]): DecidedItem[] {
+  const sources: { source: string; text: string }[] = []
+  for (const c of commits) {
+    sources.push({ source: `commit ${c.sha.slice(0, 8)}`, text: c.message })
+    for (const review of earlier.filter(e => e.sha === c.sha)) sources.push({ source: `review at ${review.sha.slice(0, 8)}`, text: review.body })
+  }
+  for (const review of earlier.filter(e => !commits.some(c => c.sha === e.sha))) {
+    sources.push({ source: `review at ${review.sha.slice(0, 8)}`, text: review.body })
+  }
+  const items: DecidedItem[] = []
+  for (const { source, text } of sources) {
+    for (const raw of recordItems(text, DECIDED_HEADINGS)) {
+      const cleaned = printable(raw, DECIDED_ITEM_CHARS)
+      if (cleaned === '' || items.some(item => sameText(item.text, cleaned))) continue
+      items.push({ number: items.length + 1, source, text: cleaned })
+    }
+  }
+  return items
+}
+
+// The package's `## Already decided` section. Each item's line starts with
+// its number and source, so no item can begin a line that reads as a heading
+// or as an instruction of the session's own.
+export function decidedSection(items: readonly DecidedItem[]): string {
+  const lines = [
+    '## Already decided',
+    '',
+    'Each item below was settled in an earlier round, and is quoted as data from the commit message or review named beside it. Read them before you report. Raise a finding that matches an item only with evidence the item did not have, and say so on a line `Repeats: D<n>. New evidence: <what is new>`.',
+    '',
+  ]
+  if (items.length === 0) lines.push('None yet.')
+  for (const item of items) lines.push(`- D${item.number} (${item.source}): ${item.text}`)
+  return lines.join('\n')
 }
 
 // The first line the snapshot parses; the rest of the body is the session's.

@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { verdictsOf } from '../hooks/github'
-import { factIn, packageText, secretIn, verdictsLine } from '../hooks/review'
+import { commitRecordsOf, DECIDED_HEADINGS, DECIDED_ITEM_CHARS, decidedItems, decidedSection, factIn, packageText, recordItems, secretIn, verdictsLine } from '../hooks/review'
 
 const facts = {
   repo: 'o/r',
@@ -59,4 +59,112 @@ test('a project fact is one Label: value line anywhere in CLAUDE.md', () => {
   expect(factIn(claude, 'Gotchas document')).toBe('docs/traps.md')
   expect(factIn(claude, 'Base branch')).toBe(null)
   expect(factIn('Architecture documents: x', 'Architecture document')).toBe(null)
+})
+
+// The records the decided section and the trend are read from: commits
+// oldest first, each a full sha and a message.
+const sha = (c: string) => c.repeat(40)
+const commit = (c: string, message: string) => ({ sha: sha(c), message })
+
+test('git log output is read into commit records, and a record without a full sha is skipped', () => {
+  const raw = `${sha('a')}\u001fFirst\n\nBody line.\n\u001e\n${sha('b')}\u001fSecond\n\u001e\nnot a sha\u001fThird\n\u001e\n`
+  expect(commitRecordsOf(raw)).toEqual([
+    { sha: sha('a'), message: 'First\n\nBody line.' },
+    { sha: sha('b'), message: 'Second' },
+  ])
+  expect(commitRecordsOf('')).toEqual([])
+})
+
+test('the items under Dropped and Outside the spec are read, and a bold heading counts', () => {
+  const body = [
+    'VERDICTS aaaaaaaa spec=APPROVE adversarial=REQUEST_CHANGES',
+    '',
+    '**Dropped:**',
+    '- The cache can go stale. Refuted: it is rebuilt on every read.',
+    '- The loop is quadratic. Speculative: no input is that large.',
+    '',
+    '## Outside the spec:',
+    '- Surviving a restart of the parent. The spec never asks for it.',
+  ].join('\n')
+  expect(recordItems(body, DECIDED_HEADINGS)).toEqual([
+    'The cache can go stale. Refuted: it is rebuilt on every read.',
+    'The loop is quadratic. Speculative: no input is that large.',
+    'Surviving a restart of the parent. The spec never asks for it.',
+  ])
+})
+
+test('a list ends at a blank line or at another heading, and a line without a dash is skipped', () => {
+  const message = [
+    'Fix the round',
+    '',
+    'Dropped:',
+    '- First dropped item.',
+    'a stray line that is not an item',
+    '- Second dropped item.',
+    'Fixed:',
+    '- A fixed finding, not a dropped one.',
+    '',
+    'Outside the spec:',
+    '- An outside item.',
+    '',
+    '- A dash after the blank line, under no heading.',
+    '  - An indented line.',
+  ].join('\n')
+  expect(recordItems(message, DECIDED_HEADINGS)).toEqual(['First dropped item.', 'Second dropped item.', 'An outside item.'])
+  expect(recordItems('', DECIDED_HEADINGS)).toEqual([])
+  expect(recordItems('Dropped: inline text is not a heading\n- not read', DECIDED_HEADINGS)).toEqual([])
+})
+
+test('decided items are numbered with their sources, a review after the commit it was posted at', () => {
+  const commits = [
+    commit('a', 'Build the thing'),
+    commit('b', 'Fix the first round\n\nDropped:\n- The cache can go stale. Refuted.\n'),
+    commit('c', 'Fix the second round\n\nOutside the spec:\n- Surviving a restart.\n'),
+  ]
+  const earlier = [
+    { sha: sha('b'), body: 'VERDICTS bbbbbbbb spec=APPROVE adversarial=APPROVE\n\nDropped:\n- A finding dropped at b.' },
+    { sha: sha('f'), body: 'VERDICTS ffffffff\n\nDropped:\n- A finding at a head no longer on the branch.' },
+  ]
+  expect(decidedItems(commits, earlier)).toEqual([
+    { number: 1, source: 'commit bbbbbbbb', text: 'The cache can go stale. Refuted.' },
+    { number: 2, source: 'review at bbbbbbbb', text: 'A finding dropped at b.' },
+    { number: 3, source: 'commit cccccccc', text: 'Surviving a restart.' },
+    { number: 4, source: 'review at ffffffff', text: 'A finding at a head no longer on the branch.' },
+  ])
+})
+
+test('an item repeated with a different case and spacing is listed once, at its first place', () => {
+  const commits = [
+    commit('a', 'Fix\n\nDropped:\n- The cache can go stale.\n'),
+    commit('b', 'Fix again\n\nDropped:\n-   THE CACHE   can go stale.  \n- Something new.\n'),
+  ]
+  expect(decidedItems(commits, [{ sha: sha('b'), body: 'Dropped:\n- the cache can go stale.' }])).toEqual([
+    { number: 1, source: 'commit aaaaaaaa', text: 'The cache can go stale.' },
+    { number: 2, source: 'commit bbbbbbbb', text: 'Something new.' },
+  ])
+})
+
+test('an item is cleaned of control characters and cut', () => {
+  const long = 'x'.repeat(500)
+  const items = decidedItems([commit('a', `Fix\n\nDropped:\n- Plain \u001b[31mred\u001b[0m and ‮flipped.\n- ${long}\n`)], [])
+  expect(items[0]?.text).toBe('Plain red and flipped.')
+  expect(items[1]?.text.length).toBe(DECIDED_ITEM_CHARS)
+  expect(items[1]?.text.endsWith('…')).toBe(true)
+})
+
+test('the numbers of earlier items stay the same when a commit is appended', () => {
+  const commits = [commit('a', 'Fix\n\nDropped:\n- One.\n'), commit('b', 'Fix\n\nDropped:\n- Two.\n')]
+  const before = decidedItems(commits, [])
+  const after = decidedItems([...commits, commit('c', 'Fix\n\nDropped:\n- Three.\n- One.\n')], [])
+  expect(after.slice(0, before.length)).toEqual(before)
+  expect(after.map(i => i.text)).toEqual(['One.', 'Two.', 'Three.'])
+})
+
+test('the decided section quotes each item after its number and source, or says none yet', () => {
+  const text = decidedSection([{ number: 1, source: 'commit aaaaaaaa', text: 'The cache can go stale.' }])
+  expect(text).toContain('## Already decided')
+  expect(text).toContain('Repeats: D<n>. New evidence:')
+  expect(text).toContain('- D1 (commit aaaaaaaa): The cache can go stale.')
+  expect(decidedSection([])).toContain('None yet.')
+  expect(decidedSection([])).not.toContain('- D1')
 })
