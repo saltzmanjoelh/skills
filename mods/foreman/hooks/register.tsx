@@ -5,7 +5,7 @@ import { decide, desktopOf, needsList, slotOutcome, type Decision, type Limits, 
 import { isSvgSurface } from './art'
 import { becameParentAnswer, COMMAND, commandOf, slotsAnswer } from './commands'
 import { failureLine, listSessions, NUDGE_TEXT, openSession, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
-import { keptLine, keptNames, NOTED, NOTES_KEPT, turnEndIds, wantsNoted } from './notes'
+import { keptLine, keptNames, NOTED, NOTES_KEPT, notesIn } from './notes'
 import { bandTree, PANE, paneTree, type Elements, type View } from './pane'
 import type { ForemanParent, ForemanTickets } from '../types'
 import { PARENT_OFF, parentIn, slotsOf, storeKey } from './parent'
@@ -563,9 +563,10 @@ const isPlain = (e: PromptSubmitInput) => e.command === undefined && (e.attachme
 type Choice = { kind: 'keep'; line: string } | { kind: 'noted' } | { kind: 'pass' }
 
 async function choiceFor($: $, e: PromptSubmitInput): Promise<Choice> {
-  if (!isPlain(e) || !wantsNoted(e.text) || !(await isOn($))) return { kind: 'pass' }
-  const ids = turnEndIds(e.text)
-  const names = ids === null ? null : keptNames(ids, ticketsIn(await read($, tickets)).pairings)
+  if (!isPlain(e)) return { kind: 'pass' }
+  const notes = notesIn(e.text)
+  if (!notes.wantsNoted || !(await isOn($))) return { kind: 'pass' }
+  const names = notes.turnEnds === null ? null : keptNames(notes.turnEnds, ticketsIn(await read($, tickets)).pairings)
   return names === null ? { kind: 'noted' } : { kind: 'keep', line: keptLine(names) }
 }
 

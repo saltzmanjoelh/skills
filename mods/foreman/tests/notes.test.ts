@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import { keptLine, keptNames, NOTED, NOTES_KEPT, turnEndIds, wantsNoted } from '../hooks/notes'
 import { newPairing } from '../hooks/tickets'
 import type { ForemanPairing } from '../types'
-import { ARCHIVED, EVENT, MESSAGE, note, PROPOSAL, SENT, STATUS, T0, WORKTREE } from './world'
+import { ARCHIVED, EVENT, MESSAGE, note, OTHER_EVENT, PROPOSAL, SENT, STATUS, T0, WORKTREE } from './world'
 
 const pairing = (localId: string | null, issueKey: string | null, standing: ForemanPairing['standing'], ticket = `ft-${localId}`): ForemanPairing => ({
   ...newPairing(ticket, localId, T0), issueKey, standing,
@@ -75,8 +75,6 @@ test('the log line names one, two or three sub sessions, and the drop reason nam
   expect(NOTES_KEPT).toBe('foreman kept a sub session\'s turn-end note from the parent\'s model; its pane shows the sub sessions')
 })
 
-// The element with its opening words changed, which foreman does not know.
-const OTHER_EVENT = EVENT.replace('None of the sessions you started is working now;', 'One of the sessions you started is waiting on you;')
 
 test('a trailing side-sessions element after the notes leaves their ids as they were', () => {
   expect(turnEndIds(`${note('local_a')}\n${STATUS}\n\n${EVENT}`)).toEqual(['local_a'])
@@ -108,6 +106,7 @@ test('the Noted line is wanted for a prompt made only of notes, status blocks, t
   expect(wantsNoted(`${note('local_a')}\n${STATUS}\n${MESSAGE}\n\n${EVENT}`)).toBe(true)
   expect(wantsNoted(`${note('local_a')}\n${STATUS}\n${MESSAGE}`)).toBe(true)
   expect(wantsNoted(SENT)).toBe(true)
+  expect(wantsNoted(SENT.slice(0, SENT.indexOf('\n\nThis came')))).toBe(true)
   expect(wantsNoted(MESSAGE)).toBe(true)
   expect(wantsNoted(note('local_z'))).toBe(true)
   expect(wantsNoted(ARCHIVED)).toBe(true)

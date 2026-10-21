@@ -90,6 +90,15 @@ function partsOf(text: string): Parts | null {
     return end + close.length
   }
   const isMessageAt = () => text.startsWith(MESSAGE_OPEN, at) && /[\s>]/.test(text[at + MESSAGE_OPEN.length] ?? '')
+  // Reads the message element that starts at `at` and counts it, or answers
+  // false when it does not close or holds a second opening tag.
+  const takeMessage = (): boolean => {
+    const end = elementEnd(MESSAGE_OPEN, MESSAGE_CLOSE)
+    if (end === -1) return false
+    parts.messages += 1
+    at = end
+    return true
+  }
   for (;;) {
     skipSpace()
     if (at === text.length) return parts
@@ -109,18 +118,11 @@ function partsOf(text: string): Parts | null {
       if (text.slice(end).trim() !== '') return null
       return parts
     } else if (isMessageAt()) {
-      const end = elementEnd(MESSAGE_OPEN, MESSAGE_CLOSE)
-      if (end === -1) return null
-      parts.messages += 1
-      at = end
+      if (!takeMessage()) return null
     } else if (text.startsWith(MESSAGE_HEAD, at)) {
       at += MESSAGE_HEAD.length
       skipSpace()
-      if (!isMessageAt()) return null
-      const end = elementEnd(MESSAGE_OPEN, MESSAGE_CLOSE)
-      if (end === -1) return null
-      parts.messages += 1
-      at = end
+      if (!isMessageAt() || !takeMessage()) return null
       skipSpace()
       if (text.startsWith(MESSAGE_TAIL, at)) {
         const line = text.indexOf('\n', at)
@@ -132,23 +134,25 @@ function partsOf(text: string): Parts | null {
   }
 }
 
-// The ids of the sub sessions whose turn-end notes make up `text`, in order,
-// or null when the text is anything else. Status blocks and a side-sessions
-// element may come with the notes; a note of another kind or a message means
-// there is something more for the model to read, so the text answers null,
-// as text with no turn-end note does.
-export function turnEndIds(text: string): string[] | null {
+// What one reading of `text` says. `turnEnds` is the ids of the sub sessions
+// whose turn-end notes make up the text, in order, or null when the text is
+// anything else: status blocks and a side-sessions element may come with the
+// notes, but a note of another kind or a message means there is something
+// more for the model to read. `wantsNoted` says whether the text is made only
+// of the app's parts and holds at least one note or message, so that the
+// model reading it should get the Noted line.
+export function notesIn(text: string): { turnEnds: string[] | null; wantsNoted: boolean } {
   const parts = partsOf(text)
-  if (parts === null || parts.otherNotes > 0 || parts.messages > 0) return null
-  return parts.turnEnds.length === 0 ? null : parts.turnEnds
+  if (parts === null) return { turnEnds: null, wantsNoted: false }
+  const isOnlyTurnEnds = parts.turnEnds.length > 0 && parts.otherNotes === 0 && parts.messages === 0
+  return {
+    turnEnds: isOnlyTurnEnds ? parts.turnEnds : null,
+    wantsNoted: parts.turnEnds.length + parts.otherNotes + parts.messages > 0,
+  }
 }
 
-// Whether `text` is made only of the app's parts and holds at least one note
-// or message, so that the model reading it should get the Noted line.
-export function wantsNoted(text: string): boolean {
-  const parts = partsOf(text)
-  return parts !== null && parts.turnEnds.length + parts.otherNotes + parts.messages > 0
-}
+export const turnEndIds = (text: string) => notesIn(text).turnEnds
+export const wantsNoted = (text: string) => notesIn(text).wantsNoted
 
 // The names of the sub sessions the notes are about, as foreman names them
 // elsewhere, without repeats and sorted, so the same sub sessions always give

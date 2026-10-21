@@ -4,7 +4,7 @@ import type { Engine } from 'claude-code/testing'
 import { NOTED, NOTES_KEPT } from '../hooks/notes'
 import { newPairing, ticketsIn, ticketsKey } from '../hooks/tickets'
 import type { ForemanPairing } from '../types'
-import { ARCHIVED, EVENT, leftInState, MESSAGE, mountBoth, note, PROPOSAL, SENT, start, STATUS, T0, world, WORKTREE } from './world'
+import { ARCHIVED, EVENT, leftInState, MESSAGE, mountBoth, note, OTHER_EVENT, PROPOSAL, SENT, start, STATUS, T0, world, WORKTREE } from './world'
 
 // A pairing of the parent with the sub session `localId`, whose issue is
 // `issueKey`, with `over` changing its fields.
@@ -137,8 +137,6 @@ test('a prompt with a slash command, attachments or context from another hook pa
   await passes($, w, note('local_a'), { context: ['more for the model'] })
 })
 
-// The element with its opening words changed, which foreman does not know.
-const OTHER_EVENT = EVENT.replace('None of the sessions you started is working now;', 'One of the sessions you started is waiting on you;')
 
 test('a prompt of the shape the app sends today, a tracked note, the status block and the side-sessions element, is dropped with the fixed reason and one line in the log', async ($, on) => {
   const { w, ui } = await parentWith($, on)

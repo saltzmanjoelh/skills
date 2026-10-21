@@ -247,6 +247,9 @@ export const MESSAGE = '<cross-session-message from="local_a" name="example">\nI
 // is working.
 export const EVENT = '<side-sessions-event>None of the sessions you started is working now; their notes are above. Carry on with any step they unblock, or else tell the user the outcome in one or two lines.</side-sessions-event>'
 
+// The element with its opening words changed, which foreman does not know.
+export const OTHER_EVENT = EVENT.replace('None of the sessions you started is working now;', 'One of the sessions you started is waiting on you;')
+
 // Two reminder blocks the app sometimes puts in front of notes, which foreman
 // does not recognise.
 export const WORKTREE = '<system-reminder>\nYou are operating in a git worktree.\nWorktree path: /work/example\n</system-reminder>'
