@@ -56,7 +56,9 @@ read the base branch's version of a file with
 Answer `stands` when the mark is right, or the scope you find instead, or
 `unsettled` when the spec and the base cannot settle it. A finding that
 breaks working behaviour is in scope whatever the spec says, so look for
-that first.
+that first. A finding in an area that the `## Areas fixed so far` section of
+`package.md` lists as closed counts as outside the spec, unless it breaks
+working behaviour.
 
 ## Verdicts
 
