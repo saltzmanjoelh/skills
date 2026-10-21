@@ -212,7 +212,9 @@ waits on is real; if the wait is real, the session ends the turn.
    **Closed without merging:** set `stuck`, say so, stop.
 2. **An open question** to the person: wait for the answer.
 3. **Over a limit.** Set `stuck`, ask the person once with a summary of
-   what keeps failing, and wait, when either of these holds:
+   what keeps failing, tell the session that started this one as
+   **The line to the starting session** says, and wait, when either of
+   these holds:
    - **Pushes:** more commits since the last changes-requested verdict
      than `Max pushes per round`. Before the first such verdict, count the
      commits committed after the pull request was opened, from
@@ -252,12 +254,13 @@ waits on is real; if the wait is real, the session ends the turn.
    carried over to this head from the approved head before it is this
    head's verdict review.
 8. **The newest verdict at this head requests changes.** Fix its blocking
-   findings, except those outside the spec, in a commit that carries the
-   fix lines (see "A review round"), set `waiting-on-author`, push. The
-   push also carries the cheap fixes that the second half committed, and
-   the next round reviews them. If it has no blocking finding left to fix,
-   which should not happen (see the second half's point 3), set `stuck`
-   and ask the person rather than wait for a change that will not come.
+   findings, except those outside the spec and those the owner's answer
+   dropped, in a commit that carries the fix lines (see "A review round"),
+   set `waiting-on-author`, push. The push also carries the cheap fixes
+   that the second half committed, and the next round reviews them. If it
+   has no blocking finding left to fix, which should not happen (see the
+   second half's point 3), set `stuck` and ask the person rather than wait
+   for a change that will not come.
 9. **Both verdicts approve at this head.** Waiting on checks happens here,
    and only here, so reviews and fixes never wait on them. Read the pull
    request again (`gh pr view <n> --json headRefOid,statusCheckRollup`) and
@@ -453,15 +456,29 @@ the reviewer marked it with a `Repeats:` line, and list it under `Dropped:`
 as a repeat of D<n>. A repeat with new evidence goes to the claim checker
 like any finding.
 
+The rule for owner questions: a finding whose claim holds only if the owner
+works in a certain way, and that nothing the owner has written down settles
+(see **Questions**), is neither fixed nor sent to the counsel. A finding
+whose mechanism the claim checker refuted is dropped as before, and a cheap
+follow-up is fixed as before. Every other such finding of the round goes to
+the owner in one question. If the owner says the case happens, the finding
+goes on as any other finding. If not, it is dropped and listed under
+`Dropped:` with the owner's answer as its reason, which puts it in
+`## Already decided`. A question about a safety finding says that it is one
+and what would be lost. A hole that someone else could open, such as an
+attacker or untrusted input, never depends on the owner's habits and never
+goes to the owner.
+
 The round's lists: every refuted, speculative and repeat finding is listed
-under `Dropped:`, with the claim checker's reason or the item it repeats, and
-every finding outside the spec under `Outside the spec:`. Both lists go in
-the fix commit of the head where the finding was settled, or, when that head
-drew no fix commit, in the review posted at that head. The package reads
-them from there to build `## Already decided`, so write each list exactly
-so: the heading alone on its line, then one line per item starting `- `,
-and a blank line after the last item. An item repeated from an earlier list
-is copied word for word.
+under `Dropped:`, with the claim checker's reason or the item it repeats,
+and so is every finding the owner's answer dropped, with that answer as its
+reason. Every finding outside the spec is listed under `Outside the
+spec:`. Both lists go in the fix commit of the head where the finding was
+settled, or, when that head drew no fix commit, in the review posted at
+that head. The package reads them from there to build `## Already
+decided`, so write each list exactly so: the heading alone on its line,
+then one line per item starting `- `, and a blank line after the last
+item. An item repeated from an earlier list is copied word for word.
 
 The fix lines: every commit that fixes review findings, in the first half's
 point 4 or for a blocking verdict in step 8 of "With the pull request open",
@@ -477,8 +494,9 @@ streak has reached 3, launch no reviewer on that package. Put to the
 counsel, with `pull_request`, whether to keep going in that area, file the
 rest of the area's findings, or cut the area out, naming the area, its
 streak and the findings fixed there, read from the fix commits that name
-it. If the counsel does not decide, the person decides. Record the answer
-in a commit of its own with the line
+it. If the counsel does not decide, the person decides. Tell the session
+that started this one, as **The line to the starting session** says.
+Record the answer in a commit of its own with the line
 `Trend: <area>: <keep going | file the rest | cut it out>`, made with
 `git commit --allow-empty` when nothing else needs committing. For cut it
 out, that commit also removes the code in the area that this pull request
@@ -488,6 +506,14 @@ half builds a new package. Keep going counts the area's streak from zero
 after that commit. File the rest and cut it out close the area. A `Trend:`
 line for one area changes nothing for any other, and its commit counts as a
 push like any other.
+
+**The line to the starting session.** When the session was started by
+another session that it can message, such as the session whose brief
+started it, it sends that session one short line whenever it puts a streak
+of 3 to the counsel or asks the person about a limit under **Over a
+limit**, whatever the counsel decides. The line names the issue and the
+area or the limit, and says either that the session waits on the person's
+answer or, when the counsel decided, what it decided.
 
 **First half, at a head where the focused reviewers have not run** (**The
 focused reviewers have not run at this head** says which heads those are).
@@ -511,7 +537,9 @@ focused reviewers have not run at this head** says which heads those are).
    of every one. Drop what it refutes and what it answers speculative,
    never making a code change for either. Set aside every finding whose
    scope is outside the spec or unsettled, unless it is a safety finding or
-   breaks working behaviour.
+   breaks working behaviour. A finding that the rule for owner questions
+   sends to the owner is neither dropped as speculative nor set aside; it
+   waits on the owner's answer.
 4. Fix every finding left. Mechanical fixes can go to an implementation
    agent. Commit with the fix lines and the round's lists, rerun the gates
    the fixes could move, push, and go on as **When a turn ends** says for a
@@ -530,14 +558,14 @@ focused reviewers have not run at this head** says which heads those are).
    left to one `builder:claim-checker`, as the first half's point 3 does.
    Drop what it refutes, and set aside every finding whose scope is outside
    the spec or unsettled, unless it is a safety finding or breaks working
-   behaviour.
+   behaviour, or the rule for owner questions sends it to the owner.
 3. Settle each reviewer's verdict. Take it from its `VERDICT:` line,
    except that a `REQUEST_CHANGES` whose blocking findings the claim
-   checker all refuted, or that the rule for rounds turns into follow-ups,
-   or whose surviving blocking findings are all outside the spec, counts as
-   `APPROVE`, and the review says so and why. Otherwise the pull request
-   would wait on a change nobody has to make. The points below use the
-   verdicts settled here.
+   checker all refuted or the owner's answer dropped, or that the rule for
+   rounds turns into follow-ups, or whose surviving blocking findings are
+   all outside the spec, counts as `APPROVE`, and the review says so and
+   why. Otherwise the pull request would wait on a change nobody has to
+   make. The points below use the verdicts settled here.
 4. Sort every `FOLLOW-UP:` that survived, including those point 3 turned
    into follow-ups, into one of three kinds. A follow-up with no
    `If never fixed:` part counts as `If never fixed: nothing visible`,
@@ -550,7 +578,8 @@ focused reviewers have not run at this head** says which heads those are).
      request. A visible problem small enough to fix is fixed in this pull
      request too, like a cheap one.
    - **Speculative:** a follow-up the claim checker answered speculative,
-     or could not confirm. Change nothing for it, file nothing, and list it
+     or could not confirm, except a finding the rule for owner questions
+     sends to the owner. Change nothing for it, file nothing, and list it
      as dropped, because a vote to fix or file it would act on a claim
      nobody verified.
    - **For the counsel:** every other follow-up, whether it describes
@@ -612,6 +641,12 @@ focused reviewers have not run at this head** says which heads those are).
    decisions, its count and its reason, so that a session resumed before
    the review is posted can still put them on the record and does not put
    the same follow-ups to the counsel again.
+
+   An owner's answer that no commit has yet put in the spec (see
+   **Questions**) counts as a cheap fix in both cases above: this commit
+   is made for it even when nothing else needs fixing, and when the limit
+   rule makes no commit, the answer is listed under `To file:` rather than
+   dropped, so that the follow-up issue carries it into a spec.
 5. The round's review is always posted at the reviewed head. Choose what
    follows it:
    - **A verdict requests changes:** push nothing here. Step 8 pushes
@@ -978,12 +1013,29 @@ Before asking, try to answer it: read the code, the spec, the issue and its
 comments, or send an agent to. A question that the code or the documents
 answer is not a question.
 
-Then put it to the counsel. Call `mcp__builder__counsel` with the question,
-two to four options, the background (the issue in a few lines, what was
-tried, what is at stake), the paths it touches and the session's own lean.
-Once this issue's pull request is open and watched, every counsel call also
-passes `pull_request` with that pull request's number, except a follow-ups
-question, below; before the pull request is opened, no call passes it.
+A question about how the owner works is one whose answer is a habit or a
+choice of the person, such as whether they ever clear a parent session, run
+two copies of a tool at once or work offline, rather than a fact the code,
+the spec or the issue settles. When nothing the owner has written down
+settles it (their global `~/.claude/CLAUDE.md`, the project's `CLAUDE.md`,
+the specs with their "Decided by the person" sections, and the issue), ask
+the person directly. Never put it to the counsel, whose members can read
+only what the owner wrote, and never guess the answer or build for the case
+to be safe. Record the answer in the change's spec under "Decided by the
+person", in the next commit the session makes rather than in a commit of
+its own, because a commit is a push that counts toward the limit; in a
+review round with nothing else to commit, the second half's point 4 says
+where it goes. Then offer the owner one line for their personal global
+`~/.claude/CLAUDE.md`, written in generic words that name no project, and
+write it there only if they say yes.
+
+Otherwise, put it to the counsel. Call `mcp__builder__counsel` with the
+question, two to four options, the background (the issue in a few lines,
+what was tried, what is at stake), the paths it touches and the session's
+own lean. Once this issue's pull request is open and watched, every counsel
+call also passes `pull_request` with that pull request's number, except a
+follow-ups question, below; before the pull request is opened, no call
+passes it.
 Launch all seven counsel members, the six builder reviewers and
 `builder:owners-advocate`, in one message, each with "Counsel brief:
 <folder>.", wait for all seven, and call `mcp__builder__counsel_tally` with
@@ -1044,13 +1096,17 @@ in its memory, so after a restart a tally can be refused because the
 question is unknown; then put the follow-ups to the counsel again, with a
 new call and all seven members.
 
-These questions skip the counsel and always go straight to the person,
-because they are about the pull request's own safeguards and the counsel is
-made of the agents that review that pull request:
+These questions skip the counsel and always go straight to the person. A
+question about checks or limits is about the pull request's own safeguards,
+and the counsel is made of the agents that review that pull request. A
+question about how the owner works needs an answer that the counsel cannot
+know, because its members read only what the owner has written down.
 
 - whether to merge a head with no checks when checks were expected;
 - what to do when a limit on pushes or rounds is hit;
-- a check that failed for a reason outside the code.
+- a check that failed for a reason outside the code;
+- a question about how the owner works, including a review finding that
+  depends on it.
 
 Ask with `AskUserQuestion`; the mod adds `needs-decision` to the pull
 request while the question is open and takes it off when it is answered.
