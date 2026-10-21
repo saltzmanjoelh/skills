@@ -467,15 +467,19 @@ like any finding.
 The rule for owner questions: a finding whose claim holds only if the owner
 works in a certain way, and that nothing the owner has written down settles
 (see **Questions**), is neither fixed nor sent to the counsel. A finding
-whose mechanism the claim checker refuted is dropped as before, and a cheap
-follow-up is fixed as before. Every other such finding of the round goes to
-the owner in one question. If the owner says the case happens, the finding
-goes on as any other finding. If not, it is dropped and listed under
-`Dropped:` with the owner's answer as its reason, which puts it in
-`## Already decided`. A question about a safety finding says that it is one
-and what would be lost. A hole that someone else could open, such as an
-attacker or untrusted input, never depends on the owner's habits and never
-goes to the owner.
+whose mechanism the claim checker refuted is dropped as before. A cheap
+follow-up is fixed as before only when it is wording in specs, plans,
+comments or the README, rewrapping, or a rename, and its fix changes
+nothing a session or the code does. Every other such finding of the round
+goes to the owner in one question, however small its fix, including a
+cheap follow-up that is small test tightening and a visible problem small
+enough to fix. If the owner says the case happens, the finding goes on as
+any other finding. If not, it is dropped and listed under `Dropped:` with
+the owner's answer as its reason, which puts it in `## Already decided`. A
+question about a safety finding says that it is one and what would be
+lost. A hole that someone else could open, such as an attacker or
+untrusted input, never depends on the owner's habits and never goes to the
+owner.
 
 The round's lists: every refuted, speculative and repeat finding is listed
 under `Dropped:`, with the claim checker's reason or the item it repeats,
@@ -623,7 +627,10 @@ focused reviewers have not run at this head** says which heads those are).
    - **Cheap:** wording in specs, plans, comments and the README,
      rewrapping, renames, and small test tightening. Fix it in this pull
      request. A visible problem small enough to fix is fixed in this pull
-     request too, like a cheap one.
+     request too, like a cheap one. A finding the rule for owner questions
+     sends to the owner is not fixed here as a cheap one, however small its
+     fix: it waits on the owner's answer, and then goes on as any other
+     finding or is dropped, as that rule says.
    - **Speculative:** a follow-up the claim checker answered speculative,
      or could not confirm, except a finding the rule for owner questions
      sends to the owner. Change nothing for it, file nothing, and list it
@@ -633,7 +640,11 @@ focused reviewers have not run at this head** says which heads those are).
      something a person could run into (a wrong result, a stall, a
      misleading message, lost work) or is marked `nothing visible`. The
      session does not decide these itself; the counsel decides whether
-     each is fixed in this pull request, filed as an issue or dropped.
+     each is fixed in this pull request, filed as an issue or dropped. A
+     finding the rule for owner questions sends to the owner is not put to
+     the counsel, even when it is outside the spec: it waits on the owner's
+     answer, and then goes on as any other finding or is dropped, as that
+     rule says.
 
    An earlier review on this pull request that has no **Follow-ups**
    section, because a session that predates it posted the review, has its
