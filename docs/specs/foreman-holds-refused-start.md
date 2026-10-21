@@ -78,9 +78,11 @@ asked for one, tell them so in one line."
 7. **The wake skill.** Its "Starting a session" step 3 says that a refusal to
    which foreman added its holding sentence goes to no card, and the model
    says the one line instead, and that such a refusal does not count as the
-   app's refusal that sends later starts straight to a card. Its step 1 keeps
-   skipping keys this parent named in a "start it" line, except a key foreman
-   holds, which the context line asks it to start. A new section, headed with
+   app's refusal that sends later starts straight to a card. Its step 1 never
+   skips a key foreman holds for being in the parent's notes, whether this
+   parent started it, proposed it or named it in a "start it" line, because
+   the context line asks it to start the key; only a running session that
+   already works on the issue skips it. A new section, headed with
    the context line's sentence, says what to do with it.
 
 ## Edge cases

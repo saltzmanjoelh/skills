@@ -90,8 +90,9 @@ or two callers raise the notification once.
 6. **The wake skill and the README.** Step 3 of "Starting a session": a
    refusal with foreman's holding sentence gets no card, the model says the
    one line, and the refusal does not send later starts straight to a card.
-   Step 1: a key foreman holds is not skipped for having been named in a
-   "start it" line. A new section headed with `heldLine`'s sentence says to
+   Step 1: a key foreman holds is never skipped for being in the parent's
+   notes, whether this parent started, proposed or named it; only a running
+   session that already works on it skips it. A new section headed with `heldLine`'s sentence says to
    start each held key first, with the duplicate check, and that a refusal
    over Remote Control leaves it held. The README lists the hold, the context
    line and the notification.
