@@ -19,7 +19,7 @@ function row(over: Record<string, unknown> = {}, file = 'a.json', mtimeMs = T0):
   return { file, record, mtimeMs, isStale: false }
 }
 
-const running: SessionsLook = { kind: 'read', sessions: [{ sessionId: 'local_a', isArchived: false, isRunning: true }] }
+const running: SessionsLook = { kind: 'read', sessions: [{ sessionId: 'local_a', isArchived: false, isRunning: true, title: null, archivedSure: true }] }
 
 // A parent with one pairing for ticket ft-a.
 const paired = (localId: string | null = 'local_a'): ForemanTickets => ({ ...TICKETS_EMPTY, pairings: [newPairing('ft-a', localId, T0)] })
@@ -115,7 +115,7 @@ test('cleanup wakes the parent once after its threshold, or at once after three 
 
 test('a done session frees its slot once it is archived, not running or not listed, and not while it runs', () => {
   const done = [row({ state: 'done' })]
-  const look = (s: { isArchived: boolean; isRunning: boolean }[]): SessionsLook => ({ kind: 'read', sessions: s.map(x => ({ sessionId: 'local_a', ...x })) })
+  const look = (s: { isArchived: boolean; isRunning: boolean }[]): SessionsLook => ({ kind: 'read', sessions: s.map(x => ({ sessionId: 'local_a', title: null, archivedSure: !x.isArchived, ...x })) })
   expect(read(paired(), done, T0, { sessions: look([{ isArchived: false, isRunning: true }]) }).tickets.pairings[0]!.standing).toBe('active')
   for (const sessions of [look([{ isArchived: true, isRunning: false }]), look([{ isArchived: false, isRunning: false }]), look([])]) {
     const d = read(paired(), done, T0, { sessions })
@@ -167,7 +167,7 @@ test('a released or freed pairing gets no action', () => {
 
 test('a sub session whose file stopped and whose session is not running wakes the parent once, unless its pull request merged', () => {
   const stopped = [row({ state: 'working' }, 'a.json', T0)]
-  const notRunning: SessionsLook = { kind: 'read', sessions: [{ sessionId: 'local_a', isArchived: false, isRunning: false }] }
+  const notRunning: SessionsLook = { kind: 'read', sessions: [{ sessionId: 'local_a', isArchived: false, isRunning: false, title: null, archivedSure: true }] }
   const later = T0 + GONE_MS + MINUTE
   let d = read(paired(), stopped, later, { sessions: notRunning })
   expect(d.reasons).toEqual([{ kind: 'gone', who: 'ABC-1', minutes: 6 }])

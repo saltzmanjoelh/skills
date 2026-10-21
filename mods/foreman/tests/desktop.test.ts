@@ -71,9 +71,28 @@ test('the list of sessions asks for archived ones too, and reads an entry withou
     ]),
   })
   expect(await listSessions(d.call)).toEqual({
-    sessions: [{ sessionId: 'local_a', isArchived: true, isRunning: false }, { sessionId: 'local_b', isArchived: false, isRunning: true }],
+    sessions: [
+      { sessionId: 'local_a', isArchived: true, isRunning: false, title: null, archivedSure: false },
+      { sessionId: 'local_b', isArchived: false, isRunning: true, title: null, archivedSure: false },
+    ],
   })
   expect(d.calls[0]!.args).toEqual({ limit: 100, include_archived: true })
+})
+
+test('the list keeps each session\'s title, and is sure a session is not archived only when its flag is exactly false', async () => {
+  const d = desktop({
+    list: async () => sessions([
+      { sessionId: 'local_a', title: 'ABC-1: short', isArchived: false, isRunning: false },
+      { sessionId: 'local_b', title: 7, isArchived: 'false' },
+      { sessionId: 'local_c', title: 'ABC-3 short', isArchived: null },
+    ]),
+  })
+  const got = await listSessions(d.call)
+  expect('sessions' in got ? got.sessions.map(s => [s.sessionId, s.title, s.archivedSure, s.isArchived]) : got).toEqual([
+    ['local_a', 'ABC-1: short', true, false],
+    ['local_b', null, false, false],
+    ['local_c', 'ABC-3 short', false, false],
+  ])
 })
 
 test('a list that is refused, not connected or not a list answers its own reason and never the tool\'s error text', async () => {

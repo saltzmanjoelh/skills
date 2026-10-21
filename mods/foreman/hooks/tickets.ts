@@ -29,9 +29,10 @@ export const TITLE_REFUSAL = 'foreman: start sub sessions with a title that begi
 const FORK_LOG = 'Refused a start_session call with forked context, because its sub session could not find its ticket.'
 export const TITLE_LOG = 'Refused a start_session call, because its title did not begin with an issue key and a space or a colon, or with "No issue: " on a call with a brief.'
 
-// A title that begins with an issue key followed by a space or a colon. A
-// hyphen does not count, so ABC-1-fix is never read as ABC-1.
-const KEYED_TITLE = new RegExp(`^${KEY}[ :]`)
+// A title that begins with an issue key followed by a space or a colon, with
+// the key as its first group. A hyphen does not count, so ABC-1-fix is never
+// read as ABC-1. The hold in hooks/held.ts reads keys with it too.
+export const KEYED_TITLE = new RegExp(`^(${KEY})[ :]`)
 
 // What a start_session call's arguments become: refused when the context is
 // fork or the title has the wrong shape, passed unchanged when there is no
