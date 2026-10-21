@@ -122,9 +122,9 @@ export async function sendMessage(call: DesktopCall, sessionId: string, text: st
 }
 
 // One session as the desktop app's list gives it. `title` is its title, or
-// null when it has none, and `archivedSure` says that the list gave its
+// null when it has none, and `surelyUnarchived` says that the list gave its
 // archived flag as exactly false, which only the release of a hold reads.
-export type Listed = { sessionId: string; isArchived: boolean; isRunning: boolean; title: string | null; archivedSure: boolean }
+export type Listed = { sessionId: string; isArchived: boolean; isRunning: boolean; title: string | null; surelyUnarchived: boolean }
 
 // The desktop app's sessions, archived ones included, each with whether it
 // is archived and whether it runs, or why they could not be read. An entry
@@ -142,7 +142,7 @@ export async function listSessions(call: DesktopCall): Promise<{ sessions: Liste
       const s = entry as { sessionId?: unknown; isArchived?: unknown; isRunning?: unknown; title?: unknown } | null
       if (typeof s?.sessionId !== 'string') return []
       const title = typeof s.title === 'string' ? s.title : null
-      return [{ sessionId: s.sessionId, isArchived: s.isArchived === true, isRunning: s.isRunning !== false, title, archivedSure: s.isArchived === false }]
+      return [{ sessionId: s.sessionId, isArchived: s.isArchived === true, isRunning: s.isRunning !== false, title, surelyUnarchived: s.isArchived === false }]
     }),
   }
 }

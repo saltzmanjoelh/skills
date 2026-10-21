@@ -69,7 +69,7 @@ or two callers raise the notification once.
    strings of the key shape, without repeats, so an old ledger reads as no
    holds. `session.start`'s restore guard also requires `held` to be empty.
 3. **The list.** `Listed` in `desktop.ts` gains `title: string | null` and
-   `archivedSure: boolean`, true only when `isArchived === false`; the
+   `surelyUnarchived: boolean`, true only when `isArchived === false`; the
    existing flags keep their readings for the slot rules. `needsList` is also
    true while a key is held, and `decide` applies `releasedBy` when the list
    was read, so a release and its log line are written with the ledger. A
@@ -139,7 +139,7 @@ Mapped to the spec's Verification section.
   held, none does; the app's notes keep their own handling.
 - `tests/tickets.test.ts`: an old ledger reads `held: []`, and entries
   without the key shape or repeated are dropped.
-- `tests/desktop.test.ts`: the new `title` and `archivedSure` fields.
+- `tests/desktop.test.ts`: the new `title` and `surelyUnarchived` fields.
 - `world.ts` gains a `title` on its sessions and records the context the
   start hook and the prompt hook pass on.
 - All four gates in `CLAUDE.md`. The wake skill and README are read by

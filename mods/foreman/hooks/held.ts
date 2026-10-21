@@ -67,7 +67,7 @@ const listedLog = (key: string) => `Stopped holding ${key}, because the desktop 
 // a space or a colon. Whether a turn runs in it does not matter, because a
 // started session is idle between turns.
 export function releasedBy(held: readonly string[], sessions: readonly Listed[]): { held: string[]; logs: string[] } {
-  const shown = new Set(sessions.flatMap(s => (s.archivedSure ? [keyOfTitle(s.title)] : [])))
+  const shown = new Set(sessions.flatMap(s => (s.surelyUnarchived ? [keyOfTitle(s.title)] : [])))
   const logs: string[] = []
   const kept = held.filter(key => {
     if (!shown.has(key)) return true

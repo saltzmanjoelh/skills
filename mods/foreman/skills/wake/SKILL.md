@@ -68,9 +68,11 @@ gives.
    in the parent's notes, as keys only. A key leaves the notes once its
    session shows up in `list_sessions`, or once the person declines it, so
    that an issue the person turned down can be offered again later. A key
-   that foreman holds is the exception: it is not skipped for having been
-   named in a "start it" line, because foreman's context line asks for it to
-   be started, as the section headed with that line says.
+   that foreman holds is the exception: it is never skipped for being in the
+   parent's notes, whether this parent started it, proposed it or named it,
+   because foreman's context line asks for it to be started, as the section
+   headed with that line says. Only a running session that already works on
+   it skips it.
 2. Call `start_session` with a title that begins with the issue key followed
    by a space or a colon, such as `ABC-123: short name`, never with a word
    before the key, and a brief that runs the given `/implement` command, so

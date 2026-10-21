@@ -10,7 +10,7 @@ const REFUSAL = 'The user is working over Remote Control, and for now you can st
 
 // A session as the desktop app's list gives it, with `over` changing its
 // fields.
-const listed = (over: Partial<Listed> = {}): Listed => ({ sessionId: 'local_a', isArchived: false, isRunning: true, title: 'ABC-123: short', archivedSure: true, ...over })
+const listed = (over: Partial<Listed> = {}): Listed => ({ sessionId: 'local_a', isArchived: false, isRunning: true, title: 'ABC-123: short', surelyUnarchived: true, ...over })
 
 test('a title gives the issue key at its start only when a space or a colon follows the key', () => {
   expect(keyOfTitle('ABC-123: x')).toBe('ABC-123')
@@ -51,8 +51,8 @@ test('a list read releases a held key only for an unarchived entry whose title b
   const none = { held: ['ABC-123'], logs: [] }
   expect(releasedBy(['ABC-123'], [listed({ title: 'ABC-1234: short' })])).toEqual(none)
   expect(releasedBy(['ABC-123'], [listed({ title: 'Implement ABC-123: short' })])).toEqual(none)
-  expect(releasedBy(['ABC-123'], [listed({ isArchived: true, archivedSure: false })])).toEqual(none)
-  expect(releasedBy(['ABC-123'], [listed({ archivedSure: false })])).toEqual(none)
+  expect(releasedBy(['ABC-123'], [listed({ isArchived: true, surelyUnarchived: false })])).toEqual(none)
+  expect(releasedBy(['ABC-123'], [listed({ surelyUnarchived: false })])).toEqual(none)
   expect(releasedBy(['ABC-123'], [listed({ title: null })])).toEqual(none)
   expect(releasedBy(['ABC-123'], [])).toEqual(none)
 })

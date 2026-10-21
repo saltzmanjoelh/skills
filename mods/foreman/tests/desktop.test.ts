@@ -72,8 +72,8 @@ test('the list of sessions asks for archived ones too, and reads an entry withou
   })
   expect(await listSessions(d.call)).toEqual({
     sessions: [
-      { sessionId: 'local_a', isArchived: true, isRunning: false, title: null, archivedSure: false },
-      { sessionId: 'local_b', isArchived: false, isRunning: true, title: null, archivedSure: false },
+      { sessionId: 'local_a', isArchived: true, isRunning: false, title: null, surelyUnarchived: false },
+      { sessionId: 'local_b', isArchived: false, isRunning: true, title: null, surelyUnarchived: false },
     ],
   })
   expect(d.calls[0]!.args).toEqual({ limit: 100, include_archived: true })
@@ -88,7 +88,7 @@ test('the list keeps each session\'s title, and is sure a session is not archive
     ]),
   })
   const got = await listSessions(d.call)
-  expect('sessions' in got ? got.sessions.map(s => [s.sessionId, s.title, s.archivedSure, s.isArchived]) : got).toEqual([
+  expect('sessions' in got ? got.sessions.map(s => [s.sessionId, s.title, s.surelyUnarchived, s.isArchived]) : got).toEqual([
     ['local_a', 'ABC-1: short', true, false],
     ['local_b', null, false, false],
     ['local_c', 'ABC-3 short', false, false],
