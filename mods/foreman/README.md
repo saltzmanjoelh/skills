@@ -18,16 +18,20 @@ As with builder, use one way or the other, not both, because an installed copy t
 
 ## Becoming the parent
 
-Foreman does nothing in a session until that session runs `/foreman`. Every session that never ran it, sub sessions included, looks and behaves exactly as it does without the mod: the band is the host's own, no timer runs and no file is read.
+Foreman does nothing in a session until that session runs `/foreman` or `/foreman slots <n>`. Every session that never ran it, sub sessions included, looks and behaves exactly as it does without the mod: the band is the host's own, no timer runs and no file is read.
 
 | Command | What it does |
 |---|---|
 | `/foreman` | Makes this session the parent, reads the status folder at once and opens the pane. |
-| `/foreman slots <n>` | Sets how many sub sessions this parent runs at once, a whole number from 1 to 20. Any other count is refused with the range and changes nothing. |
+| `/foreman slots <n>` | Sets how many sub sessions this parent runs at once, a whole number from 1 to 20, and makes the session the parent as `/foreman` does when it is not one yet. Any other count is refused with the range and changes nothing. |
 | `/foreman pause` | Pauses this parent: a slot that frees no longer wakes the parent's model, and the band says `paused`. Nudges, notifications and the other wakes go on. |
 | `/foreman resume` | Clears the pause, and wakes the parent's model once when a slot freed while it was paused and a slot is free. |
 
-The role, the slot count, the pause and the tickets are kept in the session's state and in the mod's store under the session's id, so a resumed session or a reload of the mod finds them again. Without `/foreman slots`, the count is the `slots` option in the mod's settings, which defaults to two. A slots, pause or resume command given before `/foreman` is kept and takes effect once the session becomes the parent.
+The role, the slot count, the pause and the tickets are kept in the session's state and in the mod's store under the session's id, so a resumed session or a reload of the mod finds them again. Without `/foreman slots`, the count is the `slots` option in the mod's settings, which defaults to two. A pause or resume given before the session is the parent is kept, its answer says that it waits for `/foreman`, and it takes effect once the session becomes the parent.
+
+Start sub sessions only after the session is the parent. Foreman adds its ticket to a `start_session` brief only in a parent, and builder writes a status file only for a sub session that holds a ticket, so a sub session started earlier never shows in the band or the pane.
+
+The Claude Code desktop app's prompt box does not list a command that a mod declares while the session runs, so it shows only foreman's `foreman:wake` skill and may say that `/foreman` is not a command. Type the command anyway: the session runs it, and foreman answers with a line that starts with `foreman:`.
 
 ## Tickets
 
