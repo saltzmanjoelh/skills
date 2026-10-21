@@ -109,6 +109,8 @@ export function engine(on: On) {
   const answers = {
     notices: [] as string[],
     prompts: [] as string[],
+    // Where each prompt came from, in the same order as `prompts`.
+    origins: [] as unknown[],
     appended: [] as string[],
     started: [] as Record<string, unknown>[],
     notify: 'sent' as 'sent' | 'off' | 'throws' | 'hang',
@@ -132,6 +134,7 @@ export function engine(on: On) {
     if (answers.submit === 'dropped') return { drop: 'a Stop stands' }
     answers.onSubmit()
     answers.prompts.push(e.text)
+    answers.origins.push(e.origin)
     return { text: e.text, ...(e.context === undefined ? {} : { context: e.context }) }
   })
   on('session.append', ($, a, next) => {

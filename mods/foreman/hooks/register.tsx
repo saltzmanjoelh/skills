@@ -572,23 +572,26 @@ async function choiceFor($: $, e: PromptSubmitInput): Promise<Choice> {
 
 // What /start-foreman answers once it is done. When the person typed words
 // after the command and the count, they go to the parent's model as the
-// person's own prompt, after the role is on, so that the model reads them as
-// the parent. They are submitted from a timer, because the engine refuses a
-// prompt submitted from inside the command's hook.
+// person's own prompt. They are submitted from a timer, because the engine
+// refuses a prompt submitted from inside the command's hook. The timer is set
+// before the role turns on, so it fires before the timer of any wake that the
+// first read finds, and the model reads the person's words first. It fires
+// only after this hook has returned, so the role is on by then.
 async function runCommand($: $, args: string): Promise<string> {
   const command = commandOf(args)
   if (command.kind === 'refused') return command.text
-  const answer = await applyCommand($, command)
-  if (command.prompt === null) return answer
   const prompt = command.prompt
-  later($, () => passOn($, prompt))
-  return `${answer} ${PASSED_ON}`
+  if (prompt !== null) later($, () => passOn($, prompt))
+  const answer = await applyCommand($, command)
+  return prompt === null ? answer : `${answer} ${PASSED_ON}`
 }
 
 // Submits the words the person typed after /start-foreman as their own
-// prompt. A refusal is logged, so the person can see why nothing answered.
+// prompt, only when the role is on, so that the model reads them as the
+// parent. A refusal is logged, so the person can see why nothing answered.
 async function passOn($: $, prompt: string) {
   try {
+    if (!(await isOn($))) return await addLog($, 'Did not pass on the words after /start-foreman, because the session did not become the parent.')
     const submitted = await $.prompt.submit({ text: prompt, asUser: true })
     if (submitted.drop !== undefined) await addLog($, `Could not pass on the words after /start-foreman (${printable(submitted.drop, 120)}).`)
   } catch (error) {

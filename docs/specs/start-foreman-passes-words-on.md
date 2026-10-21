@@ -33,10 +33,17 @@ The owner had to ask what had happened before trying again in two steps.
    session is the parent, so the model reads them as the parent and loads the
    wake skill for any start they ask for. They are submitted from a timer,
    because the engine refuses a prompt submitted from inside a command's hook.
-   A refusal of that prompt leaves a line in foreman's log.
-5. **The answer says so.** The command's answer ends with a sentence saying
+   A refusal of that prompt leaves a line in foreman's log, and so does a
+   session that did not become the parent, in which case the words are not
+   sent.
+5. **The person's words come before foreman's.** The first read of the status
+   folder can find work, such as a free slot, that wakes the model with a line
+   of foreman's own. The person's words reach the model before any such line,
+   so that a parent told to clean up first does not start an issue before it
+   has read that.
+6. **The answer says so.** The command's answer ends with a sentence saying
    that it passes the rest of the line on as the person's prompt.
-6. **Without the mod.** The skill's text tells the model not to act on words
+7. **Without the mod.** The skill's text tells the model not to act on words
    after the command when the mod is not loaded, and to ask the person to send
    them again once it is.
 
@@ -44,4 +51,7 @@ The owner had to ask what had happened before trying again in two steps.
 
 The gates do not read the `skills` folder. Whether the desktop app delivers
 the prompt to the parent's model after the command's answer is checked by the
-owner in a new session after the change merges.
+owner in a new session after the change merges. The engine says that a
+plugin's prompt does not expand `@file` mentions or pasted images, and it does
+not say whether it runs a slash command at the start of the words, so words
+such as `/implement ABC-123` may reach the model as text rather than run.

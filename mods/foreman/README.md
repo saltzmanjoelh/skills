@@ -34,7 +34,7 @@ Foreman does nothing in a session until that session runs `/start-foreman`. Ever
 
 The role, the slot count and the tickets are kept in the session's state and in the mod's store under the session's id, so a resumed session or a reload of the mod finds them again. Without a count, the count is the `slots` option in the mod's settings, which defaults to two.
 
-`/start-foreman` is a skill in the person's skills folder rather than a command that the mod declares while the session runs. The desktop app's prompt box lists skills before a session starts, but it does not list a command that a mod declares, so a command declared by the mod showed as unknown in a new session. Foreman's `command.run` hook answers `/start-foreman` itself, so the model never reads the skill's text while the mod runs. When the mod is not loaded, the skill's text tells the model to say so and to do nothing else.
+`/start-foreman` is a skill in the person's skills folder rather than a command that the mod declares while the session runs. The desktop app's prompt box lists skills before a session starts, but it does not list a command that a mod declares, so a command declared by the mod showed as unknown in a new session. Foreman's `command.run` hook answers `/start-foreman` itself, so the model never reads the skill's text while the mod runs. When the mod is not loaded, the skill's text tells the model to say so and to do nothing else, which includes not acting on any words typed after the command; the model asks the person to send them again once the mod is loaded.
 
 The `foreman:wake` skill is for the parent's model only, so it is marked `user-invocable: false` and does not show in the prompt box.
 
