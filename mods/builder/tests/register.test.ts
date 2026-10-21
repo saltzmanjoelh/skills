@@ -5977,7 +5977,7 @@ test('with an Issue link fact, the terminal band draws the key as a link inside 
   expect(await shapeOf(band)).toEqual(['Box', 'Text', 'Link', 'Button builder-agents', 'Button builder-line'])
 })
 
-test('with an Issue link fact, the desktop band draws the key as a link on its own row above the drawing, which keeps its whole title', async ($, on) => {
+test('with an Issue link fact, the desktop band draws the key as a link on its own row above the drawing, whose title leaves the key out', async ($, on) => {
   const clock = mock.clock(on)
   mock.store(on)
   engine(on)
@@ -5990,8 +5990,9 @@ test('with an Issue link fact, the desktop band draws the key as a link on its o
   expect(await linksIn(band)).toEqual([{ href: ISSUE_LINK, children: ['ABC-123'] }])
   expect(await shapeOf(band)).toEqual(['Box', 'Link', 'Svg', 'Button builder-agents', 'Button builder-line'])
   const drawing = await band.find({ type: 'Svg' })
-  expect(String(drawing?.props.source)).toContain(TITLE)
-  expect(drawing?.props.alt).toBe(SPEC_ROW)
+  expect(String(drawing?.props.source)).toContain('builder progress')
+  expect(String(drawing?.props.source)).not.toContain('ABC-123')
+  expect(drawing?.props.alt).toBe(SPEC_ROW.slice('ABC-123 '.length))
 })
 
 test('with an Issue link fact, the pane\'s work row has the link on the terminal and above the drawing on the desktop', async ($, on) => {
@@ -6012,7 +6013,9 @@ test('with an Issue link fact, the pane\'s work row has the link on the terminal
   const shape = await shapeOf(desktop)
   // The pane's first drawing is the bar, and the link comes directly before it.
   expect(shape.slice(shape.indexOf('Link'), shape.indexOf('Link') + 2)).toEqual(['Link', 'Svg'])
-  expect(String((await desktop.find({ type: 'Svg' }))?.props.source)).toContain(TITLE)
+  const drawing = String((await desktop.find({ type: 'Svg' }))?.props.source)
+  expect(drawing).toContain('builder progress')
+  expect(drawing).not.toContain('ABC-123')
 })
 
 test('at a width where the bar drops its title, the terminal row has no link and reads as it does without the fact', async ($, on) => {
