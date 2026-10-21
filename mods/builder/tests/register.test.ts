@@ -6140,6 +6140,10 @@ test('a missing or a usable Issue link fact shows no toast', async ($, on) => {
   expect(toasts).toEqual([])
 })
 
+// The test engine swallows a throw from a ui.toast hook before it reaches the
+// mod, so this test passes with or without the try around $.ui.toast in
+// readIssueAddress. It shows that a refused toast does no harm in the engine
+// as it is, not that the try works.
 test('a toast the engine refuses does not stop the session from starting or the band from drawing', async ($, on) => {
   const clock = mock.clock(on)
   mock.store(on)

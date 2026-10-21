@@ -276,6 +276,10 @@ test('a session that is a parent again from the store reads the fact at its star
   expect(await ui.newestLog()).toBe(line)
 })
 
+// The test engine swallows a throw from a ui.toast hook before it reaches the
+// mod, so this test passes with or without the try around $.ui.toast in
+// readLinkFact. It shows that a refused toast does no harm in the engine as it
+// is, not that the try works.
 test('a toast the engine refuses does not stop the parent from starting, the band from drawing or the line from reaching the log', async ($, on) => {
   const w = world(on)
   w.engine.toastThrows = true
