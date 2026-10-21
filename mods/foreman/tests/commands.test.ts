@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { RANGE, USAGE, commandOf } from '../hooks/commands'
+import { RANGE, USAGE, commandOf, slotsAnswer } from '../hooks/commands'
 
 test('/foreman turns the role on, slots takes a whole number from 1 to 20, and pause and resume set and clear the pause', () => {
   expect(commandOf('')).toEqual({ kind: 'on' })
@@ -18,4 +18,9 @@ test('a slots count that is not a whole number from 1 to 20 is refused with the 
   }
   for (const bad of ['slots', 'slots 3 4', 'pause now', 'start', 'resume 2']) expect(commandOf(bad)).toEqual({ kind: 'refused', text: USAGE })
   expect(RANGE).toContain('from 1 to 20')
+})
+
+test('the slots answer says sub session for one and sub sessions for any other count', () => {
+  expect(slotsAnswer(1)).toBe('This parent now runs 1 sub session at once.')
+  expect(slotsAnswer(2)).toBe('This parent now runs 2 sub sessions at once.')
 })

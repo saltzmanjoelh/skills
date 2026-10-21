@@ -3,7 +3,7 @@ import type { EngineInterface, PromptSubmitInput, Register, ResolveInput, ToolCa
 
 import { decide, desktopOf, needsList, PAUSED_SLOT_LOG, slotOutcome, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
 import { isSvgSurface } from './art'
-import { commandOf } from './commands'
+import { commandOf, slotsAnswer } from './commands'
 import { failureLine, listSessions, NUDGE_TEXT, openSession, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
 import { keptLine, keptNames, NOTES_KEPT, turnEndIds } from './notes'
 import { bandTree, PANE, paneTree, type Elements, type View } from './pane'
@@ -579,7 +579,7 @@ async function runCommand($: $, args: string): Promise<string> {
   if (command.kind === 'refused') return command.text
   if (command.kind === 'slots') {
     await writeParent($, p => ({ ...p, slots: command.count }))
-    return `This parent now runs ${command.count} sub sessions at once.`
+    return slotsAnswer(command.count)
   }
   if (command.kind === 'pause') {
     await writeParent($, p => ({ ...p, isPaused: true }))

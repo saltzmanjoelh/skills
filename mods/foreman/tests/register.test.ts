@@ -211,6 +211,7 @@ test('/foreman slots sets the count, a count outside 1 to 20 is refused and chan
   const ui = await mountBoth($, on)
   await start($)
   await foreman($)
+  expect((await foreman($, 'slots 1')).text).toBe('This parent now runs 1 sub session at once.')
   expect((await foreman($, 'slots 3')).text).toBe('This parent now runs 3 sub sessions at once.')
   expect(await ui.bandText()).toContain('0 of 3 slots busy')
   for (const bad of ['slots 0', 'slots 2.5', 'slots x']) {
