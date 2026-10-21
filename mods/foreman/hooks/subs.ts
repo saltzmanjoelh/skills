@@ -5,7 +5,7 @@
 // so the tests can check each rule without the engine.
 
 import type { ForemanFile } from '../types'
-import { recordIn, type BuildStatus, type BuildState } from './record'
+import { recordIn, type SubRecord, type BuildState } from './record'
 import { stageLabel } from './stages'
 import { printable } from './text'
 
@@ -29,35 +29,49 @@ export type FileRead = { file: string; mtimeMs: number; text: string | null }
 // when that parses as a record, else the last good read of it when there is
 // one. A file the read did not find leaves, and a file that never parsed is
 // not kept. A file whose text is the same as the kept entry's keeps that
-// entry and is not parsed again, since its text parsed when it was kept.
-// The result is in file name order.
+// entry and is not parsed again, since its text parsed when it was kept, but
+// takes the new modification time, since a file rewritten with the same text
+// is as fresh as any other. The result is in file name order.
 export function afterRead(kept: readonly ForemanFile[], found: readonly FileRead[]): ForemanFile[] {
   const before = new Map(kept.map(entry => [entry.file, entry]))
   const next: ForemanFile[] = []
   for (const f of found) {
     const last = before.get(f.file)
-    if (last !== undefined && f.text === last.text) next.push(last)
+    if (last !== undefined && f.text === last.text) next.push(last.mtimeMs === f.mtimeMs ? last : { ...last, mtimeMs: f.mtimeMs })
     else if (f.text !== null && recordIn(f.text) !== null) next.push({ file: f.file, text: f.text, mtimeMs: f.mtimeMs })
     else if (last !== undefined) next.push(last)
   }
   return next.sort((a, b) => byKeyThenFile(null, a.file, null, b.file))
 }
 
+// Compares issue keys with their numbers as numbers, so ABC-9 comes before
+// ABC-10. The locale is fixed, so the order does not depend on the machine.
+const KEYS = new Intl.Collator('en', { numeric: true })
+
 // The order of the rows, which `afterRead` also uses for its files by giving
 // every file no issue key. Rows that have no issue key yet go after every row
-// that has one. Two rows that both have a key go in key order. Rows whose
-// keys are equal, and rows that both have no key, go in file name order.
+// that has one. Two rows that both have a key go in key order, numbers
+// compared as numbers. Rows whose keys are equal, and rows that both have no
+// key, go in file name order.
 export function byKeyThenFile(aKey: string | null, aFile: string, bKey: string | null, bFile: string): number {
   if (aKey === null && bKey !== null) return 1
   if (aKey !== null && bKey === null) return -1
-  if (aKey !== null && bKey !== null && aKey !== bKey) return aKey < bKey ? -1 : 1
+  if (aKey !== null && bKey !== null && aKey !== bKey) {
+    const byKey = KEYS.compare(aKey, bKey)
+    if (byKey !== 0) return byKey
+    // The collator counts some different keys as equal, such as ABC-01 and
+    // ABC-1, so they are put in a fixed order by their text.
+    return aKey < bKey ? -1 : 1
+  }
   if (aFile === bFile) return 0
   return aFile < bFile ? -1 : 1
 }
 
 // One sub session as the band and the pane show it. It is keyed by the name
-// of its file, whatever session id the record holds.
-export type SubRow = { file: string; record: BuildStatus; mtimeMs: number; isStale: boolean }
+// of its file, whatever session id the record holds. `isReleased` marks a
+// row whose ticket the person released, which the pane draws dimmed and
+// foreman takes no action on.
+export type SubRow = { file: string; record: SubRecord; mtimeMs: number; isStale: boolean; isReleased?: boolean }
 
 // The rows for the kept files, judged stale against the read made at
 // `readAt`, in issue-key order and then file name order, with the rows that
@@ -77,9 +91,9 @@ export function nextReadDelay(rows: readonly SubRow[]): number {
   return rows.some(row => row.record.state === 'working' && !row.isStale) ? READ_SOON_MS : READ_LATER_MS
 }
 
-// How many slots are busy: every listed sub session whose state is not done,
-// stale ones included.
-export const busyCount = (rows: readonly SubRow[]) => rows.filter(row => row.record.state !== 'done').length
+// How many slots are busy: every listed sub session that is not released and
+// whose state is not done, stale ones included.
+export const busyCount = (rows: readonly SubRow[]) => rows.filter(row => row.isReleased !== true && row.record.state !== 'done').length
 
 // How a state is shown: red, amber, or the plain text color.
 export type Tone = 'red' | 'amber' | 'plain'

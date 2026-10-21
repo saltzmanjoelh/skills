@@ -12,7 +12,7 @@
     {
       "name": "foreman",
       "source": "./mods/foreman",
-      "description": "Shows a parent session every /implement sub session at a glance, in a band above the prompt and a pane, and opens a sub session beside the parent when its issue is pressed"
+      "description": "Runs a parent session's /implement sub sessions: shows them in a band above the prompt and a pane, nudges an idle one, notifies the person when one needs them, frees a slot when one finishes, and wakes the parent's model with one line when there is a decision to make"
     }
   ]
 }

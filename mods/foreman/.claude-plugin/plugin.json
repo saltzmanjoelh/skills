@@ -1,9 +1,9 @@
 {
   "name": "foreman",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "types": "./types/index.d.ts",
   "author": { "name": "Joel Saltzman" },
-  "description": "Shows a parent session every /implement sub session at a glance, in a band above the prompt and a pane, and opens a sub session beside the parent when its issue is pressed",
+  "description": "Runs a parent session's /implement sub sessions: shows them in a band above the prompt and a pane, nudges an idle one, notifies the person when one needs them, frees a slot when one finishes, and wakes the parent's model with one line when there is a decision to make",
   "dependencies": ["builder"],
   "userConfig": {
     "slots": {
@@ -11,6 +11,18 @@
       "title": "Slots",
       "description": "How many sub sessions a parent session runs at once, from 1 to 20, unless /foreman slots sets another count for that session.",
       "default": 2
+    },
+    "idleMinutes": {
+      "type": "number",
+      "title": "Idle minutes",
+      "description": "How many minutes a sub session may sit idle before foreman nudges it. The second nudge and then the wake of the parent's model each come this many minutes later.",
+      "default": 5
+    },
+    "cleanupMinutes": {
+      "type": "number",
+      "title": "Cleanup minutes",
+      "description": "How many minutes a sub session may stay in cleanup before foreman wakes the parent's model with its last error line.",
+      "default": 15
     }
   }
 }

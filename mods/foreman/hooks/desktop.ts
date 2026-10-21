@@ -4,7 +4,7 @@
 
 import type { McpToolResult } from 'claude-code'
 
-import type { BuildStatus } from './record'
+import type { SubRecord } from './record'
 
 export type DesktopCall = (server: string, tool: string, args?: Record<string, unknown>) => Promise<McpToolResult>
 
@@ -13,6 +13,10 @@ export const WINDOW_SERVER = 'ccd_window'
 export const OPEN_TOOL = 'open_session_in'
 export const SESSIONS_SERVER = 'ccd_session_mgmt'
 export const LIST_TOOL = 'list_sessions'
+export const SEND_TOOL = 'send_message'
+
+// The nudge foreman sends an idle sub session.
+export const NUDGE_TEXT = 'what\'s next?'
 // How many sessions to ask the list for. The list answers the most recently
 // active ones, twenty when not told otherwise, and a sub session that has been
 // quiet a while could fall outside twenty.
@@ -28,6 +32,7 @@ export const REASONS = {
   listRefused: 'the desktop app could not list its sessions',
   listUnreadable: 'the desktop app\'s list of sessions could not be read',
   openRefused: 'the desktop app refused to open it, as it does for a session this one did not start or while this session is not on screen',
+  sendRefused: 'the desktop app refused the message',
 } as const
 
 export type OpenResult = { opened: string } | { reason: string }
@@ -51,10 +56,10 @@ async function answerOf(call: DesktopCall, server: string, tool: string, args: R
 // root stays `/`.
 const folderOf = (path: string) => path.replace(/\/+$/, '') || '/'
 
-// The sessions in the list's answer: the first text block parsed as a JSON
-// array, each entry kept when it has a string session id and folder. Null
-// when the answer is not such a list.
-function sessionsIn(result: McpToolResult): { sessionId: string; cwd: string }[] | null {
+// The entries of the list's answer: its first text block parsed as a JSON
+// array, or null when the answer is not such a list. Each caller picks the
+// fields it needs from the entries.
+function entriesIn(result: McpToolResult): unknown[] | null {
   const block = result.content.find(b => b.type === 'text') as { text?: unknown } | undefined
   if (block === undefined || typeof block.text !== 'string') return null
   let raw: unknown
@@ -63,7 +68,14 @@ function sessionsIn(result: McpToolResult): { sessionId: string; cwd: string }[]
   } catch {
     return null
   }
-  if (!Array.isArray(raw)) return null
+  return Array.isArray(raw) ? raw : null
+}
+
+// The sessions in the list's answer, each kept when it has a string session
+// id and folder, or null when the answer is not a list.
+function sessionsIn(result: McpToolResult): { sessionId: string; cwd: string }[] | null {
+  const raw = entriesIn(result)
+  if (raw === null) return null
   return raw.flatMap(entry => {
     const s = entry as { sessionId?: unknown; cwd?: unknown } | null
     return typeof s?.sessionId === 'string' && typeof s.cwd === 'string' ? [{ sessionId: s.sessionId, cwd: s.cwd }] : []
@@ -72,7 +84,7 @@ function sessionsIn(result: McpToolResult): { sessionId: string; cwd: string }[]
 
 // The desktop session id for a record: its own when it has one, else the
 // first listed session whose folder is the record's.
-async function sessionIdOf(call: DesktopCall, record: Pick<BuildStatus, 'desktopSessionId' | 'cwd'>): Promise<{ id: string } | { reason: string }> {
+async function sessionIdOf(call: DesktopCall, record: Pick<SubRecord, 'desktopSessionId' | 'cwd'>): Promise<{ id: string } | { reason: string }> {
   if (record.desktopSessionId !== undefined) return { id: record.desktopSessionId }
   if (record.cwd === null) return { reason: REASONS.noAddress }
   const answer = await answerOf(call, SESSIONS_SERVER, LIST_TOOL, { limit: LIST_LIMIT })
@@ -89,11 +101,44 @@ async function sessionIdOf(call: DesktopCall, record: Pick<BuildStatus, 'desktop
 // band and pane stay on screen. Answers the id it opened, or why it could
 // not. An answer that is not an error counts as opened, including the
 // desktop app's answer that the session is already showing.
-export async function openSession(call: DesktopCall, record: Pick<BuildStatus, 'desktopSessionId' | 'cwd'>): Promise<OpenResult> {
+export async function openSession(call: DesktopCall, record: Pick<SubRecord, 'desktopSessionId' | 'cwd'>): Promise<OpenResult> {
   const found = await sessionIdOf(call, record)
   if ('reason' in found) return found
   const answer = await answerOf(call, WINDOW_SERVER, OPEN_TOOL, { session_id: found.id, target: 'split' })
   if (answer === 'not-connected') return { reason: REASONS.notConnected }
   if (answer === 'refused') return { reason: REASONS.openRefused }
   return { opened: found.id }
+}
+
+// How a message to a sub session went: sent, or why not.
+export type SendResult = 'sent' | 'not-connected' | 'refused'
+
+// Sends `text` to the desktop session `sessionId` with the desktop app's
+// send_message tool, which needs no permission when called through
+// $.mcp.call.
+export async function sendMessage(call: DesktopCall, sessionId: string, text: string): Promise<SendResult> {
+  const answer = await answerOf(call, SESSIONS_SERVER, SEND_TOOL, { session_id: sessionId, message: text })
+  return answer === 'not-connected' || answer === 'refused' ? answer : 'sent'
+}
+
+// One session as the desktop app's list gives it.
+export type Listed = { sessionId: string; isArchived: boolean; isRunning: boolean }
+
+// The desktop app's sessions, archived ones included, each with whether it
+// is archived and whether it runs, or why they could not be read. An entry
+// whose flags are not true or false reads as not archived and running, so a
+// doubtful entry frees no slot and wakes no one.
+export async function listSessions(call: DesktopCall): Promise<{ sessions: Listed[] } | { reason: string }> {
+  const answer = await answerOf(call, SESSIONS_SERVER, LIST_TOOL, { limit: LIST_LIMIT, include_archived: true })
+  if (answer === 'not-connected') return { reason: REASONS.notConnected }
+  if (answer === 'refused') return { reason: REASONS.listRefused }
+  const raw = entriesIn(answer)
+  if (raw === null) return { reason: REASONS.listUnreadable }
+  return {
+    sessions: raw.flatMap(entry => {
+      const s = entry as { sessionId?: unknown; isArchived?: unknown; isRunning?: unknown } | null
+      if (typeof s?.sessionId !== 'string') return []
+      return [{ sessionId: s.sessionId, isArchived: s.isArchived === true, isRunning: s.isRunning !== false }]
+    }),
+  }
 }

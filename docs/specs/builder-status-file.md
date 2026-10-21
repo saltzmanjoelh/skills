@@ -206,6 +206,13 @@ session shows it.
 - the once-a-minute refresh on the mocked clock;
 - the delete after a merge, and no delete without one.
 
+By hand, in a signed-in desktop session that has a ticket: raise one of the
+desktop app's own permission cards, and check that the status file reads
+`needs-you` while the card is open. The engine runs the classic
+`PermissionRequest` hooks on the way to that card, but this was read from
+the engine's code rather than watched, because a `claude` started outside the
+desktop app is not signed in.
+
 The four gates in the project's `CLAUDE.md` pass, and the mod's README
 describes the file and its fields.
 

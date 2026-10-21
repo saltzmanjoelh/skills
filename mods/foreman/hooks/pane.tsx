@@ -55,11 +55,12 @@ export type BandPresses = { open: (file: string) => void }
 // The band, in a parent only: the head, a chip for each sub session that
 // fits `width` with `+N more` for the rest, and when the next read is due.
 // Each chip is a button that opens its sub session; it is colored by its
-// state's tone, or dimmed and uncolored when its file is stale. Null in a
-// session that is not a parent, so the host draws what it would without
-// foreman.
-export function bandTree(ui: Elements, v: View, width: number | undefined, presses: BandPresses) {
-  if (!v.isOn) return null
+// state's tone, or dimmed and uncolored when its file is stale. A released
+// sub session has no chip. Null in a session that is not a parent, so the
+// host draws what it would without foreman.
+export function bandTree(ui: Elements, view: View, width: number | undefined, presses: BandPresses) {
+  if (!view.isOn) return null
+  const v = { ...view, rows: view.rows.filter(row => row.isReleased !== true) }
   const { Box, Text, Button } = ui
   const head = bandHead(v)
   const tail = `${SEPARATOR}${nextReadWords(v)}`
@@ -138,14 +139,29 @@ export function stateWords(row: SubRow, now: number): string {
 
 export type PanePresses = { open: (file: string) => void; nudge: (file: string) => void; release: (file: string) => void }
 
+// The words a released row shows in place of its state.
+export const RELEASED = 'released'
+
 // One sub session in the pane: the issue button, the bar, the state, and the
-// Nudge and Release buttons.
+// Nudge and Release buttons. A released one shows `released`, dimmed, in
+// place of its state and has no Nudge or Release button; its issue button
+// still opens it.
 function subTree(ui: Elements, row: SubRow, now: number, columns: number | undefined, presses: PanePresses) {
   const { Box, Text, Button } = ui
   const tone = STATE_LOOK[row.record.state].tone
+  const issue = <Button key={`open-${row.file}`} variant="primary" label={`→ ${keyOf(row)} · ${pullRequestWords(row)}`} onPress={() => presses.open(row.file)} />
+  const bar = barRow(ui, row, columns)
+  if (row.isReleased === true) {
+    return [
+      issue,
+      bar,
+      <Text key={`state-${row.file}`} dimColor>{RELEASED}</Text>,
+      <Text key={`gap-${row.file}`}> </Text>,
+    ]
+  }
   return [
-    <Button key={`open-${row.file}`} variant="primary" label={`→ ${keyOf(row)} · ${pullRequestWords(row)}`} onPress={() => presses.open(row.file)} />,
-    barRow(ui, row, columns),
+    issue,
+    bar,
     row.isStale
       ? <Text key={`state-${row.file}`} dimColor>{stateWords(row, now)}</Text>
       : <Text key={`state-${row.file}`} color={TONE_COLOR[tone]}>{stateWords(row, now)}</Text>,
@@ -173,7 +189,7 @@ export function paneTree(ui: Elements, v: View, presses: PanePresses, columns?: 
       <Text key="log-head" bold>Log</Text>
       {v.log.length === 0
         ? <Text key="log-none" dimColor>Nothing yet.</Text>
-        : v.log.map((line, i) => <Text key={`log-${i}`} dimColor>{`${timeOfDay(line.at, v.now)} ${line.text}`}</Text>)}
+        : v.log.map((line, i) => <Text key={`log-${i}`} dimColor>{`${timeOfDay(line.at, v.now)} ${line.text}${(line.times ?? 1) > 1 ? ` (${line.times} times)` : ''}`}</Text>)}
     </Box>
   )
 }

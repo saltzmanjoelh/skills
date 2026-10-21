@@ -38,10 +38,10 @@ test('a read keeps each good file, keeps the last good read of a file that does 
   ])
 })
 
-test('rows are in issue-key order, keyed by the file name, each judged stale against the read', () => {
-  const files = [kept('z.json', record('ABC-9', 'working'), 0), kept('y.json', record('ABC-10', 'idle', { sessionId: 'other' }), 5 * MIN)]
+test('rows are in issue-key order with numbers compared as numbers, keyed by the file name, each judged stale against the read', () => {
+  const files = [kept('y.json', record('ABC-10', 'idle', { sessionId: 'other' }), 5 * MIN), kept('z.json', record('ABC-9', 'working'), 0)]
   const rows = rowsOf(files, 6 * MIN)
-  expect(rows.map(row => [row.file, row.record.issueKey, row.isStale])).toEqual([['y.json', 'ABC-10', false], ['z.json', 'ABC-9', true]])
+  expect(rows.map(row => [row.file, row.record.issueKey, row.isStale])).toEqual([['z.json', 'ABC-9', true], ['y.json', 'ABC-10', false]])
   // A row with no issue yet sorts after the keyed rows, by file name.
   const unkeyed = rowsOf([
     kept('b.json', record('ABC-2', 'idle', { issueKey: null }), 0),
@@ -145,13 +145,16 @@ test('rows with an issue key come first in key order, then rows with none, and f
   expect(byKeyThenFile(null, 'a.json', 'ABC-1', 'z.json')).toBe(1)
   expect(byKeyThenFile('ABC-1', 'z.json', null, 'a.json')).toBe(-1)
   expect(byKeyThenFile('ABC-1', 'z.json', 'ABC-2', 'a.json')).toBe(-1)
+  // The collator counts ABC-01 and ABC-1 as equal; their text decides.
+  expect(byKeyThenFile('ABC-01', 'z.json', 'ABC-1', 'a.json')).toBe(-1)
+  expect(byKeyThenFile('ABC-1', 'a.json', 'ABC-01', 'z.json')).toBe(1)
   expect(byKeyThenFile('ABC-2', 'a.json', 'ABC-1', 'z.json')).toBe(1)
   expect(byKeyThenFile('ABC-1', 'a.json', 'ABC-1', 'b.json')).toBe(-1)
   expect(byKeyThenFile(null, 'b.json', null, 'a.json')).toBe(1)
   expect(byKeyThenFile(null, 'a.json', null, 'a.json')).toBe(0)
 })
 
-test('a read keeps the kept entry for an unchanged text, replaces it for a changed text that parses, and keeps the last good read of a half-written file', () => {
+test('a read keeps the kept text with the new time for an unchanged text, replaces it for a changed text that parses, and keeps the last good read of a half-written file', () => {
   const a = record('ABC-1', 'working')
   const b = record('ABC-2', 'idle')
   const c = record('ABC-3', 'idle')
@@ -162,10 +165,10 @@ test('a read keeps the kept entry for an unchanged text, replaces it for a chang
     { file: 'b.json', mtimeMs: 20, text: '{"sessionId": "s-ABC-2", "issu' },
     { file: 'c.json', mtimeMs: 30, text: changed },
   ])
-  // The unchanged text keeps the kept entry itself, with its old modification
-  // time, rather than a new entry carrying the time this read listed.
-  expect(after[0]).toBe(before[0])
-  expect(after[0]!.mtimeMs).toBe(1)
+  // The unchanged text keeps the kept text, but takes the time this read
+  // listed, because a file rewritten with the same text is fresh.
+  expect(after[0]).toEqual({ ...before[0]!, mtimeMs: 10 })
+  expect(afterRead(after, [{ file: 'a.json', mtimeMs: 10, text: a }])[0]).toBe(after[0])
   // The half-written file keeps its last good read.
   expect(after[1]).toBe(before[1])
   // The changed text that parses replaces the kept entry.

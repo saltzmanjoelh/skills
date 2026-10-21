@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { McpToolResult } from 'claude-code'
 
-import { failureLine, openSession, REASONS, type DesktopCall } from '../hooks/desktop'
+import { failureLine, listSessions, openSession, REASONS, type DesktopCall } from '../hooks/desktop'
 
 const SECRET = 'SECRET-ERROR-TEXT'
 
@@ -60,4 +60,27 @@ test('each way an open can fail answers its own reason and never the tool\'s own
 
 test('a failed open is one sentence naming the issue and the reason', () => {
   expect(failureLine('ABC-123', REASONS.openRefused)).toBe(`Could not open ABC-123: ${REASONS.openRefused}.`)
+})
+
+test('the list of sessions asks for archived ones too, and reads an entry without flags as running and not archived', async () => {
+  const d = desktop({
+    list: async () => sessions([
+      { sessionId: 'local_a', isArchived: true, isRunning: false },
+      { sessionId: 'local_b' },
+      { sessionId: 7 },
+    ]),
+  })
+  expect(await listSessions(d.call)).toEqual({
+    sessions: [{ sessionId: 'local_a', isArchived: true, isRunning: false }, { sessionId: 'local_b', isArchived: false, isRunning: true }],
+  })
+  expect(d.calls[0]!.args).toEqual({ limit: 100, include_archived: true })
+})
+
+test('a list that is refused, not connected or not a list answers its own reason and never the tool\'s error text', async () => {
+  const refused = desktop({ list: async () => ({ content: [{ type: 'text', text: SECRET }], isError: true }) })
+  expect(await listSessions(refused.call)).toEqual({ reason: REASONS.listRefused })
+  const gone = desktop({ list: async () => { throw new Error(SECRET) } })
+  expect(await listSessions(gone.call)).toEqual({ reason: REASONS.notConnected })
+  const garbage = desktop({ list: async () => text(SECRET) })
+  expect(await listSessions(garbage.call)).toEqual({ reason: REASONS.listUnreadable })
 })
