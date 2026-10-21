@@ -45,10 +45,13 @@ scope line, `Scope:`, with one of three values:
   not ask for and the base branch does not have.
 
 A finding that breaks behaviour that already works counts as in scope,
-whatever the spec says. So does a finding classed `SAFETY:`, which is a
+whatever the spec says. So does a safety finding: one that describes a
 security hole, data loss, an exposed credential, a wrong deploy, or a breach
-of a hard rule in the project's `CLAUDE.md`: it is in scope whatever the
-spec says, and it blocks as it did before this rule.
+of a hard rule in the project's `CLAUDE.md`, whatever its label or the
+reviewer that raised it, and every finding from the security reviewer. It is
+in scope whatever the spec says, and it blocks as it did before this rule.
+The claim checker never answers `outside the spec` or `unsettled` for a
+safety finding or for one that breaks working behaviour.
 
 The claim checker checks every scope mark, not only the findings marked
 `Needs checking: yes`, against the spec and the base branch, the same way it
@@ -150,7 +153,7 @@ cut it out>`, and pushes it before any reviewer runs:
 - **File the rest:** the area is closed. The package lists it as closed, and
   every later finding in it counts as outside the spec, so rule one sends it
   to the counsel to file or drop, unless it breaks working behaviour or is a
-  `SAFETY:` finding, which stays in scope as rule one says.
+  safety finding, which stays in scope as rule one says.
 - **Cut it out:** the session removes the code in that area that this pull
   request added, in the same commit as the `Trend:` line, and the area is
   closed as above.
@@ -214,8 +217,8 @@ the same in a sentence or two.
   behaviour`, and an out-of-spec addition marked in the spec is caught as
   `outside the spec`. A defect in code that serves the spec stays `in the
   spec` even when the spec does not name the protection that is missing,
-  and a `SAFETY:` finding is never outside the spec, so a security hole in
-  new code still blocks.
+  and a safety finding is never outside the spec or unsettled, so a
+  security hole in new code still blocks, whichever reviewer found it.
 - **A decided item that is not in any record.** It reaches the reviewers
   again and is checked again, which costs a check but ships nothing wrong.
 - **A malformed list in a commit.** Lines that do not start `- ` under a
