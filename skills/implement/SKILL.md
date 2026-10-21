@@ -523,7 +523,9 @@ the streak comes out as if it had been labelled right. A confirmed mislabel
 is fixed in this pull request in any round, and the rule for rounds does not
 change: in the first half its `Retag:` line goes in the round's fix commit,
 and in the second half it is a cheap fix at point 4, listed under `Fixed:`.
-When the limit rule makes no commit, the `Retag:` line goes in the next
+When the `Retag:` line is the only change, there is nothing to stage, so that
+commit is made with `git commit --allow-empty`, as a `Trend:` line's is. Only
+when the limit rule makes no commit does the `Retag:` line wait for the next
 commit that is made, and until then the package keeps listing the `Tidied:`
 line as not corrected. There is no line that turns an `Area:` line into a
 `Tidied:` one.
