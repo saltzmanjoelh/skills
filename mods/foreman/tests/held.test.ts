@@ -34,6 +34,16 @@ test('only an answer whose text holds the app\'s Remote Control words is the ref
   expect(isRemoteRefusal({ result: 'Started the session local_new1.', text: 'Started the session local_new1.' })).toBe(false)
 })
 
+test('the words in the call\'s own title, or in an answer that names a started session, are not the refusal', () => {
+  const title = 'ABC-123: keep working over Remote Control'
+  const started = `Started session "${title}" (session_id: local_new1, name: example)`
+  expect(isRemoteRefusal({ result: started, text: started }, title)).toBe(false)
+  const echoed = `Proposed "${title}" as a card.`
+  expect(isRemoteRefusal({ result: echoed, text: echoed }, title)).toBe(false)
+  expect(isRemoteRefusal({ result: `${REFUSAL} local_x`, text: `${REFUSAL} local_x` })).toBe(false)
+  expect(isRemoteRefusal({ isError: true, result: REFUSAL, text: REFUSAL }, title)).toBe(true)
+})
+
 test('a list read releases a held key only for an unarchived entry whose title begins with exactly that key, whether or not a turn runs', () => {
   expect(releasedBy(['ABC-123'], [listed()])).toEqual({ held: [], logs: ['Stopped holding ABC-123, because the desktop app\'s list shows a session for it.'] })
   expect(releasedBy(['ABC-123'], [listed({ isRunning: false, title: 'ABC-123 short' })]).held).toEqual([])

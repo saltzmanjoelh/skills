@@ -462,7 +462,7 @@ test('while a key is held, a plugin\'s prompt, foreman\'s wake among them, and a
   await passes($, w, 'go on', { origin: { kind: 'composer' }, isMeta: true })
 })
 
-test('with nothing held, or with the role off, no prompt gets the held line', async ($, on) => {
+test('with nothing held, no prompt gets the held line', async ($, on) => {
   const { w } = await holdingParent($, on, [])
   for (const kind of ['sdk', 'composer', 'bridge']) await passes($, w, 'go on', { origin: { kind } })
 })

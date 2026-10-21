@@ -728,6 +728,19 @@ test('the same refusal for a key already held adds the sentence again but raises
   expect(w.engine.notices).toEqual([HELD_NOTICE])
 })
 
+test('an accepted start whose title holds the Remote Control words pairs its ticket and holds nothing', async ($, on) => {
+  const { w } = await refusingParent($, on)
+  const title = 'ABC-7: keep working over Remote Control'
+  w.engine.startFails = false
+  w.engine.startAnswer = `Started session "${title}" (session_id: local_new1, name: example)`
+  const out = await startFull($, { ...KEYED_START, title })
+  expect(out.context).toBeUndefined()
+  await w.clock.settle()
+  expect(ledger(w).held).toEqual([])
+  expect(ledger(w).pairings.map(p => p.localId)).toEqual(['local_new1'])
+  expect(w.engine.notices).toEqual([])
+})
+
 test('a "No issue: " start refused over Remote Control holds nothing', async ($, on) => {
   const { w } = await refusingParent($, on)
   const out = await startFull($, { prompt: 'Tidy the docs.', context: 'fresh', title: 'No issue: tidy' })

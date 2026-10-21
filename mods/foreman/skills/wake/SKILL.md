@@ -139,6 +139,7 @@ foreman's, not the person's, and the person never sees it.
    line no longer names it.
 3. Then answer the person's message as usual.
 
+## <who> is still idle after two nudges.
 
 1. Find the session in `list_sessions` whose title begins with the exact key
    or ticket, as "Starting a session" says. When none or several match, tell

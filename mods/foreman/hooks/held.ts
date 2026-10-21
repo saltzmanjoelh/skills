@@ -11,7 +11,7 @@
 import type { PromptSubmitInput, ToolCallResult } from 'claude-code'
 
 import type { Listed } from './desktop'
-import { KEYED_TITLE } from './tickets'
+import { KEYED_TITLE, LOCAL_ID } from './tickets'
 
 // The words foreman recognises the refusal by. The desktop app refuses
 // start_session with: "The user is working over Remote Control, and for now
@@ -28,12 +28,17 @@ export function keyOfTitle(title: unknown): string | null {
 }
 
 // Whether a start_session answer is the app's Remote Control refusal: not a
-// deny, with the words in its text, or in its result when it has no text,
-// whether or not it is marked as an error.
-export function isRemoteRefusal(out: ToolCallResult): boolean {
+// deny, naming no started session, with the words in its text, or in its
+// result when it has no text, whether or not it is marked as an error. The
+// app repeats the call's `title` in its answers, so the words count only
+// outside that title, and a title of the person's own that holds them never
+// makes an accepted start look refused.
+export function isRemoteRefusal(out: ToolCallResult, title?: unknown): boolean {
   if (out.deny !== undefined) return false
   const text = typeof out.text === 'string' ? out.text : JSON.stringify(out.result ?? '')
-  return text.includes(REMOTE_REFUSAL)
+  if (LOCAL_ID.test(text)) return false
+  const rest = typeof title === 'string' && title !== '' ? text.split(title).join('') : text
+  return rest.includes(REMOTE_REFUSAL)
 }
 
 // Keys joined as a sentence names them: "A", "A and B", "A, B and C".
