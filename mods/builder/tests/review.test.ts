@@ -433,6 +433,8 @@ test('a keep going line between the retagged commit and the Retag: line still re
   const report = trendOf(commits)
   expect(report.stops).toEqual([])
   expect(report.streaks).toEqual([{ area: RACE, streak: 2 }])
+  expect(report.tidied).toEqual([{ sha: '22222222', area: RACE, retagged: true }])
+  expect(report.unappliedRetags).toEqual([])
 })
 
 test('a Retag: line in the commit it names, or before it, is applied', () => {
@@ -462,6 +464,8 @@ test('a Retag: line naming a commit in a closed area leaves the area closed', ()
   const report = trendOf(commits)
   expect(report.stops).toEqual([])
   expect(report.closed).toEqual([{ area: RACE, answer: 'file the rest' }])
+  expect(report.tidied).toEqual([{ sha: '66666666', area: RACE, retagged: true }])
+  expect(report.unappliedRetags).toEqual([])
 })
 
 test('a Retag: line that cannot be applied is listed, cleaned, and changes nothing', () => {

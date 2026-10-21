@@ -419,7 +419,7 @@ export function trendSection(report: TrendReport): string {
     for (const { sha, area, retagged } of report.tidied) lines.push(retagged ? `- ${area} (${sha}), read as an Area: line because a Retag: line names it` : `- ${area} (${sha})`)
   }
   if (report.unmatched.length > 0) {
-    lines.push('', `Commits whose Reviewed: value could not be matched to one commit on the branch, because it is not at least ${SHA_MIN_CHARS} hex characters or matches no commit or more than one, so the value keys a group of its own:`)
+    lines.push('', `Commits whose Reviewed: value could not be matched to one commit on the branch, because it is blank, is not at least ${SHA_MIN_CHARS} hex characters, or matches no commit or more than one. Such a commit that names an area forms a group keyed by the value, or by the commit's own sha when the value is blank:`)
     for (const { sha, value } of report.unmatched) lines.push(`- ${sha}: ${value}`)
   }
   if (report.closed.length > 0) {
