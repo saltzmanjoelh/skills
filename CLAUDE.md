@@ -7,6 +7,7 @@ Base branch: main
 Checks: none
 Merge command: gh pr merge <n> --merge --match-head-commit <sha>
 Max pushes per round: 12
+Next issue: the highest-priority issue in this repository's backlog that is not started, is not a sub-issue, and has no open pull request.
 
 The repository has no continuous integration, so no checks report on a pull
 request. The limit on pushes per round is 12 rather than the default of 8

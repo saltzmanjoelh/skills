@@ -18,7 +18,9 @@ and shows them in a band above the prompt and in a pane. It nudges a sub
 session that sits idle, notifies the person when one needs them, frees a
 slot when one finishes, and wakes the parent's model with one line only when
 there is a decision to make. It does nothing in a session until that session
-runs `/foreman`. Its README says how to install it and what it does.
+runs `/foreman`. It ships the skill `foreman:wake`, which tells the parent
+what each wake line asks of it. Its README says how to install it and what it
+does.
 
 ## Project facts
 
@@ -52,5 +54,6 @@ names.
 | `Max rounds:` | 5 | implement |
 | `Merge command:` | `gh pr merge <n> --merge --match-head-commit <sha>`; a project whose merges go through its own gate names that command, with `<n>` and `<sha>` in it | implement |
 | `Checks:` | `expected` when the base branch has files under `.github/workflows`, else `none`; a project whose checks report from an outside service writes `Checks: expected` | implement |
+| `Next issue:` | none; ask the person | foreman |
 | `## Gates` heading, one bullet per gate | detect from the manifests, confirm once, offer to write it | implement, verify-loop, pr-comments |
 | `## Hard rules` heading | none | implement |
