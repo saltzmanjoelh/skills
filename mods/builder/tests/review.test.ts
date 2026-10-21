@@ -248,6 +248,16 @@ test('keep going counts the streak from zero, so two later groups do not stop an
   expect(trendOf(three).stops).toEqual([{ area: RACE, streak: 3 }])
 })
 
+test('a Trend: answer that ends in a full stop is still read', () => {
+  const commits = [
+    fix('1', null, [RACE]), fix('2', null, [RACE]), fix('3', null, [RACE]),
+    commit('4', `Record the answer\n\nTrend: ${RACE}: keep going.`),
+  ]
+  const report = trendOf(commits)
+  expect(report.stops).toEqual([])
+  expect(report.unreadable).toEqual([])
+})
+
 test('file the rest and cut it out close an area, which then never stops', () => {
   for (const answer of ['file the rest', 'cut it out']) {
     const commits = [
