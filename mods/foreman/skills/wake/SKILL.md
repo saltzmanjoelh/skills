@@ -213,11 +213,17 @@ these steps fails, tell the person in one line, naming the issue, and stop.
      `git rev-parse '<branch>'` equals that pull request's `headRefOid`,
      because that pull request already accounts for it.
 
-   Whatever these say, the branch of the worktree step 3 accepted is remaining
-   when `git -C '<folder>' status --porcelain` prints anything, because the
-   dead session may have left edits it never committed. So a branch that a
-   squash merge left behind is not remaining, and a branch name reused for new
-   work after its pull request merged is remaining.
+   So a branch that a squash merge left behind is not remaining, and a branch
+   name reused for new work after its pull request merged is remaining.
+
+   Whatever those two say, a kept branch is also remaining in either of these
+   cases, because a worktree may hold work that has no commits of its own:
+   - an entry in step 3's worktree list has it checked out, other than the
+     worktree step 3 accepted (every entry, when step 3 accepted none),
+     because another session, running or not, may be working there;
+   - it is the branch of the worktree step 3 accepted, and
+     `git -C '<folder>' status --porcelain` prints anything, because the dead
+     session may have left edits it never committed.
 5. **Read the issue's state** with the same tracker the `Next issue:` fact
    names. When that is not possible, treat the state as unknown and go on;
    this is not a failed git or gh command.
@@ -239,14 +245,18 @@ these steps fails, tell the person in one line, naming the issue, and stop.
      remaining branch when there is one.
    - A pull request closed without merging: ask the person in one line what to
      do.
-   - None: start a session whose brief runs `/implement <issue>`. When one
-     branch remains and an entry in step 3's worktree list has it checked out,
-     other than the worktree step 3 accepted, tell the person in one line
-     instead, because another session may be working on it. When step 3
-     accepted no worktree, every entry counts, including the record's own
-     folder. Otherwise, when one branch remains, the brief names it, and
-     when step 3 accepted the worktree that holds it, the brief also names that
-     worktree folder, so that the new session works there.
+   - None: start a session whose brief runs `/implement <issue>`, after these
+     checks in order:
+     1. When no branch remains, the brief names no branch or folder.
+     2. When one branch remains, look at the entries in step 3's worktree
+        list other than the worktree step 3 accepted. When step 3 accepted no
+        worktree, that is every entry, including the record's own folder. If
+        one of those entries has the branch checked out, tell the person in
+        one line and start nothing, because another session may be working
+        on it.
+     3. Otherwise the brief names the branch, and when step 3 accepted the
+        worktree that holds it, the brief also names that worktree folder,
+        so that the new session works there.
 
 Starting goes through "Starting a session".
 

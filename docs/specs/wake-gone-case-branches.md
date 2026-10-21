@@ -41,7 +41,8 @@ what the parent will do on their behalf.
    ignoring the folder:
    1. it holds only the characters the cleanup case allows, because the
       parent may name it in a command or a brief, and it is the path of an
-      entry in `git worktree list --porcelain`;
+      entry in `git worktree list --porcelain` that is not marked `prunable`,
+      so that a brief never names a folder that is gone;
    2. that entry is not the repository's main checkout;
    3. the entry's branch, taken from that entry, holds only the characters
       the cleanup case allows;
@@ -54,12 +55,13 @@ what the parent will do on their behalf.
    kept branch is **remaining** unless its commits are reachable from the base
    branch, or it is the head branch of a merged or closed pull request from
    the list and its tip equals that pull request's `headRefOid`, because that
-   pull request already accounts for it. Whatever those say, the branch of
-   the worktree step 3 accepted is remaining when that worktree has
-   uncommitted changes, so that edits a session never committed keep an
-   owner. A kept branch with a
-   character the cleanup case does not allow goes to the person, because the
-   parent would have to put it in a command.
+   pull request already accounts for it. Whatever those say, a kept branch is
+   also remaining when a worktree other than the one step 3 accepted has it
+   checked out, or when it is the accepted worktree's branch and that
+   worktree has uncommitted changes, so that work with no commits of its own
+   keeps an owner. A kept branch with a character the cleanup case does not
+   allow goes to the person, because the parent would have to put it in a
+   command.
 5. **Counting.** "More than one branch" counts distinct branch names among
    the open pull requests' head branches and the remaining branches, so a
    worktree's branch and an open pull request on that same branch count once.
@@ -75,6 +77,9 @@ what the parent will do on their behalf.
    - a pull request closed without merging: ask the person in one line;
    - none: start `/implement <issue>`, and when one branch remains, the brief
      names it, and names the worktree folder from step 3 when that holds it.
+     When a worktree other than the one step 3 accepted has that branch
+     checked out, ask the person instead, because another session may be
+     working on it and git refuses to check out one branch twice.
 7. **The cleanup case.** The over-long line in its merged check is rewrapped,
    with no change to its words.
 8. **The heading test.** No test is added (see "Decided by the counsel"). The
