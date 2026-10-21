@@ -141,7 +141,6 @@ export function engine(on: On) {
     if (answers.startResultOnly) return { result } as never
     return { result, text: answers.startAnswer, ...(answers.startFails ? { isError: true } : {}) } as never
   })
-  on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.id', () => ({ value: answers.sessionId }))
   on('command.run', () => ({ text: '' }))
@@ -221,7 +220,7 @@ export async function mountBoth($: Engine, on: On, surface: 'terminal' | 'deskto
 }
 
 export const start = ($: Engine) => $.session.start({ cwd: '/work/parent', surface: null, isInteractive: true })
-export const foreman = ($: Engine, args = '') => $.command.run({ command: 'foreman', args } as never) as Promise<{ text: string }>
+export const foreman = ($: Engine, args = '') => $.command.run({ command: 'start-foreman', args } as never) as Promise<{ text: string }>
 
 // The desktop app's notes to a parent, in the exact wording foreman's parser
 // reads, shared by the unit tests and the engine tests so the two cannot

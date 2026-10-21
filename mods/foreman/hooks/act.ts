@@ -46,7 +46,6 @@ export type DecideInput = {
   // is freed or forgotten for a file that seems to have left.
   folderExists: boolean
   listed: boolean
-  isPaused: boolean
   slots: number
 }
 
@@ -219,17 +218,14 @@ function goneRule(s: Step) {
   setActs(s, { goneWokeFor: s.row.mtimeMs })
 }
 
-// The line the log gets when a slot frees while the parent is paused.
-export const PAUSED_SLOT_LOG = 'A slot is free, and foreman will say so when it is resumed.'
-
 // What a freed slot leads to, given how many slots are free now: nothing
-// when none is, the pause remembered while paused, and otherwise a wake with
-// the number free. A read, Release and /foreman resume all decide by it.
-export type SlotOutcome = { kind: 'none' } | { kind: 'remember' } | { kind: 'wake'; reason: Reason }
+// when none is, and otherwise a wake with the number free. A read and Release
+// both decide by it.
+export type SlotOutcome = { kind: 'none' } | { kind: 'wake'; reason: Reason }
 
-export function slotOutcome(free: number, isPaused: boolean): SlotOutcome {
+export function slotOutcome(free: number): SlotOutcome {
   if (free <= 0) return { kind: 'none' }
-  return isPaused ? { kind: 'remember' } : { kind: 'wake', reason: { kind: 'slot-free', free } }
+  return { kind: 'wake', reason: { kind: 'slot-free', free } }
 }
 
 // Whether this read needs the desktop app's list: some active owned record is
@@ -247,8 +243,7 @@ export function needsList(t: ForemanTickets, rows: readonly SubRow[], now: numbe
 // that no status file has carried for a day is forgotten and logged; neither
 // happens unless this read listed a folder that exists. A released or
 // freed pairing gets no action. When a slot freed, the parent is woken with
-// the number of slots free, unless none is free or the parent is paused, in
-// which case the pause is remembered.
+// the number of slots free, unless none is free.
 export function decide(input: DecideInput): Decision {
   const { rows, now, limits, sessions, folderExists, listed } = input
   const byId = sessions.kind === 'read' ? new Map(sessions.sessions.map(x => [x.sessionId, x])) : null
@@ -285,13 +280,8 @@ export function decide(input: DecideInput): Decision {
   if (!folderExists && !tickets.folderMissing) logs.push('The status folder is missing, so foreman frees no slot until it is back.')
   tickets = { ...tickets, folderMissing: !folderExists }
   if (freed > 0) {
-    const outcome = slotOutcome(input.slots - busyCount(shownRows(rows, tickets)), input.isPaused)
-    if (outcome.kind === 'remember') {
-      tickets = { ...tickets, freedWhilePaused: true }
-      logs.push(PAUSED_SLOT_LOG)
-    } else if (outcome.kind === 'wake') {
-      reasons.push(outcome.reason)
-    }
+    const outcome = slotOutcome(input.slots - busyCount(shownRows(rows, tickets)))
+    if (outcome.kind === 'wake') reasons.push(outcome.reason)
   }
   return { tickets, effects, reasons, logs, nextDueAt: due.length === 0 ? null : Math.min(...due) }
 }

@@ -4,8 +4,9 @@ Personal Claude Code skills and review agents, in one place. Each
 `~/.claude/skills/<name>` is a symlink into this repository, so edit here.
 
 The skills are `spec`, `plan-tournament`, `implement`, `verify-loop`,
-`pr-comments`, `storypr`, `summarize` and `cleanup`, which is a generic
-teardown of a finished worktree.
+`pr-comments`, `storypr`, `summarize`, `cleanup`, which is a generic
+teardown of a finished worktree, and `start-foreman`, which starts the
+foreman mod described below.
 
 The review agents live in the builder mod, in `mods/builder/agents`. The
 builder mod used to be called pilot. Its README says how to replace an old
@@ -18,7 +19,8 @@ and shows them in a band above the prompt and in a pane. It nudges a sub
 session that sits idle, notifies the person when one needs them, frees a
 slot when one finishes, and wakes the parent's model with one line only when
 there is a decision to make. It does nothing in a session until that session
-runs `/foreman`. It ships the skill `foreman:wake`, which tells the parent
+runs `/start-foreman`, a skill in this repository's `skills` folder that the
+mod answers itself. It ships the skill `foreman:wake`, which tells the parent
 what each wake line asks of it. Its README says how to install it and what it
 does.
 

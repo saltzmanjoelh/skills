@@ -1,13 +1,11 @@
 // The foreman mod's state contract: what $.state holds. Self-contained, as the
 // engine requires.
 
-// The parent's settings. `isOn` says this session ran /foreman and so is a
-// parent. `slots` is the count /foreman slots set, or null when none was set,
-// in which case the `slots` option applies. `isPaused` says /foreman pause is
-// in force: while it is, a slot that frees is remembered rather than waking
-// the parent's model, and /foreman resume then wakes it once. Read through
-// parentIn in hooks/parent.ts, which reads a value in any other shape as off.
-export type ForemanParent = { isOn: boolean; slots: number | null; isPaused: boolean }
+// The parent's settings. `isOn` says this session ran /start-foreman and so
+// is a parent. `slots` is the count /start-foreman <n> set, or null when none
+// was set, in which case the `slots` option applies. Read through parentIn in
+// hooks/parent.ts, which reads a value in any other shape as off.
+export type ForemanParent = { isOn: boolean; slots: number | null }
 
 // The last good read of one status file: its name in the status folder, the
 // text it held, and its modification time as the listing gave it then. The
@@ -76,11 +74,9 @@ export type ForemanEffect = { kind: 'nudge'; to: string; name: string } | { kind
 // reload that drops the timer in between loses nothing.
 export type ForemanOutbox = { logs: string[]; effects: ForemanEffect[]; lines: string[] }
 
-// Every pairing of this parent, whether a slot freed while it was paused, so
-// /foreman resume can wake the parent for it, and what is still to be
-// carried out. `folderMissing` says the last read found no status folder, so
+// Every pairing of this parent, and what is still to be carried out. `folderMissing` says the last read found no status folder, so
 // the log says so once.
-export type ForemanTickets = { pairings: ForemanPairing[]; freedWhilePaused: boolean; folderMissing: boolean; outbox: ForemanOutbox }
+export type ForemanTickets = { pairings: ForemanPairing[]; folderMissing: boolean; outbox: ForemanOutbox }
 
 declare module 'claude-code' {
   interface PluginState {
