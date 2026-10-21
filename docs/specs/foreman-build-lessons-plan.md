@@ -52,8 +52,10 @@ one.
    counsel" becomes "Otherwise, put it to the counsel". The answer is
    recorded in the change's spec under "Decided by the person", in the next
    commit the session makes, so that recording it costs no push of its own;
-   when the round commits nothing, the round's review records it. The
-   session offers the global `CLAUDE.md` line as in the spec skill.
+   when a review round would otherwise commit nothing, it goes in the
+   second half's point 4 commit, whose lines under the spec directory are
+   inert, and when a limit stops that commit it is listed under `To file:`.
+   The session offers the global `CLAUDE.md` line as in the spec skill.
 2. The straight-to-the-person list: its lead-in gives both reasons, the
    pull request's own safeguards and what the counsel cannot know, and it
    gains a fourth bullet for a question about how the owner works,

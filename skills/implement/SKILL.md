@@ -1016,8 +1016,12 @@ the person directly. Never put it to the counsel, whose members can read
 only what the owner wrote, and never guess the answer or build for the case
 to be safe. Record the answer in the change's spec under "Decided by the
 person", in the next commit the session makes rather than in a commit of
-its own, because a commit is a push that counts toward the limit; when the
-round commits nothing, record it in the round's review instead. Then offer
+its own, because a commit is a push that counts toward the limit. When a
+review round would otherwise commit nothing, add it in the second half's
+point 4 commit, making that commit for it; its lines under the spec
+directory are inert, so the verdicts carry over. When a limit stops that
+commit, list the answer under `To file:`, so that the follow-up issue
+carries it into a spec. Then offer
 the owner one line for their personal global `~/.claude/CLAUDE.md`, written
 in generic words that name no project, and write it there only if they say
 yes.
