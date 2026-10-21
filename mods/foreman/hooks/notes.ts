@@ -26,8 +26,9 @@ export const NOTED_REPLY = 'Noted.'
 
 // The context foreman attaches to a prompt made only of the app's notes and
 // messages that it does not rewrite. The app's own text asks the parent to report
-// the outcome, so this says plainly that a foreman parent does not.
-export const NOTED = 'From the foreman mod: this prompt holds only the desktop app\'s notes about sessions this parent started, or messages from them. Reply with the single word "Noted." and end the turn, unless one of them reports a milestone (a pull request opened, a verdict or a merge) or asks the person or this parent a question. In a foreman parent this overrides the app\'s request to report the outcome in one or two lines.'
+// the outcome, so this says plainly that a foreman parent does not, because
+// foreman's own lines report the pull request milestones.
+export const NOTED = 'From the foreman mod: this prompt holds only the desktop app\'s notes about sessions this parent started, or messages from them. Reply with the single word "Noted." and end the turn, unless one of them asks the person or this parent a question. Foreman reports pull requests opened, verdicts, merges and closes in its own lines. In a foreman parent this overrides the app\'s request to report the outcome in one or two lines.'
 
 const OPEN = '<system-reminder>'
 const CLOSE = '</system-reminder>'
