@@ -384,7 +384,9 @@ test('a blank Reviewed: value keeps the commit in a group of its own and is list
 
 test('a Tidied: line neither lengthens nor breaks a streak, and is listed with its commit', () => {
   const without = [fix('1', null, [RACE]), fix('3', null, [RACE])]
-  const withIt = [fix('1', null, [RACE]), tidy('2', sha('1'), [RACE]), fix('3', null, [RACE])]
+  // The tidied commit names no head, so a group it formed would stand alone and
+  // change the streak, whether it named the area or not.
+  const withIt = [fix('1', null, [RACE]), tidy('2', null, [RACE]), fix('3', null, [RACE])]
   expect(trendOf(withIt).streaks).toEqual(trendOf(without).streaks)
   const report = trendOf([fix('1', null, [RACE]), fix('2', null, [RACE]), tidy('3', null, [RACE])])
   expect(report.stops).toEqual([])
