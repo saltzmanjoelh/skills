@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import type { ForemanFile } from '../types'
 import { STATES } from '../hooks/record'
 import {
-  afterRead, ageWords, busyCount, byKeyThenFile, chipText, fitChips, isStale, nextReadDelay, READ_LATER_MS, READ_SOON_MS, rowsOf,
+  afterRead, ageWords, busyCount, byKeyThenFile, chipParts, chipText, fitChips, isStale, nextReadDelay, READ_LATER_MS, READ_SOON_MS, rowsOf,
   STALE_MS, STATE_LOOK, untilWords,
 } from '../hooks/subs'
 
@@ -102,6 +102,22 @@ test('a chip holds the issue key and the stage while working or waiting on build
   // Text in a record is cleaned before it is drawn.
   const [marked] = rowsOf([kept('m.json', record('ABC-\u001b[31m7', 'idle'), at)], at)
   expect(chipText(marked!, at)).toBe('ABC-7 idle')
+})
+
+test('a chip splits into its key and the rest, and the two joined by a space are its text', () => {
+  const at = 10 * MIN
+  const rows = rowsOf([
+    kept('a.json', record('ABC-1', 'working', { stage: 'build' }), at),
+    kept('d.json', record('ABC-4', 'working', { stage: 'build' }), at - 5 * MIN - 1000),
+    kept('n.json', record('ABC-6', 'idle', { issueKey: null }), at),
+  ], at)
+  expect(chipParts(rows[0]!, at)).toEqual({ key: 'ABC-1', rest: 'build' })
+  expect(chipParts(rows[1]!, at + MIN)).toEqual({ key: 'ABC-4', rest: 'working · no update for 6m' })
+  expect(chipParts(rows[2]!, at)).toEqual({ key: 'no issue yet', rest: 'idle' })
+  for (const row of rows) {
+    const { key, rest } = chipParts(row, at)
+    expect(chipText(row, at)).toBe(`${key} ${rest}`)
+  }
 })
 
 test('ages and waits are said in whole units', () => {

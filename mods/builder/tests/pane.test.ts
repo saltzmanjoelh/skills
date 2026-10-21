@@ -47,6 +47,7 @@ function view(over: Partial<View> = {}): View {
     planned: [],
     usageHold: null,
     stale: false,
+    issueLink: null,
     ...over,
   }
 }

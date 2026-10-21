@@ -4,8 +4,10 @@ import type { AgentCard, BackgroundTask, CounselQuestion, CounselTally, Foregrou
 import { AGENT_SVG_HEIGHT, agentSvg, BAR_SVG_HEIGHT, barSvg, fitBar, hasSvg, PLANNED_SVG_HEIGHT, plannedSvg, svgWidth, type AgentRow } from './art'
 import { abstainerReason, chosenOf, COUNSEL_KEPT, FOLLOW_UP_WORDS, followUpOutcomes, noOptionCount, shortName, turnoutOf } from './counsel'
 import { ciOf, failedCheckNames, roundInProgress, type Snapshot } from './github'
+import { linkOf } from './links'
 import { barOf, modelLabel, stageLabel, type Bar } from './progress'
 import { isRunning, shownStatus, waitingOn } from './state'
+import { issueOf } from './status'
 import { clockTime, printable, timeOfDay } from './text'
 
 export const PANE = 'builder'
@@ -45,12 +47,15 @@ export type View = {
   // Whether the mod's files on disk differ from the ones this session loaded,
   // as isStale in hooks/loaded.ts says.
   stale: boolean
+  // The project's usable issue address, with `{key}` where the key goes, or
+  // null when the project names none or names one that cannot be used.
+  issueLink: string | null
 }
 
 type El = Pick<EngineElements['terminal'], 'Box' | 'Text'>
 // The elements the band and the panes draw with, as hooks/register.tsx builds
 // them: `Svg` is there only on a surface that draws images.
-export type Elements = Pick<EngineElements['terminal'], 'Box' | 'Text' | 'Button'> & { Svg?: EngineElements['desktop']['Svg'] }
+export type Elements = Pick<EngineElements['terminal'], 'Box' | 'Text' | 'Button' | 'Link'> & { Svg?: EngineElements['desktop']['Svg'] }
 
 // How long ago the last look was, in the pane's coarser format (rounded, as
 // in 45s, 1m and 1h2m). It differs from `clockTime` on purpose: the agents'
@@ -250,14 +255,31 @@ export function drawingWidth(columns: number | undefined): number {
 
 // The bar as one row: a drawing on a surface that draws images, else text
 // cells fitted to `columns`. The drawing's text alternative is the text row.
-function barRow(ui: Elements, bar: Bar, columns: number | undefined, key: string) {
+// When `address` is the project's usable issue address and the title begins
+// with an issue key, the key is a link too: on a picture surface, on its own
+// row above the drawing, which keeps its whole title; on the terminal, as the
+// start of the text row, but only while the fitted row still holds the
+// title, so a row whose title was dropped stays plain.
+function barRow(ui: Elements, bar: Bar, columns: number | undefined, key: string, address: string | null) {
+  const { Link } = ui
+  const issueKey = issueOf(bar.title).issueKey
+  const link = linkOf(address, issueKey)
   if (hasSvg(ui)) {
     const { Svg } = ui
     const width = drawingWidth(columns)
-    return <Svg key={key} source={barSvg(bar, width)} alt={fitBar(bar, Infinity)} width={width} height={BAR_SVG_HEIGHT} />
+    const drawing = <Svg key={key} source={barSvg(bar, width)} alt={fitBar(bar, Infinity)} width={width} height={BAR_SVG_HEIGHT} />
+    return link === null ? drawing : [<Link key={`${key}-link`} href={link}>{issueKey}</Link>, drawing]
   }
   const { Text } = ui
-  return <Text key={key}>{fitBar(bar, columns ?? Infinity)}</Text>
+  const row = fitBar(bar, columns ?? Infinity)
+  // linkOf already answers null for a null key, so the check on the key here
+  // only narrows its type.
+  if (link === null || issueKey === null) return <Text key={key}>{row}</Text>
+  // The key is drawn as a link only when the row still holds the whole title,
+  // and so begins with the key, rather than a row the width cut short.
+  const titleKept = row === fitBar(bar, Infinity) && row.startsWith(issueKey)
+  if (!titleKept) return <Text key={key}>{row}</Text>
+  return <Text key={key}><Link href={link}>{issueKey}</Link>{row.slice(issueKey.length)}</Text>
 }
 
 // The agent-count button's label: how many agents run now, then how many are
@@ -287,7 +309,7 @@ export function bandTree(ui: Elements, v: View, line: string | null, width: numb
   if (bar === null && line === null) return null
   return (
     <Box flexDirection="column">
-      {bar !== null && barRow(ui, bar, width, 'builder-bar')}
+      {bar !== null && barRow(ui, bar, width, 'builder-bar', v.issueLink)}
       {bar !== null && <Button key="builder-agents" plain dimColor label={agentCount(v)} onPress={presses.agents} />}
       {line !== null && <Button key="builder-line" plain dimColor label={line} onPress={presses.line} />}
     </Box>
@@ -522,7 +544,7 @@ function workTree(ui: Elements, v: View, columns: number | undefined) {
   const bar = barOf(v.progress, v.pr, v.watchSince)
   if (bar === null) return null
   const { Text } = ui
-  return [barRow(ui, bar, columns, 'work-bar'), <Text key="work-gap"> </Text>]
+  return [barRow(ui, bar, columns, 'work-bar', v.issueLink), <Text key="work-gap"> </Text>]
 }
 
 // The stale warning at the top of the pane, in yellow, when the session is

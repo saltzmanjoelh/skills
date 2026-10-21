@@ -1,1 +1,3 @@
 .DS_Store
+# A project fact kept out of the repository, such as the tracker's issue address.
+CLAUDE.local.md

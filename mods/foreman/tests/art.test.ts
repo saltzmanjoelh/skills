@@ -1,13 +1,17 @@
 import { expect, test } from 'claude-code/testing'
 
 import { barCells, barSvg, BAR_SVG_HEIGHT, fitBar, hasSvg, isSvgSurface, svgWidth, xmlText, type Bar } from '../hooks/art'
+import { gitDirOf, ignoredLine, issueLinkIn, linkFactIn, linkOf, mainCheckoutOf, resolved, whyUnusable } from '../hooks/links'
 import { STAGES, stageLabel, type StageId } from '../hooks/stages'
 import { printable, timeOfDay } from '../hooks/text'
 import { BUILDER_DRAWN, BUILDER_STAGE_IDS } from './builder-drawn'
 
-// Foreman copies builder's drawing code, because a mod cannot import another
-// plugin's files. These tests hold each copy to what builder's own function
-// answered for the same input, as tests/builder-drawn.ts wrote it down.
+// Foreman copies builder's drawing code and its issue link rules, because a
+// mod cannot import another plugin's files. These tests hold each copy to what
+// builder's own function answered for the same input, as
+// tests/builder-drawn.ts wrote it down. The reader in hooks/links.ts is held
+// by tests/links.test.ts, which is builder's test of it without builder's
+// check against factIn.
 
 // Each copied function, by the name the fixture gives it.
 const COPIES: Record<string, (...args: never[]) => unknown> = {
@@ -20,6 +24,14 @@ const COPIES: Record<string, (...args: never[]) => unknown> = {
   fitBar: fitBar as (...args: never[]) => unknown,
   barSvg: barSvg as (...args: never[]) => unknown,
   stageLabel: stageLabel as (...args: never[]) => unknown,
+  linkFactIn: linkFactIn as (...args: never[]) => unknown,
+  whyUnusable: whyUnusable as (...args: never[]) => unknown,
+  issueLinkIn: issueLinkIn as (...args: never[]) => unknown,
+  linkOf: linkOf as (...args: never[]) => unknown,
+  resolved: resolved as (...args: never[]) => unknown,
+  gitDirOf: gitDirOf as (...args: never[]) => unknown,
+  mainCheckoutOf: mainCheckoutOf as (...args: never[]) => unknown,
+  ignoredLine: ignoredLine as (...args: never[]) => unknown,
 }
 
 test('every copied function answers what builder\'s answered for the same input', () => {
