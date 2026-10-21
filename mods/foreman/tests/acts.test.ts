@@ -40,6 +40,23 @@ test('in a parent, start_session gets the ticket line and the local_ id it answe
   expect(await ui.newestLog()).toBe(`Paired ticket ${ticket} with local_new1.`)
 })
 
+// The answer start_session gives today, word for word but for the names, so
+// that a change to how the hook reads it fails here.
+const TODAY = 'Started session "ABC-7: short" (session_id: local_7c1d9e2a-4b6f-4d3e-9a8b-0f1e2d3c4b5a, name: abc-7). It runs on its own; you get a note here when its turn ends. Don\'t repeat the introduction: at most one line on how you\'ll report back, then end your turn \u2014 do not wait for it.'
+
+test('a start_session answer of today\'s wording pairs the id after session_id', async ($, on) => {
+  const w = world(on)
+  w.engine.startAnswer = TODAY
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh', title: 'ABC-7: short' })
+  const prompt = String(w.engine.started[0]!.prompt)
+  const ticket = prompt.slice(prompt.indexOf('ft-'))
+  expect(ledger(w).pairings.map(p => [p.ticket, p.localId])).toEqual([[ticket, 'local_7c1d9e2a-4b6f-4d3e-9a8b-0f1e2d3c4b5a']])
+  expect(await ui.newestLog()).toBe(`Paired ticket ${ticket} with local_7c1d9e2a-4b6f-4d3e-9a8b-0f1e2d3c4b5a.`)
+})
+
 test('a forked start is refused, a start with no brief passes unchanged, and an answer that is an error pairs nothing', async ($, on) => {
   const w = world(on)
   await start($)
