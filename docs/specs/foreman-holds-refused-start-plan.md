@@ -55,9 +55,10 @@ or two callers raise the notification once.
    - `keyOfTitle(title: unknown): string | null`, the key at the start of a
      title followed by a space or a colon, using `KEYED_TITLE` from
      `tickets.ts` with a capture group.
-   - `isRemoteRefusal(out)`: true when the answer is not a `deny` and its
-     text, or the JSON of its result when it has no text, contains the
-     phrase, whether or not `isError` is set.
+   - `isRemoteRefusal(out, title)`: true when the answer is not a `deny`,
+     names no started session, and its text, or the JSON of its result when
+     it has no text, contains the phrase outside the call's own `title`,
+     which the app repeats in its answers, whether or not `isError` is set.
    - `heldSentence(key)`, `heldLine(keys)` and `heldNotice(key)`.
    - `releasedBy(held, sessions)`: the held keys left after a list read,
      dropping a key when an entry has `isArchived === false` and a title for
