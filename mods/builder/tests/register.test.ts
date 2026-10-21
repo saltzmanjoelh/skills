@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
-import type { Engine } from 'claude-code/testing'
+import type { ElementQuery, Engine, FoundElement } from 'claude-code/testing'
 
 import { RUNS_JQ, snapshotOf, type GhPullRequest } from '../hooks/github'
 import { NOTHING_WATCHED, STALE_WARNING } from '../hooks/pane'
@@ -5897,6 +5897,265 @@ test('on the desktop the band is one drawing and two buttons with no text rows, 
   const row = (await terminal.find({ type: 'Text', text: / of 9 · / }))?.text ?? ''
   expect(row).toContain('█')
   expect(row).toContain('░')
+})
+
+const ISSUE_ADDRESS = 'https://tracker.example.com/issue/{key}'
+const ISSUE_LINK = 'https://tracker.example.com/issue/ABC-123'
+// The bar's whole text row for the spec stage under TITLE.
+const SPEC_ROW = `${TITLE} · spec · ██░░░░░░░░ 2 of 9 · 22%`
+
+// Adds the Issue link fact to a file of fakeFiles, after what it already holds.
+function issueLinkFact(files: ReturnType<typeof fakeFiles>, value: string, path = '/repo/CLAUDE.md') {
+  files.set(path, `${files.get(path) ?? ''}Issue link: ${value}\n`)
+}
+
+// Records the text of every toast the mod shows.
+function toastsOf(on: On) {
+  const toasts: string[] = []
+  on('ui.toast', ($, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  return toasts
+}
+
+// A mounted band or pane on any surface, as far as these reads need it.
+type Drawing = {
+  redraw: () => Promise<void>
+  find: (query: ElementQuery) => Promise<FoundElement | undefined>
+  findAll: (query: ElementQuery) => Promise<FoundElement[]>
+}
+// The links a drawing holds, each as its address and its children, drawn again
+// first. A found link's text also holds its address, so the children are what
+// show the key.
+async function linksIn(drawing: Drawing) {
+  await drawing.redraw()
+  return (await drawing.findAll({ type: 'Link' })).map(link => ({ href: link.props.href, children: link.children }))
+}
+// The bar's text row on the terminal, found by its count, since a text row
+// carries no key.
+async function barRowIn(drawing: Drawing) {
+  await drawing.redraw()
+  return drawing.find({ type: 'Text', text: / of 9 · / })
+}
+// The tags and keys of a drawing's elements, outermost first in document order.
+async function shapeOf(drawing: Drawing) {
+  await drawing.redraw()
+  return (await drawing.findAll({})).map(element => `${element.type}${element.key === undefined ? '' : ` ${element.key}`}`)
+}
+
+// Starts a session in `cwd`, opens builder and reports the spec stage under
+// `title`, which draws the bar in the band and the pane.
+async function reportSpec($: Engine, clock: { settle: () => Promise<void> }, cwd = '/repo', title = TITLE) {
+  await $.session.start({ cwd, surface: null, isInteractive: true })
+  await clock.settle()
+  await loose($)({ tool: 'mcp__builder__open_pane' })
+  await report($, 'spec', { title })
+}
+
+test('with an Issue link fact, the terminal band draws the key as a link inside the bar\'s text row, followed by the rest of the row', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  fakePanes(on)
+  issueLinkFact(fakeFiles(on), ISSUE_ADDRESS)
+  const { band } = await progressBand($, on)
+  await reportSpec($, clock)
+
+  expect(await linksIn(band)).toEqual([{ href: ISSUE_LINK, children: ['ABC-123'] }])
+  const row = await barRowIn(band)
+  expect(row?.type).toBe('Text')
+  expect(row?.children).toHaveLength(2)
+  expect(row?.children[1]).toBe(SPEC_ROW.slice('ABC-123'.length))
+  expect(await shapeOf(band)).toEqual(['Box', 'Text', 'Link', 'Button builder-agents', 'Button builder-line'])
+})
+
+test('with an Issue link fact, the desktop band draws the key as a link on its own row above the drawing, which keeps its whole title', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  fakePanes(on)
+  issueLinkFact(fakeFiles(on), ISSUE_ADDRESS)
+  const { band } = await progressBand($, on, 'desktop', 100)
+  await reportSpec($, clock)
+
+  expect(await linksIn(band)).toEqual([{ href: ISSUE_LINK, children: ['ABC-123'] }])
+  expect(await shapeOf(band)).toEqual(['Box', 'Link', 'Svg', 'Button builder-agents', 'Button builder-line'])
+  const drawing = await band.find({ type: 'Svg' })
+  expect(String(drawing?.props.source)).toContain(TITLE)
+  expect(drawing?.props.alt).toBe(SPEC_ROW)
+})
+
+test('with an Issue link fact, the pane\'s work row has the link on the terminal and above the drawing on the desktop', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  fakePanes(on)
+  issueLinkFact(fakeFiles(on), ISSUE_ADDRESS)
+  const terminal = await paneOn($, 'terminal', 120)
+  const desktop = await paneOn($, 'desktop', 100)
+  await reportSpec($, clock)
+
+  expect(await linksIn(terminal)).toEqual([{ href: ISSUE_LINK, children: ['ABC-123'] }])
+  const row = await barRowIn(terminal)
+  expect(row?.children[1]).toBe(SPEC_ROW.slice('ABC-123'.length))
+  expect(await linksIn(desktop)).toEqual([{ href: ISSUE_LINK, children: ['ABC-123'] }])
+  const shape = await shapeOf(desktop)
+  // The pane's first drawing is the bar, and the link comes directly before it.
+  expect(shape.slice(shape.indexOf('Link'), shape.indexOf('Link') + 2)).toEqual(['Link', 'Svg'])
+  expect(String((await desktop.find({ type: 'Svg' }))?.props.source)).toContain(TITLE)
+})
+
+test('at a width where the bar drops its title, the terminal row has no link and reads as it does without the fact', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  fakePanes(on)
+  issueLinkFact(fakeFiles(on), ISSUE_ADDRESS)
+  const { band, bar } = await progressBand($, on, 'terminal', 50)
+  await reportSpec($, clock)
+
+  expect(await linksIn(band)).toEqual([])
+  expect(await bar()).toBe('spec · ██░░░░░░░░ 2 of 9 · 22%')
+  expect((await barRowIn(band))?.children).toEqual(['spec · ██░░░░░░░░ 2 of 9 · 22%'])
+})
+
+test('a title that does not begin with an issue key has no link on the terminal or the desktop', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  fakePanes(on)
+  issueLinkFact(fakeFiles(on), ISSUE_ADDRESS)
+  on('ui.render', ($, e) => ($.ui.resolve(e) as unknown as { Text: (props: object) => never }).Text({ children: 'host line' }))
+  const terminal = await $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, bodyColumns: 120 } as never })
+  const desktop = await $.ui.mount({ plugin: 'builder', surface: 'desktop', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, bodyColumns: 100 } as never })
+  await reportSpec($, clock, '/repo', 'builder progress')
+
+  expect(await linksIn(terminal)).toEqual([])
+  expect((await barRowIn(terminal))?.children).toEqual(['builder progress · spec · ██░░░░░░░░ 2 of 9 · 22%'])
+  expect(await linksIn(desktop)).toEqual([])
+  expect(await shapeOf(desktop)).toEqual(['Box', 'Svg', 'Button builder-agents', 'Button builder-line'])
+})
+
+test('without an Issue link fact, the band and the pane draw no link and the bar as before', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  fakePanes(on)
+  fakeFiles(on)
+  const { band } = await progressBand($, on)
+  const desktop = await paneOn($, 'desktop', 100)
+  await reportSpec($, clock)
+
+  expect(await linksIn(band)).toEqual([])
+  expect((await barRowIn(band))?.children).toEqual([SPEC_ROW])
+  expect(await linksIn(desktop)).toEqual([])
+  expect(String((await desktop.find({ type: 'Svg' }))?.props.source)).toContain(TITLE)
+})
+
+for (const place of [
+  { name: 'the working folder\'s CLAUDE.md', cwd: '/repo', path: '/repo/CLAUDE.md' },
+  { name: 'the working folder\'s CLAUDE.local.md', cwd: '/repo', path: '/repo/CLAUDE.local.md' },
+  { name: 'the main checkout\'s CLAUDE.local.md', cwd: '/wt', path: '/repo/CLAUDE.local.md' },
+]) {
+  test(`an Issue link fact in ${place.name} reaches the band`, async ($, on) => {
+    const clock = mock.clock(on)
+    mock.store(on)
+    engine(on)
+    fakeGitHub(on)
+    fakePanes(on)
+    const files = fakeFiles(on)
+    // A worktree of /repo, whose CLAUDE.md names no address.
+    files.set('/wt/CLAUDE.md', 'Architecture document: docs/arch.md\n')
+    files.set('/wt/.git', 'gitdir: /repo/.git/worktrees/wt\n')
+    files.set('/repo/.git/worktrees/wt/commondir', '../..\n')
+    issueLinkFact(files, ISSUE_ADDRESS, place.path)
+    const { band } = await progressBand($, on)
+    await reportSpec($, clock, place.cwd)
+
+    expect(await linksIn(band)).toEqual([{ href: ISSUE_LINK, children: ['ABC-123'] }])
+  })
+}
+
+for (const unusable of [
+  { value: '', reason: 'it does not begin with https://' },
+  { value: 'http://tracker.example.com/issue/{key}', reason: 'it does not begin with https://' },
+  { value: 'https://tracker.example.com/issue/', reason: 'it has no {key}' },
+  { value: 'https://tracker.example.com/issue/{key} now', reason: 'it holds spaces or control characters' },
+]) {
+  test(`an Issue link fact of ${JSON.stringify(unusable.value)} shows one toast saying ${unusable.reason}, and the keys stay plain`, async ($, on) => {
+    const clock = mock.clock(on)
+    mock.store(on)
+    engine(on)
+    fakeGitHub(on)
+    fakePanes(on)
+    issueLinkFact(fakeFiles(on), unusable.value)
+    const toasts = toastsOf(on)
+    const { band } = await progressBand($, on)
+    await reportSpec($, clock)
+
+    expect(toasts).toEqual([`builder: the Issue link fact was ignored because ${unusable.reason}`])
+    expect(await linksIn(band)).toEqual([])
+    expect((await barRowIn(band))?.children).toEqual([SPEC_ROW])
+  })
+}
+
+test('a missing or a usable Issue link fact shows no toast', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  fakePanes(on)
+  const files = fakeFiles(on)
+  const toasts = toastsOf(on)
+  await reportSpec($, clock)
+  issueLinkFact(files, ISSUE_ADDRESS)
+  await reloads($, clock)
+
+  expect(toasts).toEqual([])
+})
+
+test('a toast the engine refuses does not stop the session from starting or the band from drawing', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  fakePanes(on)
+  issueLinkFact(fakeFiles(on), 'https://tracker.example.com/issue/')
+  on('ui.toast', () => {
+    throw new Error('the engine fell over')
+  })
+  const { bar } = await progressBand($, on)
+  await reportSpec($, clock)
+
+  expect(await bar()).toBe(SPEC_ROW)
+})
+
+test('the fact is read again at the session start that follows a hot reload, so the links come back', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  fakePanes(on)
+  const files = fakeFiles(on)
+  issueLinkFact(files, ISSUE_ADDRESS)
+  const { band } = await progressBand($, on)
+  await reportSpec($, clock)
+  expect(await linksIn(band)).toHaveLength(1)
+
+  files.set('/repo/CLAUDE.md', 'Architecture document: docs/arch.md\n')
+  await reloads($, clock)
+  expect(await linksIn(band)).toEqual([])
+
+  issueLinkFact(files, ISSUE_ADDRESS)
+  await reloads($, clock)
+  expect(await linksIn(band)).toEqual([{ href: ISSUE_LINK, children: ['ABC-123'] }])
 })
 
 test('the agent-count button counts the running agents and opens the pane, also when the engine cannot list the panes, or closes it when it is open; the line only opens it', async ($, on) => {

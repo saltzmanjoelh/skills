@@ -6,6 +6,7 @@ import { isSvgSurface } from './art'
 import { checkoutSentence, worktreeWithBranch, type Checkout } from './checkout'
 import { afterAskAgain, afterTally, askAgainAnswer, briefAnswer, briefFactsOf, briefRefusal, briefText, counselAnswer, decisionLine, destinationOf, endedDecisionLines, FOLLOW_UP_OPTIONS, followUpAnswer, followUpAskAgainAnswer, followUpsInput, followUpsRefusal, followUpStepOf, followUpVotesOf, keepCounsel, MAX_BRIEF_OPTIONS, MAX_FOLLOW_UPS, MIN_OPTIONS, neverStartedCandidatesOf, neverStartedOf, type PullRequestRef, reviewParagraph, stepOf, type UnreadableVote, votesOf } from './counsel'
 import { carriedRuns, changesBetween, DECISION_LABEL, isCiMonitorEvent, isSameState, PR_FIELDS, pullRequestStateIn, roundInProgress, RUNS_JQ, runsOf, snapshotIn, snapshotOf, verdictsOf, type GhPullRequest, type Snapshot, type Verdict, type WorkflowRun } from './github'
+import { ignoredLine, readIssueLink } from './links'
 import { afterComparison, afterLoad, dueComparisons, isStale, LOADED_PATHS, loadBegunAs, loadBegunIn, loadedIn, type Found } from './loaded'
 import { AGENT_PANE, agentPaneTree, bandTree, isDrawable, messagesReadOf, NAMED_AFTER_MS, PANE, paneTree, secondRow, type Elements, type MessagesRead, type View } from './pane'
 import { afterReport, endedOf, plannedOf, progressIn, reportAnswer, reportOf, stageLabel, STAGES, type ReportInput } from './progress'
@@ -2468,6 +2469,24 @@ async function foreground<T>($: $, e: { tool: string; tool_use_id?: string }, ca
 // fixed words, or the file cannot be read.
 let mergePattern: RegExp | null = null
 
+// The project's usable issue address, read once when the session starts, or
+// null when it names none or names one that cannot be used.
+let issueAddress: string | null = null
+
+// Reads the Issue link fact from the session's folder, keeps its address, and
+// tells the person once when the fact was ignored. A refused toast changes
+// nothing, since the keys are plain either way.
+async function readIssueAddress($: $, dir: string) {
+  const found = await readIssueLink(path => $.fs.read(path), dir)
+  issueAddress = found.address
+  if (found.ignored === null) return
+  try {
+    $.ui.toast(ignoredLine('builder', found.ignored))
+  } catch {
+    // The toast is only a courtesy.
+  }
+}
+
 async function projectMergeCommand($: $, dir: string): Promise<string | null> {
   try {
     const text = await $.fs.read(`${dir}/CLAUDE.md`)
@@ -2509,6 +2528,7 @@ async function view($: $): Promise<View> {
     planned: plannedOf({ pr: shown, packaged: lastPackage, agents: cards, counsel: counselQuestions }),
     usageHold: holdIn(await read($, usageHold))?.until ?? null,
     stale: isStale(loadedIn(await read($, loaded))),
+    issueLink: issueAddress,
   }
 }
 
@@ -2517,9 +2537,9 @@ async function view($: $): Promise<View> {
 // every element on every surface and draws one the surface lacks as nothing.
 function elementsOf($: $, e: ResolveInput): Elements {
   const ui = $.ui.resolve(e)
-  const { Box, Text, Button } = ui
-  if (!isSvgSurface(e.surface)) return { Box, Text, Button }
-  return { Box, Text, Button, Svg: (ui as { Svg: NonNullable<Elements['Svg']> }).Svg }
+  const { Box, Text, Button, Link } = ui
+  if (!isSvgSurface(e.surface)) return { Box, Text, Button, Link }
+  return { Box, Text, Button, Link, Svg: (ui as { Svg: NonNullable<Elements['Svg']> }).Svg }
 }
 
 // The columns the engine gives a band or a pane, when they are a number.
@@ -3187,6 +3207,7 @@ export const register: Register = on => {
     await update($, calls, () => [])
     await update($, questions, list => list.map(q => (q.answered ? q : { ...q, answered: true })))
     void inLabelQueue(() => takeOffAnsweredLabels($))
+    await readIssueAddress($, e.cwd)
     mergePattern = mergePatternOf(await projectMergeCommand($, e.cwd))
     refreshLater($)
     ensureLive($)
