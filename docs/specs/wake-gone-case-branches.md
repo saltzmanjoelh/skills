@@ -45,7 +45,9 @@ what the parent will do on their behalf.
       so that a brief never names a folder that is gone;
    2. that entry is not the repository's main checkout;
    3. the entry's branch, taken from that entry, holds only the characters
-      the cleanup case allows;
+      the cleanup case allows; an entry that says `detached`, as during a
+      stopped rebase, goes to the person instead of being ignored, because
+      git still holds its branch;
    4. that branch holds the key;
    5. no running session in `list_sessions` uses that folder.
 4. **Local branches.** The parent lists every local branch name with

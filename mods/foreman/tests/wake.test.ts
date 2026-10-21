@@ -25,10 +25,12 @@ test('the slot words count the free slots in words', () => {
   expect(slotWords(20)).toBe('twenty slots free; pick the next issues and start them.')
 })
 
-// The skill at skills/wake/SKILL.md uses each of these sentences as a
-// heading, so they are pinned word for word. When a change to a sentence makes
-// this test fail, change the matching heading in that skill as well, because
-// no test can read the skill to catch the drift.
+// The skill at skills/wake/SKILL.md quotes each of these sentences, so they
+// are pinned word for word. Each is a heading there, except the cleanup
+// sentence's ending about the last error, which the text under the cleanup
+// heading quotes. When a change to a sentence makes this test fail, change
+// the skill to match as well, because no test can read the skill to catch the
+// drift.
 test('every wake sentence is pinned', () => {
   expect(REASON_WORDS.idle({ kind: 'idle', who: 'ABC-1', nudged: true, minutes: 15 })).toBe('ABC-1 is still idle after two nudges.')
   expect(REASON_WORDS.idle({ kind: 'idle', who: 'ABC-1', nudged: false, minutes: 10 }))

@@ -195,7 +195,11 @@ these steps fails, tell the person in one line, naming the issue, and stop.
    2. That entry is not the first one, which is the repository's main
       checkout.
    3. That entry names a branch on its `branch refs/heads/<name>` line, and
-      the name holds only the characters the cleanup case allows.
+      the name holds only the characters the cleanup case allows. When the
+      entry says `detached` instead, as it does while a rebase is stopped,
+      tell the person in one line and stop, rather than ignoring the folder,
+      because git still holds the branch for that worktree and the work in it
+      would otherwise have no owner.
    4. That branch holds the key.
    5. No running session in `list_sessions` uses that folder.
 
