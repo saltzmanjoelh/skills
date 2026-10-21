@@ -6,7 +6,7 @@ import { isSvgSurface } from './art'
 import { becameParentAnswer, COMMAND, commandOf, PASSED_ON, slotsAnswer, type Command } from './commands'
 import { failureLine, listSessions, NUDGE_TEXT, openSession, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
 import { ignoredLine, readIssueLink } from './links'
-import { keptLine, keptNames, NOTED, NOTES_KEPT, notesIn } from './notes'
+import { keptLine, keptNames, NOTED, NOTED_REPLY, notesIn } from './notes'
 import { bandTree, PANE, paneTree, type Elements, type View } from './pane'
 import type { ForemanParent, ForemanTickets } from '../types'
 import { PARENT_OFF, parentIn, slotsOf, storeKey } from './parent'
@@ -27,6 +27,7 @@ const nextReadAt = atom({ plugin: 'foreman', key: 'nextReadAt' } as const, null)
 const log = atom({ plugin: 'foreman', key: 'log' } as const, [])
 const tickets = atom({ plugin: 'foreman', key: 'tickets' } as const, TICKETS_EMPTY)
 const turnRuns = atom({ plugin: 'foreman', key: 'turnRuns' } as const, false)
+const quietLine = atom({ plugin: 'foreman', key: 'quietLine' } as const, null)
 
 // How many lines the log keeps.
 export const LOG_KEPT = 20
@@ -593,9 +594,10 @@ async function startSession<E extends Record<string, unknown>>($: $, e: E, next:
 const isPlain = (e: PromptSubmitInput) => e.command === undefined && (e.attachments?.length ?? 0) === 0 && (e.context?.length ?? 0) === 0
 
 // What foreman does with a prompt while the role is on: keep it from the
-// parent's model, with the log line for it, when it is made of turn-end notes
-// about sub sessions this parent tracks; let it go on with the Noted line when
-// it is made only of the app's notes and messages; or let it go on as it came.
+// parent's model by rewriting it to the log line for it, when it is made of
+// turn-end notes about sub sessions this parent tracks; let it go on with the
+// Noted line when it is made only of the app's notes and messages; or let it
+// go on as it came.
 // The text is checked before any state is read, so a prompt the person typed
 // never waits on a read, and the ledger is read only for a prompt that may be
 // kept.
@@ -607,6 +609,30 @@ async function choiceFor($: $, e: PromptSubmitInput): Promise<Choice> {
   if (!notes.wantsNoted || !(await isOn($))) return { kind: 'pass' }
   const names = notes.turnEnds === null ? null : keptNames(notes.turnEnds, ticketsIn(await read($, tickets)).pairings)
   return names === null ? { kind: 'noted' } : { kind: 'keep', line: keptLine(names) }
+}
+
+// Whether foreman answers the first step of a turn of the session's own loop
+// itself: only when a rewritten note left its line as the marker, and the
+// conversation ends with that line as a user message that no other user
+// message comes right before, so the line is the turn's only prompt. The
+// marker is read and cleared in one swap before the conversation is read, so
+// a marker that a new note sets in between is not wiped. Any failure means
+// the model answers.
+async function answersAlone($: $): Promise<boolean> {
+  try {
+    const held = { line: null as string | null }
+    await update($, quietLine, line => {
+      held.line = line
+      return null
+    })
+    if (held.line === null) return false
+    const messages = await $.session.messages()
+    if (!Array.isArray(messages)) return false
+    const last = messages.at(-1)
+    return last?.role === 'user' && last.text === held.line && messages.at(-2)?.role !== 'user'
+  } catch {
+    return false
+  }
 }
 
 // While the words typed after /start-foreman wait to be sent, the promise
@@ -739,19 +765,23 @@ export const register: Register = (on, options) => {
   // may read the whole status folder and the person's prompt or the turn's end
   // should not wait for that read.
   // A prompt made only of turn-end notes about sub sessions this parent
-  // tracks is dropped, with a line in the log, because the pane already shows
-  // them. Any other prompt made only of the app's notes and messages goes on
-  // with the Noted line as context, its text unchanged, and every other prompt
-  // goes on as it came. The line is written before the drop, and a hook that
+  // tracks goes on with its text replaced by its line in the log, because the
+  // pane already shows them, and the marker holds that line so that the
+  // turn.step hook below answers its turn without the model. The host draws a
+  // dropped prompt as a warning, which is why the prompt is not dropped. Any
+  // other prompt made only of the app's notes and messages goes on with the
+  // Noted line as context, its text unchanged, and every other prompt goes on
+  // as it came. The line is written before the marker is set, and a hook that
   // throws, a failed write included, passes the prompt on as it came, so no
-  // prompt is dropped without a line in the log.
+  // prompt is rewritten without a line in the log or without its marker.
   on('prompt.submit', async ($, e, next) => {
     void ensureArmed($).catch(() => undefined)
     const choice = await choiceFor($, e)
     if (choice.kind === 'pass') return next(e)
     if (choice.kind === 'noted') return next({ ...e, context: [NOTED] })
     await addLog($, choice.line)
-    return { drop: NOTES_KEPT }
+    await update($, quietLine, () => choice.line)
+    return next({ ...e, text: choice.line })
   }).catch(($, e, next) => next(e))
   // Whether a turn of the session's own loop runs decides how a wake goes in,
   // so the end of a turn and the start of one below keep turnRuns. A
@@ -766,6 +796,22 @@ export const register: Register = (on, options) => {
     if (e.agentId === undefined && (await isOn($))) await update($, turnRuns, () => true)
     return next(e)
   }).catch(($, e, next) => next(e))
+
+  // The turn of a prompt that the prompt.submit hook rewrote is answered here
+  // with "Noted.", so the model is not asked. Only the first step of a
+  // turn of the session's own loop is looked at, and a later step or a
+  // subagent's leaves the marker for that first step. answersAlone decides
+  // before anything is yielded, because the engine keeps a chunk once it is
+  // yielded, and a failure after it would let the model's answer follow
+  // foreman's. The role is not checked, since the marker is set only while it
+  // is on.
+  on('turn.step', async function* ($, e, next) {
+    if (e.index !== 0 || e.agentId !== undefined) return yield* next(e)
+    if (!(await answersAlone($))) return yield* next(e)
+    yield { kind: 'text', index: 0, text: NOTED_REPLY }
+    yield { kind: 'stop', stopReason: 'end_turn', usage: null }
+    return { turnId: e.turnId, index: e.index, answer: NOTED_REPLY, toolUses: [], stopReason: 'end_turn', usage: null }
+  })
 
   // Every start_session call in a parent goes through startSession, which
   // checks its title. In any other session the call passes unchanged. A hook

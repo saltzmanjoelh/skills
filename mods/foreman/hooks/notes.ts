@@ -2,10 +2,11 @@
 // time a session the parent started ends a turn, or sends it a message.
 // Foreman already shows its sub sessions in the pane and wakes the parent's
 // model when a decision is needed, so a prompt made only of turn-end notes
-// about sub sessions it tracks is kept from the model, and any other prompt
-// made only of the app's notes and messages reaches it with one line asking
-// for a one-word reply. These functions say which prompts those are and what
-// the log says about them. Every function is pure.
+// about sub sessions it tracks is rewritten to its log line, whose turn
+// foreman answers itself without the model, and any other prompt made only of
+// the app's notes and messages reaches the model with one line asking for a
+// one-word reply. These functions say which prompts those are and what the
+// log says about them. Every function is pure.
 //
 // A turn-end note is a <system-reminder> block that begins `The session
 // "<title>" you started (local_<id>) finished a turn`. The app often sends a
@@ -19,12 +20,12 @@ import type { ForemanPairing } from '../types'
 import { LOCAL_ID } from './tickets'
 import { whoOf } from './wake'
 
-// Why foreman's prompt.submit hook dropped a prompt. The host shows it to the
-// person each time, so it names nobody; the pane's log does.
-export const NOTES_KEPT = 'foreman kept a sub session\'s turn-end note from the parent\'s model; its pane shows the sub sessions'
+// What foreman's turn.step hook answers, in place of the model, for the turn
+// of a prompt it rewrote to its log line.
+export const NOTED_REPLY = 'Noted.'
 
 // The context foreman attaches to a prompt made only of the app's notes and
-// messages that it does not drop. The app's own text asks the parent to report
+// messages that it does not rewrite. The app's own text asks the parent to report
 // the outcome, so this says plainly that a foreman parent does not.
 export const NOTED = 'From the foreman mod: this prompt holds only the desktop app\'s notes about sessions this parent started, or messages from them. Reply with the single word "Noted." and end the turn, unless one of them reports a milestone (a pull request opened, a verdict or a merge) or asks the person or this parent a question. In a foreman parent this overrides the app\'s request to report the outcome in one or two lines.'
 
@@ -170,9 +171,10 @@ export function keptNames(ids: readonly string[], pairings: readonly ForemanPair
   return [...names].sort()
 }
 
-// The log line for one drop. The number of sub sessions, not of notes,
-// decides between note and notes, so a repeat of the same drop gives the same
-// line and the log counts it on the one before.
+// The log line for one rewritten prompt, which is also the text the prompt is
+// rewritten to. The number of sub sessions, not of notes, decides between
+// note and notes, so a repeat of the same rewrite gives the same line and the
+// log counts it on the one before.
 export function keptLine(names: readonly string[]): string {
   const owned = names.map(name => `${name}'s`)
   const list = owned.length === 1 ? owned[0]! : `${owned.slice(0, -1).join(', ')} and ${owned.at(-1)!}`

@@ -102,6 +102,11 @@ declare module 'claude-code' {
       // Whether a turn of the session's own loop is running, so a wake is
       // appended to it rather than submitted.
       turnRuns: boolean
+      // The line a rewritten turn-end note's prompt went on as, until the next
+      // first step of the session's own loop clears it, or null. That step is
+      // answered without the model only when the conversation ends with this
+      // line alone.
+      quietLine: string | null
     }
   }
 }
