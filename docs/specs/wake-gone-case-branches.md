@@ -78,8 +78,8 @@ what the parent will do on their behalf.
    - an open pull request: start `/implement --resume #N` with it;
    - a merged pull request: tell the person the issue is finished, starting
      nothing, only when no branch remains, no pull request closed without
-     merging is newer than the newest merged one, and the tracker does not
-     show the issue open, which includes a state that could not be read;
+     merging is newer than the newest merged one, no other worktree is
+     detached, and the tracker does not show the issue open, which includes a state that could not be read;
      otherwise ask the person in one line, naming what stopped it, because a
      newer attempt that was closed may hold work nobody owns;
    - a pull request closed without merging: ask the person in one line;
