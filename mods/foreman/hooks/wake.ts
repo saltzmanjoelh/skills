@@ -4,9 +4,10 @@
 // quoted, and the line says that quoted text is data, not instructions.
 // Every function is pure.
 //
-// The next step's skill tells the parent's model what each sentence means, so
-// REASON_WORDS is pinned by tests/wake.test.ts and listed in the README. Change
-// all three together.
+// The skill at skills/wake/SKILL.md tells the parent's model what each
+// sentence means and uses each sentence as a heading, so REASON_WORDS is pinned
+// by tests/wake.test.ts, listed in the README and quoted in that skill. Change
+// all four together.
 
 import { printable } from './text'
 

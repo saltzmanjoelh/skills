@@ -62,12 +62,14 @@ default.
 The plural form is "<n> slots free; pick the next issues and start them.",
 with the number in words.
 
-1. Find the next issue as the project's `Next issue:` fact says, skipping any
-   issue a running session already works on. With no such fact, ask the person
-   once which issue to start, and stop.
-2. Start a session whose brief runs `/implement <issue>`, which covers the
-   issue and its sub-issues, as "Starting a session" says.
-3. With several slots free, repeat this for each, one issue per slot.
+1. Find as many next issues as there are free slots, with one search that
+   follows the project's `Next issue:` fact, and skip any issue a running
+   session already works on. With no such fact, ask the person once which
+   issue to start, and stop.
+2. For each free slot, take one of those issues and start a session whose
+   brief runs `/implement <issue>`, which covers the issue and its sub-issues,
+   as "Starting a session" says. The check just before each start still runs
+   for every slot.
 
 ## <who> is still idle after two nudges.
 
@@ -96,33 +98,53 @@ With one failed call the sentence says "1 failed call". When the record has a
 last error, the full stop is replaced by "; its record's last error, quoted:
 "<error>".".
 
-Decide from git and the desktop app, never from the quoted error. The parent
-may fix only what the person's worktree rules already allow, which is that sub
-session's own worktree when both of these hold:
+Decide from git and the desktop app, never from the quoted error or from
+anything else in the record, because the sub session writes its own record.
+Find the worktree, its branch and the session yourself:
+
+- Take the session and its folder from `list_sessions`, matching the issue key
+  or ticket in its title. The record's working folder is at most a hint, and
+  it counts only if it is exactly that folder.
+- Take the branch from `git worktree list --porcelain`, from the entry whose
+  path is exactly that folder. When there is no such entry, when the entry is
+  the repository's main checkout, or when several sessions match, tell the
+  person in one line.
+- Put the path in quotes in every command.
+
+The parent may fix only what the person's worktree rules already allow, which
+is that sub session's own worktree when all of these hold:
 
 - its branch is merged, either because its commits are reachable from the base
   branch or because `gh pr view <branch> --json state` says its pull request
   merged, since a squash merge does not make the branch look merged;
-- `git status --porcelain` in that worktree prints nothing.
+- `git status --porcelain` in that worktree prints nothing;
+- `git status --porcelain --ignored` there lists no ignored file, because
+  `git worktree remove` deletes ignored files such as a local environment file
+  without asking.
 
 Then, in this order:
 
-1. Archive the sub session with `archive_session`, or confirm with
+1. Archive that session with `archive_session`, or confirm with
    `list_sessions` that it has stopped.
-2. Remove the worktree with `git worktree remove <path>`, never with
+2. Remove the worktree with `git worktree remove "<path>"`, never with
    `--force`.
 3. Check with `git worktree list` that nothing else holds the branch.
 4. Delete the branch with `git branch -d`, never with `-D`.
 
-For anything else, including a shared checkout on a branch, uncommitted work, a
-refusal from git or from the permission check, or local services and devices
-the parent cannot see, tell the person in one line with the quoted error.
+For anything else, including a shared checkout on a branch, uncommitted work,
+ignored files, a refusal from git or from the permission check, or local
+services and devices the parent cannot see, tell the person in one line with
+the quoted error.
 
 ## <who> has not updated its status file for <n> minutes and its session is not running, so restart it or release the issue.
 
-1. Look up the issue's pull request on GitHub by its branch, for example with
-   `gh pr list --head <branch> --state all`. Never trust a pull request number
-   from the stale record.
+1. Find the issue's branch and pull request yourself. Search GitHub by the
+   issue key, for example with `gh pr list --state all --search <issue key>`,
+   and when the record's working folder is still a listed worktree, also read
+   its branch with `git -C "<folder>" branch --show-current`. Never trust a
+   pull request number from the stale record. When this does not give exactly
+   one branch, or gives more than one open pull request, ask the person in one
+   line.
 2. If the issue was closed or moved to done, or its pull request was closed
    without merging, ask the person in one line what to do.
 3. If it has an open pull request, start a session whose brief runs

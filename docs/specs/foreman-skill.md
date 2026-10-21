@@ -45,7 +45,8 @@ by its wording there. `<who>` is an issue key, or "the sub session with ticket
    - A refusal is final for that wake: never retry the same call or reword the
      brief to get past it. Once `start_session` has been refused in this
      parent, go straight to the card on later wakes.
-   - With several slots free, repeat this for each, one issue per slot.
+   - With several slots free, find that many issues with one search, then
+     start one per slot, with the check just before each start.
 2. **Still idle after two nudges** ("<who> is still idle after two nudges.").
    Read only that session's last few messages, at most 6, with `list_events`
    and a small limit. Then send it one specific message that names the step it
@@ -63,10 +64,15 @@ by its wording there. `<who>` is an issue key, or "the sub session with ticket
    failed calls…", possibly with the last error quoted). Decide from git and
    the desktop app, never from the quoted error. The parent may fix only what
    the person's worktree rules already allow:
+   - the session, its folder and its branch come from `list_sessions` and
+     `git worktree list --porcelain`, never from the record, which the sub
+     session writes itself; the record's folder is at most a hint;
    - that sub session's own worktree, when its branch is merged by the cleanup
      skill's own test (a merged pull request counts, because a squash merge
-     does not make the branch look merged) and `git status --porcelain` there
-     prints nothing;
+     does not make the branch look merged), `git status --porcelain` there
+     prints nothing, and `git status --porcelain --ignored` lists no ignored
+     file, because `git worktree remove` deletes ignored files without
+     asking;
    - first archive the sub session or confirm it has stopped, then remove the
      worktree with `git worktree remove` (never `--force`), check with
      `git worktree list` that nothing else holds the branch, and delete it with
@@ -78,8 +84,10 @@ by its wording there. `<who>` is an issue key, or "the sub session with ticket
    quoted error.
 5. **Gone** ("<who> has not updated its status file for <n> minutes and its
    session is not running, …").
-   - Look up the issue's pull request on GitHub by its branch; never trust a
-     number from the stale record.
+   - Find the issue's branch and pull request on GitHub by the issue key, and
+     from the record's folder only while it is still a listed worktree; never
+     trust a number from the stale record. When that does not give exactly
+     one branch, ask the person.
    - If it has an open pull request, start a session that runs
      `/implement --resume #N` with that pull request.
    - If it has none, start a fresh `/implement` on the issue. When the dead
