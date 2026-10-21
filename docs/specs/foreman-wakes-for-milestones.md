@@ -120,7 +120,9 @@ pair at the current head.
     nothing else. Its "When the parent speaks" list replaces the milestone
     that a note or message reports with the milestone that a foreman line
     reports. Its rule for a note or a message keeps asking for "Noted.",
-    with only the question exception.
+    except for a question and for a sub session's line about a streak of 3
+    or a limit, which "When the parent speaks" still lists, so that relay
+    keeps working.
 13. **The README** lists the four new sentences with the others, and says
     that a closed pull request stops the idle nudges.
 
