@@ -257,17 +257,19 @@ export function drawingWidth(columns: number | undefined): number {
 // cells fitted to `columns`. The drawing's text alternative is the text row.
 // When `address` is the project's usable issue address and the title begins
 // with an issue key, the key is a link too: on a picture surface, on its own
-// row above the drawing, which keeps its whole title; on the terminal, as the
-// start of the text row, but only while the fitted row still holds the
-// title, so a row whose title was dropped stays plain.
+// row above the drawing, whose title then leaves the key out so the key is
+// not shown twice; on the terminal, as the start of the text row, but only
+// while the fitted row still holds the title, so a row whose title was
+// dropped stays plain.
 function barRow(ui: Elements, bar: Bar, columns: number | undefined, key: string, address: string | null) {
   const { Link } = ui
-  const issueKey = issueOf(bar.title).issueKey
+  const { issueKey, issueTitle } = issueOf(bar.title)
   const link = linkOf(address, issueKey)
   if (hasSvg(ui)) {
     const { Svg } = ui
     const width = drawingWidth(columns)
-    const drawing = <Svg key={key} source={barSvg(bar, width)} alt={fitBar(bar, Infinity)} width={width} height={BAR_SVG_HEIGHT} />
+    const drawn = link === null ? bar : { ...bar, title: issueTitle }
+    const drawing = <Svg key={key} source={barSvg(drawn, width)} alt={fitBar(drawn, Infinity)} width={width} height={BAR_SVG_HEIGHT} />
     return link === null ? drawing : [<Link key={`${key}-link`} href={link}>{issueKey}</Link>, drawing]
   }
   const { Text } = ui

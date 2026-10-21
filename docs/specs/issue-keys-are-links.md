@@ -112,7 +112,8 @@ the rest of its text and its press.
       is dropped with it and the row is plain, as today.
     - On a surface that draws the bar as a picture (the desktop, the phone
       and the editor), the `Link` is drawn on its own row directly above the
-      picture, and the picture keeps its whole title.
+      picture, and the picture's title leaves the key out, so the key is
+      shown once, as the link, rather than twice.
 13. **Without a usable fact,** every chip, row and bar is drawn exactly as it
     is today: the key stays inside its button or drawing, and no element is
     added or moved.
