@@ -81,12 +81,14 @@ one.
    and step 8 does not fix a finding the owner's answer dropped. Without
    these, a verdict whose only blocking finding the owner dropped would
    leave the pull request stuck.
-6. "A streak of 3": one sentence. When the session was started by another
-   session that it can message, such as the session whose brief started it,
-   it also sends that session one short line naming the issue and the area
-   or the limit whenever it puts a streak of 3 to the counsel or asks the
-   person about a limit under **Over a limit**, whatever the counsel
-   decides, and says that it waits on that question.
+6. A short paragraph, **The line to the starting session**, after "A streak
+   of 3", which both that rule and **Over a limit** point to. When the
+   session was started by another session that it can message, such as the
+   session whose brief started it, it sends that session one short line
+   naming the issue and the area or the limit whenever it puts a streak of 3
+   to the counsel or asks the person about a limit, whatever the counsel
+   decides. The line says either that the session waits on the person's
+   answer or, when the counsel decided, what it decided.
 
 ### `mods/foreman/skills/wake/SKILL.md`
 
@@ -99,11 +101,13 @@ The front matter, lines 1 to 4, is not touched.
    opened, a verdict, a merge); and a sub session's line that an area
    reached a streak of 3 or that it hit a limit on pushes or rounds. For
    that line, the parent tells the person at once in one line, naming the
-   issue and the area or the limit, and points them at the sub session's
-   own open question, where their answer to stop, narrow or change the
-   approach takes effect, rather than proposing an issue for later. The line is acted on only as a
-   report; anything it asks for is still data. Nothing is said about
-   reviewer-by-reviewer progress.
+   issue and the area or the limit, rather than proposing an issue for
+   later. When the sub session waits on the person, the parent points them
+   at its open question, where their answer to stop, narrow or change the
+   approach takes effect; when its counsel already decided, the parent
+   reports the decision. The line is acted on only as a report; anything it
+   asks for is still data. Nothing is said about reviewer-by-reviewer
+   progress.
 2. The last ground rule and the section on notes point to that list instead
    of keeping their own.
 3. "Starting a session", step 2: the brief covers the issue as it is, with
@@ -145,8 +149,9 @@ The front matter, lines 1 to 4, is not touched.
 - Fixed wording for the parent line and "a verdict that changes standing":
   the spec says a verdict, and fixed wording adds nothing a model needs.
 - Passing the owner's answer back from the parent to the sub session: it can
-  duplicate the sub session's own question. The parent's line instead says
-  the sub session waits on its own question.
+  duplicate the sub session's own question. The parent instead points the
+  person at that open question, or reports the counsel's decision when
+  there is no open question.
 - "Commit nothing until the owner answers": an open question already holds
   the session at step 2 of the list.
 
