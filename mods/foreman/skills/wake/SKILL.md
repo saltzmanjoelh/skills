@@ -1,6 +1,6 @@
 ---
 name: wake
-description: What a parent session does when the foreman mod wakes it. Use whenever a line starting "foreman: " arrives, as a prompt or appended to a running turn, to handle each sentence in it, such as a free slot, an idle sub session, a sub session stuck in cleanup, or one that is gone.
+description: For the parent's model, not for typing. To start foreman, type /foreman. What a parent session does when the foreman mod wakes it. Use whenever a line starting "foreman: " arrives, as a prompt or appended to a running turn, to handle each sentence in it, such as a free slot, an idle sub session, a sub session stuck in cleanup, or one that is gone.
 ---
 
 # Foreman wake
@@ -205,6 +205,15 @@ The rules for the idle, cleanup and idle-without-a-session sentences still
 apply. For the sentence about a status file that stopped updating, ask the
 person in one line, because a pull request cannot be looked up without an
 issue key.
+
+## A note about a sub session, or a message from one
+
+Foreman keeps most of the desktop app's notes about sub sessions from the
+parent, but some still arrive, such as a message a sub session sent or a note
+in a form foreman does not recognise. When one arrives, answer with nothing
+and end the turn, unless it reports a milestone, such as a pull request opened
+or a merge, which you relay to the person in one line, or asks the parent or
+the person a question, which you answer or relay.
 
 ## What the parent never does
 
