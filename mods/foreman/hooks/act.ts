@@ -243,7 +243,8 @@ const isCarriedOverApproval = (pair: RecordVerdicts, announced: RecordVerdicts |
 // which both approved, which is the same review carried over to a new head
 // and is not recorded. A state foreman cannot read changes nothing, and a
 // pull request that opens again wakes nothing but is remembered as open, so a
-// second close wakes again.
+// second close wakes again. A merge is also announced when the pairing's file
+// leaves the folder, which mergedOnLeaving decides.
 function milestoneRule(s: Step): Reason[] {
   const { pr } = s.row.record
   const announced = s.p.acts.announced
@@ -276,6 +277,16 @@ function milestoneRule(s: Step): Reason[] {
   return reasons
 }
 
+// The merge of a pairing whose file left the status folder, or none. Builder
+// deletes a status file only when its session ends after the watched pull
+// request merged, which can happen between two reads, so a file that leaves
+// while its pull request was last told open means the pull request merged.
+function mergedOnLeaving(p: ForemanPairing): Reason[] {
+  const told = p.acts.announced
+  if (told === null || told.number === null || told.state !== 'OPEN') return []
+  return [{ kind: 'merged', who: whoOf(p.issueKey, p.ticket), number: told.number }]
+}
+
 // What a freed slot leads to, given how many slots are free now: nothing
 // when none is, and otherwise a wake with the number free. A read and Release
 // both decide by it.
@@ -303,7 +314,8 @@ export function slotsNeedList(t: ForemanTickets, rows: readonly SubRow[], now: n
 }
 
 // Decides everything one read leads to. A pairing whose owner's file left the
-// folder is forgotten, freeing its slot when it was active, and a pairing
+// folder is forgotten, freeing its slot when it was active and announcing a
+// merge when its pull request was last told open, and a pairing
 // that no status file has carried for a day is forgotten and logged; neither
 // happens unless this read listed a folder that exists. A released or
 // freed pairing gets no action. An active pairing's pull request
@@ -331,15 +343,9 @@ export function decide(input: DecideInput): Decision {
       if (p.standing === 'active') {
         freed += 1
         logs.push(`The slot of ${p.issueKey ?? byTicket(p.ticket)} is free, because its file left the status folder.`)
-        // Builder deletes a status file only when its session ends after the
-        // watched pull request merged, which can happen between two reads.
-        // So a file that leaves while the pull request was last told open
-        // means it merged, and the parent hears it before the slot-free
-        // sentence, which is added after every pairing.
-        const told = p.acts.announced
-        if (told !== null && told.number !== null && told.state === 'OPEN') {
-          reasons.push({ kind: 'merged', who: whoOf(p.issueKey, p.ticket), number: told.number })
-        }
+        // The merge comes before the slot-free sentence, which is added
+        // after every pairing.
+        reasons.push(...mergedOnLeaving(p))
       }
       return []
     }
