@@ -116,6 +116,11 @@ what the parent will do on their behalf.
   remaining, so a fresh session's brief names it and its folder.
 - A worktree folder whose path holds a character the cleanup case does not
   allow is ignored, so it is never named in a command or a brief.
+- An issue moved to done with one merged pull request and none open: the
+  done choice steps aside, and the merged choice reports the issue finished
+  when nothing else stops it.
+- An issue moved to done with an open pull request: the case goes to the
+  person, and the open pull request is never resumed under a done issue.
 - A branch that exists only on the remote with no pull request is not seen.
   Pushed work almost always has a pull request, which the lists find.
 
