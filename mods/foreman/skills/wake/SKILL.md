@@ -188,8 +188,10 @@ these steps fails, tell the person in one line, naming the issue, and stop.
 3. **Read the dead session's worktree.** Run `git worktree list --porcelain`,
    and check the record's working folder against it in this order. At the
    first check that fails, ignore the folder and go on to step 4.
-   1. The folder is exactly the path of an entry, and that entry is not marked
-      `prunable`, which would mean its folder is gone.
+   1. The folder holds only the characters the cleanup case allows, because
+      the parent may name it in a command or in a brief. It is exactly the path
+      of an entry, and that entry is not marked `prunable`, which would mean
+      its folder is gone.
    2. That entry is not the first one, which is the repository's main
       checkout.
    3. That entry names a branch on its `branch refs/heads/<name>` line, and
@@ -211,8 +213,11 @@ these steps fails, tell the person in one line, naming the issue, and stop.
      `git rev-parse '<branch>'` equals that pull request's `headRefOid`,
      because that pull request already accounts for it.
 
-   So a branch that a squash merge left behind is not remaining, and a branch
-   name reused for new work after its pull request merged is remaining.
+   Whatever these say, the branch of the worktree step 3 accepted is remaining
+   when `git -C '<folder>' status --porcelain` prints anything, because the
+   dead session may have left edits it never committed. So a branch that a
+   squash merge left behind is not remaining, and a branch name reused for new
+   work after its pull request merged is remaining.
 5. **Read the issue's state** with the same tracker the `Next issue:` fact
    names. When that is not possible, treat the state as unknown and go on;
    this is not a failed git or gh command.
@@ -235,9 +240,11 @@ these steps fails, tell the person in one line, naming the issue, and stop.
    - A pull request closed without merging: ask the person in one line what to
      do.
    - None: start a session whose brief runs `/implement <issue>`. When one
-     branch remains and another entry in step 3's worktree list has it checked
-     out, tell the person in one line instead, because another session may be
-     working on it. Otherwise, when one branch remains, the brief names it, and
+     branch remains and an entry in step 3's worktree list has it checked out,
+     other than the worktree step 3 accepted, tell the person in one line
+     instead, because another session may be working on it. When step 3
+     accepted no worktree, every entry counts, including the record's own
+     folder. Otherwise, when one branch remains, the brief names it, and
      when step 3 accepted the worktree that holds it, the brief also names that
      worktree folder, so that the new session works there.
 

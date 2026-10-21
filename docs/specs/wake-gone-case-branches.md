@@ -39,7 +39,9 @@ what the parent will do on their behalf.
 3. **The dead session's worktree.** The parent reads the record's working
    folder as ordered checks, stopping at the first that fails and then
    ignoring the folder:
-   1. it is the path of an entry in `git worktree list --porcelain`;
+   1. it holds only the characters the cleanup case allows, because the
+      parent may name it in a command or a brief, and it is the path of an
+      entry in `git worktree list --porcelain`;
    2. that entry is not the repository's main checkout;
    3. the entry's branch, taken from that entry, holds only the characters
       the cleanup case allows;
@@ -52,7 +54,10 @@ what the parent will do on their behalf.
    kept branch is **remaining** unless its commits are reachable from the base
    branch, or it is the head branch of a merged or closed pull request from
    the list and its tip equals that pull request's `headRefOid`, because that
-   pull request already accounts for it. A kept branch with a
+   pull request already accounts for it. Whatever those say, the branch of
+   the worktree step 3 accepted is remaining when that worktree has
+   uncommitted changes, so that edits a session never committed keep an
+   owner. A kept branch with a
    character the cleanup case does not allow goes to the person, because the
    parent would have to put it in a command.
 5. **Counting.** "More than one branch" counts distinct branch names among
@@ -88,6 +93,11 @@ what the parent will do on their behalf.
   `headRefOid`, so the parent resumes the open one.
 - A running session holds a branch for the key: the branch counts, which
   sends the case to the person, because the issue is not finished.
+- A session died before its first commit, so its branch sits at the base
+  branch's tip with uncommitted edits in its worktree: the branch is
+  remaining, so a fresh session's brief names it and its folder.
+- A worktree folder whose path holds a character the cleanup case does not
+  allow is ignored, so it is never named in a command or a brief.
 - A branch that exists only on the remote with no pull request is not seen.
   Pushed work almost always has a pull request, which the lists find.
 
