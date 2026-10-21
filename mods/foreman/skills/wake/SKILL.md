@@ -245,9 +245,10 @@ failed.
 7. **Decide**, taking the first of these that holds:
    - More than one open pull request, or more than one branch: tell the person
      in one line.
-   - The issue was closed or moved to done, and no pull request for it merged:
-     ask the person in one line what to do. When one merged, the merged
-     choice below decides, because merging usually moves the issue to done.
+   - The issue was closed or moved to done, and either no pull request for it
+     merged or one is still open: ask the person in one line what to do. When
+     one merged and none is open, skip this choice, so that the merged choice
+     below decides, because merging usually moves the issue to done.
    - An open pull request: start a session whose brief runs
      `/implement --resume #N` with that pull request's number, even when an
      older one for the issue merged or was closed.

@@ -74,9 +74,11 @@ what the parent will do on their behalf.
 6. **Deciding**, taking the first that holds:
    - more than one open pull request, or more than one branch: tell the
      person in one line;
-   - the issue was closed or moved to done, and no pull request for it
-     merged: ask the person in one line; when one merged, the merged choice
-     decides, because merging usually moves the issue to done;
+   - the issue was closed or moved to done, and either no pull request for
+     it merged or one is still open: ask the person in one line; when one
+     merged and none is open, the merged choice decides, because merging
+     usually moves the issue to done, while an open pull request under a done
+     issue is never resumed without the person;
    - an open pull request: start `/implement --resume #N` with it;
    - a merged pull request: tell the person the issue is finished, starting
      nothing, only when no branch remains, no pull request closed without
@@ -126,7 +128,10 @@ what the parent will do on their behalf.
 ## Failure modes
 
 - Every case the parent cannot settle safely, including a git or gh command
-  that fails, ends in a one-line message to the person naming the issue.
+  that fails, ends in a one-line message to the person naming the issue. A
+  command that answers no through its exit status, such as
+  `git merge-base --is-ancestor` for a branch that is not reachable, has not
+  failed, because otherwise every ordinary branch would go to the person.
 - A wrong "finished" leaves work without an owner while a needless question
   costs one line, so each doubtful case asks.
 
