@@ -1,4 +1,5 @@
-// Small text rules shared by the pane, the progress rules and the drawings.
+// Small text rules shared by the pane, the progress rules, the drawings, the
+// counsel and the review package.
 // This module imports nothing from the rest of the mod, so every other module
 // can import it without making two modules import each other.
 
@@ -38,3 +39,16 @@ export function timeOfDay(at: number, now: number): string {
   const time = stamp.slice(11, 19)
   return stamp.slice(0, 10) === new Date(now).toISOString().slice(0, 10) ? time : `${stamp.slice(0, 10)} ${time}`
 }
+
+// Two texts say the same thing when they are equal once each is trimmed and
+// put in lower case. normalText is that one definition. The counsel compares
+// its options and follow-ups with it, and the review package compares the
+// items already decided with it, so both say the same thing the same way.
+export const normalText = (text: string) => text.trim().toLowerCase()
+export const sameText = (a: string, b: string) => normalText(a) === normalText(b)
+
+// An area named on a fix commit's Area: line, as the streaks compare it: in
+// lower case, with each run of spaces made one space, and without one
+// trailing full stop, so the same area written with a different case or
+// spacing counts as one area.
+export const areaKey = (area: string) => area.trim().toLowerCase().replace(/\s+/g, ' ').replace(/\.$/, '').trim()

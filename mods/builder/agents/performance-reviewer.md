@@ -47,11 +47,34 @@ position in `diff.patch`; read the file to find it.
 
 One line per finding, exactly:
 
-`- [performance] <file>:<line>: <the waste in one sentence>. Why: <what it costs and when>. Fix: <the equal-or-similar-effort alternative>. Needs checking: <yes|no>`
+`- [performance] <file>:<line>: <the waste in one sentence>. Why: <what it costs and when>. Fix: <the equal-or-similar-effort alternative>. Needs checking: <yes|no>. Scope: <in the spec: the passage | breaks working behaviour: what works on the base and stops at the head | outside the spec>`
 
 Say `Needs checking: yes` when the finding rests on something you inferred,
 such as how large the data gets or how often a path runs. An empty list is
 a valid result.
+
+Every finding has its `Scope:` part. Write `in the spec` with the passage of
+the spec that asks for the feature the finding is about, `breaks working
+behaviour` with what works on the base branch and stops working at the head,
+or `outside the spec` for a finding that asks for behaviour the spec does
+not ask for and the base does not have. A defect in code that the pull
+request adds to deliver what the spec asks for is in the spec, even when the
+spec does not name the protection that is missing. A finding classed
+`SAFETY:`, or one that describes a security hole (an authorization boundary,
+injection, untrusted text reaching a shell or a model as an instruction, a
+widened privilege), data loss or corruption, a migration that cannot be
+undone safely, a credential exposed, a wrong deploy to production, or a
+breach of a guarantee the project's `CLAUDE.md` names as protected, is a
+safety finding, whatever its label, and is never outside the spec. A finding
+outside the spec does not block and is not fixed in this pull request; the
+counsel decides whether to file it.
+
+Before you report, read the `## Already decided` section of `package.md`:
+the findings that earlier rounds settled, numbered `D1`, `D2` and so on.
+Raise a finding that matches one only with evidence the item did not have,
+and put it on the line after the finding, as
+`Repeats: D<n>. New evidence: <what is new>`. A repeat without new
+evidence is dropped without being checked, so leave it out.
 
 ## The last line
 

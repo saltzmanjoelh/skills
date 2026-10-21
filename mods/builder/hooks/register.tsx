@@ -4,13 +4,13 @@ import type { EngineInterface, Next, PromptOrigin, Register, ResolveInput, ToolC
 import type { AgentCard, BackgroundTask, BuilderRun, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, StatusMemo, Wake } from '../types'
 import { isSvgSurface } from './art'
 import { checkoutSentence, worktreeWithBranch, type Checkout } from './checkout'
-import { afterAskAgain, afterTally, askAgainAnswer, briefAnswer, briefFactsOf, briefRefusal, briefText, counselAnswer, decisionLine, destinationOf, endedDecisionLines, FOLLOW_UP_OPTIONS, followUpAnswer, followUpAskAgainAnswer, followUpsRefusal, followUpStepOf, followUpVotesOf, keepCounsel, MAX_BRIEF_OPTIONS, MAX_FOLLOW_UPS, MIN_OPTIONS, neverStartedCandidatesOf, neverStartedOf, type PullRequestRef, reviewParagraph, stepOf, type UnreadableVote, votesOf } from './counsel'
+import { afterAskAgain, afterTally, askAgainAnswer, briefAnswer, briefFactsOf, briefRefusal, briefText, counselAnswer, decisionLine, destinationOf, endedDecisionLines, FOLLOW_UP_OPTIONS, followUpAnswer, followUpAskAgainAnswer, followUpsInput, followUpsRefusal, followUpStepOf, followUpVotesOf, keepCounsel, MAX_BRIEF_OPTIONS, MAX_FOLLOW_UPS, MIN_OPTIONS, neverStartedCandidatesOf, neverStartedOf, type PullRequestRef, reviewParagraph, stepOf, type UnreadableVote, votesOf } from './counsel'
 import { carriedRuns, changesBetween, DECISION_LABEL, isCiMonitorEvent, isSameState, PR_FIELDS, pullRequestStateIn, roundInProgress, RUNS_JQ, runsOf, snapshotIn, snapshotOf, verdictsOf, type GhPullRequest, type Snapshot, type Verdict, type WorkflowRun } from './github'
 import { afterComparison, afterLoad, dueComparisons, isStale, LOADED_PATHS, loadBegunAs, loadBegunIn, loadedIn, type Found } from './loaded'
 import { AGENT_PANE, agentPaneTree, bandTree, isDrawable, messagesReadOf, NAMED_AFTER_MS, PANE, paneTree, secondRow, type Elements, type MessagesRead, type View } from './pane'
 import { afterReport, endedOf, plannedOf, progressIn, reportAnswer, reportOf, stageLabel, STAGES, type ReportInput } from './progress'
 import { changePrompt, ciEventContext, resumePrompt, stateLines, stuckPrompt } from './prompts'
-import { factIn, packageText, secretIn, verdictsLine, type PackageInput } from './review'
+import { commitRecordsOf, decidedItems, factIn, packageText, secretIn, trendOf, trendStopLine, verdictsLine, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
 import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, buildPathOf, comparedTextOf, configDirOf, firstPromptOf, generationIn, isCleanupSkill, newMemo, recordOf, statusMemoIn, ticketIn, watchedSnapshotOf, type StatusFacts } from './status'
 import { timeOfDay } from './text'
@@ -1744,14 +1744,19 @@ async function servePackage($: $, input: PackageInput): Promise<string> {
     return `git could not fetch the base, ${live.baseRefName}, so the diff against it would be stale.`
   }
   const range = `origin/${live.baseRefName}...HEAD`
-  const [stat, diff, commits, dir] = await Promise.all([
+  // The full messages are read beside the diff, because the findings already
+  // decided and the areas fixed so far are read from them. A package without
+  // them would tell the reviewers that nothing was decided, so a failed read
+  // refuses the package as a failed diff does.
+  const [stat, diff, commits, messages, dir] = await Promise.all([
     git($, checkoutDir, ['diff', '--stat', range]),
     git($, checkoutDir, ['diff', range]),
     git($, checkoutDir, ['log', '--reverse', '--name-status', '--format=%h %s', `origin/${live.baseRefName}..HEAD`]),
+    git($, checkoutDir, ['log', '--reverse', '--format=%H%x1f%B%x1e', `origin/${live.baseRefName}..HEAD`]),
     packageDir($, checkoutDir, live.headRefOid),
   ])
-  if (stat === null || diff === null || commits === null || dir === null) {
-    return 'git could not produce the whole diff against the base (it failed, or its output was over 4 MiB and cut off), so no package was written.'
+  if (stat === null || diff === null || commits === null || messages === null || dir === null) {
+    return 'git could not produce the whole diff against the base or the commit messages (it failed, or its output was over 4 MiB and cut off), so no package was written.'
   }
 
   // The round and the earlier rounds come from the same live read, so the
@@ -1759,6 +1764,8 @@ async function servePackage($: $, input: PackageInput): Promise<string> {
   const earlier = (live.reviews ?? [])
     .filter(review => review.author?.login === r.login && verdictsOf(review) !== null)
     .map(review => ({ sha: review.commit?.oid ?? '', body: review.body ?? '' }))
+  const records = commitRecordsOf(messages)
+  const trend = trendOf(records)
   const text = packageText(input, {
     repo: r.repo,
     number: r.number,
@@ -1769,6 +1776,8 @@ async function servePackage($: $, input: PackageInput): Promise<string> {
     round: roundInProgress(snapshotOf(r.repo, live, r.login)),
     ...(await projectDocuments($, checkoutDir)),
     earlier,
+    decided: decidedItems(records, earlier),
+    trend,
   })
   await $.fs.write(`${dir}/package.md`, text)
   await $.fs.write(`${dir}/diff.patch`, diff)
@@ -1777,7 +1786,11 @@ async function servePackage($: $, input: PackageInput): Promise<string> {
   const packagedAt = await $.clock.now()
   await update($, packaged, () => ({ head: live.headRefOid, at: packagedAt }))
   $.ui.invalidate('ui.render')
+  // A streak that stops the rounds comes first, so the session reads it
+  // before it launches any reviewer on the package.
+  const stop = trendStopLine(trend)
   return [
+    ...(stop === null ? [] : [stop]),
     `Review package for ${live.headRefOid.slice(0, 8)}:`,
     `Head: ${live.headRefOid}`,
     `${dir}/package.md`,
@@ -1933,7 +1946,7 @@ async function serveCounsel($: $, input: CounselInput): Promise<string> {
     tallies: [],
     ...(owedTo ? { pr: owedTo } : {}),
     launchedAt: await $.clock.now(),
-    ...(isFollowUps ? { followUps: (input.follow_ups as string[]).map(text => text.trim()) } : {}),
+    ...(isFollowUps ? followUpsInput(input.follow_ups as unknown[]) : {}),
   }
   try {
     await $.fs.write(`${folder}/brief.md`, briefText(briefFactsOf(q), unwritten))
@@ -3040,7 +3053,7 @@ export const register: Register = on => {
     })
     await $.tool.register({
       name: 'package',
-      description: 'Build the review package for the watched pull request at its current head: package.md (the issue, spec and plan paths, changed files, earlier rounds) and diff.patch. Answers with the folder to hand every reviewer. The checkout used is the worktree that has the pull request\'s head branch checked out, or the session\'s folder when no worktree has it, and it must be at the pull request\'s head.',
+      description: 'Build the review package for the watched pull request at its current head: package.md (the issue, spec and plan paths, changed files, earlier rounds, the findings already decided, read from the Dropped: and Outside the spec: lists of the fix commits and earlier reviews, and the areas fixed so far, read from the fix commits\' Reviewed:, Area: and Trend: lines) and diff.patch. Answers with the folder to hand every reviewer. When an area was fixed at 3 reviewed heads in a row, the answer\'s first line says the rounds stop, and the session puts the area to the counsel before launching any reviewer. The checkout used is the worktree that has the pull request\'s head branch checked out, or the session\'s folder when no worktree has it, and it must be at the pull request\'s head.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -3068,13 +3081,32 @@ export const register: Register = on => {
     })
     await $.tool.register({
       name: 'counsel',
-      description: 'Put a question to the counsel of seven members, the six reviewers and the owner\'s advocate, before asking the person. The mod writes the brief (without the lean) and answers with the question id, the brief folder and which members to launch. A decision is recorded in the spec unless pull_request names the watched pull request while it is open; then the mod lists it in that pull request\'s next review. To put a review round\'s follow-ups, give follow_ups and no options or pull_request: each follow-up gets the same three options, fix it in this pull request, file it as an issue or drop it, and is decided on its own; the decisions are recorded only in the round\'s Follow-ups section.',
+      description: 'Put a question to the counsel of seven members, the six reviewers and the owner\'s advocate, before asking the person. The mod writes the brief (without the lean) and answers with the question id, the brief folder and which members to launch. A decision is recorded in the spec unless pull_request names the watched pull request while it is open; then the mod lists it in that pull request\'s next review. To put a review round\'s follow-ups, give follow_ups and no options or pull_request: each follow-up gets the same three options, fix it in this pull request, file it as an issue or drop it, and is decided on its own; the decisions are recorded only in the round\'s Follow-ups section. A follow-up outside the spec, given as { text, outside_spec: true }, is offered only file and drop, and a vote to fix it is not counted.',
       inputSchema: {
         type: 'object',
         properties: {
           question: { type: 'string', description: 'The question, as it would be asked.' },
           options: { type: 'array', items: { type: 'string' }, minItems: MIN_OPTIONS, maxItems: MAX_BRIEF_OPTIONS, description: `${MIN_OPTIONS} to ${MAX_BRIEF_OPTIONS} options, in the order given; no recommendation. Required unless follow_ups is given, and refused with it.` },
-          follow_ups: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: MAX_FOLLOW_UPS, description: `1 to ${MAX_FOLLOW_UPS} follow-ups, each in one or two sentences saying what it is and what a person would see if it is never fixed. Give it in place of options, and without pull_request.` },
+          follow_ups: {
+            type: 'array',
+            items: {
+              anyOf: [
+                { type: 'string' },
+                {
+                  type: 'object',
+                  properties: {
+                    text: { type: 'string' },
+                    outside_spec: { type: 'boolean', enum: [true] },
+                  },
+                  required: ['text', 'outside_spec'],
+                  additionalProperties: false,
+                },
+              ],
+            },
+            minItems: 1,
+            maxItems: MAX_FOLLOW_UPS,
+            description: `1 to ${MAX_FOLLOW_UPS} follow-ups, each in one or two sentences saying what it is and what a person would see if it is never fixed. Give a follow-up as its text, or, for a finding the claim checker confirmed is outside the spec, as { text, outside_spec: true }, which the counsel may only file or drop. Give it in place of options, and without pull_request.`,
+          },
           background: { type: 'string', description: 'The issue in a few lines, what was tried, and what is at stake.' },
           paths: { type: 'array', items: { type: 'string' }, description: 'Paths, relative to the checkout, of the spec, plan or code the question touches.' },
           lean: { type: 'string', description: 'The session\'s own lean. Kept out of the brief and shown to the person only if they are asked.' },

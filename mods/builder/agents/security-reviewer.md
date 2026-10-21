@@ -44,13 +44,30 @@ position in `diff.patch`; read the file to find it.
 
 One line per finding, exactly:
 
-`- [security] <file>:<line>: <the attack in one concrete sentence, naming who does what to whom>. Why: <why the code allows it>. Fix: <one sentence>. Needs checking: <yes|no>`
+`- [security] <file>:<line>: <the attack in one concrete sentence, naming who does what to whom>. Why: <why the code allows it>. Fix: <one sentence>. Needs checking: <yes|no>. Scope: <in the spec: the passage | breaks working behaviour: what works on the base and stops at the head>`
 
 Say `Needs checking: yes` when the finding rests on something you inferred
 rather than read: a caller you did not find, a policy you could not see, a
 runtime value. The session sends those to the claim checker before anyone
 acts on them. Report only what you would want fixed; there is no nit tier,
 and an empty list is a valid result.
+
+Every finding has its `Scope:` part. Every finding you report is a safety
+finding, which is always in scope whatever the spec says, so its scope is
+one of two. Write `breaks working behaviour` with what works on the base
+branch and stops working at the head, or else `in the spec` with the
+passage of the spec that asks for the feature the finding is about. When
+neither fits well, pick the closer one: a safety finding is in scope
+whichever of the two it carries. A hole
+in code that the pull request adds to deliver what the spec asks for is in
+the spec, even when the spec does not name the protection that is missing.
+
+Before you report, read the `## Already decided` section of `package.md`:
+the findings that earlier rounds settled, numbered `D1`, `D2` and so on.
+Raise a finding that matches one only with evidence the item did not have,
+and put it on the line after the finding, as
+`Repeats: D<n>. New evidence: <what is new>`. A repeat without new
+evidence is dropped without being checked, so leave it out.
 
 ## The last line
 

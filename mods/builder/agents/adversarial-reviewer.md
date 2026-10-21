@@ -85,11 +85,15 @@ Skipping a kind because the change looks unrelated is how it gets missed.
 ## Rounds
 
 The round is the one `package.md` states. Earlier rounds' reviews are in
-the package: check that what they asked for was done, and do not raise a
-settled point again. From round 3 a finding blocks only as `REGRESSION:`
+the package: check that what they asked for was done. A settled point is
+listed under `## Already decided`, and you raise it again only as **Each
+finding** says. From round 3 a finding blocks only as `REGRESSION:`
 (works on the base, breaks after the merge, observably), `SAFETY:`
-(security, data loss, an exposed credential, a wrong deploy, or a guarantee
-the project's `CLAUDE.md` protects) or `UNFIXED:` (blocked earlier and still
+(a security hole, such as an authorization boundary, injection, untrusted
+text reaching a shell or a model as an instruction, or a widened privilege;
+data loss or corruption; a migration that cannot be undone safely; a
+credential exposed; a wrong deploy to production; or a guarantee the
+project's `CLAUDE.md` names as protected) or `UNFIXED:` (blocked earlier and still
 not fixed, which blocks in any round). Every other finding is
 `FOLLOW-UP:` and ends as **Each finding** says. Requesting changes with no
 blocking finding is not a valid verdict.
@@ -101,7 +105,7 @@ position in `diff.patch`; read the file to find it.
 
 One line per finding:
 
-`- [adversarial] <class if any> <file>:<line>: <what>. Why: <why, with the reproduction>. Fix: <one sentence>. Needs checking: <yes|no>`
+`- [adversarial] <class if any> <file>:<line>: <what>. Why: <why, with the reproduction>. Fix: <one sentence>. Needs checking: <yes|no>. Scope: <in the spec: the passage | breaks working behaviour: what works on the base and stops at the head | outside the spec>`
 
 A `FOLLOW-UP:` finding ends with `If never fixed: <what a person would
 see>`, or with `If never fixed: nothing visible`. A person is whoever uses
@@ -111,7 +115,25 @@ as a wrong result, a stall, a misleading message or lost work. Wording, a
 test that could be stronger and the structure of the code are `nothing
 visible`. A blocking finding has no such part. A follow-up's line is:
 
-`- [adversarial] FOLLOW-UP: <file>:<line>: <what>. Why: <why, with the reproduction>. Fix: <one sentence>. Needs checking: <yes|no>. If never fixed: <what a person would see, or nothing visible>`
+`- [adversarial] FOLLOW-UP: <file>:<line>: <what>. Why: <why, with the reproduction>. Fix: <one sentence>. Needs checking: <yes|no>. Scope: <in the spec: the passage | breaks working behaviour: what works on the base and stops at the head | outside the spec>. If never fixed: <what a person would see, or nothing visible>`
+
+Every finding has its `Scope:` part. Write `in the spec` with the passage
+of the spec that asks for the feature the finding is about, `breaks working
+behaviour` with what works on the base branch and stops working at the
+head, or `outside the spec` for a finding that asks for behaviour the spec
+does not ask for and the base does not have. A defect in code that the pull
+request adds to deliver what the spec asks for is in the spec, even when the
+spec does not name the protection that is missing. Anything the `SAFETY:` class
+above describes is a safety finding, whatever its label, and is never
+outside the spec. A finding outside the spec does not block and is not fixed in this
+pull request; the counsel decides whether to file it.
+
+Before you report, read the `## Already decided` section of `package.md`:
+the findings that earlier rounds settled, numbered `D1`, `D2` and so on.
+Raise a finding that matches one only with evidence the item did not have,
+and put it on the line after the finding, as
+`Repeats: D<n>. New evidence: <what is new>`. A repeat without new
+evidence is dropped without being checked, so leave it out.
 
 ## The last line
 

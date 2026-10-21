@@ -5,6 +5,7 @@
 import type { AgentCard, CounselQuestion, CounselTally, CounselVote, Snapshot } from '../types'
 import { secretIn } from './review'
 import { OWNERS_ADVOCATE, REVIEWERS } from './state'
+import { normalText, sameText } from './text'
 
 // The counsel is always seven members, the six reviewers and the owner's
 // advocate, and every one of them votes. Seven is odd, so the votes for two
@@ -27,12 +28,6 @@ export const COUNSEL_KEPT = 20
 // How much of a member's reason the ask answer quotes.
 const REASON_CHARS = 200
 
-// Two texts say the same thing when they are equal once each is trimmed and
-// put in lower case. normalText is that one definition, and sameText and
-// hasRepeat both use it.
-const normalText = (text: string) => text.trim().toLowerCase()
-const sameText = (a: string, b: string) => normalText(a) === normalText(b)
-
 // Whether two of the texts say the same thing.
 function hasRepeat(texts: readonly string[]): boolean {
   const seen = new Set<string>()
@@ -45,8 +40,9 @@ function hasRepeat(texts: readonly string[]): boolean {
 }
 
 // A follow-ups question puts every follow-up of a review round to the counsel
-// at once, each with the same three options in this order, which a member may
-// also name by the words in FOLLOW_UP_WORDS. Each member's report holds one
+// at once, each with the same three options in this order, except that a
+// follow-up outside the spec has only the last two, and a member may also
+// name an option by the words in FOLLOW_UP_WORDS. Each member's report holds one
 // vote per follow-up, so a question holds at most twenty. A follow-up is
 // decided by an option chosen by 4 of the 7 members, counted against all
 // seven whoever voted, so a missing vote only ever takes a vote away.
@@ -67,9 +63,53 @@ export function briefRefusal(question: unknown, options: readonly unknown[]): st
   return null
 }
 
+// A follow-up as the session gives it: its text, or, for a finding the claim
+// checker confirmed is outside the spec, an object with its text and
+// outside_spec set to true and no other key. Anything else is refused, so a
+// misspelt key or a false never quietly makes a follow-up in scope.
+type FollowUpObject = { text: string; outside_spec: true }
+
+function isFollowUp(value: unknown): value is string | FollowUpObject {
+  if (typeof value === 'string') return value.trim() !== ''
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const keys = Object.keys(value)
+  const { text, outside_spec: outsideSpec } = value as Record<string, unknown>
+  return keys.length === 2 && keys.includes('text') && keys.includes('outside_spec')
+    && typeof text === 'string' && text.trim() !== '' && outsideSpec === true
+}
+
+const followUpTextOf = (value: string | FollowUpObject) => (typeof value === 'string' ? value : value.text).trim()
+
+// The follow-ups as the question records them: their texts, trimmed, in the
+// order given, and the numbers, counted from 1, of those outside the spec.
+// The numbers are left out when there are none, so a question with none
+// outside the spec is stored as one was before follow-ups could be outside
+// the spec. Only input that followUpsRefusal accepted is read here.
+export function followUpsInput(raw: readonly unknown[]): Pick<CounselQuestion, 'followUps' | 'outsideSpec'> {
+  const given = raw.filter(isFollowUp)
+  const outsideSpec = given.flatMap((value, i) => (typeof value === 'string' ? [] : [i + 1]))
+  return { followUps: given.map(followUpTextOf), ...(outsideSpec.length > 0 ? { outsideSpec } : {}) }
+}
+
+// The options follow-up n of a question allows, by number: file and drop for
+// a follow-up outside the spec, which cannot be fixed in this pull request,
+// and all three otherwise. A question stored before follow-ups could be
+// outside the spec has no outsideSpec, so all its follow-ups allow all three.
+// The follow-ups brief and followUpVotesOf, which reads the votes, use it.
+export function optionsAllowed(q: Pick<CounselQuestion, 'outsideSpec'>, n: number): number[] {
+  return isOutsideSpec(q, n) ? [2, 3] : [1, 2, 3]
+}
+
+// Whether follow-up n of a question was marked outside the spec. The options
+// it allows, the brief's marks and each follow-up's outcome all read it.
+export function isOutsideSpec(q: Pick<CounselQuestion, 'outsideSpec'>, n: number): boolean {
+  return (q.outsideSpec ?? []).includes(n)
+}
+
 // Why a follow-ups brief cannot be written, or null when it can. A
 // follow-ups call gives no options, because the mod gives every follow-up the
-// same three, and no pull_request, because the session's Follow-ups section
+// same three, or only file and drop to one outside the spec, and no
+// pull_request, because the session's Follow-ups section
 // is the only record of these decisions and nothing is owed to a review.
 export function followUpsRefusal(question: unknown, followUps: unknown, options: unknown, pullRequest: unknown): string | null {
   if (typeof question !== 'string' || question.trim() === '') return 'the question is empty.'
@@ -78,8 +118,8 @@ export function followUpsRefusal(question: unknown, followUps: unknown, options:
   if (!Array.isArray(followUps)) return 'follow_ups must be a list of follow-ups.'
   if (followUps.length === 0) return 'follow_ups is empty; with nothing to decide, the counsel does not sit.'
   if (followUps.length > MAX_FOLLOW_UPS) return `a call holds at most ${MAX_FOLLOW_UPS} follow-ups, and this one has ${followUps.length}.`
-  if (followUps.some(text => typeof text !== 'string' || text.trim() === '')) return 'every follow-up must be some text.'
-  if (hasRepeat(followUps as string[])) return 'two follow-ups say the same thing.'
+  if (!followUps.every(isFollowUp)) return 'every follow-up must be some text, or { text, outside_spec: true } for one outside the spec, with no other key.'
+  if (hasRepeat(followUps.map(followUpTextOf))) return 'two follow-ups say the same thing.'
   return null
 }
 
@@ -93,6 +133,7 @@ export function briefFactsOf(q: CounselQuestion): BriefFacts {
   return {
     id: q.id, question: q.question, options: q.options, background: q.background, paths: q.paths, folder: q.folder, round: q.round,
     ...(q.followUps !== undefined ? { followUps: q.followUps } : {}),
+    ...(q.outsideSpec !== undefined ? { outsideSpec: q.outsideSpec } : {}),
   }
 }
 
@@ -145,7 +186,9 @@ export function briefText(q: BriefFacts, unwritten: readonly string[]): string {
 // files, then the follow-ups numbered, the three options once, and one pair
 // of VOTE and REASON lines asked for each follow-up. The question has one
 // round and fixed options, so the brief offers no new option and says nothing
-// of a second round.
+// of a second round. A follow-up outside the spec is marked in the list, is
+// offered only file and drop under their own numbers, and its VOTE line names
+// only those words.
 function followUpsBriefText(q: BriefFacts, followUps: readonly string[], unwritten: readonly string[]): string {
   const lines = [
     `# Counsel brief ${q.id}, round ${q.round}`,
@@ -156,15 +199,25 @@ function followUpsBriefText(q: BriefFacts, followUps: readonly string[], unwritt
     '', ...backgroundLines(q, unwritten),
     '', '## Follow-ups', '',
   ]
-  followUps.forEach((text, i) => lines.push(`${i + 1}. ${text.trim()}`))
-  lines.push('', '## Options', '', 'Every follow-up has the same three options:', '')
+  const outside = followUps.map((_, i) => i + 1).filter(n => isOutsideSpec(q, n))
+  followUps.forEach((text, i) => lines.push(`${i + 1}. ${text.trim()}${outside.includes(i + 1) ? ' (outside the spec: file or drop only)' : ''}`))
+  lines.push('', '## Options', '', outside.length === 0 ? 'Every follow-up has the same three options:' : 'Every follow-up not marked outside the spec has these three options:', '')
   q.options.forEach((option, i) => lines.push(`${i + 1}. ${option.trim()}`))
+  if (outside.length > 0) {
+    const which = outside.length === 1 ? `Follow-up ${outside[0]} is` : `Follow-ups ${listed(outside.map(String))} are`
+    const allowed = optionsAllowed(q, outside[0]!)
+    lines.push(
+      '', `${which} outside the spec: the spec does not ask for the behaviour and the base branch does not have it, so it cannot be fixed in this pull request. It has only these two options, under the same numbers, and a vote to fix it is not counted:`, '',
+      ...allowed.map(n => `${n}. ${(q.options[n - 1] ?? '').trim()}`),
+    )
+  }
+  const voteWords = (n: number) => [...optionsAllowed(q, n).map(o => FOLLOW_UP_WORDS[o - 1]), 'none'].join('|')
   lines.push(
     '', '## Your answer', '',
     'End your report with one pair of these lines for each follow-up, in order, the number after VOTE and REASON being the follow-up\'s from the list above:',
     '',
     '```',
-    ...followUps.flatMap((_, i) => [`VOTE ${i + 1}: <fix|file|drop|none>`, `REASON ${i + 1}: <one sentence>`]),
+    ...followUps.flatMap((_, i) => [`VOTE ${i + 1}: <${voteWords(i + 1)}>`, `REASON ${i + 1}: <one sentence>`]),
     '```',
     '',
     `Vote fix, file or drop, or the option's number, to choose that option for the follow-up, or none when no option is right. Every member votes on every follow-up: one far from your own angle is still yours to judge as an engineer. The options are fixed, so propose no other. A follow-up without a readable VOTE line is not counted for you, and you will be launched again.`,
@@ -717,8 +770,10 @@ export function counselAnswer(
 
 // A follow-up's vote that could not be read, with its member, the
 // follow-up's number and the text the session reported. Like UnreadableVote,
-// it lives only in one tally call's value and answer.
-export type UnreadableFollowUp = { member: string; number: number; text: string }
+// it lives only in one tally call's value and answer. `outsideSpec` is set
+// when the vote was read but chose fix on a follow-up outside the spec, which
+// is not counted.
+export type UnreadableFollowUp = { member: string; number: number; text: string; outsideSpec?: true }
 
 type FollowUpVoteInput = { number?: unknown; vote?: unknown; reason?: unknown }
 
@@ -733,7 +788,9 @@ type FollowUpVoteInput = { number?: unknown; vote?: unknown; reason?: unknown }
 // for a member that failed, is no vote. A NEW OPTION is ignored, because the
 // options are fixed. A vote that cannot be read is left out, as a vote the
 // session left out is, and its text is returned in `unreadable` when it is
-// not empty, so the answer can quote it.
+// not empty, so the answer can quote it. A vote for an option the follow-up
+// does not allow, which is fix on a follow-up outside the spec, is treated
+// the same way, marked so that the answer says why.
 export function followUpVotesOf(q: CounselQuestion, round: unknown, input: unknown): { followUps: CounselVote[][]; unreadable: UnreadableFollowUp[] } | { refusal: string } {
   const followUps = q.followUps ?? []
   if (round !== 1) return { refusal: 'a follow-ups question has only round 1.' }
@@ -759,6 +816,10 @@ export function followUpVotesOf(q: CounselQuestion, round: unknown, input: unkno
       if ('unreadable' in vote) {
         const text = String(entry.vote ?? '')
         if (tidyVote(text) !== '') unreadable.push({ member, number, text })
+        continue
+      }
+      if (typeof vote.vote === 'number' && !optionsAllowed(q, number).includes(vote.vote)) {
+        unreadable.push({ member, number, text: String(entry.vote ?? ''), outsideSpec: true })
         continue
       }
       read[number - 1]!.push({ member, vote: vote.vote, reason: typeof entry.reason === 'string' ? entry.reason.trim() : '' })
@@ -823,12 +884,13 @@ function shownReason(reason: string | null): string | null {
 }
 
 // One follow-up as the tally's answer and the pane give it: its number and
-// text, the option the counsel chose, or null when it did not decide, the
-// votes for each option and for none, the members without a vote, and the
-// counsel's reason.
+// text, whether it is outside the spec, the option the counsel chose, or null
+// when it did not decide, the votes for each option and for none, the members
+// without a vote, and the counsel's reason.
 export type FollowUpOutcome = {
   number: number
   text: string
+  outsideSpec: boolean
   decision: string | null
   count: number
   counts: number[]
@@ -850,6 +912,7 @@ export function followUpOutcomes(q: CounselQuestion, t: CounselTally): FollowUpO
     return {
       number: i + 1,
       text: (q.followUps?.[i] ?? '').trim().replace(/\s+/g, ' '),
+      outsideSpec: isOutsideSpec(q, i + 1),
       decision: f.chosen === undefined ? null : (q.options[f.chosen - 1] ?? null),
       count: f.chosen === undefined ? 0 : (f.counts[f.chosen - 1] ?? 0),
       counts: f.counts,
@@ -874,13 +937,15 @@ export function followUpAskAgainAnswer(q: CounselQuestion, members: readonly str
   const lacking = members.map(member => {
     const numbers = missing.get(member) ?? []
     const which = numbers.length === 1 ? `follow-up ${numbers[0]}` : `follow-ups ${listed(numbers.map(String))}`
-    const quoted = unreadable.filter(u => u.member === member).map(u => ` Its vote on follow-up ${u.number} could not be read: ${quoteVote(u.text)}.`)
+    const quoted = unreadable.filter(u => u.member === member).map(u => (u.outsideSpec
+      ? ` Its vote on follow-up ${u.number}, ${quoteVote(u.text)}, is not counted: follow-up ${u.number} is outside the spec and cannot be fixed in this pull request, so vote file, drop or none.`
+      : ` Its vote on follow-up ${u.number} could not be read: ${quoteVote(u.text)}.`))
     return `- ${member}: no vote on ${which}.${quoted.join('')}`
   })
   return [
     `Refused: round 1 of ${q.id} is not counted, because every member votes on every follow-up and ${listed(members)} gave no vote on some of them. A member that failed, was stopped, abstained or wrote a vote that cannot be read has none.`,
     ...lacking,
-    ...(unreadable.length > 0 ? [READABLE_FOLLOW_UP_VOTE] : []),
+    ...(unreadable.some(u => u.outsideSpec !== true) ? [READABLE_FOLLOW_UP_VOTE] : []),
     launchLine(q.folder, members),
     `Then call counsel_tally again with id ${q.id}, round 1, and every member's follow_ups: the votes you already have and the new ${members.length === 1 ? 'one' : 'ones'}.`,
     `The mod recorded only that ${members.length === 1 ? 'this member was' : 'these members were'} asked again. A member asked again that still lacks a vote is counted without it: a follow-up is decided only by an option with 4 of the 7 votes, and is otherwise dropped, and the person is not asked.`,
@@ -890,14 +955,15 @@ export function followUpAskAgainAnswer(q: CounselQuestion, members: readonly str
 // What the tally tool answers once a follow-ups question is counted: one
 // sentence for each follow-up with its decision, its count and the counsel's
 // reason, or that the counsel did not decide, so it is dropped, with its
-// tally and the members without a vote. Then where each one goes in the
-// round's Follow-ups section, that nothing is owed to a review or a spec,
-// and not to ask the person.
+// tally and the members without a vote, each follow-up outside the spec
+// named as such. Then where each one goes in the round's Follow-ups section,
+// that nothing is owed to a review or a spec, and not to ask the person.
 export function followUpAnswer(q: CounselQuestion, t: CounselTally): string {
   const total = COUNSEL_MEMBERS.length
   const lines = [`Counted: the counsel voted on each follow-up on its own, and an option chosen by ${FOLLOW_UP_NEEDED} of the ${total} members decides one.`]
-  for (const o of followUpOutcomes(q, t)) {
-    const named = `- Follow-up ${o.number}, "${o.text}":`
+  const outcomes = followUpOutcomes(q, t)
+  for (const o of outcomes) {
+    const named = `- Follow-up ${o.number}${o.outsideSpec ? ' (outside the spec)' : ''}, "${o.text}":`
     if (o.decision !== null) {
       const why = o.reason === null ? 'No member that chose it gave a reason.' : `Its reason: ${sentence(o.reason)}`
       lines.push(`${named} the counsel decided to ${o.decision}, ${o.count} of ${total}. ${why}`)
@@ -911,6 +977,7 @@ export function followUpAnswer(q: CounselQuestion, t: CounselTally): string {
     '- A follow-up decided fix is fixed in the commit "Fix this round\'s cheap follow-ups", with the cheap ones, and goes in that commit\'s Fixed: list.',
     '- A follow-up decided file goes in the review\'s To file: list, with one sentence on what a person would see.',
     '- A follow-up decided drop goes in the review\'s Dropped: list. So does one the counsel did not decide, with its tally, the members without a vote and the words "the counsel did not decide".',
+    ...(outcomes.some(o => o.outsideSpec) ? ['- A follow-up outside the spec is written with the words (outside the spec) beside it, so its scope stays in the record.'] : []),
     'The Follow-ups section is the only record of these decisions: nothing is owed to any review or spec for them. Do not ask the person about them.',
   )
   return lines.join('\n')

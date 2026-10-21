@@ -252,11 +252,12 @@ waits on is real; if the wait is real, the session ends the turn.
    carried over to this head from the approved head before it is this
    head's verdict review.
 8. **The newest verdict at this head requests changes.** Fix its blocking
-   findings, set `waiting-on-author`, push. The push also carries the
-   cheap fixes that the second half committed, and the next round reviews
-   them. If it has no blocking finding left to fix, which should not
-   happen (see the second half's point 3), set `stuck` and ask the person
-   rather than wait for a change that will not come.
+   findings, except those outside the spec, in a commit that carries the
+   fix lines (see "A review round"), set `waiting-on-author`, push. The
+   push also carries the cheap fixes that the second half committed, and
+   the next round reviews them. If it has no blocking finding left to fix,
+   which should not happen (see the second half's point 3), set `stuck`
+   and ask the person rather than wait for a change that will not come.
 9. **Both verdicts approve at this head.** Waiting on checks happens here,
    and only here, so reviews and fixes never wait on them. Read the pull
    request again (`gh pr view <n> --json headRefOid,statusCheckRollup`) and
@@ -382,9 +383,10 @@ person, and never run `/cleanup`.
 - A cheap-fix commit is the one whose first line is the one the second
   half's point 4 gives. Its message holds the round's
   `Fixed:`, `Dropped:` and `To file:` lists. No other commit carries
-  lists, except that a first-half fix commit's message may end with a
-  `Dropped:` section. To find cheap-fix commits already on the pull
-  request, look for that first line in `gh pr view <n> --json commits`.
+  lists, except that a commit fixing review findings may hold the
+  `Dropped:` and `Outside the spec:` lists of the head it fixes. To find
+  cheap-fix commits already on the pull request, look for that first line
+  in `gh pr view <n> --json commits`.
 - While the pull request is open and the newest verdict at its head
   requests changes, push nothing here: step 8 pushes the commits with the
   blocking fixes, so the next round reviews both together.
@@ -417,12 +419,83 @@ The rule for rounds: from round 3, a blocking finding must be classed
 finding is asked once more with that rule quoted; a second unclassed
 request counts as follow-ups only.
 
+The rule for scope: every finding, focused and verdict alike, carries a
+`Scope:` line, either `in the spec` with the passage that asks for the
+feature the finding is about, `breaks working behaviour` with what works on
+the base branch and stops working at the head, or `outside the spec`, for a
+finding that asks for behaviour the spec does not ask for and the base
+branch does not have. A defect in code that the pull request adds to deliver
+what the spec asks for is in the spec, even when the spec does not name the
+protection that is missing. A finding that breaks working behaviour is in
+scope, whatever the spec says, and so is a safety finding, which blocks as
+before. A safety finding is any finding classed `SAFETY:`, any `[security]`
+finding, and any other finding that describes a security hole (an
+authorization boundary, injection, untrusted text reaching a shell or a
+model as an instruction, a widened privilege), data loss or corruption, a
+migration that cannot be undone safely, a credential exposed, a wrong deploy
+to production, or a breach of a guarantee the project's `CLAUDE.md` names as
+protected, whatever its label or the reviewer that raised it. The claim
+checker checks every scope mark. A finding whose scope after the check is
+outside the spec, or unsettled because the spec and the base cannot settle
+it, and that is neither a safety finding nor one that breaks working
+behaviour, is not fixed in this pull request, in either half, and does not
+block; it is listed under `Outside the spec:` and becomes a follow-up for
+the counsel (second half, point 4). Every later finding in an area that a
+`Trend:` line closed counts as outside the spec too, unless it breaks
+working behaviour or is a safety finding, which stays in scope as the rule
+above says (see **A streak of 3** below).
+
+The rule for repeats: the package's `## Already decided` section numbers the
+findings that earlier rounds dropped or put outside the spec, as `D1`, `D2`
+and so on. Before the claim checker, drop every finding that matches a
+decided item and brings no evidence the item did not have, whether or not
+the reviewer marked it with a `Repeats:` line, and list it under `Dropped:`
+as a repeat of D<n>. A repeat with new evidence goes to the claim checker
+like any finding.
+
+The round's lists: every refuted, speculative and repeat finding is listed
+under `Dropped:`, with the claim checker's reason or the item it repeats, and
+every finding outside the spec under `Outside the spec:`. Both lists go in
+the fix commit of the head where the finding was settled, or, when that head
+drew no fix commit, in the review posted at that head. The package reads
+them from there to build `## Already decided`, so write each list exactly
+so: the heading alone on its line, then one line per item starting `- `,
+and a blank line after the last item. An item repeated from an earlier list
+is copied word for word.
+
+The fix lines: every commit that fixes review findings, in the first half's
+point 4 or for a blocking verdict in step 8 of "With the pull request open",
+carries the line `Reviewed: <head>`, naming the head the findings were
+raised at, and one line `Area: <file>: <function or mechanism>` for each
+area a fixed finding lies in. Reuse the wording that the package's
+`## Areas fixed so far` gives an area already named, because an area worded
+differently starts a new streak. A commit that fixes only cheap follow-ups
+carries neither line.
+
+**A streak of 3.** When the package tool's first line says an area's
+streak has reached 3, launch no reviewer on that package. Put to the
+counsel, with `pull_request`, whether to keep going in that area, file the
+rest of the area's findings, or cut the area out, naming the area, its
+streak and the findings fixed there, read from the fix commits that name
+it. If the counsel does not decide, the person decides. Record the answer
+in a commit of its own with the line
+`Trend: <area>: <keep going | file the rest | cut it out>`, made with
+`git commit --allow-empty` when nothing else needs committing. For cut it
+out, that commit also removes the code in the area that this pull request
+added, and the gates that removal could move are rerun. Push it before any
+reviewer runs and go on as **When a turn ends** says; the new head's first
+half builds a new package. Keep going counts the area's streak from zero
+after that commit. File the rest and cut it out close the area. A `Trend:`
+line for one area changes nothing for any other, and its commit counts as a
+push like any other.
+
 **First half, at a head where the focused reviewers have not run** (**The
 focused reviewers have not run at this head** says which heads those are).
 
 1. Call `mcp__builder__package` with the issue in a few lines, the spec and
    plan paths, and the test summary line. It answers with the package
-   folder and the full head.
+   folder and the full head. When its first line reports a streak of 3, do
+   what **A streak of 3** says instead of going on.
 2. In one message, launch `builder:security-reviewer`,
    `builder:maintainability-reviewer`, `builder:performance-reviewer` and
    `builder:data-reviewer`, each with "Review package: <folder>. Head:
@@ -431,20 +504,21 @@ focused reviewers have not run at this head** says which heads those are).
    arrives as its own message once it finishes; wait for all four before
    going on.
 3. Merge findings that describe the same problem into one, naming every
-   reviewer that raised it. Number every finding marked
-   `Needs checking: yes` and give them, with the head, to one
-   `builder:claim-checker`. Drop what it refutes. A speculative finding is
-   dropped and listed as dropped in the round's review, never a code
-   change. When point 4 commits fixes, the commit's message ends with a
-   `Dropped:` section naming those findings, one sentence each on why, so
-   that a session that restarts before the review still has them.
-4. Fix every confirmed finding and every unmarked finding. Mechanical fixes
-   can go to an implementation agent. Rerun the gates the fixes could move, push,
-   and go on as **When a turn ends** says for a push: end the turn under
-   `Checks: expected`, or re-read with `mcp__builder__watch` and start the
-   list again under `Checks: none`.
+   reviewer that raised it, and drop the repeats as the rule for repeats
+   says. Number every finding left and give them all, with the package
+   folder and the head, to one `builder:claim-checker`, saying which are
+   marked `Needs checking: yes`; it checks the claim of those and the scope
+   of every one. Drop what it refutes and what it answers speculative,
+   never making a code change for either. Set aside every finding whose
+   scope is outside the spec or unsettled, unless it is a safety finding or
+   breaks working behaviour.
+4. Fix every finding left. Mechanical fixes can go to an implementation
+   agent. Commit with the fix lines and the round's lists, rerun the gates
+   the fixes could move, push, and go on as **When a turn ends** says for a
+   push: end the turn under `Checks: expected`, or re-read with
+   `mcp__builder__watch` and start the list again under `Checks: none`.
 5. With nothing to fix, start the list again from **Merged** in the same
-   turn (see "When a turn ends").
+   turn (see "When a turn ends"). The head's lists then go in its review.
 
 **Second half, once the focused reviewers found nothing to fix at the head.**
 
@@ -452,18 +526,25 @@ focused reviewers have not run at this head** says which heads those are).
    `builder:adversarial-reviewer` with "Review package: <folder>. Head:
    <full sha>. This is the round package.md states." Every head that
    drew a verdict review was a round, whichever way it went.
-2. Send their findings marked `Needs checking: yes` to one
-   `builder:claim-checker`, and drop what it refutes.
+2. Drop the repeats as the rule for repeats says, and give every finding
+   left to one `builder:claim-checker`, as the first half's point 3 does.
+   Drop what it refutes, and set aside every finding whose scope is outside
+   the spec or unsettled, unless it is a safety finding or breaks working
+   behaviour.
 3. Settle each reviewer's verdict. Take it from its `VERDICT:` line,
    except that a `REQUEST_CHANGES` whose blocking findings the claim
    checker all refuted, or that the rule for rounds turns into follow-ups,
-   counts as `APPROVE`, and the review says so and why. Otherwise the pull
-   request would wait on a change nobody has to make. The points below use
-   the verdicts settled here.
+   or whose surviving blocking findings are all outside the spec, counts as
+   `APPROVE`, and the review says so and why. Otherwise the pull request
+   would wait on a change nobody has to make. The points below use the
+   verdicts settled here.
 4. Sort every `FOLLOW-UP:` that survived, including those point 3 turned
    into follow-ups, into one of three kinds. A follow-up with no
    `If never fixed:` part counts as `If never fixed: nothing visible`,
-   unless the finding plainly describes a visible failure.
+   unless the finding plainly describes a visible failure. A finding
+   outside the spec, blocking or not, is always for the counsel, however
+   cheap, and so is every item listed under `Outside the spec:` at this
+   head or at an earlier head since the last review.
    - **Cheap:** wording in specs, plans, comments and the README,
      rewrapping, renames, and small test tightening. Fix it in this pull
      request. A visible problem small enough to fix is fixed in this pull
@@ -491,11 +572,14 @@ focused reviewers have not run at this head** says which heads those are).
    decided follow-up to the counsel again. An item listed under `Fixed:`,
    `To file:` or `Dropped:` in one of those is decided, including an item
    of a review posted before the counsel decided follow-ups, whose sort
-   stands as it was made. An item listed under `Undecided:` is not.
+   stands as it was made. An item listed under `Undecided:` or
+   `Outside the spec:` is not.
    - **A verdict requests changes:** the counsel does not sit. List every
      follow-up for the counsel that it has not yet decided under
      `Undecided:` in this round's review, so that the next round in which
-     both verdicts approve puts it to the counsel.
+     both verdicts approve puts it to the counsel. An item outside the spec
+     keeps its scope there, ending with the words "outside the spec", so
+     that it reaches the counsel as outside the spec.
    - **Both verdicts approve and no follow-up is left to decide:** the
      counsel does not sit.
    - **Both verdicts approve and follow-ups are left to decide:** put every
@@ -585,16 +669,18 @@ focused reviewers have not run at this head** says which heads those are).
    `mcp__builder__post_review` with the head and the verdicts point 3
    settled. The body has: each distinct surviving finding once, naming the
    reviewers that raised it; the focused reviewers that ran, what they
-   found and what was fixed in which commit; what the claim checker
-   refuted; and a section headed **Follow-ups** with four lists:
+   found and what was fixed in which commit; this head's findings outside
+   the spec, under `Outside the spec:`; and a section headed **Follow-ups**
+   with four lists:
    `Fixed:`, each item with its commit; `Undecided:`, each with one or two
    sentences on what it is and what a person would see if it is never
    fixed, which holds items only in a round where a verdict requests
    changes; `Dropped:`, each with one sentence on why, including the
-   speculative findings the first half dropped at this head and at earlier
+   refuted, speculative and repeat findings of this head and of earlier
    heads since the last review, which those heads' fix commits hold in
-   their `Dropped:` sections; and `To file:`, each with one sentence on
-   what a person would see. An empty list says `None.`.
+   their `Dropped:` lists; and `To file:`, each with one sentence on
+   what a person would see. An empty list says `None.`. Every list is
+   written as the round's lists say.
 
    An item the counsel decided says so, with the count and the counsel's
    one-line reason, such as "The counsel decided to file it, 5 of 7:
@@ -930,9 +1016,13 @@ further twenty, all in the same round, with all seven members launched for
 each call. Call `mcp__builder__counsel` with the question, the background,
 the paths and the session's lean as usual, and with `follow_ups` in place of
 `options`: a list of the follow-ups, each in one or two sentences saying
-what it is and what a person would see if it is never fixed. The mod gives
-every follow-up the same three options, fix it in this pull request, file
-it as an issue, or drop it. This call never passes `pull_request`, and the
+what it is and what a person would see if it is never fixed. A follow-up
+outside the spec is passed as `{ text, outside_spec: true }`, and every
+other one as its text. The mod gives every follow-up three options, fix it
+in this pull request (1), file it as an issue (2), or drop it (3), except
+that a follow-up outside the spec is offered only file and drop; a vote to
+fix one is not counted, and the tally asks that member again. This call
+never passes `pull_request`, and the
 tool refuses it if it does, because its decisions are recorded in the
 round's review, in the **Follow-ups** section, and nowhere else: not in the
 spec, and not in a paragraph the mod adds to a review. Launch all seven

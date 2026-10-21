@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import {
   abstainerReason, afterAskAgain, afterTally, askAgainAnswer, askOrder, briefAnswer, briefFactsOf, briefRefusal, briefText, COUNSEL_KEPT, counselAnswer, decisionLine, destinationOf, endedDecisionLines,
-  FOLLOW_UP_OPTIONS, FOLLOW_UP_PATTERNS, FOLLOW_UP_WORDS, followUpAnswer, followUpAskAgainAnswer, followUpOutcomes, followUpsRefusal, followUpStepOf, followUpTally, followUpVotesOf,
+  FOLLOW_UP_OPTIONS, FOLLOW_UP_PATTERNS, FOLLOW_UP_WORDS, followUpAnswer, followUpAskAgainAnswer, followUpOutcomes, followUpsInput, followUpsRefusal, followUpStepOf, followUpTally, followUpVotesOf, optionsAllowed,
   keepCounsel, MAX_FOLLOW_UPS, MAX_OPTIONS, neededOf, neverStartedCandidatesOf, neverStartedOf, noOptionCount, QUOTE_CHARS, quoteVote, READABLE_FOLLOW_UP_VOTE, READABLE_VOTE, readVote, reviewParagraph, stepOf, tally, turnoutOf,
   votesOf, type WatchedState, WITHHELD_REASON, WITHHELD_VOTE,
 } from '../hooks/counsel'
@@ -1091,4 +1091,117 @@ test('the decisions still owed to a pull request that ended are worded once, wit
     '- R? B.',
     'Leave out any line the spec already has.',
   ])
+})
+
+// A follow-ups question whose second follow-up is outside the spec, as the
+// counsel tool records it.
+const OUTSIDE = 'builder:spec-reviewer'
+const outsideQuestion = () => followUpsQuestion({ outsideSpec: [2] })
+const OUTSIDE_SENTENCE = 'follow-up 2 is outside the spec and cannot be fixed in this pull request'
+
+test('a follow-up outside the spec is given as an object with outside_spec true, and any other object is refused', () => {
+  expect(followUpsRefusal('Q?', ['one', { text: 'two', outside_spec: true }], undefined, undefined)).toBeNull()
+  for (const bad of [
+    { text: 'two', outside_spec: false },
+    { text: 'two' },
+    { outside_spec: true },
+    { text: '  ', outside_spec: true },
+    { text: 'two', outside_spec: true, scope: 'outside' },
+    { text: 'two', outside_spec: 'true' },
+  ]) {
+    const refusal = followUpsRefusal('Q?', ['one', bad], undefined, undefined)
+    expect([bad, refusal?.includes('outside_spec: true')]).toEqual([bad, true])
+  }
+  expect(followUpsRefusal('Q?', ['The poll logs twice.', { text: ' the POLL logs twice.', outside_spec: true }], undefined, undefined)).toContain('same thing')
+  expect(followUpsInput(['one', { text: ' two ', outside_spec: true }, 'three'])).toEqual({ followUps: ['one', 'two', 'three'], outsideSpec: [2] })
+  expect(followUpsInput(['one'])).toEqual({ followUps: ['one'] })
+})
+
+test('the follow-ups record has no outsideSpec key when no follow-up is outside the spec', () => {
+  expect('outsideSpec' in followUpsInput(['one', 'two'])).toBe(false)
+  expect(followUpsInput(['one', { text: 'two', outside_spec: true }]).outsideSpec).toEqual([2])
+})
+
+test('the options a follow-up allows are file and drop when it is outside the spec, and all three otherwise', () => {
+  const q = outsideQuestion()
+  expect(optionsAllowed(q, 1)).toEqual([1, 2, 3])
+  expect(optionsAllowed(q, 2)).toEqual([2, 3])
+  expect(optionsAllowed(followUpsQuestion(), 2)).toEqual([1, 2, 3])
+})
+
+test('the brief offers a follow-up outside the spec only file and drop, keeping their numbers, and says why', () => {
+  const q = outsideQuestion()
+  expect(briefFactsOf(q).outsideSpec).toEqual([2])
+  const text = briefText(briefFactsOf(q), [])
+  expect(text).toContain('VOTE 1: <fix|file|drop|none>')
+  expect(text).toContain('VOTE 2: <file|drop|none>')
+  expect(text).toContain('VOTE 3: <fix|file|drop|none>')
+  expect(text).toContain('2. The poll logs every look twice. (outside the spec: file or drop only)')
+  expect(text).toContain('Follow-up 2 is outside the spec')
+  expect(text).toContain('2. file it as an issue\n3. drop it')
+  expect(text).toContain('cannot be fixed in this pull request')
+})
+
+test('the brief names every follow-up outside the spec when there are several, and offers each only file and drop', () => {
+  const text = briefText(briefFactsOf(followUpsQuestion({ outsideSpec: [1, 3] })), [])
+  expect(text).toContain('Follow-ups 1 and 3 are outside the spec')
+  expect(text).toContain('VOTE 1: <file|drop|none>')
+  expect(text).toContain('VOTE 2: <fix|file|drop|none>')
+  expect(text).toContain('VOTE 3: <file|drop|none>')
+})
+
+test('a vote to fix a follow-up outside the spec is not counted and sends the member back, while fix on a follow-up in scope still counts', () => {
+  const q = outsideQuestion()
+  for (const fixVote of ['fix', '1', 'option 1', '**fix**']) {
+    const rows: (string | undefined)[][] = [
+      ['fix', 'fix', 'fix', 'fix', 'drop', 'drop', 'drop'],
+      [fixVote, 'file', 'file', 'file', 'drop', 'drop', 'drop'],
+      ['drop', 'drop', 'drop', 'drop', 'drop', 'drop', 'drop'],
+    ]
+    const read = followUpRead(q, followUpRaws(rows))
+    expect(read.unreadable).toEqual([{ member: OUTSIDE, number: 2, text: fixVote, outsideSpec: true }])
+    // The spec reviewer's fix on the first follow-up, in scope, is counted.
+    expect(read.followUps[0]?.find(v => v.member === OUTSIDE)?.vote).toBe(1)
+    expect(read.followUps[1]?.some(v => v.member === OUTSIDE)).toBe(false)
+    const step = followUpStepOf(q, read.followUps)
+    expect(step).toEqual({ askAgain: [OUTSIDE] })
+    const asked = followUpAskAgainAnswer(q, [OUTSIDE], read.followUps, read.unreadable)
+    expect(asked).toContain(`- ${OUTSIDE}: no vote on follow-up 2.`)
+    expect(asked).toContain(OUTSIDE_SENTENCE)
+    expect(asked).not.toContain(READABLE_FOLLOW_UP_VOTE)
+  }
+})
+
+test('the answer names a follow-up outside the spec, so its scope reaches the review', () => {
+  const q = outsideQuestion()
+  const read = followUpRead(q, followUpRaws([
+    ['fix', 'fix', 'fix', 'fix', 'drop', 'drop', 'drop'],
+    ['file', 'file', 'file', 'file', 'drop', 'drop', 'drop'],
+    ['drop', 'drop', 'drop', 'drop', 'drop', 'drop', 'drop'],
+  ]))
+  const step = followUpStepOf(q, read.followUps)
+  if (!('tally' in step)) throw new Error('the round was not counted')
+  const recorded = afterTally(q, step.tally)
+  expect(followUpOutcomes(recorded, step.tally).map(o => o.outsideSpec)).toEqual([false, true, false])
+  const answer = followUpAnswer(recorded, step.tally)
+  expect(answer).toContain('- Follow-up 2 (outside the spec), "The poll logs every look twice.": the counsel decided to file it as an issue, 4 of 7.')
+  expect(answer).toContain('- Follow-up 1, "The pane cuts long agent names.": the counsel decided to fix it in this pull request, 4 of 7.')
+  expect(answer).toContain('(outside the spec) beside it')
+})
+
+test('a stored follow-ups question without outsideSpec reads every follow-up as in scope', () => {
+  const q = followUpsQuestion()
+  expect(q.outsideSpec).toBeUndefined()
+  expect(briefFactsOf(q).outsideSpec).toBeUndefined()
+  expect(briefText(briefFactsOf(q), [])).not.toContain('outside the spec')
+  const read = followUpRead(q, followUpRaws([
+    ['fix', 'fix', 'fix', 'fix', 'drop', 'drop', 'drop'],
+    ['fix', 'fix', 'fix', 'fix', 'drop', 'drop', 'drop'],
+    ['fix', 'fix', 'fix', 'fix', 'drop', 'drop', 'drop'],
+  ]))
+  expect(read.unreadable).toEqual([])
+  const step = followUpStepOf(q, read.followUps)
+  if (!('tally' in step)) throw new Error('the round was not counted')
+  expect(step.tally.followUps?.map(f => f.chosen)).toEqual([1, 1, 1])
+  expect(followUpAnswer(afterTally(q, step.tally), step.tally)).not.toContain('(outside the spec)')
 })
