@@ -3,7 +3,7 @@ import type { EngineInterface, PromptSubmitInput, Register, ResolveInput, ToolCa
 
 import { decide, desktopOf, needsList, slotOutcome, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
 import { isSvgSurface } from './art'
-import { becameParentAnswer, COMMAND, commandOf, slotsAnswer } from './commands'
+import { becameParentAnswer, COMMAND, commandOf, PASSED_ON, slotsAnswer, type Command } from './commands'
 import { failureLine, listSessions, NUDGE_TEXT, openSession, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
 import { keptLine, keptNames, NOTED, NOTES_KEPT, notesIn } from './notes'
 import { bandTree, PANE, paneTree, type Elements, type View } from './pane'
@@ -570,10 +570,33 @@ async function choiceFor($: $, e: PromptSubmitInput): Promise<Choice> {
   return names === null ? { kind: 'noted' } : { kind: 'keep', line: keptLine(names) }
 }
 
-// What /start-foreman answers once it is done.
+// What /start-foreman answers once it is done. When the person typed words
+// after the command and the count, they go to the parent's model as the
+// person's own prompt, after the role is on, so that the model reads them as
+// the parent. They are submitted from a timer, because the engine refuses a
+// prompt submitted from inside the command's hook.
 async function runCommand($: $, args: string): Promise<string> {
   const command = commandOf(args)
   if (command.kind === 'refused') return command.text
+  const answer = await applyCommand($, command)
+  if (command.prompt === null) return answer
+  const prompt = command.prompt
+  later($, () => passOn($, prompt))
+  return `${answer} ${PASSED_ON}`
+}
+
+// Submits the words the person typed after /start-foreman as their own
+// prompt. A refusal is logged, so the person can see why nothing answered.
+async function passOn($: $, prompt: string) {
+  try {
+    const submitted = await $.prompt.submit({ text: prompt, asUser: true })
+    if (submitted.drop !== undefined) await addLog($, `Could not pass on the words after /start-foreman (${printable(submitted.drop, 120)}).`)
+  } catch (error) {
+    await addLog($, `Could not pass on the words after /start-foreman (${reasonOf(error)}).`)
+  }
+}
+
+async function applyCommand($: $, command: Exclude<Command, { kind: 'refused' }>): Promise<string> {
   // Setting the slot count also makes the session the parent, because a
   // count given to a session that is not one is never what the person meant.
   if (command.kind === 'slots') {

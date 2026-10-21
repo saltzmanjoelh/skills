@@ -199,29 +199,74 @@ test('after a reload whose read is not yet due, the end of a turn arms the timer
 test('after a reload that lost the timer, a refused /start-foreman arms it again', async ($, on) => {
   const w = world(on)
   leftInState(on, { tickets: w.stored.get(ticketsKey('session-1')), parent: { isOn: true, slots: null }, nextReadAt: T0 + 20 * SECOND, readAt: T0 - 100 * SECOND })
-  await foreman($, 'x')
+  await foreman($, '0')
   await w.clock.advance(19 * SECOND)
   expect(w.folder.lists).toBe(0)
   await w.clock.advance(SECOND)
   expect(w.folder.lists).toBe(1)
 })
 
-test('/start-foreman <n> sets the count, and a count outside 1 to 20 or any other argument is refused and changes nothing', async ($, on) => {
-  world(on)
+test('/start-foreman <n> sets the count, and a count outside 1 to 20 is refused and changes nothing', async ($, on) => {
+  const w = world(on)
   const ui = await mountBoth($, on)
   await start($)
   await foreman($)
   expect((await foreman($, '1')).text).toBe('This parent now runs 1 sub session at once.')
   expect((await foreman($, '3')).text).toBe('This parent now runs 3 sub sessions at once.')
   expect(await ui.bandText()).toContain('0 of 3 slots busy')
-  for (const bad of ['0', '2.5', '21']) {
+  for (const bad of ['0', '2.5', '21', '0 start two issues']) {
     expect((await foreman($, bad)).text).toContain('from 1 to 20')
     expect(await ui.bandText()).toContain('0 of 3 slots busy')
   }
-  for (const bad of ['x', 'pause', 'slots 3']) {
-    expect((await foreman($, bad)).text).toContain('Use /start-foreman')
-    expect(await ui.bandText()).toContain('0 of 3 slots busy')
+  await w.clock.settle()
+  expect(w.engine.prompts).toEqual([])
+})
+
+test('/start-foreman <n> with words after it makes the session the parent first, then sends the words to the model as the person\'s prompt', async ($, on) => {
+  const w = world(on)
+  let wasParentWhenSent: unknown = 'not sent'
+  w.engine.onSubmit = () => {
+    wasParentWhenSent = w.stored.get('parent:session-1')
   }
+  const ui = await mountBoth($, on)
+  await start($)
+  const answer = await foreman($, '2 clean up the worktrees, then start the next 2 issues')
+  await w.clock.settle()
+  expect(answer.text).toBe('This session is now the parent and runs 2 sub sessions at once, and foreman shows its sub sessions above the prompt and in its pane. It passes the rest of your line to this session as your prompt.')
+  expect(await ui.bandText()).toContain('0 of 2 slots busy')
+  expect(w.engine.prompts).toEqual(['clean up the worktrees, then start the next 2 issues'])
+  expect(wasParentWhenSent).toEqual({ isOn: true, slots: 2 })
+})
+
+test('/start-foreman with words and no count makes the session the parent and sends every word to the model', async ($, on) => {
+  const w = world(on)
+  await mountBoth($, on)
+  await start($)
+  const answer = await foreman($, 'start the next issue')
+  await w.clock.settle()
+  expect(answer.text).toBe('This session is now the parent, and foreman shows its sub sessions above the prompt and in its pane. It passes the rest of your line to this session as your prompt.')
+  expect(w.stored.get('parent:session-1')).toEqual({ isOn: true, slots: null })
+  expect(w.engine.prompts).toEqual(['start the next issue'])
+})
+
+test('words after /start-foreman that the engine refuses leave a line in the log', async ($, on) => {
+  const w = world(on)
+  w.engine.submit = 'dropped'
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($, 'start the next issue')
+  await w.clock.settle()
+  expect(await ui.newestLog()).toBe('Could not pass on the words after /start-foreman (a Stop stands).')
+})
+
+test('/start-foreman with nothing after it, or only a count, sends no prompt', async ($, on) => {
+  const w = world(on)
+  await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await foreman($, '4')
+  await w.clock.settle()
+  expect(w.engine.prompts).toEqual([])
 })
 
 test('/start-foreman <n> in a session that is not the parent makes it the parent with that count, reads the folder and opens the pane', async ($, on) => {
@@ -240,7 +285,9 @@ test('a refused /start-foreman leaves a session that is not the parent as it was
   const w = world(on)
   const ui = await mountBoth($, on)
   await start($)
-  expect((await foreman($, 'pause')).text).toContain('Use /start-foreman')
+  expect((await foreman($, '0 pause')).text).toContain('from 1 to 20')
+  await w.clock.settle()
+  expect(w.engine.prompts).toEqual([])
   expect(await ui.bandText()).toBe('')
   expect(w.folder.lists).toBe(0)
   expect(w.panes).toEqual([])

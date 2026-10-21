@@ -113,6 +113,8 @@ export function engine(on: On) {
     started: [] as Record<string, unknown>[],
     notify: 'sent' as 'sent' | 'off' | 'throws' | 'hang',
     submit: 'ok' as 'ok' | 'dropped',
+    // Called as each prompt is submitted, so a test can see what held then.
+    onSubmit: (() => undefined) as () => void,
     startAnswer: 'Started the session local_new1 (name: example).',
     // Whether start_session's answer leaves out the text, giving the result alone.
     startResultOnly: false,
@@ -128,6 +130,7 @@ export function engine(on: On) {
   })
   on('prompt.submit', ($, e) => {
     if (answers.submit === 'dropped') return { drop: 'a Stop stands' }
+    answers.onSubmit()
     answers.prompts.push(e.text)
     return { text: e.text, ...(e.context === undefined ? {} : { context: e.context }) }
   })

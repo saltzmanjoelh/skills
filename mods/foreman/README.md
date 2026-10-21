@@ -29,7 +29,8 @@ Foreman does nothing in a session until that session runs `/start-foreman`. Ever
 | Command | What it does |
 |---|---|
 | `/start-foreman` | Makes this session the parent, reads the status folder at once and opens the pane. |
-| `/start-foreman <n>` | Does the same, and sets how many sub sessions this parent runs at once, a whole number from 1 to 20. In a session that is already the parent, it only changes the count. Any other count is refused with the range, any other argument is refused with the usage, and neither changes anything. |
+| `/start-foreman <n>` | Does the same, and sets how many sub sessions this parent runs at once, a whole number from 1 to 20. In a session that is already the parent, it only changes the count. Any other count is refused with the range and changes nothing. |
+| `/start-foreman [n] <words>` | Does what the command does without the words, and then sends the words to this session's model as the person's own prompt, for example `/start-foreman 2 clean up the worktrees, then start the next two issues`. The words are not sent when the count is refused. |
 
 The role, the slot count and the tickets are kept in the session's state and in the mod's store under the session's id, so a resumed session or a reload of the mod finds them again. Without a count, the count is the `slots` option in the mod's settings, which defaults to two.
 

@@ -9,7 +9,6 @@ export const COMMAND = 'start-foreman'
 export const MIN_SLOTS = 1
 export const MAX_SLOTS = 20
 
-export const USAGE = `Use /${COMMAND} to make this session the parent, or /${COMMAND} <n> to do the same and set how many sub sessions it runs at once.`
 export const RANGE = `The slot count must be a whole number from ${MIN_SLOTS} to ${MAX_SLOTS}, so it was left as it was.`
 
 // What /start-foreman <n> answers in a session that was already the parent:
@@ -22,21 +21,31 @@ export const becameParentAnswer = (count: number) =>
 
 const subSessions = (count: number) => (count === 1 ? 'session' : 'sessions')
 
+// What /start-foreman adds to its answer when it passes the person's words on.
+export const PASSED_ON = 'It passes the rest of your line to this session as your prompt.'
+
+// `prompt` is what the person typed after the command and the count, which
+// the parent's model reads as the person's own prompt once the role is on, or
+// null when nothing followed.
 export type Command =
-  | { kind: 'on' }
-  | { kind: 'slots'; count: number }
+  | { kind: 'on'; prompt: string | null }
+  | { kind: 'slots'; count: number; prompt: string | null }
   | { kind: 'refused'; text: string }
 
-// The command the arguments ask for. No arguments turn the role on. One word
-// that is a whole number from 1 to 20 also sets the slot count. A word that
-// starts with a digit but is not such a number is refused with the range, and
-// any other form is refused with the usage.
+// The command the arguments ask for. No arguments turn the role on. A first
+// word that is a whole number from 1 to 20 also sets the slot count. A first
+// word that starts with a digit or a minus sign but is not such a number is
+// refused with the range, and nothing else happens, so the words after it are
+// not passed on either. Every other word, from the first one that is not the
+// count, is the person's prompt for the parent's model, such as "2 clean up
+// the worktrees, then start the next two issues".
 export function commandOf(args: string): Command {
-  const words = (typeof args === 'string' ? args : '').trim().split(/\s+/).filter(word => word !== '')
-  if (words.length === 0) return { kind: 'on' }
-  const raw = words[0]!
-  if (words.length > 1 || !/^[-\d]/.test(raw)) return { kind: 'refused', text: USAGE }
+  const text = (typeof args === 'string' ? args : '').trim()
+  if (text === '') return { kind: 'on', prompt: null }
+  const raw = text.split(/\s+/)[0]!
+  if (!/^[-\d]/.test(raw)) return { kind: 'on', prompt: text }
   const count = Number(raw)
   if (!/^\d+$/.test(raw) || count < MIN_SLOTS || count > MAX_SLOTS) return { kind: 'refused', text: RANGE }
-  return { kind: 'slots', count }
+  const rest = text.slice(raw.length).trim()
+  return { kind: 'slots', count, prompt: rest === '' ? null : rest }
 }
