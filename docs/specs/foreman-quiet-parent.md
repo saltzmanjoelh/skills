@@ -148,8 +148,11 @@ foreman's live store for the ledger of the real parent run. It found:
   this change; nothing is dropped by mistake.
 - If the model ignores the context line, it replies with a line of progress,
   as it does today.
-- If the app changes the `start_session` answer so that the id no longer
-  follows a `local_` match the hook reads, the pinned test fails.
+- The pinned test holds its own copy of today's `start_session` answer, so it
+  fails when the hook's reading of that wording changes, not when the app's
+  wording does. If the app changes its answer so that the hook reads no id
+  or the wrong one, sub sessions go unpaired and their notes reach the model
+  again, with the "Noted." line.
 
 ## Verification
 
