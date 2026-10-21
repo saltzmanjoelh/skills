@@ -1114,7 +1114,12 @@ test('a follow-up outside the spec is given as an object with outside_spec true,
   }
   expect(followUpsRefusal('Q?', ['The poll logs twice.', { text: ' the POLL logs twice.', outside_spec: true }], undefined, undefined)).toContain('same thing')
   expect(followUpsInput(['one', { text: ' two ', outside_spec: true }, 'three'])).toEqual({ followUps: ['one', 'two', 'three'], outsideSpec: [2] })
-  expect(followUpsInput(['one'])).toEqual({ followUps: ['one'], outsideSpec: [] })
+  expect(followUpsInput(['one'])).toEqual({ followUps: ['one'] })
+})
+
+test('the follow-ups record has no outsideSpec key when no follow-up is outside the spec', () => {
+  expect('outsideSpec' in followUpsInput(['one', 'two'])).toBe(false)
+  expect(followUpsInput(['one', { text: 'two', outside_spec: true }]).outsideSpec).toEqual([2])
 })
 
 test('the options a follow-up allows are file and drop when it is outside the spec, and all three otherwise', () => {

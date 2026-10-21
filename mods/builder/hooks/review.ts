@@ -230,12 +230,12 @@ function labelled(message: string, label: string): string[] {
 }
 
 // The group a commit with Area: lines belongs to: its own sha when it has no
-// Reviewed: line, the full sha of the branch commit whose sha starts with the
-// Reviewed: value, or the value itself when it is not hex or matches none.
+// Reviewed: line, or the full sha of the branch commit whose sha starts with
+// the Reviewed: value. Any value that matches no branch commit, including one
+// that is not hex at all, keys a group of its own.
 function groupKeyOf(c: CommitRecord, reviewed: string | undefined, commits: readonly CommitRecord[]): string {
   const prefix = reviewed?.toLowerCase() ?? ''
   if (prefix === '') return c.sha
-  if (!/^[0-9a-f]+$/.test(prefix)) return `reviewed ${prefix}`
   const matched = commits.find(other => other.sha.startsWith(prefix))
   if (matched === undefined) return `reviewed ${prefix}`
   return matched.sha
@@ -244,6 +244,19 @@ function groupKeyOf(c: CommitRecord, reviewed: string | undefined, commits: read
 // Whether a group names the area in a commit after the one at index after.
 function namesAreaAfter(group: { named: { index: number; area: string }[] }, area: string, after: number): boolean {
   return group.named.some(n => n.area === area && n.index > after)
+}
+
+// The area and answer of a Trend: line's value, or undefined when it has no
+// colon, names no area or gives an answer that is not one of TREND_ANSWERS.
+function trendLineOf(value: string): { area: string; answer: TrendAnswer } | undefined {
+  const split = value.lastIndexOf(':')
+  if (split === -1) return undefined
+  const area = areaKey(value.slice(0, split))
+  const said = value.slice(split + 1).replace(/\.$/, '')
+  const answer = TREND_ANSWERS.find(a => sameText(a, said))
+  if (area === '') return undefined
+  if (answer === undefined) return undefined
+  return { area, answer }
 }
 
 // The areas fixed on the branch and their streaks, from the Reviewed:, Area:
@@ -267,11 +280,9 @@ export function trendOf(commits: readonly CommitRecord[]): TrendReport {
   const unreadable: string[] = []
   commits.forEach((c, index) => {
     for (const value of labelled(c.message, 'Trend:')) {
-      const split = value.lastIndexOf(':')
-      const area = split === -1 ? '' : areaKey(value.slice(0, split))
-      const answer = TREND_ANSWERS.find(a => split !== -1 && sameText(a, value.slice(split + 1).replace(/\.$/, '')))
-      if (area === '' || answer === undefined) unreadable.push(printable(value, AREA_CHARS))
-      else answers.set(area, { index, answer })
+      const answered = trendLineOf(value)
+      if (answered === undefined) unreadable.push(printable(value, AREA_CHARS))
+      else answers.set(answered.area, { index, answer: answered.answer })
     }
     const areas = labelled(c.message, 'Area:').filter(area => areaKey(area) !== '')
     const reviewed = labelled(c.message, 'Reviewed:')[0]
@@ -314,8 +325,9 @@ export function trendOf(commits: readonly CommitRecord[]): TrendReport {
   }
 }
 
-// The package's `## Areas fixed so far` section, or None yet when no fix
-// commit has named an area, listed none without one, or recorded a trend.
+// The package's `## Areas fixed so far` section. The section reads `None yet.`
+// when no area was named, no commit fixed findings without an Area: line, no
+// area was closed and no Trend: line was unreadable.
 export function trendSection(report: TrendReport): string {
   const lines = ['## Areas fixed so far', '']
   const nothing = report.areas.length === 0 && report.unlabelled.length === 0 && report.closed.length === 0 && report.unreadable.length === 0

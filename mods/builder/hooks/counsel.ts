@@ -82,13 +82,13 @@ const followUpTextOf = (value: string | FollowUpObject) => (typeof value === 'st
 
 // The follow-ups as the question records them: their texts, trimmed, in the
 // order given, and the numbers, counted from 1, of those outside the spec.
-// Only input that followUpsRefusal accepted is read here.
-export function followUpsInput(raw: readonly unknown[]): { followUps: string[]; outsideSpec: number[] } {
+// The numbers are left out when there are none, so a question with none
+// outside the spec is stored as one was before follow-ups could be outside
+// the spec. Only input that followUpsRefusal accepted is read here.
+export function followUpsInput(raw: readonly unknown[]): Pick<CounselQuestion, 'followUps' | 'outsideSpec'> {
   const given = raw.filter(isFollowUp)
-  return {
-    followUps: given.map(followUpTextOf),
-    outsideSpec: given.flatMap((value, i) => (typeof value === 'string' ? [] : [i + 1])),
-  }
+  const outsideSpec = given.flatMap((value, i) => (typeof value === 'string' ? [] : [i + 1]))
+  return { followUps: given.map(followUpTextOf), ...(outsideSpec.length > 0 ? { outsideSpec } : {}) }
 }
 
 // The options follow-up n of a question allows, by number: file and drop for

@@ -1899,14 +1899,6 @@ async function counselDestination($: $, named: unknown): Promise<ReturnType<type
   return destinationOf(named, watched, state)
 }
 
-// The follow-ups a question records, with the numbers of those outside the
-// spec only when there are any, so a question with none in that list is
-// stored as one was before follow-ups could be outside the spec.
-function followUpsRecord(raw: readonly unknown[]): Pick<CounselQuestion, 'followUps' | 'outsideSpec'> {
-  const { followUps, outsideSpec } = followUpsInput(raw)
-  return { followUps, ...(outsideSpec.length > 0 ? { outsideSpec } : {}) }
-}
-
 // Writes the brief, then records the question; a refusal or a failed write
 // records nothing. Where a decision goes is settled first, before an id is
 // taken or anything is written, and when the question is put, not when it is
@@ -1954,7 +1946,7 @@ async function serveCounsel($: $, input: CounselInput): Promise<string> {
     tallies: [],
     ...(owedTo ? { pr: owedTo } : {}),
     launchedAt: await $.clock.now(),
-    ...(isFollowUps ? followUpsRecord(input.follow_ups as unknown[]) : {}),
+    ...(isFollowUps ? followUpsInput(input.follow_ups as unknown[]) : {}),
   }
   try {
     await $.fs.write(`${folder}/brief.md`, briefText(briefFactsOf(q), unwritten))
