@@ -67,9 +67,10 @@ asked for one, tell them so in one line."
    `start_session` call for that key that the app accepts, seen by the start
    hook, including one the app answers with a proposal card, because the
    decision then sits with the person; or a read of the desktop app's list of
-   sessions that shows a session whose `isRunning` is exactly true, which is
-   not archived, and whose title begins with that exact key followed by a
-   space or a colon. Foreman reads the list for this only while a key is
+   sessions that shows a session whose `isArchived` is exactly false and
+   whose title begins with that exact key followed by a space or a colon.
+   The list's `isRunning` is left out, because it says whether a turn is in
+   progress, and is false for a started session that is idle between turns. Foreman reads the list for this only while a key is
    held, as part of its periodic read, and logs each release. Foreman has no
    command that turns the role off, so the holds live in the parent's ledger
    for as long as the parent does, and a session that becomes a parent
@@ -94,8 +95,9 @@ asked for one, tell them so in one line."
 - A neighbouring key, such as `ABC-1234` for a held `ABC-123`: it does not
   release the hold, because the title must have a space or a colon right
   after the key.
-- A list entry whose running flag is missing or not a boolean, or which is
-  archived, releases nothing. A list that cannot be read releases nothing.
+- A list entry whose archived flag is missing or not exactly false, or whose
+  title is missing, releases nothing. A list that cannot be read releases
+  nothing.
 - The app rewords its refusal: foreman no longer recognises it and holds
   nothing, and the parent falls back to today's card and one line.
 - A start for a held key comes without a brief: it is held and released the
@@ -139,10 +141,11 @@ Tests in `mods/foreman/tests`, through the fake desktop app in
 - While a key is held, a prompt from the person (SDK, terminal or bridge)
   carries the context line naming it, and a plugin's prompt, foreman's wake
   among them, does not; with nothing held, no prompt gets the line.
-- An accepted start for the key releases it; a list read with a running,
-  unarchived session titled with the key releases it; a neighbouring key, an
-  archived entry, an entry with a doubtful running flag and an unreadable
-  list release nothing.
+- An accepted start for the key releases it, a proposal card included; a
+  list read with an unarchived session titled with the key releases it,
+  whether or not a turn runs in it; a neighbouring key, an archived entry,
+  an entry with a doubtful archived flag and an unreadable list release
+  nothing.
 - The context line's sentence is pinned by a test and quoted in the wake
   skill, as the other wake sentences are.
 
