@@ -23,7 +23,7 @@ export const NO_ISSUE_MARKER = 'No issue: '
 // Why a start_session call is refused for its title. Foreman and its wake
 // skill find a sub session by the issue key, or the ticket, at the start of
 // its title.
-export const TITLE_REFUSAL = 'foreman: start sub sessions with a title that begins with the issue key and a colon, such as "ABC-123: short name", or, for work with no issue, with "No issue: short name" and a brief, so that foreman and its wake skill can find the sub session by its title.'
+export const TITLE_REFUSAL = 'foreman: start sub sessions with a title that begins with the issue key followed by a space or a colon, such as "ABC-123: short name", or, for work with no issue, with "No issue: short name" and a brief, so that foreman and its wake skill can find the sub session by its title.'
 
 // The log lines for each refusal.
 const FORK_LOG = 'Refused a start_session call with forked context, because its sub session could not find its ticket.'
