@@ -137,17 +137,19 @@ const objectOf = (raw: unknown): Record<string, unknown> | null => (typeof raw =
 // cause to announce everything again.
 function announcedIn(raw: unknown): ForemanActs['announced'] {
   const a = objectOf(raw)
-  if (a === null || !('number' in a) || !('state' in a) || !('verdicts' in a)) return null
-  const isNumber = a.number === null || (typeof a.number === 'number' && Number.isInteger(a.number) && a.number > 0)
-  const state = a.state === null || isPullRequestState(a.state) ? a.state : undefined
+  if (a === null) return null
+  const { number, state } = a
+  if (number !== null && !(typeof number === 'number' && Number.isInteger(number) && number > 0)) return null
+  if (state !== null && !isPullRequestState(state)) return null
+  if (a.verdicts === null) return { number, state, verdicts: null }
   const verdicts = verdictsIn(a.verdicts)
-  if (!isNumber || state === undefined || (a.verdicts !== null && verdicts === null)) return null
-  return { number: a.number as number | null, state, verdicts }
+  if (verdicts === null) return null
+  return { number, state, verdicts }
 }
 
-// Stored acts read tolerantly. Acts with no milestone memory, as a pairing
-// stored before foreman kept one has, read with none, which is not the same
-// as a memory that has announced nothing.
+// Stored acts read tolerantly. A pairing stored before foreman kept a
+// milestone memory has none, and reads with none, which is not the same as a
+// memory that has announced nothing.
 function actsIn(raw: unknown): ForemanActs {
   const a = objectOf(raw)
   if (a === null) return { ...ACTS_FRESH, announced: null }

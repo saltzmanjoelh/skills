@@ -62,8 +62,16 @@ function stagesDone(raw: unknown): number {
   return Math.min(Math.max(Math.floor(raw), 0), STAGES.length)
 }
 
-const VERDICT_WORDS: readonly string[] = ['APPROVE', 'REQUEST_CHANGES']
-const isVerdict = (raw: unknown): raw is RecordVerdicts['spec'] => typeof raw === 'string' && VERDICT_WORDS.includes(raw)
+// The two verdicts a verdict review can give.
+const VERDICT_WORDS = ['APPROVE', 'REQUEST_CHANGES'] as const
+
+// This line stops the type check when foreman's list of verdicts and
+// builder's differ in either direction, so that a new verdict word cannot
+// make the reader drop every pair without a sound.
+const VERDICTS_MATCH_BUILDER: [(typeof VERDICT_WORDS)[number], RecordVerdicts['spec']] extends [RecordVerdicts['spec'], (typeof VERDICT_WORDS)[number]] ? true : never = true
+void VERDICTS_MATCH_BUILDER
+
+const isVerdict = (raw: unknown): raw is RecordVerdicts['spec'] => typeof raw === 'string' && (VERDICT_WORDS as readonly string[]).includes(raw)
 
 // A verdict pair, or null unless its sha is 7 to 40 lowercase hexadecimal
 // characters and both verdicts are APPROVE or REQUEST_CHANGES. A record from

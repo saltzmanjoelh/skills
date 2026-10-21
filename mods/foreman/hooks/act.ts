@@ -235,8 +235,8 @@ const isCarriedOverApproval = (pair: RecordVerdicts, announced: RecordVerdicts |
 
 // The pull request milestones the parent has not been told about, in the
 // order opened, verdicts, then merged or closed, with the memory of what was
-// told brought up to date. A pairing with no memory yet, as one stored before
-// foreman kept it has, takes this read as already told and answers none. A
+// told brought up to date. A pairing stored before foreman kept this memory
+// has none yet, so it takes this read as already told and answers none. A
 // record with no pull request changes nothing. A new number is a new pull
 // request, so its verdicts and state are judged afresh. A verdict pair at a
 // new head wakes, except one in which both approve after an announced pair in
