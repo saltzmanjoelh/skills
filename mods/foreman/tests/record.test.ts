@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { recordIn, STATES, type SubRecord } from '../hooks/record'
+import { prStateOf, recordIn, STATES, verdictsIn, type SubRecord } from '../hooks/record'
 
 // A whole record as builder writes it, which each test changes.
 const WHOLE = {
@@ -12,7 +12,7 @@ const WHOLE = {
   issueTitle: 'Make the thing',
   stage: 'build',
   stageDone: 4,
-  pr: { repo: 'acme/example-app', number: 12, state: 'open', checks: 'passed' },
+  pr: { repo: 'acme/example-app', number: 12, state: 'open', checks: 'passed', verdicts: { sha: 'f'.repeat(40), spec: 'APPROVE', adversarial: 'REQUEST_CHANGES' } },
   state: 'working',
   reason: 'building',
   stateSince: 1000,
@@ -26,7 +26,7 @@ const text = (over: Record<string, unknown> = {}, drop: string[] = []) => {
 }
 
 test('a whole record reads back field for field', () => {
-  const expected: SubRecord = { ...WHOLE, stage: 'build', state: 'working' }
+  const expected: SubRecord = { ...WHOLE, pr: { ...WHOLE.pr, verdicts: { sha: 'f'.repeat(40), spec: 'APPROVE', adversarial: 'REQUEST_CHANGES' } }, stage: 'build', state: 'working' }
   expect(recordIn(text())).toEqual(expected)
 })
 
@@ -91,7 +91,38 @@ test('a pull request needs a whole number, and its state and checks fall back to
   expect(recordIn(text({ pr: null }))?.pr).toBeNull()
   expect(recordIn(text({ pr: { number: 1.5, state: 'open', checks: 'passed' } }))?.pr).toBeNull()
   expect(recordIn(text({ pr: { number: 0, state: 'open', checks: 'passed' } }))?.pr).toBeNull()
-  expect(recordIn(text({ pr: { number: 9 } }))?.pr).toEqual({ repo: '', number: 9, state: 'unknown', checks: 'unknown' })
+  expect(recordIn(text({ pr: { number: 9 } }))?.pr).toEqual({ repo: '', number: 9, state: 'unknown', checks: 'unknown', verdicts: null })
+})
+
+test('a verdict pair is kept only with a sha of 7 to 40 lowercase hexadecimal characters and two known verdicts', () => {
+  const pair = { sha: 'abc1234', spec: 'APPROVE', adversarial: 'REQUEST_CHANGES' }
+  expect(verdictsIn(pair)).toEqual(pair)
+  expect(verdictsIn({ ...pair, sha: '0'.repeat(40), spec: 'REQUEST_CHANGES', adversarial: 'APPROVE' })).toEqual({ sha: '0'.repeat(40), spec: 'REQUEST_CHANGES', adversarial: 'APPROVE' })
+  expect(verdictsIn({ ...pair, extra: 'words' })).toEqual(pair)
+  for (const bad of [
+    undefined, null, 'APPROVE', [], { ...pair, sha: 'abc123' }, { ...pair, sha: 'a'.repeat(41) }, { ...pair, sha: 'ABC1234' },
+    { ...pair, sha: 'abc123g' }, { ...pair, sha: 7 }, { ...pair, spec: 'approve' }, { ...pair, spec: 'COMMENT' },
+    { ...pair, adversarial: null }, { sha: 'abc1234', spec: 'APPROVE' },
+  ]) expect(verdictsIn(bad)).toBeNull()
+})
+
+test('a pull request keeps a well-formed verdict pair and reads a malformed or missing one as null', () => {
+  const pr = { repo: 'o/r', number: 9, state: 'OPEN', checks: 'passed' }
+  const pair = { sha: 'abc1234', spec: 'APPROVE', adversarial: 'APPROVE' }
+  expect(recordIn(text({ pr: { ...pr, verdicts: pair } }))?.pr?.verdicts).toEqual(pair)
+  expect(recordIn(text({ pr: { ...pr, verdicts: { ...pair, spec: 'MAYBE' } } }))?.pr?.verdicts).toBeNull()
+  expect(recordIn(text({ pr: { ...pr, verdicts: 'approved' } }))?.pr?.verdicts).toBeNull()
+  expect(recordIn(text({ pr }))?.pr?.verdicts).toBeNull()
+})
+
+test('a pull request\'s state reads as OPEN, MERGED or CLOSED whatever its case, and as null for anything else or no pull request', () => {
+  const pr = (state: string) => ({ repo: 'o/r', number: 9, state, checks: 'passed', verdicts: null })
+  expect(prStateOf(pr('OPEN'))).toBe('OPEN')
+  expect(prStateOf(pr('merged'))).toBe('MERGED')
+  expect(prStateOf(pr('Closed'))).toBe('CLOSED')
+  expect(prStateOf(pr('unknown'))).toBeNull()
+  expect(prStateOf(pr('DRAFT'))).toBeNull()
+  expect(prStateOf(null)).toBeNull()
 })
 
 test('the cleanup counts are read in any state once present, and are absent until then', () => {

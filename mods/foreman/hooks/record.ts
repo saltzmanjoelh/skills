@@ -23,10 +23,14 @@ const STATES_MATCH_BUILDER: [(typeof STATES)[number], BuildState] extends [Build
 void STATES_MATCH_BUILDER
 
 // The sub session's pull request: the repository as owner/name, its number,
-// its state in words such as `OPEN`, and its checks in words such as
-// `passed`. Foreman does not draw the repository. The state and the checks
-// are kept as any text a file holds.
+// its state in words such as `OPEN`, its checks in words such as `passed`,
+// and the newest verdict pair at its head, or null. Foreman does not draw the
+// repository. The state and the checks are kept as any text a file holds.
 export type RecordPullRequest = Omit<NonNullable<BuildStatus['pr']>, 'state' | 'checks'> & { state: string; checks: string }
+
+// A verdict pair as builder writes it: the head's commit id and the two
+// verdicts.
+export type RecordVerdicts = NonNullable<RecordPullRequest['verdicts']>
 
 // What a session has met since its cleanup began: how many calls failed, and
 // the last error line, which is empty until a call fails.
@@ -58,12 +62,40 @@ function stagesDone(raw: unknown): number {
   return Math.min(Math.max(Math.floor(raw), 0), STAGES.length)
 }
 
+const VERDICT_WORDS: readonly string[] = ['APPROVE', 'REQUEST_CHANGES']
+const isVerdict = (raw: unknown): raw is RecordVerdicts['spec'] => typeof raw === 'string' && VERDICT_WORDS.includes(raw)
+
+// A verdict pair, or null unless its sha is 7 to 40 lowercase hexadecimal
+// characters and both verdicts are APPROVE or REQUEST_CHANGES. A record from
+// a builder that wrote no pair reads as having none. The ledger reads the
+// pairs it remembers through it too.
+export function verdictsIn(raw: unknown): RecordVerdicts | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
+  const v = raw as Record<string, unknown>
+  if (typeof v.sha !== 'string' || !/^[0-9a-f]{7,40}$/.test(v.sha) || !isVerdict(v.spec) || !isVerdict(v.adversarial)) return null
+  return { sha: v.sha, spec: v.spec, adversarial: v.adversarial }
+}
+
 // The pull request, or null unless it has a positive whole number.
 function pullRequestIn(raw: unknown): RecordPullRequest | null {
   if (typeof raw !== 'object' || raw === null) return null
   const p = raw as Record<string, unknown>
   if (typeof p.number !== 'number' || !Number.isInteger(p.number) || p.number <= 0) return null
-  return { repo: textOr(p.repo, ''), number: p.number, state: filledOr(p.state, 'unknown'), checks: filledOr(p.checks, 'unknown') }
+  return {
+    repo: textOr(p.repo, ''), number: p.number, state: filledOr(p.state, 'unknown'), checks: filledOr(p.checks, 'unknown'), verdicts: verdictsIn(p.verdicts),
+  }
+}
+
+// One of the three states GitHub gives a pull request.
+export type PullRequestState = NonNullable<BuildStatus['pr']>['state']
+
+// The pull request's state as one of the three, whatever the case of its
+// text, or null when there is no pull request or its state is any other
+// text, such as the reader's `unknown`, so that a state foreman cannot read
+// changes nothing.
+export function prStateOf(pr: RecordPullRequest | null): PullRequestState | null {
+  const state = pr?.state.toUpperCase()
+  return state === 'OPEN' || state === 'MERGED' || state === 'CLOSED' ? state : null
 }
 
 // The cleanup counts, or undefined when the record has none.
