@@ -7,7 +7,8 @@
 // the two only together. No test compares the two files. Foreman's
 // tests/art.test.ts holds the pure functions of foreman's copy to the answers
 // that builder's copy gave, and readIssueLink is checked in each mod by its
-// own tests/links.test.ts, which are copies of one another.
+// own tests/links.test.ts. The two test files are the same except that
+// builder's also checks linkFactIn against factIn, which foreman lacks.
 
 // The issue-key shape: an upper-case letter, then upper-case letters or
 // digits, a hyphen, and digits. A key of this shape is safe in an address as

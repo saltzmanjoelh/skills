@@ -10,7 +10,8 @@ import { BUILDER_DRAWN, BUILDER_STAGE_IDS } from './builder-drawn'
 // mod cannot import another plugin's files. These tests hold each copy to what
 // builder's own function answered for the same input, as
 // tests/builder-drawn.ts wrote it down. The reader in hooks/links.ts is held
-// by tests/links.test.ts, a copy of builder's test of it.
+// by tests/links.test.ts, which is builder's test of it without builder's
+// check against factIn.
 
 // Each copied function, by the name the fixture gives it.
 const COPIES: Record<string, (...args: never[]) => unknown> = {
