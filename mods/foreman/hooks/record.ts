@@ -84,11 +84,15 @@ export function verdictsIn(raw: unknown): RecordVerdicts | null {
   return { sha: v.sha, spec: v.spec, adversarial: v.adversarial }
 }
 
+// Whether a value can be a pull request's number: a positive whole number.
+// The ledger's reader checks the numbers it remembers by it too.
+export const isPullRequestNumber = (raw: unknown): raw is number => typeof raw === 'number' && Number.isInteger(raw) && raw > 0
+
 // The pull request, or null unless it has a positive whole number.
 function pullRequestIn(raw: unknown): RecordPullRequest | null {
   if (typeof raw !== 'object' || raw === null) return null
   const p = raw as Record<string, unknown>
-  if (typeof p.number !== 'number' || !Number.isInteger(p.number) || p.number <= 0) return null
+  if (!isPullRequestNumber(p.number)) return null
   return {
     repo: textOr(p.repo, ''), number: p.number, state: filledOr(p.state, 'unknown'), checks: filledOr(p.checks, 'unknown'), verdicts: verdictsIn(p.verdicts),
   }

@@ -9,7 +9,7 @@ import { releasedBy } from './held'
 import { prStateOf, type BuildState, type RecordVerdicts } from './record'
 import type { ForemanActs, ForemanEffect, ForemanPairing, ForemanTickets } from '../types'
 import { busyCount, nameOf, type SubRow } from './subs'
-import { capped, ownsTicket, shownRows } from './tickets'
+import { ANNOUNCED_NONE, capped, ownsTicket, shownRows } from './tickets'
 import { printable } from './text'
 import { byTicket, whoOf, type Reason } from './wake'
 
@@ -248,7 +248,8 @@ function milestoneRule(s: Step): Reason[] {
   const { pr } = s.row.record
   const announced = s.p.acts.announced
   if (announced === null) {
-    setActs(s, { announced: pr === null ? { number: null, state: null, verdicts: null } : { number: pr.number, state: prStateOf(pr), verdicts: pr.verdicts } })
+    const baseline = pr === null ? ANNOUNCED_NONE : { number: pr.number, state: prStateOf(pr), verdicts: pr.verdicts }
+    setActs(s, { announced: baseline })
     return []
   }
   if (pr === null) return []

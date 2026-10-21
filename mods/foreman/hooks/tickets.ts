@@ -4,7 +4,7 @@
 // and which rows show. Every function is pure.
 
 import type { ForemanActs, ForemanEffect, ForemanOutbox, ForemanPairing, ForemanStanding, ForemanTickets } from '../types'
-import { isPullRequestState, verdictsIn } from './record'
+import { isPullRequestNumber, isPullRequestState, verdictsIn } from './record'
 import { byKeyThenFile, keyOf, nameOf, type SubRow } from './subs'
 import { byTicket, KEY } from './wake'
 
@@ -110,9 +110,13 @@ function outboxIn(raw: unknown): ForemanOutbox {
   return { logs: strings(o.logs), effects: Array.isArray(o.effects) ? o.effects.flatMap(e => effectIn(e) ?? []) : [], lines: strings(o.lines) }
 }
 
+// The milestone memory of a pairing that has announced nothing: no pull
+// request, no state and no verdict pair.
+export const ANNOUNCED_NONE: NonNullable<ForemanActs['announced']> = { number: null, state: null, verdicts: null }
+
 // The acts of a pairing made now, which has announced nothing yet.
 export const ACTS_FRESH: ForemanActs = {
-  episode: null, stretch: null, notifiedFor: null, cleanupWokeFor: null, goneWokeFor: null, announced: { number: null, state: null, verdicts: null },
+  episode: null, stretch: null, notifiedFor: null, cleanupWokeFor: null, goneWokeFor: null, announced: ANNOUNCED_NONE,
 }
 
 // The most pairings kept. Past it, freed and released pairings go first,
@@ -139,7 +143,7 @@ function announcedIn(raw: unknown): ForemanActs['announced'] {
   const a = objectOf(raw)
   if (a === null) return null
   const { number, state } = a
-  if (number !== null && !(typeof number === 'number' && Number.isInteger(number) && number > 0)) return null
+  if (number !== null && !isPullRequestNumber(number)) return null
   if (state !== null && !isPullRequestState(state)) return null
   if (a.verdicts === null) return { number, state, verdicts: null }
   const verdicts = verdictsIn(a.verdicts)
