@@ -40,7 +40,9 @@ The owner had to ask what had happened before trying again in two steps.
    folder can find work, such as a free slot, that wakes the model with a line
    of foreman's own. The person's words reach the model before any such line,
    so that a parent told to clean up first does not start an issue before it
-   has read that.
+   has read that. Foreman holds its wake lines from before the role turns on
+   until the words have been sent or refused, rather than relying on the order
+   in which its timers fire, which the engine does not promise.
 6. **The answer says so.** The command's answer ends with a sentence saying
    that it passes the rest of the line on as the person's prompt.
 7. **Without the mod.** The skill's text tells the model not to act on words

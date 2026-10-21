@@ -370,6 +370,7 @@ async function carryOut($: $) {
 // submitted as a prompt when none does. A wake that is refused or fails is
 // logged and not tried again, because the ledger already records it.
 async function wake($: $, line: string) {
+  if (wordsPending !== null) await wordsPending
   try {
     if (await read($, turnRuns)) {
       const appended = await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: line }] } })
@@ -570,20 +571,40 @@ async function choiceFor($: $, e: PromptSubmitInput): Promise<Choice> {
   return names === null ? { kind: 'noted' } : { kind: 'keep', line: keptLine(names) }
 }
 
+// While the words typed after /start-foreman wait to be sent, the promise
+// that settles once they have been, or null when no words wait. A wake waits
+// for it, so the model reads the person's words before any line of foreman's
+// own, such as a free slot that the first read finds.
+let wordsPending: Promise<void> | null = null
+
 // What /start-foreman answers once it is done. When the person typed words
 // after the command and the count, they go to the parent's model as the
-// person's own prompt. They are submitted from a timer, because the engine
-// refuses a prompt submitted from inside the command's hook. The timer is set
-// before the role turns on, so it fires before the timer of any wake that the
-// first read finds, and the model reads the person's words first. It fires
-// only after this hook has returned, so the role is on by then.
+// person's own prompt, after the role is on. They are submitted from a timer,
+// because the engine refuses a prompt submitted from inside the command's
+// hook. Wakes are held back from before the role turns on, because turning it
+// on makes the first read, which may find a wake to send.
 async function runCommand($: $, args: string): Promise<string> {
   const command = commandOf(args)
   if (command.kind === 'refused') return command.text
   const prompt = command.prompt
-  if (prompt !== null) later($, () => passOn($, prompt))
-  const answer = await applyCommand($, command)
-  return prompt === null ? answer : `${answer} ${PASSED_ON}`
+  if (prompt === null) return applyCommand($, command)
+  let release = () => {}
+  const pending = new Promise<void>(resolve => {
+    release = resolve
+  })
+  wordsPending = pending
+  const done = () => {
+    release()
+    if (wordsPending === pending) wordsPending = null
+  }
+  try {
+    const answer = await applyCommand($, command)
+    later($, () => passOn($, prompt).finally(done))
+    return `${answer} ${PASSED_ON}`
+  } catch (error) {
+    done()
+    throw error
+  }
 }
 
 // Submits the words the person typed after /start-foreman as their own
