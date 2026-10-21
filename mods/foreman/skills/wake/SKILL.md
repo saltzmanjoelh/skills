@@ -145,16 +145,19 @@ Find the worktree, its branch and the session yourself:
   record's working folder is at most a hint, and it counts only if it is
   exactly that folder.
 - Take the branch from `git worktree list --porcelain`, from the entry whose
-  path is exactly that folder. When there is no such entry, when the entry is
-  the repository's main checkout, or when several sessions match, tell the
-  person in one line.
+  path is exactly that folder. When the entry is the repository's main
+  checkout, or when several sessions match, tell the person in one line. When
+  no entry has exactly that path, or the entry that has it is marked
+  `prunable`, which means its folder is gone, follow "When the worktree is
+  already gone" below instead of the numbered steps.
 - Put every path and branch name in single quotes in every command. When a
   path or branch name holds anything other than letters, digits, `/`, `.`,
   `_` and `-`, run nothing and tell the person in one line, because the sub
   session chose that name and the shell would act on such characters.
 
 The parent may fix only what the person's worktree rules already allow, which
-is that sub session's own worktree, and only in this order:
+is that sub session's own worktree, and, while that worktree still exists,
+only in this order:
 
 1. Check that its branch is merged, either because its commits are reachable
    from the base branch, or because
@@ -183,6 +186,74 @@ For anything else, including a shared checkout on a branch, uncommitted work,
 ignored files, a refusal from git or from the permission check, or local
 services and devices the parent cannot see, tell the person in one line with
 the quoted error.
+
+### When the worktree is already gone
+
+A sub session that ran `/cleanup` has usually removed its own worktree and
+local branch already, and stopped before it could archive itself. Instead of
+telling the person, the parent checks that the work merged and archives the
+session itself, in this order. Each check that fails, and each git or gh
+command that fails, sends the case to the person in one line, naming the
+issue, and the parent archives nothing. A command that answers no through its
+exit status, such as `git merge-base --is-ancestor` for a branch that is not
+reachable, has not failed.
+
+1. Check that exactly one session matches, that `list_sessions` shows it is
+   not running, and that `test -e '<path>'` says its folder no longer exists.
+   A folder that is still there while git lists no entry for it is spelled
+   differently, such as `/private/tmp` against `/tmp`, and archiving its
+   session could remove a live worktree, because `archive_session` removes a
+   session's worktree by default.
+2. Take the branch that `list_sessions` shows for that session, never the
+   record's. When there is none, or it holds anything other than the
+   characters allowed above, run nothing.
+3. Check that `gh pr view '<branch>' --json state,headRefOid` says its pull
+   request merged.
+4. Check that the merged commit is the branch's last commit, because a reused
+   branch name can carry new work after an older pull request from it merged.
+   First run `git rev-parse --verify --quiet 'refs/heads/<branch>'`, which
+   prints nothing and exits with status 1 when the local branch is gone.
+   - When the local branch is there, its commits must be reachable from the
+     base branch, or the commit it printed must equal `headRefOid`.
+   - When the local branch is gone, run
+     `git ls-remote --exit-code origin 'refs/heads/<branch>'`. It passes when
+     it exits with status 0 and prints a line for exactly
+     `refs/heads/<branch>` whose commit equals `headRefOid`. It also passes
+     when it exits with status 2, which means the remote branch is gone too, as
+     it is when GitHub deletes a branch on merge; the merged pull request is
+     then enough. Any other exit status, such as one from a network or
+     authentication error, or status 0 without a line for exactly that ref, is
+     a failed command, and never means that the branch is missing.
+5. Find the issue's pull requests as steps 1 and 2 of "<who> has not updated
+   its status file for <n> minutes and its session is not running, so restart
+   it or release the issue." say, with the same two `gh pr list` calls, the
+   same stop when the open list holds 1000, and the same rule for matching the
+   key, and check that none of them is open. When the sentence names a ticket
+   instead of an issue key, this search cannot run, so tell the person in one
+   line.
+6. Turn that session's Remote Control off with `set_remote_control`, naming
+   its session id, because the app refuses to archive a session while Remote
+   Control is on, and a sub session whose own call to turn it off was refused
+   stops with it still on. Then archive the session with `archive_session`. A
+   refusal of either call is final, as the ground rules say, and is told to
+   the person in one line.
+7. Then clear what git still holds for that folder, in this order. A refusal
+   from git here is told to the person in one line with the quoted error, and
+   the archive already done stands.
+   - When the entry for exactly that folder is marked `prunable`, remove it
+     with `git worktree remove '<path>'`, never with `--force`. That removes
+     this one entry and leaves every other prunable entry in place, because
+     those belong to other sessions. Never run `git worktree prune`, which
+     clears every prunable entry in the repository. The entry goes first
+     because `git branch -d` refuses a branch that an entry still holds.
+   - When the local branch is still there, and `git worktree list` shows no
+     entry holding it, delete it with `git branch -d '<branch>'`, never with
+     `-D`. After a squash merge git usually refuses, and that refusal is told
+     to the person like any other.
+
+Every other case still goes to the person, as the "For anything else"
+paragraph above says, including a pull request that is not merged, an open pull
+request for the issue, and a tip that differs from `headRefOid`.
 
 ## <who> has not updated its status file for <n> minutes and its session is not running, so restart it or release the issue.
 
