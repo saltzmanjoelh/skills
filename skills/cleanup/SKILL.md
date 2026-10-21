@@ -93,12 +93,30 @@ fails the remaining ones still describe a coherent state.
    completed in full and looked like a failure. The harness recreates the
    directory for the next tool call anyway, so deleting it buys nothing.
 7. **Archive the session**, last, with `archive_session` and `session_id:
-   "self"`. This ends the conversation, so **write the full report before
-   calling it**, because there is no turn afterwards in which to explain what
+   "self"`. The person's request to run `/cleanup`, or to run `/implement`,
+   whose last step is `/cleanup`, already counts as their agreement to archive
+   the session. This holds whether the person started this session directly
+   or through a foreman parent session that they started, because either way
+   they asked for the whole life of the session, and that life ends in an
+   archive. So never wait for, or ask for, a second agreement here. The
+   agreement covers the archive only: the checks in "Refuse rather than
+   destroy" still run first, and a check that fails still stops the skill.
+   Archiving ends the conversation, so **write the full report before calling
+   it**, because there is no turn afterwards in which to explain what
    happened.
    Turn Remote Control off first, with `set_remote_control` for `"self"`: the
    app refuses to archive a session while Remote Control is on, and calls it
    only "live work".
+   When the app or the permission check refuses either call, or the tool is
+   not there at all, as in a session outside the desktop app, that is final.
+   Add one sentence to the report already written, naming the call and
+   quoting the refusal, and stop. Never retry the call, and never ask the
+   person instead. When turning Remote Control off failed, do not call
+   `archive_session`, because the app would refuse it too. The session is then
+   left with its work merged and torn down but not archived. When a foreman
+   parent started it, the parent archives it once foreman reports the session
+   as stuck in cleanup; a person who started it directly reads the sentence
+   and archives it themselves.
 
 ## Ordering traps
 
