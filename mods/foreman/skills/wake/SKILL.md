@@ -228,8 +228,9 @@ reachable, has not failed.
    its status file for <n> minutes and its session is not running, so restart
    it or release the issue." say, with the same two `gh pr list` calls, the
    same stop when the open list holds 1000, and the same rule for matching the
-   key, and check that none of them is open. When the sentence names a ticket instead of an issue key, this
-   search cannot run, so tell the person in one line.
+   key, and check that none of them is open. When the sentence names a ticket
+   instead of an issue key, this search cannot run, so tell the person in one
+   line.
 6. Archive the session with `archive_session`.
 7. Then clear what git still holds for that folder, in this order. A refusal
    from git here is told to the person in one line with the quoted error, and
