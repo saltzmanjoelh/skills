@@ -472,13 +472,13 @@ goes to the owner.
 The round's lists: every refuted, speculative and repeat finding is listed
 under `Dropped:`, with the claim checker's reason or the item it repeats,
 and so is every finding the owner's answer dropped, with that answer as its
-reason. Every finding outside the spec is listed under `Outside the spec:`. Both lists go in
-the fix commit of the head where the finding was settled, or, when that head
-drew no fix commit, in the review posted at that head. The package reads
-them from there to build `## Already decided`, so write each list exactly
-so: the heading alone on its line, then one line per item starting `- `,
-and a blank line after the last item. An item repeated from an earlier list
-is copied word for word.
+reason. Every finding outside the spec is listed under `Outside the
+spec:`. Both lists go in the fix commit of the head where the finding was
+settled, or, when that head drew no fix commit, in the review posted at
+that head. The package reads them from there to build `## Already
+decided`, so write each list exactly so: the heading alone on its line,
+then one line per item starting `- `, and a blank line after the last
+item. An item repeated from an earlier list is copied word for word.
 
 The fix lines: every commit that fixes review findings, in the first half's
 point 4 or for a blocking verdict in step 8 of "With the pull request open",
@@ -632,6 +632,12 @@ focused reviewers have not run at this head** says which heads those are).
    dropped on the session's judgement alone. List the follow-ups the
    counsel decided to fix as to file too, because the counsel judged them
    worth doing.
+
+   An owner's answer that no commit has yet put in the spec (see
+   **Questions**) counts as a cheap fix here, so this commit is made for
+   it even when nothing else needs fixing. When the limit rule above makes
+   no commit, the answer is listed under `To file:` rather than dropped,
+   so that the follow-up issue carries it into a spec.
 
    Otherwise commit the fixes, the cheap ones and those the counsel decided
    to fix, in one commit, staged by path, and do not push yet. Its first
@@ -1016,15 +1022,11 @@ the person directly. Never put it to the counsel, whose members can read
 only what the owner wrote, and never guess the answer or build for the case
 to be safe. Record the answer in the change's spec under "Decided by the
 person", in the next commit the session makes rather than in a commit of
-its own, because a commit is a push that counts toward the limit. When a
-review round would otherwise commit nothing, add it in the second half's
-point 4 commit, making that commit for it; its lines under the spec
-directory are inert, so the verdicts carry over. When a limit stops that
-commit, list the answer under `To file:`, so that the follow-up issue
-carries it into a spec. Then offer
-the owner one line for their personal global `~/.claude/CLAUDE.md`, written
-in generic words that name no project, and write it there only if they say
-yes.
+its own, because a commit is a push that counts toward the limit; in a
+review round with nothing else to commit, the second half's point 4 says
+where it goes. Then offer the owner one line for their personal global
+`~/.claude/CLAUDE.md`, written in generic words that name no project, and
+write it there only if they say yes.
 
 Otherwise, put it to the counsel. Call `mcp__builder__counsel` with the
 question, two to four options, the background (the issue in a few lines,
