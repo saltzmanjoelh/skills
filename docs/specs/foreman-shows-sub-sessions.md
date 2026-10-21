@@ -56,6 +56,15 @@ behaves exactly as it does without the mod.
    like the role flag, which in this step only changes what the band says.
    Each command answers in one sentence. A `slots` value that is not a whole
    number from 1 to 20 is refused with the range.
+
+   Amended after first use: `/foreman slots <n>` in a session that is not
+   the parent also turns the role on, as `/foreman` does. A person set a
+   count, was told the parent now ran that many sub sessions, and started
+   two of them, but the session had never become the parent, so neither
+   sub session got a ticket and the band and the pane never appeared.
+   Several sessions had been left the same way. A pause or resume before
+   the role is on is still kept, and its answer now says that it waits for
+   `/foreman`.
 5. **Reading the folder.** Foreman lists the status folder,
    `$CLAUDE_CONFIG_DIR/foreman/builds/` when that variable is set and
    `$HOME/.claude/foreman/builds/` otherwise, and reads each file in it whose
@@ -170,7 +179,8 @@ test's `$.fs` hooks and the clock mocked:
   file; `/foreman` turns the role on, and a new load of the module with the
   same session id finds it on again.
 - `/foreman slots 3` changes the band to `of 3`; `/foreman slots 0` is
-  refused; `/foreman pause` adds `paused`.
+  refused; `/foreman pause` adds `paused`. `/foreman slots 3` in a session
+  that is not the parent makes it the parent with three slots.
 - A file that does not parse keeps the last good read of it; a file that
   leaves the folder leaves the list.
 - A file older than three minutes is drawn dimmed with its age and still

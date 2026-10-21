@@ -9,7 +9,13 @@ export const RANGE = `The slot count must be a whole number from ${MIN_SLOTS} to
 
 // What /foreman slots answers once the count is set: one sub session in the
 // singular, and every other count in the plural.
-export const slotsAnswer = (count: number) => `This parent now runs ${count} sub ${count === 1 ? 'session' : 'sessions'} at once.`
+export const slotsAnswer = (count: number) => `This parent now runs ${count} sub ${subSessions(count)} at once.`
+
+// What /foreman slots answers when it also made the session the parent.
+export const becameParentAnswer = (count: number) =>
+  `This session is now the parent and runs ${count} sub ${subSessions(count)} at once, and foreman shows its sub sessions above the prompt and in its pane.`
+
+const subSessions = (count: number) => (count === 1 ? 'session' : 'sessions')
 
 export type Command =
   | { kind: 'on' }

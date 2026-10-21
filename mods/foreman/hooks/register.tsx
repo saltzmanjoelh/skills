@@ -3,7 +3,7 @@ import type { EngineInterface, PromptSubmitInput, Register, ResolveInput, ToolCa
 
 import { decide, desktopOf, needsList, PAUSED_SLOT_LOG, slotOutcome, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
 import { isSvgSurface } from './art'
-import { commandOf, slotsAnswer } from './commands'
+import { becameParentAnswer, commandOf, slotsAnswer } from './commands'
 import { failureLine, listSessions, NUDGE_TEXT, openSession, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
 import { keptLine, keptNames, NOTES_KEPT, turnEndIds } from './notes'
 import { bandTree, PANE, paneTree, type Elements, type View } from './pane'
@@ -577,28 +577,42 @@ async function keptLineFor($: $, e: PromptSubmitInput): Promise<string | null> {
 async function runCommand($: $, args: string): Promise<string> {
   const command = commandOf(args)
   if (command.kind === 'refused') return command.text
+  // Setting the slot count also makes the session the parent, because a
+  // count given to a session that is not one is never what the person meant.
   if (command.kind === 'slots') {
+    const wasOn = await isOn($)
     await writeParent($, p => ({ ...p, slots: command.count }))
-    return slotsAnswer(command.count)
+    if (wasOn) return slotsAnswer(command.count)
+    await becomeParent($)
+    return becameParentAnswer(command.count)
   }
+  // Pause and resume leave the role as it is. Before /foreman they are kept,
+  // and the answer says so, because they do nothing until the role is on.
+  const notYet = ' This session is not the parent yet, so it takes effect once /foreman makes it one.'
   if (command.kind === 'pause') {
     await writeParent($, p => ({ ...p, isPaused: true }))
-    return 'This parent is paused.'
+    return (await isOn($)) ? 'This parent is paused.' : `The pause is kept.${notYet}`
   }
   if (command.kind === 'resume') {
     await writeParent($, p => ({ ...p, isPaused: false }))
+    if (!(await isOn($))) return `The pause is cleared.${notYet}`
     // The wake goes in the outbox and is carried out from a timer, so the
     // command answers at once.
-    if (await isOn($)) await resumeWake($)
+    await resumeWake($)
     return 'This parent is no longer paused.'
   }
+  await becomeParent($)
+  return 'This session is now the parent, and foreman shows its sub sessions above the prompt and in its pane.'
+}
+
+// Turns the role on, reads the status folder and opens the pane.
+async function becomeParent($: $) {
   await writeParent($, p => ({ ...p, isOn: true }))
   // Arming makes the first read of the status folder, so it has to come
   // before the pane opens. Opened first, the pane would draw from no read at
   // all and say that the folder holds no sub sessions until the read landed.
   await ensureArmed($)
   await $.ui.open({ id: PANE, title: 'foreman' }).catch(() => undefined)
-  return 'This session is now the parent, and foreman shows its sub sessions above the prompt and in its pane.'
 }
 
 export const register: Register = (on, options) => {
@@ -612,7 +626,7 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'foreman',
-      description: 'Make this session the parent and show its /implement sub sessions. `/foreman slots <n>` sets how many it runs at once, `/foreman pause` and `/foreman resume` pause and resume it.',
+      description: 'Make this session the parent and show its /implement sub sessions. `/foreman slots <n>` does the same and sets how many it runs at once, `/foreman pause` and `/foreman resume` pause and resume it.',
     })
     const id = await $.session.id()
     const rawParent = await $.store.get(storeKey(id))

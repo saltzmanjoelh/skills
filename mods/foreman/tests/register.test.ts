@@ -225,15 +225,38 @@ test('/foreman slots sets the count, a count outside 1 to 20 is refused and chan
   expect(await ui.bandText()).not.toContain('paused')
 })
 
-test('a slots or pause command before /foreman is kept and takes effect once the role is on', async ($, on) => {
+test('/foreman slots before /foreman makes the session the parent with that count, reads the folder and opens the pane', async ($, on) => {
   const w = world(on)
   const ui = await mountBoth($, on)
   await start($)
-  await foreman($, 'slots 5')
+  const answer = await foreman($, 'slots 5')
+  expect(answer.text).toBe('This session is now the parent and runs 5 sub sessions at once, and foreman shows its sub sessions above the prompt and in its pane.')
+  expect(await ui.bandText()).toContain('0 of 5 slots busy')
+  expect(w.folder.lists).toBe(1)
+  expect(w.panes).toEqual(['foreman'])
+  expect(w.stored.get('parent:session-1')).toEqual({ isOn: true, slots: 5, isPaused: false })
+})
+
+test('a pause or a resume before /foreman is kept, says it waits for /foreman, and leaves the role off', async ($, on) => {
+  const w = world(on)
+  const ui = await mountBoth($, on)
+  await start($)
+  expect((await foreman($, 'pause')).text).toBe('The pause is kept. This session is not the parent yet, so it takes effect once /foreman makes it one.')
   expect(await ui.bandText()).toBe('')
   expect(w.folder.lists).toBe(0)
+  expect(w.panes).toEqual([])
   await foreman($)
-  expect(await ui.bandText()).toContain('0 of 5 slots busy')
+  expect(await ui.bandText()).toContain('paused')
+})
+
+test('a resume before /foreman clears a kept pause and says it waits for /foreman', async ($, on) => {
+  const w = world(on, { store: { 'parent:session-1': { isOn: false, slots: null, isPaused: true } } })
+  const ui = await mountBoth($, on)
+  await start($)
+  expect((await foreman($, 'resume')).text).toBe('The pause is cleared. This session is not the parent yet, so it takes effect once /foreman makes it one.')
+  expect(w.folder.lists).toBe(0)
+  await foreman($)
+  expect(await ui.bandText()).not.toContain('paused')
 })
 
 test('slots and pause stored before /foreman survive a resume, and /foreman then keeps them in the band and the store', async ($, on) => {
