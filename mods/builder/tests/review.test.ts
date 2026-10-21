@@ -289,3 +289,9 @@ test('with no fix commits the trend section says none yet', () => {
   expect(trendSection(report)).toContain('None yet.')
   expect(trendStopLine(report)).toBe(null)
 })
+
+test('an area closed by a Trend: line that no Area: line named is still listed as closed', () => {
+  const section = trendSection(trendOf([commit('1', 'Record the answer\n\nTrend: hooks/x.ts: the thing: file the rest')]))
+  expect(section).toContain('No area named yet.')
+  expect(section).toContain('- hooks/x.ts: the thing: file the rest')
+})
