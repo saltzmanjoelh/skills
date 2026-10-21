@@ -72,6 +72,15 @@ finding in an area that the `## Areas fixed so far` section of `package.md`
 lists as closed counts as outside the spec, unless it breaks working
 behaviour or is a safety finding.
 
+A finding that a `Tidied:` line in the `## Areas fixed so far` section names
+a fix that changed what the code does is in the spec, whatever the spec that
+`package.md` names says, because the rule that a `Tidied:` line is only for a
+fix that changes nothing the code does belongs to the review rounds
+themselves and no pull request's spec repeats it. Check its claim with
+`git show <sha>` on the commit it names: it is confirmed when that commit
+changed what the code does, a change to an instruction file such as a skill,
+an agent, a command or a mod included.
+
 ## Verdicts
 
 Exactly one per claim:

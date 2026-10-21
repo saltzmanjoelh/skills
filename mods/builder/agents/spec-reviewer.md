@@ -122,6 +122,18 @@ and put it on the line after the finding, as
 `Repeats: D<n>. New evidence: <what is new>`. A repeat without new
 evidence is dropped without being checked, so leave it out.
 
+Read the `Tidied:` lines in the `## Areas fixed so far` section of
+`package.md` too. A `Tidied:` line says its fix changed only tests,
+comments, documentation, names or wording, and such a fix counts toward no
+streak. Judge each one by the files its commit touched, which the
+`## Commits, oldest first` block lists, and by the diff. A `Tidied:` line on
+a fix that changed what the code does, a change to an instruction file such
+as a skill, an agent, a command or a mod included, is a finding: name the
+commit's short sha and the area, give it `Scope: in the spec`, citing the
+review rounds' rule that a `Tidied:` line is only for a fix that changes
+nothing the code does, and mark it `Needs checking: yes`, because you cannot
+see that commit's own diff.
+
 ## The last line
 
 Your answer's last line is exactly one of these, with the full head sha
