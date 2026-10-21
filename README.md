@@ -57,5 +57,16 @@ names.
 | `Merge command:` | `gh pr merge <n> --merge --match-head-commit <sha>`; a project whose merges go through its own gate names that command, with `<n>` and `<sha>` in it | implement |
 | `Checks:` | `expected` when the base branch has files under `.github/workflows`, else `none`; a project whose checks report from an outside service writes `Checks: expected` | implement |
 | `Next issue:` | none; ask the person | foreman |
+| `Issue link:` | none; issue keys are drawn as plain text | the builder and foreman mods |
 | `## Gates` heading, one bullet per gate | detect from the manifests, confirm once, offer to write it | implement, verify-loop, pr-comments |
 | `## Hard rules` heading | none | implement |
+
+`Issue link:` is the address of an issue in the project's tracker, with
+`{key}` where the issue key goes, such as
+`Issue link: https://tracker.example.com/issue/{key}`. The builder and
+foreman mods read it, not a skill, and draw every issue key in their band and
+pane as a link to that address. It is the one fact that may also live in a
+`CLAUDE.local.md`, beside `CLAUDE.md` or in the repository's main checkout, so
+that a project whose shared `CLAUDE.md` must not name its tracker can keep the
+address in a file that git ignores. The two mods' READMEs say where they look, in
+what order, and what they show when the address cannot be used.
