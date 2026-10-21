@@ -34,14 +34,21 @@ against the three rules below is in the pull request that carries this spec.
 Every finding from every reviewer, focused and verdict alike, carries a
 scope line, `Scope:`, with one of three values:
 
-- `in the spec`, naming the passage of the spec that asks for the behaviour;
+- `in the spec`, naming the passage of the spec that asks for the feature
+  the finding is about. The spec asks for a feature, not for every
+  protection inside it, so a defect in code that the pull request adds to
+  deliver what the spec asks for is in the spec, even when the spec does
+  not name the check that is missing;
 - `breaks working behaviour`, naming what works on the base branch and
   stops working at the head;
-- `outside the spec`, for behaviour the spec does not ask for and the base
-  branch does not have.
+- `outside the spec`, for a finding that asks for behaviour the spec does
+  not ask for and the base branch does not have.
 
 A finding that breaks behaviour that already works counts as in scope,
-whatever the spec says.
+whatever the spec says. So does a finding classed `SAFETY:`, which is a
+security hole, data loss, an exposed credential, a wrong deploy, or a breach
+of a hard rule in the project's `CLAUDE.md`: it is in scope whatever the
+spec says, and it blocks as it did before this rule.
 
 The claim checker checks every scope mark, not only the findings marked
 `Needs checking: yes`, against the spec and the base branch, the same way it
@@ -142,8 +149,8 @@ cut it out>`, and pushes it before any reviewer runs:
   three more groups in a row name the area.
 - **File the rest:** the area is closed. The package lists it as closed, and
   every later finding in it counts as outside the spec, so rule one sends it
-  to the counsel to file or drop, unless it breaks working behaviour, which
-  stays in scope as rule one says.
+  to the counsel to file or drop, unless it breaks working behaviour or is a
+  `SAFETY:` finding, which stays in scope as rule one says.
 - **Cut it out:** the session removes the code in that area that this pull
   request added, in the same commit as the `Trend:` line, and the area is
   closed as above.
@@ -205,7 +212,10 @@ the same in a sentence or two.
 - **A wrong scope mark.** The claim checker checks every one; a real
   regression marked outside the spec is caught as `breaks working
   behaviour`, and an out-of-spec addition marked in the spec is caught as
-  `outside the spec`.
+  `outside the spec`. A defect in code that serves the spec stays `in the
+  spec` even when the spec does not name the protection that is missing,
+  and a `SAFETY:` finding is never outside the spec, so a security hole in
+  new code still blocks.
 - **A decided item that is not in any record.** It reaches the reviewers
   again and is checked again, which costs a check but ships nothing wrong.
 - **A malformed list in a commit.** Lines that do not start `- ` under a

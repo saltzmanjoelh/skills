@@ -105,10 +105,15 @@ visible`. A blocking finding has no such part. A follow-up's line is:
 `- [spec] FOLLOW-UP: <file>:<line>: <what>. Why: <why>. Fix: <one sentence>. Needs checking: <yes|no>. Scope: <in the spec: the passage | breaks working behaviour: what works on the base and stops at the head | outside the spec>. If never fixed: <what a person would see, or nothing visible>`
 
 Every finding has its `Scope:` part. Write `in the spec` with the passage
-of the spec that asks for the behaviour, `breaks working behaviour` with
-what works on the base branch and stops working at the head, or `outside
-the spec` for behaviour the spec does not ask for and the base does not
-have. A finding outside the spec does not block and is not fixed in this
+of the spec that asks for the feature the finding is about, `breaks working
+behaviour` with what works on the base branch and stops working at the
+head, or `outside the spec` for a finding that asks for behaviour the spec
+does not ask for and the base does not have. A defect in code that the pull
+request adds to deliver what the spec asks for is in the spec, even when the
+spec does not name the protection that is missing. A security hole, data
+loss, an exposed credential, a wrong deploy or a breach of a hard rule in
+the project's `CLAUDE.md` is a `SAFETY:` finding and is never outside the
+spec. A finding outside the spec does not block and is not fixed in this
 pull request; the counsel decides whether to file it.
 
 Before you report, read the `## Already decided` section of `package.md`:

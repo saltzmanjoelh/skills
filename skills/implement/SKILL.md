@@ -421,17 +421,21 @@ request counts as follow-ups only.
 
 The rule for scope: every finding, focused and verdict alike, carries a
 `Scope:` line, either `in the spec` with the passage that asks for the
-behaviour, `breaks working behaviour` with what works on the base branch and
-stops working at the head, or `outside the spec`, for behaviour the spec does
-not ask for and the base branch does not have. A finding that breaks working
-behaviour is in scope, whatever the spec says. The claim checker checks every
+feature the finding is about, `breaks working behaviour` with what works on
+the base branch and stops working at the head, or `outside the spec`, for a
+finding that asks for behaviour the spec does not ask for and the base branch
+does not have. A defect in code that the pull request adds to deliver what
+the spec asks for is in the spec, even when the spec does not name the
+protection that is missing. A finding that breaks working behaviour is in
+scope, whatever the spec says, and so is a `SAFETY:` finding, which blocks as
+before. The claim checker checks every
 scope mark. A finding whose scope after the check is outside the spec, or
 unsettled because the spec and the base cannot settle it, is not fixed in
 this pull request, in either half, and does not block; it is listed under
 `Outside the spec:` and becomes a follow-up for the counsel (second half,
 point 4). Every later finding in an area that a `Trend:` line closed counts
-as outside the spec too, unless it breaks working behaviour, which stays in
-scope as the rule above says (see **A streak of 3** below).
+as outside the spec too, unless it breaks working behaviour or is a
+`SAFETY:` finding, which stays in scope as the rule above says (see **A streak of 3** below).
 
 The rule for repeats: the package's `## Already decided` section numbers the
 findings that earlier rounds dropped or put outside the spec, as `D1`, `D2`

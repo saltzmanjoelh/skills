@@ -46,19 +46,23 @@ read the base branch's version of a file with
 `git show origin/<base>:<path>`, the base being the one `package.md` names.
 
 - `in the spec` stands only when the passage it names exists and asks for
-  the behaviour the finding wants.
+  the feature the finding is about. A defect in code that the pull request
+  adds to deliver what the spec asks for is in the spec, even when the spec
+  does not name the protection that is missing.
 - `breaks working behaviour` stands only when the behaviour works on the
   base and stops working at the head. Behaviour the base never had is not
   working behaviour.
-- `outside the spec` stands when the spec does not ask for the behaviour
-  and the base does not have it.
+- `outside the spec` stands when the finding asks for behaviour that the
+  spec does not ask for and the base does not have.
 
 Answer `stands` when the mark is right, or the scope you find instead, or
 `unsettled` when the spec and the base cannot settle it. A finding that
 breaks working behaviour is in scope whatever the spec says, so look for
-that first. A finding in an area that the `## Areas fixed so far` section of
-`package.md` lists as closed counts as outside the spec, unless it breaks
-working behaviour.
+that first. A `SAFETY:` finding is in scope whatever the spec says too, so
+never answer `outside the spec` for one. A finding in an area that the
+`## Areas fixed so far` section of `package.md` lists as closed counts as
+outside the spec, unless it breaks working behaviour or is a `SAFETY:`
+finding.
 
 ## Verdicts
 
