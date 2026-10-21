@@ -5,7 +5,7 @@ import { decide, desktopOf, needsList, slotOutcome, type Decision, type Limits, 
 import { isSvgSurface } from './art'
 import { becameParentAnswer, COMMAND, commandOf, slotsAnswer } from './commands'
 import { failureLine, listSessions, NUDGE_TEXT, openSession, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
-import { keptLine, keptNames, NOTES_KEPT, turnEndIds } from './notes'
+import { keptLine, keptNames, NOTED, NOTES_KEPT, notesIn } from './notes'
 import { bandTree, PANE, paneTree, type Elements, type View } from './pane'
 import type { ForemanParent, ForemanTickets } from '../types'
 import { PARENT_OFF, parentIn, slotsOf, storeKey } from './parent'
@@ -549,19 +549,25 @@ async function startSession<E extends Record<string, unknown>>($: $, e: E, next:
   return out
 }
 
-// The log line for a prompt that foreman keeps from the parent's model, or
-// null when the prompt goes on. Only a prompt made of turn-end notes about sub
-// sessions this parent tracks is kept, and only while the role is on. A slash
-// command, attachments or context another hook added each mean there is
-// something more for the model to read, so such a prompt goes on. The text is
-// checked before any state is read, so a prompt the person typed never waits
-// on a read.
-async function keptLineFor($: $, e: PromptSubmitInput): Promise<string | null> {
-  if (e.command !== undefined || (e.attachments?.length ?? 0) > 0 || (e.context?.length ?? 0) > 0) return null
-  const ids = turnEndIds(e.text)
-  if (ids === null || !(await isOn($))) return null
-  const names = keptNames(ids, ticketsIn(await read($, tickets)).pairings)
-  return names === null ? null : keptLine(names)
+// Whether a prompt is only its text: a slash command, attachments or context
+// another hook added each mean there is something more for the model to read.
+const isPlain = (e: PromptSubmitInput) => e.command === undefined && (e.attachments?.length ?? 0) === 0 && (e.context?.length ?? 0) === 0
+
+// What foreman does with a prompt while the role is on: keep it from the
+// parent's model, with the log line for it, when it is made of turn-end notes
+// about sub sessions this parent tracks; let it go on with the Noted line when
+// it is made only of the app's notes and messages; or let it go on as it came.
+// The text is checked before any state is read, so a prompt the person typed
+// never waits on a read, and the ledger is read only for a prompt that may be
+// kept.
+type Choice = { kind: 'keep'; line: string } | { kind: 'noted' } | { kind: 'pass' }
+
+async function choiceFor($: $, e: PromptSubmitInput): Promise<Choice> {
+  if (!isPlain(e)) return { kind: 'pass' }
+  const notes = notesIn(e.text)
+  if (!notes.wantsNoted || !(await isOn($))) return { kind: 'pass' }
+  const names = notes.turnEnds === null ? null : keptNames(notes.turnEnds, ticketsIn(await read($, tickets)).pairings)
+  return names === null ? { kind: 'noted' } : { kind: 'keep', line: keptLine(names) }
 }
 
 // What /start-foreman answers once it is done.
@@ -639,14 +645,17 @@ export const register: Register = (on, options) => {
   // should not wait for that read.
   // A prompt made only of turn-end notes about sub sessions this parent
   // tracks is dropped, with a line in the log, because the pane already shows
-  // them; every other prompt passes on unchanged. The line is written before
-  // the drop, and a hook that throws, a failed write included, passes the
-  // prompt on, so no prompt is dropped without a line in the log.
+  // them. Any other prompt made only of the app's notes and messages goes on
+  // with the Noted line as context, its text unchanged, and every other prompt
+  // goes on as it came. The line is written before the drop, and a hook that
+  // throws, a failed write included, passes the prompt on as it came, so no
+  // prompt is dropped without a line in the log.
   on('prompt.submit', async ($, e, next) => {
     void ensureArmed($).catch(() => undefined)
-    const line = await keptLineFor($, e)
-    if (line === null) return next(e)
-    await addLog($, line)
+    const choice = await choiceFor($, e)
+    if (choice.kind === 'pass') return next(e)
+    if (choice.kind === 'noted') return next({ ...e, context: [NOTED] })
+    await addLog($, choice.line)
     return { drop: NOTES_KEPT }
   }).catch(($, e, next) => next(e))
   // Whether a turn of the session's own loop runs decides how a wake goes in,

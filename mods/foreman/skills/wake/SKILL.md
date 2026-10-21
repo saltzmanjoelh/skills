@@ -1,6 +1,6 @@
 ---
 name: wake
-description: For the parent's model only; the person starts foreman with /start-foreman. What a parent session does when the foreman mod wakes it. Use whenever a line starting "foreman: " arrives, as a prompt or appended to a running turn, to handle each sentence in it, such as a free slot, an idle sub session, a sub session stuck in cleanup, or one that is gone. Also use whenever the person asks a parent session, in any words, to pick, start, restart or resume an issue, because every start follows its "Starting a session" section.
+description: For the parent's model only; the person starts foreman with /start-foreman. What a parent session does when the foreman mod wakes it. Use whenever a line starting "foreman: " arrives, as a prompt or appended to a running turn, to handle each sentence in it, such as a free slot, an idle sub session, a sub session stuck in cleanup, or one that is gone. Also use whenever the person asks a parent session, in any words, to pick, start, restart or resume an issue, because every start follows its "Starting a session" section. Also use whenever a desktop app note about a session the parent started, or a message from one, reaches the parent's model.
 user-invocable: false
 ---
 
@@ -335,9 +335,13 @@ The parent says nothing about a sub session's progress reviewer by reviewer.
 
 Foreman keeps most of the desktop app's notes about sub sessions from the
 parent, but some still arrive, such as a message a sub session sent or a note
-in a form foreman does not recognise. When one arrives, answer with nothing
-and end the turn, unless "When the parent speaks" lists it, or it asks the
-parent a question it can answer from this skill.
+in a form foreman does not recognise. Foreman may attach a line of context to
+such a prompt that asks for the same reply as this rule. When one arrives,
+reply with the single word "Noted." and end the turn, unless "When the parent
+speaks" lists it, or it asks the parent a question it can answer from this
+skill. Never reply with nothing, because the app refuses an empty reply. In a
+foreman parent this rule overrides the app's request, at the end of its notes,
+to report the outcome in one or two lines.
 
 ## What the parent never does
 

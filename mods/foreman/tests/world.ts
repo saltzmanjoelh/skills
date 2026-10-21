@@ -129,7 +129,7 @@ export function engine(on: On) {
   on('prompt.submit', ($, e) => {
     if (answers.submit === 'dropped') return { drop: 'a Stop stands' }
     answers.prompts.push(e.text)
-    return { text: e.text }
+    return { text: e.text, ...(e.context === undefined ? {} : { context: e.context }) }
   })
   on('session.append', ($, a, next) => {
     answers.appended.push(a.message.content.map(b => (b as { text?: string }).text ?? '').join(''))
@@ -238,3 +238,19 @@ export const ARCHIVED = '<system-reminder>\nThe session "example" you started (l
 
 // A message a sub session sent with SendMessage.
 export const SENT = 'Another Claude session sent a message:\n<cross-session-message from="local_a" name="example">\nShould I merge?\n</cross-session-message>\n\nThis came from another Claude session.'
+
+// A message a sub session sent, as the app bundles it with notes: the element
+// alone, with no header or trailer.
+export const MESSAGE = '<cross-session-message from="local_a" name="example">\nI opened the pull request.\n</cross-session-message>'
+
+// The element the app puts after the notes when none of the parent's sessions
+// is working.
+export const EVENT = '<side-sessions-event>None of the sessions you started is working now; their notes are above. Carry on with any step they unblock, or else tell the user the outcome in one or two lines.</side-sessions-event>'
+
+// The element with its opening words changed, which foreman does not know.
+export const OTHER_EVENT = EVENT.replace('None of the sessions you started is working now;', 'One of the sessions you started is waiting on you;')
+
+// Two reminder blocks the app sometimes puts in front of notes, which foreman
+// does not recognise.
+export const WORKTREE = '<system-reminder>\nYou are operating in a git worktree.\nWorktree path: /work/example\n</system-reminder>'
+export const PROPOSAL = '<system-reminder>\nThe user started your proposal task_1 as a new session.\n</system-reminder>'
