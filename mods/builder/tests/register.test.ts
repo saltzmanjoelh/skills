@@ -790,7 +790,12 @@ function fakeFiles(on: On) {
   const links = new Map<string, string>()
   const dirs = new Set(['/repo'])
   const writes = { refused: false, log: [] as string[], hold: null as Promise<void> | null }
-  on('fs.read', ($, e) => (files.has(e.path) ? { value: files.get(e.path) as string } : { deny: 'missing' }))
+  // Every path read, in order, whether or not it is there.
+  const reads: string[] = []
+  on('fs.read', ($, e) => {
+    reads.push(e.path)
+    return files.has(e.path) ? { value: files.get(e.path) as string } : { deny: 'missing' }
+  })
   on('fs.exists', ($, e) => ({ value: files.has(e.path) || dirs.has(e.path) }))
   // `links` maps a path to where it really points. A path that is none of the
   // files, folders or links is refused, as the real file system refuses it.
@@ -808,7 +813,7 @@ function fakeFiles(on: On) {
     files.set(e.path, e.text)
     return { value: undefined }
   })
-  return Object.assign(files, { links, dirs, writes })
+  return Object.assign(files, { links, dirs, writes, reads })
 }
 
 // The mod loaded through a link into a checkout at `dir`: every stat resolves
@@ -6135,6 +6140,36 @@ test('a toast the engine refuses does not stop the session from starting or the 
   await reportSpec($, clock)
 
   expect(await bar()).toBe(SPEC_ROW)
+})
+
+test('a session start reads CLAUDE.md once and still finds both its merge command and its Issue link fact', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  fakePanes(on)
+  bashAnswers(on)
+  const files = fakeFiles(on)
+  files.set('/repo/CLAUDE.md', 'Merge command: node scripts/merge-gate.mjs <pr>\n')
+  issueLinkFact(files, ISSUE_ADDRESS)
+  const state = writtenState(on)
+  const { band } = await progressBand($, on)
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await clock.settle()
+
+  expect(files.reads.filter(path => path === '/repo/CLAUDE.md')).toHaveLength(1)
+
+  await loose($)({ tool: 'mcp__builder__open_pane' })
+  await report($, 'spec', { title: TITLE })
+  expect(await linksIn(band)).toEqual([{ href: ISSUE_LINK, children: ['ABC-123'] }])
+
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  const at = clock.now()
+  await loose($)({ tool: 'Bash', command: 'git push origin HEAD' })
+  await clock.advance(20_000)
+  await loose($)({ tool: 'Bash', command: 'cd /repo && node scripts/merge-gate.mjs 7' })
+  await clock.advance(60_000)
+  expect(state.wakesFrom('after-command')).toEqual([at + 10_000, at + 30_000, at + 60_000])
 })
 
 test('the fact is read again at the session start that follows a hot reload, so the links come back', async ($, on) => {

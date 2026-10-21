@@ -130,12 +130,18 @@ async function readLinkFact($: $, dir: string | null) {
   issueAddress = found.address
   if (found.ignored === null) return
   const line = ignoredLine('foreman', found.ignored)
+  // The toast and the line are only a courtesy, since the keys are plain
+  // either way. Each has its own try, so a refused toast still leaves the
+  // line in the log.
   try {
     $.ui.toast(line)
+  } catch {
+    // The log line below still says why.
+  }
+  try {
     await addLog($, line)
   } catch {
-    // The toast and the line are only a courtesy, since the keys are plain
-    // either way.
+    // The toast above already said why.
   }
 }
 

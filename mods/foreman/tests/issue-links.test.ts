@@ -204,6 +204,22 @@ test('a session that is a parent again from the store reads the fact at its star
   expect(await ui.newestLog()).toBe(line)
 })
 
+test('a toast the engine refuses does not stop the parent from starting, the band from drawing or the line from reaching the log', async ($, on) => {
+  const w = world(on)
+  w.engine.toastThrows = true
+  w.folder.project.set(`${PARENT_DIR}/CLAUDE.md`, fact('https://tracker.example.com/issue/'))
+  // A sub session that is working, so that no notice about it follows the
+  // ignored line into the log.
+  w.folder.put('a.json', record('ABC-1', 'working', { stage: 'plan', stageDone: 3, desktopSessionId: 'local_a' }))
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  expect((w.stored.get('parent:session-1') as { isOn: boolean }).isOn).toBe(true)
+  const parts = await bandParts(ui)
+  expect(textOf(parts[chipAt(parts, 'a.json')])).toBe('ABC-1 plan tournament')
+  expect(await ui.newestLog()).toBe('foreman: the Issue link fact was ignored because it has no {key}')
+})
+
 test('a session that is a parent again from the store draws its links from the start', async ($, on) => {
   const w = world(on, { store: { 'parent:session-1': { isOn: true, slots: null } } })
   w.folder.project.set(`${PARENT_DIR}/CLAUDE.md`, fact(ADDRESS))
