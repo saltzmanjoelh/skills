@@ -137,15 +137,25 @@ export const keyOf = (row: SubRow) => (row.record.issueKey === null ? NO_ISSUE :
 // session with no issue yet.
 export const nameOf = (row: SubRow) => (row.record.issueKey === null ? `the sub session with ${NO_ISSUE}` : keyOf(row))
 
-// A chip's text: the issue key, then the stage while the sub session works or
-// waits on builder and has reported one, else the state in words. A stale
-// chip shows its last state and how long it has gone without an update.
-export function chipText(row: SubRow, now: number): string {
+// A chip's two parts: the issue key, or the words for a row with no issue
+// yet, and the rest of the chip. The rest is the stage while the sub session
+// works or waits on builder and has reported one, else the state in words. A
+// stale chip's rest is its last state and how long it has gone without an
+// update. The band draws the key as a link apart from the rest when it can.
+export function chipParts(row: SubRow, now: number): { key: string; rest: string } {
   const { state, stage } = row.record
   const words = STATE_LOOK[state].words
-  if (row.isStale) return `${keyOf(row)} ${words} · ${staleWords(row, now)}`
+  const key = keyOf(row)
+  if (row.isStale) return { key, rest: `${words} · ${staleWords(row, now)}` }
   const isMoving = state === 'working' || state === 'waiting-on-builder'
-  return `${keyOf(row)} ${isMoving && stage !== null ? stageLabel(stage) : words}`
+  return { key, rest: isMoving && stage !== null ? stageLabel(stage) : words }
+}
+
+// A chip's text: its key and its rest, joined by a space, so the chip the
+// band fits and the chip it draws in two parts are the same text.
+export function chipText(row: SubRow, now: number): string {
+  const { key, rest } = chipParts(row, now)
+  return `${key} ${rest}`
 }
 
 // The separator between the band's parts.
