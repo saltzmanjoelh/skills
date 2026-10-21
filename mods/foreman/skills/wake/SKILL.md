@@ -231,7 +231,12 @@ reachable, has not failed.
    key, and check that none of them is open. When the sentence names a ticket
    instead of an issue key, this search cannot run, so tell the person in one
    line.
-6. Archive the session with `archive_session`.
+6. Turn that session's Remote Control off with `set_remote_control`, naming
+   its session id, because the app refuses to archive a session while Remote
+   Control is on, and a sub session whose own call to turn it off was refused
+   stops with it still on. Then archive the session with `archive_session`. A
+   refusal of either call is final, as the ground rules say, and is told to
+   the person in one line.
 7. Then clear what git still holds for that folder, in this order. A refusal
    from git here is told to the person in one line with the quoted error, and
    the archive already done stands.

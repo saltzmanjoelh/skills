@@ -70,7 +70,11 @@ session's worktree is already gone.
    5. The gone case's search for the issue's pull requests, the same two
       `gh pr list` calls and the same rule for matching the key, finds no open
       pull request for the issue.
-   6. The parent archives the session with `archive_session`.
+   6. The parent turns that session's Remote Control off with
+      `set_remote_control`, naming its session id, and then archives it with
+      `archive_session`. A sub session whose own call to turn Remote Control
+      off was refused stops with it still on, and the app refuses to archive a
+      session while it is on.
    7. It then clears what git still holds for that folder, in this order:
       - a `prunable` entry for exactly that folder is removed with
         `git worktree remove '<path>'`, never with `--force`, which removes that
