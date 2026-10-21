@@ -82,7 +82,7 @@ export const ticketsKey = (sessionId: string) => `tickets:${sessionId}`
 
 export const OUTBOX_EMPTY: ForemanOutbox = { logs: [], effects: [], lines: [] }
 
-export const TICKETS_EMPTY: ForemanTickets = { pairings: [], folderMissing: false, outbox: OUTBOX_EMPTY }
+export const TICKETS_EMPTY: ForemanTickets = { pairings: [], folderMissing: false, outbox: OUTBOX_EMPTY, held: [] }
 
 // Whether the outbox holds anything to carry out.
 export const hasWork = (o: ForemanOutbox) => o.logs.length > 0 || o.effects.length > 0 || o.lines.length > 0
@@ -158,6 +158,13 @@ function pairingIn(raw: unknown): ForemanPairing | null {
   }
 }
 
+// A whole issue key, which is all a held entry may be.
+const HELD_SHAPE = new RegExp(`^${KEY}$`)
+
+// The held keys read tolerantly: only strings of the issue-key shape, each
+// once, so a ledger from before holds existed reads as holding none.
+const heldIn = (raw: unknown): string[] => [...new Set(strings(raw).filter(key => HELD_SHAPE.test(key)))]
+
 // A stored ledger read tolerantly: a value in any other shape, such as none
 // at all from a parent of the read-only build, reads as empty, and a pairing
 // without a ticket is dropped while any other bad field takes its default.
@@ -165,7 +172,7 @@ export function ticketsIn(raw: unknown): ForemanTickets {
   const t = objectOf(raw)
   if (t === null) return TICKETS_EMPTY
   const pairings = Array.isArray(t.pairings) ? t.pairings.flatMap(p => pairingIn(p) ?? []) : []
-  return { pairings, folderMissing: t.folderMissing === true, outbox: outboxIn(t.outbox) }
+  return { pairings, folderMissing: t.folderMissing === true, outbox: outboxIn(t.outbox), held: heldIn(t.held) }
 }
 
 // The ledger with the pairings past MAX_PAIRINGS dropped, freed and released

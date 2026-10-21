@@ -733,7 +733,7 @@ export const register: Register = (on, options) => {
       const storedTickets = ticketsIn(rawTickets)
       await update($, tickets, heldRaw => {
         const held = ticketsIn(heldRaw)
-        return held.pairings.length === 0 && !hasWork(held.outbox) ? storedTickets : held
+        return held.pairings.length === 0 && !hasWork(held.outbox) && held.held.length === 0 ? storedTickets : held
       })
     }
     if (rawParent !== undefined && rawParent !== null) {
