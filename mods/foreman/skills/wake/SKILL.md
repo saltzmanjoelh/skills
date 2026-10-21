@@ -101,8 +101,9 @@ with the number in words.
 2. Look the session up once with `list_sessions` by the record's working
    folder. The record has no branch field, so a record without a folder goes
    to the person in one line.
-3. If exactly one session matches, handle it as "<who> is still idle after two
-   nudges." says. If none or several match, tell the person in one line.
+3. If exactly one session matches, handle it from step 2 of "<who> is still
+   idle after two nudges.", with the session already found. If none or
+   several match, tell the person in one line.
 
 ## <who> has been in cleanup for <n> minutes with <n> failed calls.
 
@@ -161,29 +162,40 @@ the quoted error.
 ## <who> has not updated its status file for <n> minutes and its session is not running, so restart it or release the issue.
 
 Never trust a pull request number from the stale record. Find the issue's
-branch and pull request yourself:
+branch and pull request yourself. GitHub's search does not look at branch
+names, and a title need not carry the issue key, so list pull requests rather
+than search for the key:
 
-1. **Search.** Run
-   `gh pr list --state all --author @me --search '<issue key>' --json number,state,title,headRefName,isCrossRepository --limit 10`.
+1. **List.** Run
+   `gh pr list --state all --author @me --json number,state,title,headRefName,isCrossRepository --limit 100`.
 2. **Filter.** Keep only pull requests that are not from a fork and whose
-   title begins with the exact key, as "Starting a session" says, or whose
-   head branch holds the exact key between non-key characters. A pull request
-   that only mentions the key, such as a sub-issue's, does not count.
+   title or head branch holds the exact issue key between characters that
+   cannot be part of a key, ignoring letter case, since branch names are
+   often lowercase. A pull request that only mentions the key in its body,
+   such as a sub-issue's, does not count.
 3. **Read the worktree's branch.** When the record's working folder is still a
-   listed worktree and is not the repository's main checkout, also read its
-   branch with `git -C '<folder>' branch --show-current`, under the cleanup
-   case's rule for single quotes and allowed characters.
-4. **Decide.** More than one branch, or more than one open pull request, goes
-   to the person in one line. Otherwise:
-   - If the pull request has merged, start nothing and tell the person in one
-     line that the issue is finished.
-   - If the issue was closed or moved to done, or its pull request was closed
-     without merging, ask the person in one line what to do.
-   - If it has an open pull request, start a session whose brief runs
-     `/implement --resume #N` with that pull request's number.
-   - If it has none, start a session whose brief runs `/implement <issue>`.
-     When step 3 found a branch, the brief names it, so that the new session
-     reuses it.
+   listed worktree, is not the repository's main checkout, its branch holds
+   the exact key as in step 2, and no running session in `list_sessions` uses
+   that folder, read its branch with `git -C '<folder>' branch --show-current`,
+   under the cleanup case's rule for single quotes and allowed characters.
+   Otherwise ignore the folder.
+4. **Read the issue's state** with the same tracker the `Next issue:` fact
+   names. When that is not possible, treat the state as unknown and go on.
+5. **Decide**, taking the first of these that holds:
+   - More than one branch, or more than one open pull request: tell the
+     person in one line.
+   - The issue was closed or moved to done: ask the person in one line what
+     to do.
+   - An open pull request: start a session whose brief runs
+     `/implement --resume #N` with that pull request's number, even when an
+     older one for the issue merged or was closed.
+   - A merged pull request: start nothing and tell the person in one line that
+     the issue is finished.
+   - A pull request closed without merging: ask the person in one line what
+     to do.
+   - None: start a session whose brief runs `/implement <issue>`. When step 3
+     found a branch, the brief names both that branch and its worktree folder,
+     so that the new session works there.
 
 Starting goes through "Starting a session".
 

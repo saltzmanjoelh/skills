@@ -94,13 +94,18 @@ by its wording there. `<who>` is an issue key, or "the sub session with ticket
    quoted error.
 5. **Gone** ("<who> has not updated its status file for <n> minutes and its
    session is not running, …").
-   - Find the issue's branch and pull request on GitHub by the issue key,
-     keeping only pull requests whose title begins with the exact key or
-     whose head branch holds it, and from the record's folder only while it
-     is still a listed worktree that is not the main checkout; never trust a
-     number from the stale record. More than one branch or more than one open
-     pull request goes to the person; no branch and no pull request means
-     start fresh.
+   - List the person's recent pull requests rather than search for the key,
+     because GitHub's search ignores branch names and titles need not carry
+     the key. Keep only pull requests that are not from a fork and whose
+     title or head branch holds the exact key, ignoring letter case. Use the
+     record's folder only while it is a listed worktree that is not the main
+     checkout, whose branch holds the key, and that no running session uses.
+     Read the issue's state from the tracker the `Next issue:` fact names,
+     and treat it as unknown when that is not possible. More than one branch
+     or more than one open pull request goes to the person; an open pull
+     request wins over an older merged or closed one; no branch and no pull
+     request means start fresh, with the brief naming any branch and folder
+     found.
    - If it has an open pull request, start a session that runs
      `/implement --resume #N` with that pull request.
    - If it has none, start a fresh `/implement` on the issue. When the dead
