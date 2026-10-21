@@ -103,15 +103,14 @@ by its wording there. `<who>` is an issue key, or "the sub session with ticket
      Read the issue's state from the tracker the `Next issue:` fact names,
      and treat it as unknown when that is not possible. More than one branch
      or more than one open pull request goes to the person; an open pull
-     request wins over an older merged or closed one; no branch and no pull
-     request means start fresh, with the brief naming any branch and folder
+     request wins over an older merged or closed one; no pull request means
+     start fresh, with the brief naming any worktree branch and folder
      found.
    - If it has an open pull request, start a session that runs
      `/implement --resume #N` with that pull request.
    - If it has none, start a fresh `/implement` on the issue. When the dead
      session left a branch or worktree for it, the one-line message or the
      brief names it, so the new session reuses it or the person decides.
-   - Only pull requests the person authored, and not from a fork, count.
    - When the pull request has merged, start nothing and tell the person the
      issue is finished.
    - Ask the person only when the issue was closed, moved to done, or its pull
