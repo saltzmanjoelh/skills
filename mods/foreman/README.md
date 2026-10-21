@@ -66,11 +66,27 @@ A file whose modification time is more than three minutes older than the read th
 
 ## The band
 
-The band is one row, in the parent only, such as `foreman: 2 of 2 slots busy · ABC-123 build · ABC-124 needs you · next read in 30s`. It counts every listed sub session whose state is not done as busy, and shows a chip for each sub session: its issue key with its stage while it works or waits on builder, or its state in words otherwise. Only `needs you` is red, and only `idle` and `in cleanup` are amber. When the chips do not all fit, the band ends with `+N more`. Pressing a chip opens that sub session.
+The band is one row, in the parent only, such as `foreman: 2 of 2 slots busy · ABC-123 build · ABC-124 needs you · next read in 30s`. It counts every listed sub session whose state is not done as busy, and shows a chip for each sub session: its issue key with its stage while it works or waits on builder, or its state in words otherwise. Only `needs you` is red, and only `idle` and `in cleanup` are amber. When the chips do not all fit, the band ends with `+N more`. Pressing a chip opens that sub session. When the project names an issue address (see **The issue link** below), each chip's key is a link that opens the issue in its tracker, and the rest of the chip is the button that opens the sub session. The chips are fitted to the band by their whole text, key included, as without a link.
 
 ## The pane
 
-The pane has one row for each sub session, in issue-key order with the sub sessions that have no issue yet last. Each row has the issue key and its pull request as one button, such as `→ ABC-123 · #N open · checks passed`; the stage bar, drawn as builder draws its own, an image on the desktop and cells of text on the terminal; the state in words with its reason; and a Nudge and a Release button. Under the rows is the log, the last 20 lines of what foreman did, each with its UTC time. A line that comes again straight after itself is counted on that line, such as `(3 times)`, rather than added. Every string a record holds is drawn as plain text, with control characters and escape sequences removed.
+The pane has one row for each sub session, in issue-key order with the sub sessions that have no issue yet last. Each row has the issue key and its pull request as one button, such as `→ ABC-123 · #N open · checks passed`, or, when the project names an issue address, the key as a link to the issue followed by the button `→ #N open · checks passed`; the stage bar, drawn as builder draws its own, an image on the desktop and cells of text on the terminal; the state in words with its reason; and a Nudge and a Release button. Under the rows is the log, the last 20 lines of what foreman did, each with its UTC time. A line that comes again straight after itself is counted on that line, such as `(3 times)`, rather than added. Every string a record holds is drawn as plain text, with control characters and escape sequences removed.
+
+## The issue link
+
+A parent reads one fact from the project, the line `Issue link: <address>`, whose address holds the placeholder `{key}`, for example `Issue link: https://tracker.example.com/issue/{key}`. Foreman looks for it in three places and takes the first file that has the line:
+
+1. `CLAUDE.md` in the parent's working folder;
+2. `CLAUDE.local.md` in the parent's working folder;
+3. `CLAUDE.local.md` in the repository's main checkout, when the working folder is a git worktree of it. This place lets a repository whose checked-in `CLAUDE.md` must not name its tracker keep the address in an ignored file that a worktree does not carry.
+
+Without the fact, which is the default, every key stays plain text and the band and the pane look exactly as they did before. Foreman does nothing in a session that is not a parent, so it reads the fact only at the start of a session that is a parent again from the store, and when `/start-foreman` makes a session the parent. A change to the fact shows in the next session, or after the mod reloads.
+
+An address can be used only when it begins with `https://`, holds `{key}` at least once, and holds no white space and no control characters. A fact that fails one of these leaves the keys plain, and foreman shows one toast that names the reason and never the value, such as `foreman: the Issue link fact was ignored because it has no {key}`, and writes the same line to its pane's log. An unusable fact in an earlier place still stops the search, so a mistake in `CLAUDE.md` is not hidden by an older `CLAUDE.local.md`.
+
+Only a key of the issue-key shape, such as `ABC-123`, becomes a link, with every `{key}` in the address replaced by it. A row with no issue yet, and a key that foreman cut for length or cleaned of escape sequences, stay plain. Foreman uses the parent's address for every row, so a sub session that works in another repository gets a link to the parent's tracker. The log lines stay plain text.
+
+On a terminal that cannot draw hyperlinks, the engine draws a link as its key followed by the address in dim type, so the band may wrap or be cut there. Foreman cannot tell which kind of terminal it draws on, so it fits the chips by the key's text alone. This is a known limit.
 
 ## Opening a sub session
 
