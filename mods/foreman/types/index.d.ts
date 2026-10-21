@@ -40,6 +40,17 @@ export type ForemanActs = {
   // The file modification time that the gone wake was last given for, or
   // null.
   goneWokeFor: number | null
+  // The pull request milestones the parent was told about: the pull
+  // request's number and state, and the last verdict pair, each null until
+  // there is one. `sha` is the reviewed head's full commit id, and each
+  // verdict is APPROVE or REQUEST_CHANGES. The whole field is null for a
+  // pairing stored before foreman kept it, which takes its next read as
+  // already announced.
+  announced: {
+    number: number | null
+    state: 'OPEN' | 'MERGED' | 'CLOSED' | null
+    verdicts: { sha: string; spec: 'APPROVE' | 'REQUEST_CHANGES'; adversarial: 'APPROVE' | 'REQUEST_CHANGES' } | null
+  } | null
 }
 
 // One ticket this parent issued and the sub session paired with it.
