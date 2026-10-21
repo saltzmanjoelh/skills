@@ -107,7 +107,10 @@ that the pull request added, and a hole in that code goes with it.
 the two kinds of line and when each is used, the `Retag:` correction, and that
 the stop always happens with the answer governing only the area's other later
 findings. Each of the six reviewer agents says that a mislabelled `Tidied:`
-line is a finding. The builder README's description of the package tool
+line is a finding. The claim checker agent says that such a finding is in the
+spec whatever the pull request's own spec says, because the rule that asks
+for the label to be right is the review rounds' own rule and the pull
+request's spec will not mention it. The builder README's description of the package tool
 mentions `Tidied:` and `Retag:` lines. Rule three of
 `review-rounds-stay-in-scope.md` is edited where it becomes wrong, and points
 to this spec.
