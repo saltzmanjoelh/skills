@@ -633,12 +633,6 @@ focused reviewers have not run at this head** says which heads those are).
    counsel decided to fix as to file too, because the counsel judged them
    worth doing.
 
-   An owner's answer that no commit has yet put in the spec (see
-   **Questions**) counts as a cheap fix here, so this commit is made for
-   it even when nothing else needs fixing. When the limit rule above makes
-   no commit, the answer is listed under `To file:` rather than dropped,
-   so that the follow-up issue carries it into a spec.
-
    Otherwise commit the fixes, the cheap ones and those the counsel decided
    to fix, in one commit, staged by path, and do not push yet. Its first
    line is `Fix this round's cheap follow-ups`, and its message holds this
@@ -646,6 +640,12 @@ focused reviewers have not run at this head** says which heads those are).
    decisions, its count and its reason, so that a session resumed before
    the review is posted can still put them on the record and does not put
    the same follow-ups to the counsel again.
+
+   An owner's answer that no commit has yet put in the spec (see
+   **Questions**) counts as a cheap fix in both cases above: this commit
+   is made for it even when nothing else needs fixing, and when the limit
+   rule makes no commit, the answer is listed under `To file:` rather than
+   dropped, so that the follow-up issue carries it into a spec.
 5. The round's review is always posted at the reviewed head. Choose what
    follows it:
    - **A verdict requests changes:** push nothing here. Step 8 pushes
