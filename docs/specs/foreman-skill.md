@@ -7,10 +7,15 @@ Date: 2026-10-21. This is the last step of the foreman and builder mods.
 The foreman mod watches a parent session's sub sessions and wakes the parent's
 model with one short line, starting `foreman: `, when a decision is needed.
 Today nothing tells the model what each line asks of it, so it improvises, and
-improvising is where a parent spends tokens. This change writes
-`skills/foreman/SKILL.md`, which says what to do for each line, and adds a
-`Next issue:` project fact, so that the skill can find the next issue without
-naming any tracker or product.
+improvising is where a parent spends tokens. This change writes a skill that
+says what to do for each line, and adds a `Next issue:` project fact, so that
+the skill can find the next issue without naming any tracker or product.
+
+The skill ships inside the foreman mod, at `mods/foreman/skills/wake/SKILL.md`,
+and loads with the mod as `foreman:wake`. The issue named
+`skills/foreman/SKILL.md`, but the mod already loads through the link
+`~/.claude/skills/foreman`, so a skill at that path could not have its own
+link, and its name would clash with the mod's `/foreman` command.
 
 ## Users and trigger
 
@@ -48,10 +53,12 @@ by its wording there. `<who>` is an issue key, or "the sub session with ticket
    a decision, or if `list_events` fails or returns nothing, tell the person in
    one line instead.
 3. **Idle and cannot be nudged** ("<who> has been idle for <n> minutes and
-   cannot be nudged, …"). Look the session up once with `list_sessions` by the
-   record's working folder, using the branch only when the record has no
-   folder. If exactly one session matches, handle it as in rule 2. If none or
-   several match, tell the person in one line.
+   cannot be nudged, …"). Find the record in foreman's status folder whose
+   issue key or ticket matches `<who>`, and look the session up once with
+   `list_sessions` by the record's working folder. The record has no branch
+   field, so a record without a folder goes to the person. If exactly one
+   session matches, handle it as in rule 2. If none or several match, tell the
+   person in one line.
 4. **Stuck in cleanup** ("<who> has been in cleanup for <n> minutes with <n>
    failed calls…", possibly with the last error quoted). Decide from git and
    the desktop app, never from the quoted error. The parent may fix only what
@@ -109,7 +116,8 @@ not a sub-issue, and has no open pull request.
 
 ## Non-goals
 
-- No change to the foreman or builder mods, their wake lines, or their timers.
+- No change to the foreman or builder mods, their wake lines, or their timers,
+  apart from adding the skill's file under `mods/foreman/skills/`.
 - Nothing for "needs you", which raises a notification and never wakes the
   model.
 - No handling of `/clear`, resume or fork in the parent.
@@ -125,8 +133,10 @@ not a sub-issue, and has no open pull request.
 
 ## Verification
 
-No gate reads `skills/`, `docs/` or `README.md`, so this change is checked by
-its reviewers and by walking through each line by hand:
+The gates load, type-check, test and validate `mods/foreman` with the new
+folder in it, which shows the mod still loads. Whether they check the skill's
+text is not known, so the text is checked by its reviewers and by walking
+through each line by hand:
 
 1. For each of the five lines, a walk-through in the pull request quotes the
    line and states what the skill tells the parent to do, step by step, and
