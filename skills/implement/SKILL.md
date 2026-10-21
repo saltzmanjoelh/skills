@@ -512,7 +512,8 @@ another session that it can message, such as the session whose brief
 started it, it sends that session one short line whenever it puts a streak
 of 3 to the counsel or asks the person about a limit under **Over a
 limit**, whatever the counsel decides. The line names the issue and the
-area or the limit, and says that the session waits on that question.
+area or the limit, and says either that the session waits on the person's
+answer or, when the counsel decided, what it decided.
 
 **First half, at a head where the focused reviewers have not run** (**The
 focused reviewers have not run at this head** says which heads those are).

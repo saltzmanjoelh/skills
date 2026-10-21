@@ -82,10 +82,12 @@ The wake skill gains four rules for the parent session:
 - **Step in when the sub session raises a streak or a limit.** When a sub
   session tells the parent that one area's fixes reached a streak of 3, or
   that it hit its limit on pushes or rounds, the parent tells the owner in
-  one line at once, naming the issue and the area or the limit, and points
-  them at the sub session's own open question, which is where their answer
-  to stop, narrow or change the approach takes effect, so that the person
-  is not asked the same thing twice. It does not propose an issue for later
+  one line at once, naming the issue and the area or the limit. When the
+  sub session waits on the person, the parent points them at its open
+  question, which is where their answer to stop, narrow or change the
+  approach takes effect, so that the person is not asked the same thing
+  twice; when the sub session's counsel already decided, the parent reports
+  the decision. It does not propose an issue for later
   instead.
 - **Never raise a limit to make room.** The parent never agrees to raise a
   limit on pushes or rounds, and never proposes it. When the owner asks for
