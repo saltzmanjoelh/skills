@@ -35,12 +35,15 @@ below. Every other step keeps its current wording unless this list changes it.
    records git keeps for a worktree stopped in a rebase or a bisect, in this
    order, each settling to a branch name or to no branch:
    1. The worktree's folder holds only the characters the cleanup case allows,
-      because the parent puts it in a command.
+      because the parent puts it in a command, and its entry is not marked
+      `prunable`, because `git -C` into a nested worktree whose `.git` file is
+      gone reads the main checkout's records instead of its own.
    2. For each of `rebase-merge/head-name`, `rebase-apply/head-name` and
       `BISECT_START`, the parent finds the record's path with
       `git -C '<folder>' rev-parse --path-format=absolute --git-path '<record>'`
-      and reads the file's first line when the file exists. A record that does
-      not exist names no branch.
+      and reads the file's first line with its file-reading tool, never
+      through the shell, when the file exists. A record that does not exist
+      names no branch.
    3. In the two rebase records, the line is either `refs/heads/<name>`, which
       names `<name>`, or exactly `detached HEAD`, which git writes for a rebase
       that began on a detached head and which names no branch. In
@@ -55,7 +58,8 @@ below. Every other step keeps its current wording unless this list changes it.
    as a plain `git worktree add --detach`, and affects nothing in the gone
    case.
 2. **A worktree that cannot be settled.** A detached other worktree cannot be
-   settled when its folder fails the character check, the path command fails,
+   settled when its folder fails the character check, its entry is marked
+   `prunable`, the path command fails,
    a record exists but cannot be read, a rebase record's line has neither
    form above, `BISECT_START` is empty, a name fails the character check, or
    the branch lookup exits with any status other than 0 or 1. Such a worktree
@@ -98,6 +102,11 @@ below. Every other step keeps its current wording unless this list changes it.
 - A plain detached worktree: it holds no branch.
 - A worktree in a rebase and a bisect at once: every branch either record
   names is held.
+- A detached worktree nested inside the main checkout whose `.git` file was
+  deleted: its entry is `prunable`, so it cannot be settled and keeps today's
+  block, because reading it would read the main checkout's records.
+- The main checkout itself stopped in a rebase: it is one of the other
+  worktrees, and its records are read under `.git/` the same way.
 - The dead session's own worktree saying `detached`: step 3.3 still sends the
   whole case to the person, unchanged.
 
@@ -141,7 +150,10 @@ placeholders.
 Measured on 2026-10-21 with git 2.54: a linked worktree's records are under
 `.git/worktrees/<name>/`, while `--git-path` without `--path-format=absolute`
 prints a path relative to the folder for the main checkout; `git branch -d`
-and `git checkout` refuse a branch that a detached rebase or bisect holds.
+and `git checkout` refuse a branch that a detached rebase or bisect holds;
+and `git -C` into a nested worktree whose `.git` file was deleted resolves
+the main checkout's `.git/rebase-merge/head-name`, while git still refuses to
+delete that worktree's branch.
 
 ## Decided by the counsel
 

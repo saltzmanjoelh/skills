@@ -67,7 +67,10 @@ what the parent will do on their behalf.
    When a worktree other than the one step 3 accepted says `detached`, the
    parent cannot tell which branch git holds for it, so it never reports the
    issue finished or starts a fresh session while one does, and asks the
-   person instead.
+   person instead. A later change narrowed this rule: a detached worktree now
+   counts only through the branch git holds for it during a stopped rebase or
+   bisect, and blocks as described here only when that branch cannot be
+   settled (see `docs/specs/wake-detached-worktrees.md`).
 5. **Counting.** "More than one branch" counts distinct branch names among
    the open pull requests' head branches and the remaining branches, so a
    worktree's branch and an open pull request on that same branch count once.
@@ -83,7 +86,8 @@ what the parent will do on their behalf.
    - a merged pull request: tell the person the issue is finished, starting
      nothing, only when no branch remains, no pull request closed without
      merging is newer than the newest merged one, no other worktree is
-     detached, and the tracker does not show the issue open, where a state
+     detached (narrowed later, see `docs/specs/wake-detached-worktrees.md`),
+     and the tracker does not show the issue open, where a state
      that could not be read does not show the issue open; otherwise ask the
      person in one line, naming what stopped it, because a newer attempt that
      was closed may hold work nobody owns;

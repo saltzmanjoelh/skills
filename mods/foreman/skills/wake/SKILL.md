@@ -271,7 +271,8 @@ holds a character the cleanup case does not allow. When a git or gh command in
 these steps fails, tell the person in one line, naming the issue, and stop. A
 command that answers no through its exit status, such as
 `git merge-base --is-ancestor` for a branch that is not reachable, has not
-failed.
+failed. The one exception is reading a detached other worktree, where "The
+branch a detached other worktree holds" below says what a failure means.
 
 1. **List pull requests.** Run
    `gh pr list --state all --author @me --json number,state,title,headRefName,headRefOid,isCrossRepository --limit 100`,
@@ -305,10 +306,10 @@ failed.
    When every check passes, step 7 may name this worktree folder. The
    **other worktrees** are every entry in that list except the worktree step
    3 accepted, or every entry, including the record's own folder, when step 3
-   accepted none. When one of the other worktrees says `detached`, as it does
-   while a rebase is stopped, the parent cannot tell which branch git holds
-   for it, so step 7 never reports the issue finished or starts a fresh
-   session while one does.
+   accepted none. One of the other worktrees that says `detached`, as it does
+   while a rebase or a bisect is stopped, may still hold a branch, so read it
+   as "The branch a detached other worktree holds" below says before going on
+   to step 4.
 4. **Find the local branches.** List every local branch name with
    `git branch --list --format='%(refname:short)'`, and keep the names that
    hold the key. Filter the names yourself rather than passing the key to git
@@ -332,6 +333,10 @@ failed.
    - it is the branch of the worktree step 3 accepted, and
      `git -C '<folder>' status --porcelain` prints anything, because the dead
      session may have left edits it never committed.
+
+   A branch that a detached other worktree holds counts as checked out by
+   that worktree, here and in step 7, because git refuses to check out or
+   delete a branch that a stopped rebase or bisect holds.
 5. **Read the issue's state** with the same tracker the `Next issue:` fact
    names. When that is not possible, treat the state as unknown and go on;
    this is not a failed git or gh command.
@@ -350,27 +355,82 @@ failed.
      older one for the issue merged or was closed.
    - A merged pull request: when no branch remains, no pull request for the
      issue that was closed without merging has a higher number than the
-     newest merged one, none of the other worktrees says `detached`, and the
-     tracker does not show the issue open, start nothing and tell the person
-     in one line that the issue is finished. A state that could not be read
-     does not show the issue open. Otherwise ask the person in one line what
-     to do, naming what stopped it: the remaining branch, the newer closed
-     pull request, the detached worktree's folder, or the issue's open state.
+     newest merged one, none of the other worktrees is one that cannot be
+     settled, and the tracker does not show the issue open, start nothing and
+     tell the person in one line that the issue is finished. A state that
+     could not be read does not show the issue open. Otherwise ask the person
+     in one line what to do, naming what stopped it: the remaining branch, the
+     newer closed pull request, the folder of the worktree that cannot be
+     settled, or the issue's open state.
    - A pull request closed without merging: ask the person in one line what to
      do.
    - None: start a session whose brief runs `/implement <issue>`, after these
      checks in order:
-     1. When one of the other worktrees says `detached`, tell the person in
-        one line, naming its folder, and start nothing.
+     1. When one of the other worktrees cannot be settled, tell the person in
+        one line, naming the issue and that worktree's folder, and start
+        nothing.
      2. When no branch remains, the brief names no branch or folder.
      3. When one branch remains and one of the other worktrees from step 3
-        has it checked out, tell the person in one line and start nothing,
-        because another session may be working on it.
+        has it checked out, which includes holding it while detached, tell
+        the person in one line and start nothing, because another session may
+        be working on it.
      4. Otherwise the brief names the branch, and when step 3 accepted the
         worktree that holds it, the brief also names that worktree folder,
         so that the new session works there.
 
 Starting goes through "Starting a session".
+
+### The branch a detached other worktree holds
+
+While a rebase or a bisect is stopped, git lists the worktree as `detached`,
+yet it still holds the branch the rebase or bisect began on, and refuses to
+check that branch out elsewhere or delete it. For each of the other worktrees
+from step 3 whose entry says `detached`, find the branches it holds with the
+checks below, in order. When a check fails, or one of these commands fails,
+the worktree is one that **cannot be settled**, the parent reads no further
+for it, and the gone case goes on; step 7 says what such a worktree stops. A
+command that answers no through its exit status has not failed.
+
+1. The worktree's folder holds only the characters the cleanup case allows,
+   because the parent puts it in a command, and its entry is not marked
+   `prunable`. A worktree inside the main checkout whose `.git` file is gone
+   is marked `prunable`, and `git -C` there reads the main checkout's records
+   instead of its own, while git still holds its branch.
+2. For each record in the list below, find its path with
+   `git -C '<folder>' rev-parse --path-format=absolute --git-path '<record>'`,
+   and read the first line of the file at that path with the file-reading
+   tool, never through the shell, because no check covers the characters of
+   that path. A record whose file does not exist names no branch. A file that
+   exists but cannot be read fails.
+3. Turn the line into a name as the list says for that record.
+4. The name holds only the characters the cleanup case allows. Then
+   `git -C '<folder>' rev-parse --verify --quiet 'refs/heads/<name>'` decides.
+   Exit status 0 means the worktree holds that branch. Exit status 1 means no
+   branch has that name, so the record names no branch. Any other status
+   fails.
+
+The records, and how each one's line names a branch:
+
+- `rebase-merge/head-name` and `rebase-apply/head-name`, which a stopped
+  rebase writes: the line `refs/heads/<name>` names `<name>`, and exactly
+  `detached HEAD`, which git writes for a rebase that began on a detached
+  head, names no branch. Any other line fails.
+- `BISECT_START`, which a bisect writes: the whole line is the name, and an
+  empty line fails. A bisect that began on a detached head writes a commit id
+  there, which the branch lookup answers with exit status 1, so it names no
+  branch.
+
+The worktree holds every branch that any record names. A detached other
+worktree whose records name no branch holds no branch, the same as one made
+with `git worktree add --detach`, and changes nothing in the gone case, and so
+does a branch it holds that does not hold the key. When the parent tells the
+person about a worktree that cannot be settled, the line names the issue and
+the folder and never repeats the text of a record.
+
+A rebase that ends between `git worktree list --porcelain` and the reading of
+its records makes that worktree read as holding no branch, although it then
+has the branch checked out. That needs someone acting at that moment, and a
+fresh session that tries to check out such a branch is refused by git.
 
 ## A line that names a ticket instead of an issue key
 
