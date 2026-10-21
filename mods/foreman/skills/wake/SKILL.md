@@ -71,7 +71,9 @@ gives.
    sub session's ticket in place of those words, so the title begins with the
    ticket. The marker works only on a call that carries a brief, because the
    mod issues a ticket only with a brief, so a title-only offer card cannot
-   use it. The brief covers the issue as it is, with
+   use it. When the mod refuses the title, call again once with the title
+   fixed and the brief unchanged; this is the one refusal that is not final,
+   because fixing the title is what the refusal asks for. The brief covers the issue as it is, with
    the sub-issues the tracker already lists under it, and never folds in an
    edge case or follow-up from another issue; the follow-up stays its own
    issue.
