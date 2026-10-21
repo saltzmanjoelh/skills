@@ -370,7 +370,9 @@ async function carryOut($: $) {
 // submitted as a prompt when none does. A wake that is refused or fails is
 // logged and not tried again, because the ledger already records it.
 async function wake($: $, line: string) {
-  if (wordsPending !== null) await wordsPending
+  if (wordsPending !== null && (await within($, wordsPending)) === TIMED_OUT) {
+    await addLog($, `Stopped waiting for the words after /start-foreman to be sent, after ${CALL_TIMEOUT_MS / 1000} seconds.`)
+  }
   try {
     if (await read($, turnRuns)) {
       const appended = await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: line }] } })
@@ -574,7 +576,9 @@ async function choiceFor($: $, e: PromptSubmitInput): Promise<Choice> {
 // While the words typed after /start-foreman wait to be sent, the promise
 // that settles once they have been, or null when no words wait. A wake waits
 // for it, so the model reads the person's words before any line of foreman's
-// own, such as a free slot that the first read finds.
+// own, such as a free slot that the first read finds. A wake waits at most
+// CALL_TIMEOUT_MS, so a timer that never runs or a submit that never answers
+// cannot silence every later wake.
 let wordsPending: Promise<void> | null = null
 
 // What /start-foreman answers once it is done. When the person typed words

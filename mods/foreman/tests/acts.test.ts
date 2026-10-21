@@ -651,3 +651,20 @@ test('the words after /start-foreman reach the model before a wake that the firs
   expect(w.engine.prompts.slice(1)).toEqual(['foreman: two slots free; pick the next issues and start them.'])
 })
 
+test('a wake waits at most 30 seconds for the words after /start-foreman, and logs that it stopped waiting', async ($, on) => {
+  const w = world(on, { store: { 'parent:session-1': { isOn: false, slots: 2 } } })
+  w.folder.put('a.json', record('ABC-1', 'done', { desktopSessionId: 'local_a' }))
+  w.desktop.sessions = [{ sessionId: 'local_a', cwd: '/w', isArchived: true, isRunning: false }]
+  w.engine.submit = 'hang'
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($, 'clean up the worktrees first')
+  await w.clock.settle()
+  expect(w.engine.prompts).toEqual(['clean up the worktrees first'])
+  await w.clock.advance(30 * SECOND)
+  await w.clock.settle()
+  expect(w.engine.prompts).toEqual(['clean up the worktrees first', 'foreman: two slots free; pick the next issues and start them.'])
+  const logs = await ui.paneText()
+  expect(logs).toContain('Stopped waiting for the words after /start-foreman to be sent, after 30 seconds.')
+})
+
