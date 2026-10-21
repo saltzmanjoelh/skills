@@ -18,7 +18,7 @@ export const FORK_REFUSAL = 'foreman: start sub sessions with context "fresh", s
 // The marker a title begins with when its work has no issue. Foreman puts the
 // ticket it issues in place of the marker, so the wake skill can find the sub
 // session by the ticket at the start of its title.
-export const NO_ISSUE = 'No issue: '
+export const NO_ISSUE_MARKER = 'No issue: '
 
 // Why a start_session call is refused for its title. Foreman and its wake
 // skill find a sub session by the issue key, or the ticket, at the start of
@@ -27,7 +27,7 @@ export const TITLE_REFUSAL = 'foreman: start sub sessions with a title that begi
 
 // The log lines for each refusal.
 const FORK_LOG = 'Refused a start_session call with forked context, because its sub session could not find its ticket.'
-const TITLE_LOG = 'Refused a start_session call, because its title did not begin with an issue key and a space or a colon, or with "No issue: " on a call with a brief.'
+export const TITLE_LOG = 'Refused a start_session call, because its title did not begin with an issue key and a space or a colon, or with "No issue: " on a call with a brief.'
 
 // A title that begins with an issue key followed by a space or a colon. A
 // hyphen does not count, so ABC-1-fix is never read as ABC-1.
@@ -55,15 +55,15 @@ export function briefFor(args: Record<string, unknown>, uuid: string): Brief {
     // A title passes when it begins with an issue key and a space or a colon,
     // or with the marker on a call whose brief gets a ticket to replace it.
     const isKeyed = title !== null && KEYED_TITLE.test(title)
-    const isMarked = title !== null && title.startsWith(NO_ISSUE)
+    const isMarked = title !== null && title.startsWith(NO_ISSUE_MARKER)
     if (!isKeyed && !isMarked) return { kind: 'deny', text: TITLE_REFUSAL, log: TITLE_LOG }
     if (isMarked && brief === null) return { kind: 'deny', text: TITLE_REFUSAL, log: TITLE_LOG }
   }
   if (brief === null) return { kind: 'pass' }
   const ticket = `ft-${uuid}`
   const prompt = `${brief.replace(/\s+$/, '')}\n\n${TICKET_LINE} ${ticket}`
-  if (title === null || !title.startsWith(NO_ISSUE)) return { kind: 'add', ticket, prompt }
-  return { kind: 'add', ticket, prompt, title: `${ticket}: ${title.slice(NO_ISSUE.length)}` }
+  if (title === null || !title.startsWith(NO_ISSUE_MARKER)) return { kind: 'add', ticket, prompt }
+  return { kind: 'add', ticket, prompt, title: `${ticket}: ${title.slice(NO_ISSUE_MARKER.length)}` }
 }
 
 // The shape of a desktop session id, such as local_ab-12_c. The turn-end

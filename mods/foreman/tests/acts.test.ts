@@ -3,7 +3,7 @@ import type { Engine } from 'claude-code/testing'
 
 import { REASONS } from '../hooks/desktop'
 import { DATA_NOTE } from '../hooks/wake'
-import { FORK_REFUSAL, newPairing, ticketsIn, ticketsKey, TITLE_REFUSAL } from '../hooks/tickets'
+import { FORK_REFUSAL, newPairing, ticketsIn, ticketsKey, TITLE_LOG, TITLE_REFUSAL } from '../hooks/tickets'
 import { foreman, leftInState, MINUTE, mountBoth, record, SECOND, start, T0, world } from './world'
 
 const START = 'mcp__ccd_session__start_session'
@@ -92,7 +92,7 @@ test('in a parent, a title of any other shape is refused, starts nothing, issues
   for (const args of BAD_STARTS) expect((await startSession($, args)).deny).toBe(TITLE_REFUSAL)
   expect(w.engine.started).toEqual([])
   expect(ledger(w).pairings).toEqual([])
-  expect(await ui.newestLog()).toStartWith('Refused a start_session call')
+  expect(await ui.newestLog()).toBe(`${TITLE_LOG} (${BAD_STARTS.length} times)`)
 })
 
 test('in a parent, a "No issue: " title with a brief reaches the desktop app with its ticket in place of the marker', async ($, on) => {
