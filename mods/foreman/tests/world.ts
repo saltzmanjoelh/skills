@@ -82,7 +82,7 @@ export function statusFolder(on: On, at = FOLDER, stored = new Map<string, unkno
 export function desktopApp(on: On) {
   const d = {
     calls: [] as { server: string; tool: string; args: Record<string, unknown> }[],
-    sessions: [] as { sessionId: string; cwd: string; isArchived?: boolean; isRunning?: boolean }[],
+    sessions: [] as { sessionId: string; cwd: string; title?: string; isArchived?: boolean; isRunning?: boolean }[],
     list: 'ok' as 'ok' | 'error' | 'garbage' | 'not-connected' | 'hang',
     send: 'ok' as 'ok' | 'error' | 'not-connected' | 'hang',
     open: 'ok' as 'ok' | 'error' | 'error-empty' | 'not-connected',
@@ -120,8 +120,10 @@ export function engine(on: On) {
   const answers = {
     notices: [] as string[],
     prompts: [] as string[],
-    // Where each prompt came from, in the same order as `prompts`.
+    // Where each prompt came from, and the context it came with, in the same
+    // order as `prompts`.
     origins: [] as unknown[],
+    contexts: [] as (readonly string[] | undefined)[],
     appended: [] as string[],
     started: [] as Record<string, unknown>[],
     notify: 'sent' as 'sent' | 'off' | 'throws' | 'hang',
@@ -147,6 +149,7 @@ export function engine(on: On) {
     answers.onSubmit()
     answers.prompts.push(e.text)
     answers.origins.push(e.origin)
+    answers.contexts.push(e.context)
     if (answers.submit === 'hang') return new Promise<never>(() => {})
     return { text: e.text, ...(e.context === undefined ? {} : { context: e.context }) }
   })

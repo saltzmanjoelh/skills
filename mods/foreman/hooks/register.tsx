@@ -1,10 +1,11 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PromptSubmitInput, Register, ResolveInput, ToolCallResult } from 'claude-code'
 
-import { decide, desktopOf, needsList, slotOutcome, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
+import { decide, desktopOf, needsList, slotOutcome, slotsNeedList, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
 import { isSvgSurface } from './art'
 import { becameParentAnswer, COMMAND, commandOf, PASSED_ON, slotsAnswer, type Command } from './commands'
 import { failureLine, listSessions, NUDGE_TEXT, openSession, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
+import { acceptedLog, heldLine, heldLog, heldNotice, heldSentence, isPersonPrompt, isRemoteRefusal, keyOfTitle } from './held'
 import { ignoredLine, readIssueLink } from './links'
 import { keptLine, keptNames, NOTED, NOTED_REPLY, notesIn } from './notes'
 import { bandTree, PANE, paneTree, type Elements, type View } from './pane'
@@ -312,9 +313,11 @@ function later($: $, work: () => Promise<unknown>) {
 }
 
 // Joins the rows to the ledger, reads the desktop app's list of sessions when
-// a rule needs it, and decides what the read leads to, inside the ledger's
-// update, so the decision and the ledger it was made on are written together
-// and no other writer can claim the same nudge or wake.
+// a rule or a held key needs it, and decides what the read leads to, inside
+// the ledger's update, so the decision and the ledger it was made on are
+// written together and no other writer can claim the same nudge or wake. A
+// list that could not be read is logged with what it kept from happening: a
+// freed slot when a slot rule needed it, and otherwise a released hold.
 async function decideNow($: $, folderExists: boolean, listed: boolean, now: number): Promise<{ decision: Decision; rows: SubRow[] }> {
   const rows = await rowsNow($)
   const before = joinOwners(ticketsIn(await read($, tickets)), rows).tickets
@@ -324,7 +327,8 @@ async function decideNow($: $, folderExists: boolean, listed: boolean, now: numb
     if (sessionList === TIMED_OUT || 'reason' in sessionList) {
       const why = sessionList === TIMED_OUT ? NO_ANSWER : sessionList.reason
       sessions = { kind: 'failed' }
-      await addLog($, `Could not read the desktop app's list of sessions, so no slot was freed: ${why}.`)
+      const kept = slotsNeedList(before, rows, now) ? 'no slot was freed' : 'no held issue was released'
+      await addLog($, `Could not read the desktop app's list of sessions, so ${kept}: ${why}.`)
     } else {
       sessions = { kind: 'read', sessions: sessionList.sessions }
     }
@@ -556,9 +560,9 @@ async function releaseRow($: $, file: string) {
 
 // The tool.call hook on start_session, in a parent: a forked start and a
 // title of the wrong shape are refused, a call with a brief gets the ticket
-// line, and a "No issue: " title gets the ticket in place of its marker. Once
-// the call answered without an error the ticket is paired with the desktop
-// session id the answer names, or with none for a proposal card.
+// line, and a "No issue: " title gets the ticket in place of its marker. A
+// call with no brief goes on unchanged. Every call that went on has its
+// answer read by afterStart.
 // The call is typed as the engine gives an MCP tool's, with the tool's
 // arguments spread on it, so briefFor can read `prompt`, `context`, `title`
 // and `proposal_id`.
@@ -568,23 +572,49 @@ async function startSession<E extends Record<string, unknown>>($: $, e: E, next:
     await addLog($, brief.log).catch(() => undefined)
     return { deny: brief.text }
   }
-  if (brief.kind === 'pass') return next(e)
-  const out = await next({ ...e, prompt: brief.prompt, ...(brief.title === undefined ? {} : { title: brief.title }) })
+  const sent = brief.kind === 'pass' ? e : { ...e, prompt: brief.prompt, ...(brief.title === undefined ? {} : { title: brief.title }) }
+  const out = await next(sent)
   try {
-    if (out.deny === undefined && out.isError !== true) {
-      // Core answers the text the model reads beside the tool's result; a
-      // hook beneath may answer the result alone, whose text blocks hold the
-      // id then.
-      const localId = localIdIn(typeof out.text === 'string' ? out.text : JSON.stringify(out.result ?? ''))
-      const at = await $.clock.now()
-      await writeTickets($, t => ({ ...t, pairings: [...t.pairings, newPairing(brief.ticket, localId, at)] }))
-      await addLog($, localId === null
-        ? `Gave ticket ${brief.ticket} to a sub session that has not started yet.`
-        : `Paired ticket ${brief.ticket} with ${localId}.`)
-    }
+    return await afterStart($, keyOfTitle(e.title), brief.kind === 'add' ? brief.ticket : null, out)
   } catch {
-    // The call has run; its answer goes back to the model whatever happened
-    // to the pairing.
+    // The call has run; its answer goes back to the model as it came,
+    // whatever happened to the pairing or the hold.
+    return out
+  }
+}
+
+// What foreman does with start_session's answer, for a call whose title
+// began with `key`, or null, and that carried `ticket`, or null. The app's
+// Remote Control refusal holds the key, in one update with its log line and
+// one notification, raised only when the key is newly held, and the answer
+// goes back with the holding sentence as context; it pairs no ticket. Any
+// other answer that is not a deny and not an error is accepted: its ticket is
+// paired with the desktop session id it names, or with none for a proposal
+// card, and its key is released. Every other answer goes back as it came.
+async function afterStart($: $, key: string | null, ticket: string | null, out: ToolCallResult): Promise<ToolCallResult> {
+  if (out.deny === undefined && isRemoteRefusal(out)) {
+    if (key === null) return out
+    await writeTickets($, t => (t.held.includes(key)
+      ? t
+      : { ...t, held: [...t.held, key], outbox: addWork(t.outbox, { logs: [heldLog(key)], effects: [{ kind: 'notify', text: heldNotice(key) }], lines: [] }) }))
+    later($, () => carryOut($))
+    return { ...out, context: [...(out.context ?? []), heldSentence(key)] }
+  }
+  if (out.deny !== undefined || out.isError === true) return out
+  // Core answers the text the model reads beside the tool's result; a hook
+  // beneath may answer the result alone, whose text blocks hold the id then.
+  const localId = localIdIn(typeof out.text === 'string' ? out.text : JSON.stringify(out.result ?? ''))
+  const at = await $.clock.now()
+  await writeTickets($, t => {
+    const paired = ticket === null ? t : { ...t, pairings: [...t.pairings, newPairing(ticket, localId, at)] }
+    if (key === null || !paired.held.includes(key)) return paired
+    return { ...paired, held: paired.held.filter(k => k !== key), outbox: addWork(paired.outbox, { logs: [acceptedLog(key)], effects: [], lines: [] }) }
+  })
+  later($, () => carryOut($))
+  if (ticket !== null) {
+    await addLog($, localId === null
+      ? `Gave ticket ${ticket} to a sub session that has not started yet.`
+      : `Paired ticket ${ticket} with ${localId}.`)
   }
   return out
 }
@@ -597,10 +627,11 @@ const isPlain = (e: PromptSubmitInput) => e.command === undefined && (e.attachme
 // parent's model by rewriting it to the log line for it, when it is made of
 // turn-end notes about sub sessions this parent tracks; let it go on with the
 // Noted line when it is made only of the app's notes and messages; or let it
-// go on as it came.
+// go on as it came, which withHeld may give the held line.
 // The text is checked before any state is read, so a prompt the person typed
-// never waits on a read, and the ledger is read only for a prompt that may be
-// kept.
+// waits here on no read, and the ledger is read only for a prompt that may be
+// kept. A prompt the person typed that goes on does wait in withHeld for
+// reads of the role and the ledger, to learn whether any key is held.
 type Choice = { kind: 'keep'; line: string } | { kind: 'noted' } | { kind: 'pass' }
 
 async function choiceFor($: $, e: PromptSubmitInput): Promise<Choice> {
@@ -609,6 +640,16 @@ async function choiceFor($: $, e: PromptSubmitInput): Promise<Choice> {
   if (!notes.wantsNoted || !(await isOn($))) return { kind: 'pass' }
   const names = notes.turnEnds === null ? null : keptNames(notes.turnEnds, ticketsIn(await read($, tickets)).pairings)
   return names === null ? { kind: 'noted' } : { kind: 'keep', line: keptLine(names) }
+}
+
+// The prompt with the held line added to its context, when it is the
+// person's own, the role is on and some key is held, or else as it came.
+// Whose prompt it is is checked first, so a plugin's prompt, foreman's own
+// wake among them, reads no state here.
+async function withHeld($: $, e: PromptSubmitInput): Promise<PromptSubmitInput> {
+  if (!isPersonPrompt(e) || !(await isOn($))) return e
+  const held = ticketsIn(await read($, tickets)).held
+  return held.length === 0 ? e : { ...e, context: [...(e.context ?? []), heldLine(held)] }
 }
 
 // Whether foreman answers the first step of a turn of the session's own loop
@@ -773,16 +814,18 @@ export const register: Register = (on, options) => {
   // dropped prompt as a warning, which is why the prompt is not dropped. Any
   // other prompt made only of the app's notes and messages goes on with the
   // Noted line as context, its text unchanged, and every other prompt goes on
-  // as it came. The marker is set before the line is written, and a hook that
-  // throws, a failed write included, passes the prompt on as it came, so no
-  // prompt is rewritten without a line in the log or without its marker, and
-  // no line in the log speaks of a note that went on unchanged. A marker left
-  // by a failed log write is cleared by the next first step, whose last
-  // message is then not the line.
+  // as it came, except that the person's own prompt carries the held line as
+  // context while a key whose start the app refused is held. The marker is
+  // set before the line is written, and a hook that throws, a failed write
+  // included, passes the prompt on as it came, so no prompt is rewritten
+  // without a line in the log or without its marker, and no line in the log
+  // speaks of a note that went on unchanged. A marker left by a failed log
+  // write is cleared by the next first step, whose last message is then not
+  // the line.
   on('prompt.submit', async ($, e, next) => {
     void ensureArmed($).catch(() => undefined)
     const choice = await choiceFor($, e)
-    if (choice.kind === 'pass') return next(e)
+    if (choice.kind === 'pass') return next(await withHeld($, e))
     if (choice.kind === 'noted') return next({ ...e, context: [NOTED] })
     await update($, quietLine, () => choice.line)
     await addLog($, choice.line)

@@ -203,3 +203,14 @@ test('a record with no stateSince counts its episode from the read that first sa
   const changed = (now: number) => [row({ stateSince: null, state: (now - T0) / MINUTE < 3 ? 'working' : 'idle' })]
   expect(readEvery(paired(), changed, T0 + 9 * MINUTE)).toEqual([{ at: 8, nudges: 1, reasons: [] }])
 })
+
+test('a held key needs the list, and only a list that was read releases it, with a log line', () => {
+  const holding: ForemanTickets = { ...TICKETS_EMPTY, held: ['ABC-7'] }
+  expect(needsList(holding, [], T0)).toBe(true)
+  expect(needsList(TICKETS_EMPTY, [], T0)).toBe(false)
+  const shown: SessionsLook = { kind: 'read', sessions: [{ sessionId: 'local_n', isArchived: false, isRunning: false, title: 'ABC-7: short', archivedSure: true }] }
+  const d = read(holding, [], T0, { sessions: shown })
+  expect(d.tickets.held).toEqual([])
+  expect(d.logs).toEqual(['Stopped holding ABC-7, because the desktop app\'s list shows a session for it.'])
+  for (const sessions of [{ kind: 'unread' }, { kind: 'failed' }] as SessionsLook[]) expect(read(holding, [], T0, { sessions }).tickets.held).toEqual(['ABC-7'])
+})

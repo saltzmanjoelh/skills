@@ -421,3 +421,59 @@ test('a marker that cannot be written lets the note pass unchanged, with no line
   await passes($, w, note('local_a'))
   expect(await ui.newestLog()).not.toBe(ONE)
 })
+
+// The line every prompt of the person's carries while ABC-7 is held.
+const HELD = 'foreman: the desktop app refused to start ABC-7 over Remote Control, and foreman holds it; start it first, before anything else, as "Starting a session" says.'
+
+// A parent like parentWith's whose ledger holds `held`.
+async function holdingParent($: Engine, on: Parameters<typeof world>[0], held: readonly string[] = ['ABC-7'], isOn = true) {
+  const w = world(on, { store: { 'parent:session-1': { isOn, slots: null }, [ticketsKey('session-1')]: { ...ledgerOf(PAIRINGS), held } } })
+  const marker = markerOf(on)
+  await mountBoth($, on)
+  await start($)
+  await w.clock.settle()
+  return { w, marker }
+}
+
+test('while a key is held, a prompt the person typed in the desktop app, at a terminal or over the bridge carries the held line, after any context it came with', async ($, on) => {
+  const { w } = await holdingParent($, on)
+  for (const kind of ['sdk', 'composer', 'bridge']) {
+    const out = await submit($, 'go on', { origin: { kind } })
+    expect([kind, out.text, out.context]).toEqual([kind, 'go on', [HELD]])
+    expect(w.engine.contexts.at(-1)).toEqual([HELD])
+  }
+  expect((await submit($, 'go on', { context: ['from another hook'] })).context).toEqual(['from another hook', HELD])
+})
+
+test('while a key is held, a plugin\'s prompt, foreman\'s wake among them, and a peer\'s, a task\'s or a schedule\'s get no line', async ($, on) => {
+  const { w } = await holdingParent($, on)
+  const others = [
+    { kind: 'plugin', name: 'foreman' },
+    { kind: 'plugin', name: 'other', asUser: true },
+    { kind: 'peer' },
+    { kind: 'peer-send-message' },
+    { kind: 'task-notification' },
+    { kind: 'scheduled-trigger' },
+  ]
+  for (const origin of others) {
+    await passes($, w, 'foreman: one slot free; pick the next issue and start it.', { origin })
+    expect(w.engine.contexts.at(-1)).toBeUndefined()
+  }
+  await passes($, w, 'go on', { origin: { kind: 'composer' }, isMeta: true })
+})
+
+test('with nothing held, or with the role off, no prompt gets the held line', async ($, on) => {
+  const { w } = await holdingParent($, on, [])
+  for (const kind of ['sdk', 'composer', 'bridge']) await passes($, w, 'go on', { origin: { kind } })
+})
+
+test('with the role off, a held key in the stored ledger gives no prompt the line', async ($, on) => {
+  const { w } = await holdingParent($, on, ['ABC-7'], false)
+  await passes($, w, 'go on', { origin: { kind: 'sdk' } })
+})
+
+test('while a key is held, the app\'s notes keep their own handling and get no held line', async ($, on) => {
+  const { w, marker } = await holdingParent($, on)
+  await kept($, w, marker, `${note('local_a')}\n${STATUS}`, ONE)
+  await noted($, w, SENT, { origin: { kind: 'sdk' } })
+})
