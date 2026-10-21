@@ -4,7 +4,7 @@
 // and which rows show. Every function is pure.
 
 import type { ForemanActs, ForemanEffect, ForemanOutbox, ForemanPairing, ForemanStanding, ForemanTickets } from '../types'
-import { verdictsIn } from './record'
+import { isPullRequestState, verdictsIn } from './record'
 import { byKeyThenFile, keyOf, nameOf, type SubRow } from './subs'
 import { byTicket, KEY } from './wake'
 
@@ -130,8 +130,6 @@ const textOr = <T>(raw: unknown, fallback: T): string | T => (typeof raw === 'st
 const numberOr = <T>(raw: unknown, fallback: T): number | T => (typeof raw === 'number' && Number.isFinite(raw) ? raw : fallback)
 const objectOf = (raw: unknown): Record<string, unknown> | null => (typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? raw as Record<string, unknown> : null)
 
-const PR_STATES: readonly string[] = ['OPEN', 'MERGED', 'CLOSED']
-
 // A stored milestone memory, or null, which stands for none, unless every
 // field is sound: a positive whole number or null, one of the three states or
 // null, and a verdict pair that verdictsIn keeps or null. A damaged memory
@@ -141,10 +139,10 @@ function announcedIn(raw: unknown): ForemanActs['announced'] {
   const a = objectOf(raw)
   if (a === null || !('number' in a) || !('state' in a) || !('verdicts' in a)) return null
   const isNumber = a.number === null || (typeof a.number === 'number' && Number.isInteger(a.number) && a.number > 0)
-  const isState = a.state === null || (typeof a.state === 'string' && PR_STATES.includes(a.state))
+  const state = a.state === null || isPullRequestState(a.state) ? a.state : undefined
   const verdicts = verdictsIn(a.verdicts)
-  if (!isNumber || !isState || (a.verdicts !== null && verdicts === null)) return null
-  return { number: a.number as number | null, state: a.state as NonNullable<ForemanActs['announced']>['state'], verdicts }
+  if (!isNumber || state === undefined || (a.verdicts !== null && verdicts === null)) return null
+  return { number: a.number as number | null, state, verdicts }
 }
 
 // Stored acts read tolerantly. Acts with no milestone memory, as a pairing

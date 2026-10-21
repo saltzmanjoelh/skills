@@ -227,6 +227,12 @@ function goneRule(s: Step) {
 
 const bothApprove = (v: RecordVerdicts) => v.spec === 'APPROVE' && v.adversarial === 'APPROVE'
 
+// Whether a pair at a new head is the approval of the last announced pair
+// carried over after a commit of cheap fixes: both approve, and both approved
+// in the pair the parent was last told about. Such a pair is neither
+// announced nor recorded.
+const isCarriedOverApproval = (pair: RecordVerdicts, announced: RecordVerdicts | null) => announced !== null && bothApprove(pair) && bothApprove(announced)
+
 // The pull request milestones the parent has not been told about, in the
 // order opened, verdicts, then merged or closed, with the memory of what was
 // told brought up to date. A pairing with no memory yet, as one stored before
@@ -255,7 +261,7 @@ function milestoneRule(s: Step): Reason[] {
     next = { number, state: null, verdicts: null }
   }
   const pair = pr.verdicts
-  if (pair !== null && pair.sha !== next.verdicts?.sha && !(bothApprove(pair) && next.verdicts !== null && bothApprove(next.verdicts))) {
+  if (pair !== null && pair.sha !== next.verdicts?.sha && !isCarriedOverApproval(pair, next.verdicts)) {
     reasons.push({ kind: 'verdicts', who, number, ...pair })
     next = { ...next, verdicts: pair }
   }

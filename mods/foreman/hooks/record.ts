@@ -89,13 +89,26 @@ function pullRequestIn(raw: unknown): RecordPullRequest | null {
 // One of the three states GitHub gives a pull request.
 export type PullRequestState = NonNullable<BuildStatus['pr']>['state']
 
+// The three states, which prStateOf and the ledger's reader both check
+// against.
+export const PR_STATES = ['OPEN', 'MERGED', 'CLOSED'] as const
+
+// This line stops the type check when foreman's list of pull request states
+// and builder's differ in either direction, as STATES_MATCH_BUILDER does for
+// the sub session's states.
+const PR_STATES_MATCH_BUILDER: [(typeof PR_STATES)[number], PullRequestState] extends [PullRequestState, (typeof PR_STATES)[number]] ? true : never = true
+void PR_STATES_MATCH_BUILDER
+
+// Whether a value is one of the three states, in capitals.
+export const isPullRequestState = (raw: unknown): raw is PullRequestState => typeof raw === 'string' && (PR_STATES as readonly string[]).includes(raw)
+
 // The pull request's state as one of the three, whatever the case of its
 // text, or null when there is no pull request or its state is any other
 // text, such as the reader's `unknown`, so that a state foreman cannot read
 // changes nothing.
 export function prStateOf(pr: RecordPullRequest | null): PullRequestState | null {
   const state = pr?.state.toUpperCase()
-  return state === 'OPEN' || state === 'MERGED' || state === 'CLOSED' ? state : null
+  return isPullRequestState(state) ? state : null
 }
 
 // The cleanup counts, or undefined when the record has none.
