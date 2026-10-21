@@ -5,6 +5,7 @@
 import type { AgentCard, CounselQuestion, CounselTally, CounselVote, Snapshot } from '../types'
 import { secretIn } from './review'
 import { OWNERS_ADVOCATE, REVIEWERS } from './state'
+import { normalText, sameText } from './text'
 
 // The counsel is always seven members, the six reviewers and the owner's
 // advocate, and every one of them votes. Seven is odd, so the votes for two
@@ -26,12 +27,6 @@ export const ASK_OPTIONS = 4
 export const COUNSEL_KEPT = 20
 // How much of a member's reason the ask answer quotes.
 const REASON_CHARS = 200
-
-// Two texts say the same thing when they are equal once each is trimmed and
-// put in lower case. normalText is that one definition, and sameText and
-// hasRepeat both use it.
-const normalText = (text: string) => text.trim().toLowerCase()
-const sameText = (a: string, b: string) => normalText(a) === normalText(b)
 
 // Whether two of the texts say the same thing.
 function hasRepeat(texts: readonly string[]): boolean {
