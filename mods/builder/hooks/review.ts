@@ -431,7 +431,7 @@ export function trendSection(report: TrendReport): string {
     for (const text of report.unreadable) lines.push(`- ${text}`)
   }
   if (report.unappliedRetags.length > 0) {
-    lines.push('', 'Retag: lines that changed nothing, because their sha does not name exactly one commit on the branch or that commit has no Tidied: line for the area:')
+    lines.push('', 'Retag: lines that changed nothing, because they have no colon between the sha and the area, name no area, give a sha that does not name exactly one commit on the branch, or name a commit that has no Tidied: line for the area:')
     for (const text of report.unappliedRetags) lines.push(`- ${text}`)
   }
   return lines.join('\n')
