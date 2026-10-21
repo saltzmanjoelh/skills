@@ -332,3 +332,176 @@ test('an area closed by a Trend: line that no Area: line named is still listed a
   expect(section).toContain('No area named yet.')
   expect(section).toContain('- hooks/x.ts: the thing: file the rest')
 })
+
+// Two branch commits whose shas share their first seven characters.
+const TWIN_A = { sha: 'abcdef1' + 'a'.repeat(33), message: 'Build' }
+const TWIN_B = { sha: 'abcdef1' + 'b'.repeat(33), message: 'Build more' }
+// A fix commit for the findings raised at `reviewed` that names `tidied` on
+// Tidied: lines and `areas` on Area: lines.
+const tidy = (c: string, reviewed: string | null, tidied: string[], areas: string[] = []) => commit(c, [
+  'Fix the findings',
+  '',
+  ...(reviewed === null ? [] : [`Reviewed: ${reviewed}`]),
+  ...areas.map(area => `Area: ${area}`),
+  ...tidied.map(area => `Tidied: ${area}`),
+].join('\n'))
+
+test('a Reviewed: value of seven hex characters that matches one commit groups under it', () => {
+  const commits = [commit('1', 'Build'), fix('2', '1111111', [RACE]), fix('3', sha('1'), [RACE])]
+  const report = trendOf(commits)
+  expect(report.streaks).toEqual([])
+  expect(report.unmatched).toEqual([])
+})
+
+test('a Reviewed: value of six characters keys a group of its own and is listed', () => {
+  const commits = [commit('1', 'Build'), fix('2', '111111', [RACE]), fix('3', sha('1'), [RACE])]
+  const report = trendOf(commits)
+  expect(report.streaks).toEqual([{ area: RACE, streak: 2 }])
+  expect(report.unmatched).toEqual([{ sha: '22222222', value: '111111' }])
+  expect(trendSection(report)).toContain('- 22222222: 111111')
+})
+
+test('a Reviewed: value that matches two commits keys a group of its own, which commits giving it share', () => {
+  const commits = [TWIN_A, TWIN_B, fix('2', 'abcdef1', [RACE]), fix('3', 'ABCDEF1.', [RACE]), fix('4', TWIN_A.sha, [RACE])]
+  const report = trendOf(commits)
+  expect(report.streaks).toEqual([{ area: RACE, streak: 2 }])
+  expect(report.unmatched).toEqual([{ sha: '22222222', value: 'abcdef1' }, { sha: '33333333', value: 'ABCDEF1.' }])
+})
+
+test('a seven-character value that matched one commit keys a group of its own once a second commit shares its prefix', () => {
+  const before = [TWIN_A, fix('2', 'abcdef1', [RACE]), fix('3', TWIN_A.sha, [RACE])]
+  expect(trendOf(before).streaks).toEqual([])
+  const after = [TWIN_A, fix('2', 'abcdef1', [RACE]), fix('3', TWIN_A.sha, [RACE]), TWIN_B]
+  expect(trendOf(after).streaks).toEqual([{ area: RACE, streak: 2 }])
+  expect(trendOf(after).unmatched).toEqual([{ sha: '22222222', value: 'abcdef1' }])
+})
+
+test('a blank Reviewed: value keeps the commit in a group of its own and is listed as no value', () => {
+  const report = trendOf([fix('1', '', [RACE]), fix('2', '', [RACE])])
+  expect(report.streaks).toEqual([{ area: RACE, streak: 2 }])
+  expect(report.unmatched).toEqual([{ sha: '11111111', value: '(no value)' }, { sha: '22222222', value: '(no value)' }])
+})
+
+test('a Tidied: line neither lengthens nor breaks a streak, and is listed with its commit', () => {
+  const without = [fix('1', null, [RACE]), fix('3', null, [RACE])]
+  // The tidied commit names no head, so a group it formed would stand alone and
+  // change the streak, whether it named the area or not.
+  const withIt = [fix('1', null, [RACE]), tidy('2', null, [RACE]), fix('3', null, [RACE])]
+  expect(trendOf(withIt).streaks).toEqual(trendOf(without).streaks)
+  const report = trendOf([fix('1', null, [RACE]), fix('2', null, [RACE]), tidy('3', null, [RACE])])
+  expect(report.stops).toEqual([])
+  expect(report.tidied).toEqual([{ sha: '33333333', area: RACE, retagged: false }])
+  expect(trendSection(report)).toContain(`- ${RACE} (33333333)`)
+  expect(trendSection(report)).toContain('is a finding')
+})
+
+test('a commit with a Reviewed: line and only Tidied: lines is not listed among the commits without an area', () => {
+  const report = trendOf([commit('1', 'Build'), tidy('2', sha('1'), [RACE])])
+  expect(report.unlabelled).toEqual([])
+  expect(report.areas).toEqual([])
+})
+
+test('an Area: line and a Tidied: line for one area in one commit count the area once and list the Tidied: line', () => {
+  const report = trendOf([fix('1', null, [RACE]), tidy('2', null, [RACE], [RACE])])
+  expect(report.streaks).toEqual([{ area: RACE, streak: 2 }])
+  expect(report.tidied).toEqual([{ sha: '22222222', area: RACE, retagged: false }])
+})
+
+test('a trend section with only Tidied: lines does not say none yet', () => {
+  const section = trendSection(trendOf([tidy('1', null, [RACE])]))
+  expect(section).not.toContain('None yet.')
+  expect(section).toContain('No area named yet.')
+})
+
+test('a Retag: line counts the area at the retagged commit\'s own place, so a streak of two becomes three and stops', () => {
+  const mislabelled = [fix('1', null, [RACE]), tidy('2', null, [RACE]), fix('3', null, [RACE])]
+  expect(trendOf(mislabelled).stops).toEqual([])
+  const report = trendOf([...mislabelled, commit('4', `Correct the record\n\nRetag: 22222222: ${RACE}`)])
+  expect(report.stops).toEqual([{ area: RACE, streak: 3 }])
+  expect(report.tidied).toEqual([{ sha: '22222222', area: RACE, retagged: true }])
+  expect(trendSection(report)).toContain('read as an Area: line')
+  expect(report.unappliedRetags).toEqual([])
+})
+
+test('a keep going line between the retagged commit and the Retag: line still resets the streak', () => {
+  const commits = [
+    fix('1', null, [RACE]), tidy('2', null, [RACE]),
+    commit('3', `Record the answer\n\nTrend: ${RACE}: keep going`),
+    fix('4', null, [RACE]), fix('5', null, [RACE]),
+    commit('6', `Correct the record\n\nRetag: 2222222: ${RACE}`),
+  ]
+  const report = trendOf(commits)
+  expect(report.stops).toEqual([])
+  expect(report.streaks).toEqual([{ area: RACE, streak: 2 }])
+  expect(report.tidied).toEqual([{ sha: '22222222', area: RACE, retagged: true }])
+  expect(report.unappliedRetags).toEqual([])
+})
+
+test('a Retag: line in the commit it names, or before it, is applied', () => {
+  const inItself = commit('2', `Fix the findings\n\nTidied: ${RACE}\nRetag: 22222222: ${RACE}`)
+  expect(trendOf([fix('1', null, [RACE]), inItself, fix('3', null, [RACE])]).stops).toEqual([{ area: RACE, streak: 3 }])
+  const before = commit('0', `Correct the record\n\nRetag: 22222222: ${RACE}`)
+  expect(trendOf([before, fix('1', null, [RACE]), tidy('2', null, [RACE]), fix('3', null, [RACE])]).stops).toEqual([{ area: RACE, streak: 3 }])
+})
+
+test('a second Retag: line for the same commit and area changes nothing and is not listed', () => {
+  const commits = [
+    fix('1', null, [RACE]), tidy('2', null, [RACE]), fix('3', null, [RACE]),
+    commit('4', `Correct the record\n\nRetag: 22222222: ${RACE}\nRetag: 2222222222: ${RACE}`),
+  ]
+  const report = trendOf(commits)
+  expect(report.stops).toEqual([{ area: RACE, streak: 3 }])
+  expect(report.unappliedRetags).toEqual([])
+})
+
+test('a Retag: line naming a commit in a closed area leaves the area closed', () => {
+  const commits = [
+    fix('1', null, [RACE]), fix('2', null, [RACE]), fix('3', null, [RACE]),
+    commit('4', `Record the answer\n\nTrend: ${RACE}: file the rest`),
+    fix('5', null, [RACE]), tidy('6', null, [RACE]), fix('7', null, [RACE]),
+    commit('8', `Correct the record\n\nRetag: 66666666: ${RACE}`),
+  ]
+  const report = trendOf(commits)
+  expect(report.stops).toEqual([])
+  expect(report.closed).toEqual([{ area: RACE, answer: 'file the rest' }])
+  expect(report.tidied).toEqual([{ sha: '66666666', area: RACE, retagged: true }])
+  expect(report.unappliedRetags).toEqual([])
+})
+
+test('a Retag: line that cannot be applied is listed, cleaned, and changes nothing', () => {
+  const base = [fix('1', null, [RACE]), tidy('2', null, [RACE]), fix('3', null, [RACE]), TWIN_A, TWIN_B]
+  const bad = [
+    `222222: ${RACE}`,
+    `abcdef1: ${RACE}`,
+    `99999999: ${RACE}`,
+    '22222222 no colon here',
+    '22222222:   ',
+    `11111111: ${RACE}`,
+    `22222222: ${CACHE}`,
+    '22222222: hooks/x.ts: \u001b[31mred‮',
+  ]
+  for (const value of bad) {
+    const report = trendOf([...base, commit('4', `Correct the record\n\nRetag: ${value}`)])
+    expect(report.stops).toEqual([])
+    expect(report.streaks).toEqual([{ area: RACE, streak: 2 }])
+    expect(report.unappliedRetags).toHaveLength(1)
+    expect(report.unappliedRetags[0]!).not.toMatch(/[\u0000-\u001f‮]/)
+    expect(trendSection(report)).toContain('changed nothing')
+  }
+})
+
+test('an unmatched Reviewed: value is cleaned before it is printed', () => {
+  const report = trendOf([fix('1', '\u001b[31mred‮', [RACE])])
+  expect(report.unmatched).toHaveLength(1)
+  expect(report.unmatched[0]!.value).not.toMatch(/[\u0000-\u001f‮]/)
+})
+
+test('the stop line says later safety findings and findings that break working behaviour stay blocking whatever the answer, on one line', () => {
+  const stop = trendStopLine(trendOf([fix('1', null, [RACE]), fix('2', null, [RACE]), fix('3', null, [RACE])]))!
+  expect(stop).toContain('whatever the findings behind the streak were')
+  expect(stop).toContain('safety finding')
+  expect(stop).toContain('breaks working behaviour')
+  expect(stop).toContain('stays in scope and blocking whatever the answer')
+  expect(stop).toContain("governs only the area's other later findings")
+  expect(stop).not.toContain('\n')
+})

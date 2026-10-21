@@ -892,6 +892,7 @@ test('the package tool lists the decided findings and the areas, and its first l
 
   expect(answer.split('\n')[0]).toContain('The review rounds stop here')
   expect(answer.split('\n')[0]).toContain(area)
+  expect(answer.split('\n')[0]).toContain('stays in scope and blocking whatever the answer')
   expect(answer).toContain(`Review package for ${C.slice(0, 8)}:`)
   expect(text).toContain('## Already decided')
   expect(text).toContain(`- D1 (commit ${A.slice(0, 8)}): The cache can go stale. Refuted: it is rebuilt.`)

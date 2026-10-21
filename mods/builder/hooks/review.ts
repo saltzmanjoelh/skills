@@ -196,6 +196,11 @@ export function decidedSection(items: readonly DecidedItem[]): string {
 export const STREAK_SHOWN = 2
 export const STREAK_STOP = 3
 
+// A Reviewed: or Retag: value names a branch commit only when it has at least
+// SHA_MIN_CHARS hex characters and exactly one branch commit's sha starts with
+// it.
+export const SHA_MIN_CHARS = 7
+
 // The answers a Trend: line may give for an area.
 export const TREND_ANSWERS = ['keep going', 'file the rest', 'cut it out'] as const
 export type TrendAnswer = (typeof TREND_ANSWERS)[number]
@@ -205,20 +210,27 @@ export type TrendAnswer = (typeof TREND_ANSWERS)[number]
 const AREA_CHARS = 200
 
 // What the fix commits on the branch say about the areas their findings lay
-// in. `areas` holds every area an Area: line named, in its first wording, in
-// the order first named. `streaks` holds each open area whose streak is
-// STREAK_SHOWN or more, and `stops` each of those whose streak is
-// STREAK_STOP or more. `unlabelled` holds the short shas of the commits that
-// fixed review findings without an Area: line, `closed` each area whose
-// latest Trend: answer closed it, and `unreadable` the text of each Trend:
-// line that could not be read.
+// in. `areas` holds every area an Area: line named, or a Tidied: line that a
+// Retag: line corrected, in its first wording, in the order first named.
+// `streaks` holds each open area whose streak is STREAK_SHOWN or more, and
+// `stops` each of those whose streak is STREAK_STOP or more. `unlabelled`
+// holds the short shas of the commits that fixed review findings without an
+// Area: or Tidied: line, `tidied` each Tidied: line with its commit's short
+// sha and whether a Retag: line corrected it, `unmatched` each commit whose
+// Reviewed: value names no single branch commit, `closed` each area whose
+// latest Trend: answer closed it, `unreadable` the text of each Trend: line
+// that could not be read, and `unappliedRetags` the text of each Retag: line
+// that changed nothing.
 export type TrendReport = {
   areas: string[]
   streaks: { area: string; streak: number }[]
   stops: { area: string; streak: number }[]
   unlabelled: string[]
+  tidied: { sha: string; area: string; retagged: boolean }[]
+  unmatched: { sha: string; value: string }[]
   closed: { area: string; answer: Exclude<TrendAnswer, 'keep going'> }[]
   unreadable: string[]
+  unappliedRetags: string[]
 }
 
 // The values of every line in `message` that starts with `label`, compared
@@ -231,17 +243,49 @@ function labelled(message: string, label: string): string[] {
   return values
 }
 
-// The group a commit with Area: lines belongs to: its own sha when it has no
-// Reviewed: line, or the full sha of the branch commit whose sha starts with
-// the Reviewed: value's first word, without trailing punctuation. Any value
-// that matches no branch commit, including one that is not hex at all, keys a
-// group of its own.
-function groupKeyOf(c: CommitRecord, reviewed: string | undefined, commits: readonly CommitRecord[]): string {
-  const prefix = (reviewed ?? '').split(/\s+/)[0]!.replace(/[^0-9a-z]+$/i, '').toLowerCase()
-  if (prefix === '') return c.sha
-  const matched = commits.find(other => other.sha.startsWith(prefix))
-  if (matched === undefined) return `reviewed ${prefix}`
-  return matched.sha
+// A Reviewed: or Retag: value's first word, without trailing punctuation, in
+// lower case.
+function shaWord(value: string): string {
+  return value.trim().split(/\s+/)[0]!.replace(/[^0-9a-z]+$/i, '').toLowerCase()
+}
+
+// The index of the one branch commit whose sha starts with `word`, or
+// undefined when `word` is not SHA_MIN_CHARS to 40 hex characters or does not
+// match exactly one branch commit.
+function commitNamed(word: string, commits: readonly CommitRecord[]): number | undefined {
+  if (word.length < SHA_MIN_CHARS || !/^[0-9a-f]{1,40}$/.test(word)) return undefined
+  const matched = commits.flatMap((c, index) => c.sha.startsWith(word) ? [index] : [])
+  return matched.length === 1 ? matched[0] : undefined
+}
+
+// What a commit's Reviewed: line says, read once. `key` is the group the
+// commit belongs to when it names an area: its own sha when it has no
+// Reviewed: line or a blank one, or the full sha of the branch commit that the
+// value's first word names. Any other value, too short, not hex, or matching
+// no branch commit or more than one, keys a group of its own, so commits that
+// give the same such value share a group. `unmatched` is the value to list,
+// cleaned to print, when the line names no single commit, and null otherwise.
+function reviewedOf(c: CommitRecord, reviewed: string | undefined, commits: readonly CommitRecord[]): { key: string; unmatched: string | null } {
+  if (reviewed === undefined) return { key: c.sha, unmatched: null }
+  const word = shaWord(reviewed)
+  if (word === '') return { key: c.sha, unmatched: '(no value)' }
+  const named = commitNamed(word, commits)
+  if (named !== undefined) return { key: commits[named]!.sha, unmatched: null }
+  return { key: `reviewed ${word}`, unmatched: printable(reviewed.split(/\s+/)[0]!, AREA_CHARS) }
+}
+
+// The commit index and area of a Retag: line's value, or undefined when it has
+// no colon, names no area, its sha names no single branch commit, or that
+// commit has no Tidied: line for the area. The sha is the text before the
+// first colon, because an area holds a colon of its own.
+function retagOf(value: string, commits: readonly CommitRecord[]): { index: number; area: string } | undefined {
+  const split = value.indexOf(':')
+  if (split === -1) return undefined
+  const area = areaKey(value.slice(split + 1))
+  const index = commitNamed(shaWord(value.slice(0, split)), commits)
+  if (area === '' || index === undefined) return undefined
+  if (!labelled(commits[index]!.message, 'Tidied:').some(t => areaKey(t) === area)) return undefined
+  return { index, area }
 }
 
 // Whether a group names the area in a commit after the one at index after.
@@ -262,38 +306,58 @@ function trendLineOf(value: string): { area: string; answer: TrendAnswer } | und
   return { area, answer }
 }
 
-// The areas fixed on the branch and their streaks, from the Reviewed:, Area:
-// and Trend: lines of its commits, oldest first. Commits with Area: lines are
-// grouped by the head their Reviewed: line names, matched by prefix against
-// the branch's full shas, or by the value itself when it matches none, or by
-// their own sha when they have no Reviewed: line, in the order the groups
-// first appear. A commit with a Reviewed: line and no Area: line fixed
-// findings without naming an area, so it is listed and is no group. On a
-// Trend: line the answer is the text after the last colon and the area the
-// text before it, and the latest answer for an area wins. An area's streak
-// is the number of groups in a row, ending with the newest, that name it in
-// a commit after the latest commit holding a Trend: line for it, so keep
-// going counts it from zero. An area closed by file the rest or cut it out
-// has no streak and never stops the rounds.
+// The areas fixed on the branch and their streaks, from the Reviewed:, Area:,
+// Tidied:, Retag: and Trend: lines of its commits, oldest first. Every Retag:
+// line is read first, wherever it stands, and turns the Tidied: line it names
+// into an Area: line at that Tidied: line's own commit. Commits with Area:
+// lines are grouped as reviewedOf says, in the order the groups first appear.
+// A Tidied: line neither lengthens nor breaks a streak, so a commit whose
+// fixes are all tidied forms no group. A commit with a Reviewed: line and
+// neither line fixed findings without naming an area, so it is listed and is
+// no group. On a Trend: line the answer is the text after the last colon and
+// the area the text before it, and the latest answer for an area wins. An
+// area's streak is the number of groups in a row, ending with the newest,
+// that name it in a commit after the latest commit holding a Trend: line for
+// it, so keep going counts it from zero. An area closed by file the rest or
+// cut it out has no streak and never stops the rounds.
 export function trendOf(commits: readonly CommitRecord[]): TrendReport {
   const first = new Map<string, string>()
   const groups: { key: string; named: { index: number; area: string }[] }[] = []
   const unlabelled: string[] = []
+  const tidied: TrendReport['tidied'] = []
+  const unmatched: TrendReport['unmatched'] = []
   const answers = new Map<string, { index: number; answer: TrendAnswer }>()
   const unreadable: string[] = []
+  const unappliedRetags: string[] = []
+  const retagged = new Map<number, Set<string>>()
+  for (const c of commits) {
+    for (const value of labelled(c.message, 'Retag:')) {
+      const retag = retagOf(value, commits)
+      if (retag === undefined) unappliedRetags.push(printable(value, AREA_CHARS))
+      else retagged.set(retag.index, (retagged.get(retag.index) ?? new Set()).add(retag.area))
+    }
+  }
   commits.forEach((c, index) => {
     for (const value of labelled(c.message, 'Trend:')) {
       const answered = trendLineOf(value)
       if (answered === undefined) unreadable.push(printable(value, AREA_CHARS))
       else answers.set(answered.area, { index, answer: answered.answer })
     }
-    const areas = labelled(c.message, 'Area:').filter(area => areaKey(area) !== '')
+    const corrected = retagged.get(index) ?? new Set<string>()
+    const tidiedHere = labelled(c.message, 'Tidied:').filter(area => areaKey(area) !== '')
+    for (const area of tidiedHere) tidied.push({ sha: c.sha.slice(0, 8), area: printable(area, AREA_CHARS), retagged: corrected.has(areaKey(area)) })
+    const areas = [
+      ...labelled(c.message, 'Area:').filter(area => areaKey(area) !== ''),
+      ...tidiedHere.filter(area => corrected.has(areaKey(area))),
+    ]
     const reviewed = labelled(c.message, 'Reviewed:')[0]
+    const named = reviewedOf(c, reviewed, commits)
+    if (named.unmatched !== null) unmatched.push({ sha: c.sha.slice(0, 8), value: named.unmatched })
     if (areas.length === 0) {
-      if (reviewed !== undefined) unlabelled.push(c.sha.slice(0, 8))
+      if (reviewed !== undefined && tidiedHere.length === 0) unlabelled.push(c.sha.slice(0, 8))
       return
     }
-    const key = groupKeyOf(c, reviewed, commits)
+    const key = named.key
     let group = groups.find(g => g.key === key)
     if (group === undefined) groups.push(group = { key, named: [] })
     for (const area of areas) {
@@ -323,17 +387,20 @@ export function trendOf(commits: readonly CommitRecord[]): TrendReport {
     streaks,
     stops: streaks.filter(s => s.streak >= STREAK_STOP),
     unlabelled,
+    tidied,
+    unmatched,
     closed,
     unreadable,
+    unappliedRetags,
   }
 }
 
 // The package's `## Areas fixed so far` section. The section reads `None yet.`
-// when no area was named, no commit fixed findings without an Area: line, no
-// area was closed and no Trend: line was unreadable.
+// when every list in the report except the streaks is empty.
 export function trendSection(report: TrendReport): string {
   const lines = ['## Areas fixed so far', '']
-  const nothing = report.areas.length === 0 && report.unlabelled.length === 0 && report.closed.length === 0 && report.unreadable.length === 0
+  const lists = [report.areas, report.unlabelled, report.tidied, report.unmatched, report.closed, report.unreadable, report.unappliedRetags]
+  const nothing = lists.every(list => list.length === 0)
   if (nothing) {
     lines.push('None yet.')
     return lines.join('\n')
@@ -345,7 +412,15 @@ export function trendSection(report: TrendReport): string {
     lines.push(streak === undefined ? `- ${area}` : `- ${area}, fixed at ${streak} reviewed heads in a row`)
   }
   if (report.unlabelled.length > 0) {
-    lines.push('', `Commits that fixed findings without an Area: line, which neither lengthen nor break a streak: ${report.unlabelled.join(', ')}.`)
+    lines.push('', `Commits that fixed findings without an Area: or Tidied: line, which neither lengthen nor break a streak: ${report.unlabelled.join(', ')}.`)
+  }
+  if (report.tidied.length > 0) {
+    lines.push('', 'Tidied: lines, whose fixes the session says changed only tests, comments, documentation, names or wording, and which neither lengthen nor break a streak. A Tidied: line on a fix that changed what the code does, a change to an instruction file such as a skill, an agent, a command or a mod included, is a finding:')
+    for (const { sha, area, retagged } of report.tidied) lines.push(retagged ? `- ${area} (${sha}), read as an Area: line because a Retag: line names it` : `- ${area} (${sha})`)
+  }
+  if (report.unmatched.length > 0) {
+    lines.push('', `Commits whose Reviewed: value could not be matched to one commit on the branch, because it is blank, is not at least ${SHA_MIN_CHARS} hex characters, or matches no commit or more than one. Such a commit that names an area forms a group keyed by the value, or by the commit's own sha when the value is blank:`)
+    for (const { sha, value } of report.unmatched) lines.push(`- ${sha}: ${value}`)
   }
   if (report.closed.length > 0) {
     lines.push('', 'Closed areas, in which every later finding counts as outside the spec, unless it breaks working behaviour or is a safety finding:')
@@ -355,6 +430,10 @@ export function trendSection(report: TrendReport): string {
     lines.push('', `Trend: lines that could not be read, because their answer is not ${TREND_ANSWERS.join(', ')} or they name no area:`)
     for (const text of report.unreadable) lines.push(`- ${text}`)
   }
+  if (report.unappliedRetags.length > 0) {
+    lines.push('', 'Retag: lines that changed nothing, because they have no colon between the sha and the area, name no area, give a sha that does not name exactly one commit on the branch, or name a commit that has no Tidied: line for the area:')
+    for (const text of report.unappliedRetags) lines.push(`- ${text}`)
+  }
   return lines.join('\n')
 }
 
@@ -362,7 +441,7 @@ export function trendSection(report: TrendReport): string {
 export function trendStopLine(report: TrendReport): string | null {
   if (report.stops.length === 0) return null
   const named = report.stops.map(s => `${s.area} (fixed at ${s.streak} reviewed heads in a row)`).join('; ')
-  return `The review rounds stop here: ${named}. Before launching any reviewer, put to the counsel whether to keep going in that area, file the rest of its findings or cut it out, then record the answer on a Trend: line in a commit of its own and push it.`
+  return `The review rounds stop here, whatever the findings behind the streak were: ${named}. Before launching any reviewer, put to the counsel whether to keep going in that area, file the rest of its findings or cut it out, and say in the question that a later safety finding in the area, or a later finding that breaks working behaviour, stays in scope and blocking whatever the answer, so the answer governs only the area's other later findings. Then record the answer on a Trend: line in a commit of its own and push it.`
 }
 
 // The first line the snapshot parses; the rest of the body is the session's.
