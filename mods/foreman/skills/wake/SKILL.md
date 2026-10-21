@@ -335,8 +335,8 @@ branch a detached other worktree holds" below says what a failure means.
      session may have left edits it never committed.
 
    A branch that a detached other worktree holds counts as checked out by
-   that worktree, here and in step 7, because git refuses to check out or
-   delete a branch that a stopped rebase or bisect holds.
+   that worktree, here and in step 7, because git treats such a branch as in
+   use by that worktree and refuses to delete it.
 5. **Read the issue's state** with the same tracker the `Next issue:` fact
    names. When that is not possible, treat the state as unknown and go on;
    this is not a failed git or gh command.
@@ -383,10 +383,10 @@ Starting goes through "Starting a session".
 ### The branch a detached other worktree holds
 
 While a rebase or a bisect is stopped, git lists the worktree as `detached`,
-yet it still holds the branch the rebase or bisect began on, and refuses to
-check that branch out elsewhere or delete it. For each of the other worktrees
-from step 3 whose entry says `detached`, find the branches it holds with the
-checks below, in order. When a check fails, or one of these commands fails,
+yet it still holds the branch the rebase or bisect began on, and any other
+branch the rebase will move, and refuses to delete them. For each of the
+other worktrees from step 3 whose entry says `detached`, find the branches it
+holds with the checks below, in order. When a check fails, or one of these commands fails,
 the worktree is one that **cannot be settled**, the parent reads no further
 for it, and the gone case goes on; step 7 says what such a worktree stops. A
 command that answers no through its exit status has not failed.
@@ -396,13 +396,13 @@ command that answers no through its exit status has not failed.
    `prunable`. A worktree inside the main checkout whose `.git` file is gone
    is marked `prunable`, and `git -C` there reads the main checkout's records
    instead of its own, while git still holds its branch.
-2. For each record in the list below, find its path with
-   `git -C '<folder>' rev-parse --path-format=absolute --git-path '<record>'`,
-   and read the first line of the file at that path with the file-reading
-   tool, never through the shell, because no check covers the characters of
-   that path. A record whose file does not exist names no branch. A file that
-   exists but cannot be read fails.
-3. Turn the line into a name as the list says for that record.
+2. Find the paths of all four records in the list below with one command,
+   `git -C '<folder>' rev-parse --path-format=absolute --git-path 'rebase-merge/head-name' --git-path 'rebase-merge/update-refs' --git-path 'rebase-apply/head-name' --git-path 'BISECT_START'`,
+   which prints one path per line in that order. Read each file with the
+   file-reading tool, never through the shell, because no check covers the
+   characters of those paths. A record whose file does not exist names no
+   branch. A file that exists but cannot be read fails.
+3. Turn the record's lines into names as the list says for that record.
 4. The name holds only the characters the cleanup case allows. Then
    `git -C '<folder>' rev-parse --verify --quiet 'refs/heads/<name>'` decides.
    Exit status 0 means the worktree holds that branch. Exit status 1 means no
@@ -412,18 +412,24 @@ command that answers no through its exit status has not failed.
 The records, and how each one's line names a branch:
 
 - `rebase-merge/head-name` and `rebase-apply/head-name`, which a stopped
-  rebase writes: the line `refs/heads/<name>` names `<name>`, and exactly
-  `detached HEAD`, which git writes for a rebase that began on a detached
-  head, names no branch. Any other line fails.
-- `BISECT_START`, which a bisect writes: the whole line is the name, and an
-  empty line fails. A bisect that began on a detached head writes a commit id
+  rebase writes: its first line `refs/heads/<name>` names `<name>`, and
+  exactly `detached HEAD`, which git writes for a rebase that began on a
+  detached head, names no branch. Any other first line fails.
+- `rebase-merge/update-refs`, which a rebase run with `--update-refs` writes
+  to list the other branches it will move: every line that starts with
+  `refs/heads/` names the branch after that prefix, and every other line must
+  hold only hexadecimal digits, because it is a commit id. Any other line
+  fails.
+- `BISECT_START`, which a bisect writes: its whole first line is the name,
+  and an empty line fails. A bisect that began on a detached head writes a commit id
   there, which the branch lookup answers with exit status 1, so it names no
   branch.
 
 The worktree holds every branch that any record names. A detached other
 worktree whose records name no branch holds no branch, the same as one made
-with `git worktree add --detach`, and changes nothing in the gone case, and so
-does a branch it holds that does not hold the key. When the parent tells the
+with `git worktree add --detach`, and changes nothing in the gone case. A
+branch it holds that does not hold the key also changes nothing. When the
+parent tells the
 person about a worktree that cannot be settled, the line names the issue and
 the folder and never repeats the text of a record.
 

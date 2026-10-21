@@ -114,5 +114,8 @@ exit status, and what the edited skill tells the parent to do:
 Pull request lists are invented for the walk-through, because `gh` cannot be
 faked in a scratch repository, and the pull request says so. Its risk notes
 name what the change leaves as it was: the open pull request choice still
-ignores a worktree that cannot be settled, and `rebase-merge/update-refs` is
-not read.
+ignores a worktree that cannot be settled.
+
+The first review round found that a rebase run with `--update-refs` also
+holds the branches it lists in `rebase-merge/update-refs`, so the subsection
+reads that record too, and finds all four record paths with one command.

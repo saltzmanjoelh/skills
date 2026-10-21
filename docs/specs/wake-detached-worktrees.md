@@ -38,16 +38,21 @@ below. Every other step keeps its current wording unless this list changes it.
       because the parent puts it in a command, and its entry is not marked
       `prunable`, because `git -C` into a nested worktree whose `.git` file is
       gone reads the main checkout's records instead of its own.
-   2. For each of `rebase-merge/head-name`, `rebase-apply/head-name` and
-      `BISECT_START`, the parent finds the record's path with
-      `git -C '<folder>' rev-parse --path-format=absolute --git-path '<record>'`
-      and reads the file's first line with its file-reading tool, never
-      through the shell, when the file exists. A record that does not exist
-      names no branch.
-   3. In the two rebase records, the line is either `refs/heads/<name>`, which
-      names `<name>`, or exactly `detached HEAD`, which git writes for a rebase
-      that began on a detached head and which names no branch. In
-      `BISECT_START`, the whole line is the name.
+   2. For `rebase-merge/head-name`, `rebase-merge/update-refs`,
+      `rebase-apply/head-name` and `BISECT_START`, the parent finds the
+      records' paths with one
+      `git -C '<folder>' rev-parse --path-format=absolute --git-path '<record>' ...`
+      call, which prints one path per line in order, and reads each file with
+      its file-reading tool, never through the shell, when the file exists.
+      A record that does not exist names no branch.
+   3. In the two `head-name` records, the first line is either
+      `refs/heads/<name>`, which names `<name>`, or exactly `detached HEAD`,
+      which git writes for a rebase that began on a detached head and which
+      names no branch. In `rebase-merge/update-refs`, which a rebase run with
+      `--update-refs` writes for the other branches it will move, every line
+      that starts with `refs/heads/` names a branch, and every other line is a
+      commit id of hexadecimal digits. In `BISECT_START`, the whole first line
+      is the name.
    4. The name holds only the characters the cleanup case allows. Then
       `git -C '<folder>' rev-parse --verify --quiet 'refs/heads/<name>'` decides:
       exit status 0 means the worktree holds that branch, and exit status 1
@@ -60,8 +65,8 @@ below. Every other step keeps its current wording unless this list changes it.
 2. **A worktree that cannot be settled.** A detached other worktree cannot be
    settled when its folder fails the character check, its entry is marked
    `prunable`, the path command fails,
-   a record exists but cannot be read, a rebase record's line has neither
-   form above, `BISECT_START` is empty, a name fails the character check, or
+   a record exists but cannot be read, a rebase record's line has no form
+   above, `BISECT_START` is empty, a name fails the character check, or
    the branch lookup exits with any status other than 0 or 1. Such a worktree
    keeps today's block: the parent never reports the issue finished and never
    starts a fresh session while one exists, and tells the person in one line
@@ -102,6 +107,10 @@ below. Every other step keeps its current wording unless this list changes it.
 - A plain detached worktree: it holds no branch.
 - A worktree in a rebase and a bisect at once: every branch either record
   names is held.
+- A rebase run with `--update-refs` of `claude/xyz-9-other`, stacked on
+  `claude/abc-123-fix`: `rebase-merge/update-refs` names
+  `claude/abc-123-fix`, so it is held, because git refuses to delete it while
+  the rebase is stopped.
 - A detached worktree nested inside the main checkout whose `.git` file was
   deleted: its entry is `prunable`, so it cannot be settled and keeps today's
   block, because reading it would read the main checkout's records.
