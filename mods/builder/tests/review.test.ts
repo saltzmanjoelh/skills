@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { verdictsOf } from '../hooks/github'
-import { commitRecordsOf, DECIDED_HEADINGS, DECIDED_ITEM_CHARS, decidedItems, decidedSection, factIn, packageText, recordItems, secretIn, verdictsLine } from '../hooks/review'
+import { commitRecordsOf, DECIDED_HEADINGS, DECIDED_ITEM_CHARS, decidedItems, decidedSection, factIn, packageText, recordItems, secretIn, STREAK_STOP, trendOf, trendSection, trendStopLine, verdictsLine } from '../hooks/review'
 
 const facts = {
   repo: 'o/r',
@@ -14,6 +14,8 @@ const facts = {
   architecture: 'docs/architecture.md',
   gotchas: null,
   earlier: [],
+  decided: [],
+  trend: trendOf([]),
 }
 
 test('the package names the head, the round, the documents and the commits, and points at the diff first', () => {
@@ -167,4 +169,113 @@ test('the decided section quotes each item after its number and source, or says 
   expect(text).toContain('- D1 (commit aaaaaaaa): The cache can go stale.')
   expect(decidedSection([])).toContain('None yet.')
   expect(decidedSection([])).not.toContain('- D1')
+})
+
+// A fix commit for the findings raised at `reviewed`, naming `areas`.
+const fix = (c: string, reviewed: string | null, areas: string[], extra = '') => commit(c, [
+  'Fix the findings',
+  '',
+  ...(reviewed === null ? [] : [`Reviewed: ${reviewed}`]),
+  ...areas.map(area => `Area: ${area}`),
+  ...(extra === '' ? [] : [extra]),
+].join('\n'))
+const RACE = 'hooks/a.ts: the parent race'
+const CACHE = 'hooks/b.ts: the cache'
+
+test('two commits for one reviewed head are one group, whether the head is named short or in full', () => {
+  const commits = [
+    commit('1', 'Build'),
+    fix('2', '11111111', [RACE]),
+    fix('3', sha('1'), [RACE]),
+    commit('4', 'Another head'),
+    fix('5', '44444444', [RACE]),
+  ]
+  const report = trendOf(commits)
+  expect(report.streaks).toEqual([{ area: RACE, streak: 2 }])
+  expect(report.stops).toEqual([])
+  expect(trendSection(report)).toContain(`- ${RACE}, fixed at 2 reviewed heads in a row`)
+  expect(trendStopLine(report)).toBe(null)
+})
+
+test('a streak of three stops the rounds, at the top of the package', () => {
+  const commits = [fix('1', null, [RACE]), fix('2', null, [RACE, CACHE]), fix('3', null, [RACE])]
+  const report = trendOf(commits)
+  expect(report.stops).toEqual([{ area: RACE, streak: STREAK_STOP }])
+  const stop = trendStopLine(report)
+  expect(stop).toContain(RACE)
+  expect(stop).toContain('3 reviewed heads in a row')
+  const text = packageText({ issue: 'x' }, { ...facts, decided: [], trend: report })
+  expect(text.split('\n').slice(0, 3).join('\n')).toContain(stop!)
+  expect(text).toContain('## Areas fixed so far')
+  expect(text).toContain('## Already decided')
+  // The cache was fixed at the middle head only, so it has no streak shown.
+  expect(trendSection(report).split('\n')).toContain(`- ${CACHE}`)
+})
+
+test('a commit that fixed findings without an Area line is listed and changes no streak', () => {
+  const without = [fix('1', null, [RACE]), fix('2', null, [RACE])]
+  const withIt = [fix('1', null, [RACE]), fix('9', sha('1'), []), fix('2', null, [RACE])]
+  expect(trendOf(withIt).streaks).toEqual(trendOf(without).streaks)
+  expect(trendOf(withIt).unlabelled).toEqual(['99999999'])
+  expect(trendSection(trendOf(withIt))).toContain('99999999')
+  // A commit that fixed no review findings is not listed.
+  expect(trendOf([commit('8', 'Build the thing')]).unlabelled).toEqual([])
+})
+
+test('keep going counts the streak from zero, so two later groups do not stop and a third does', () => {
+  const before = [fix('1', null, [RACE]), fix('2', null, [RACE]), fix('3', null, [RACE])]
+  const kept = [...before, commit('4', `Record the counsel's answer\n\nTrend: ${RACE}: keep going`)]
+  expect(trendOf(kept).stops).toEqual([])
+  const two = [...kept, fix('5', null, [RACE]), fix('6', null, [RACE])]
+  expect(trendOf(two).stops).toEqual([])
+  expect(trendOf(two).streaks).toEqual([{ area: RACE, streak: 2 }])
+  const three = [...two, fix('7', null, [RACE])]
+  expect(trendOf(three).stops).toEqual([{ area: RACE, streak: 3 }])
+})
+
+test('file the rest and cut it out close an area, which then never stops', () => {
+  for (const answer of ['file the rest', 'cut it out']) {
+    const commits = [
+      fix('1', null, [RACE]), fix('2', null, [RACE]), fix('3', null, [RACE]),
+      commit('4', `Record the answer\n\nTrend: ${RACE}: ${answer}`),
+      fix('5', null, [RACE]), fix('6', null, [RACE]), fix('7', null, [RACE]),
+    ]
+    const report = trendOf(commits)
+    expect(report.stops).toEqual([])
+    expect(report.streaks).toEqual([])
+    expect(report.closed).toEqual([{ area: RACE, answer }])
+    expect(trendSection(report)).toContain(`- ${RACE}: ${answer}`)
+  }
+})
+
+test('a Trend line for one area leaves another area\'s streak alone', () => {
+  const commits = [
+    fix('1', null, [RACE, CACHE]), fix('2', null, [RACE, CACHE]),
+    commit('3', `Record the answer\n\nTrend: ${RACE}: keep going`),
+    fix('4', null, [RACE, CACHE]),
+  ]
+  const report = trendOf(commits)
+  expect(report.stops).toEqual([{ area: CACHE, streak: 3 }])
+  expect(report.streaks).toEqual([{ area: CACHE, streak: 3 }])
+})
+
+test('areas differing in case, spaces and a trailing full stop are one area, kept in its first wording', () => {
+  const commits = [fix('1', null, [RACE]), fix('2', null, ['HOOKS/a.ts:   the parent race.']), fix('3', null, ['hooks/A.ts: The Parent Race'])]
+  const report = trendOf(commits)
+  expect(report.areas).toEqual([RACE])
+  expect(report.stops).toEqual([{ area: RACE, streak: 3 }])
+})
+
+test('a Trend line that cannot be read is listed and changes nothing', () => {
+  const commits = [fix('1', null, [RACE]), fix('2', null, [RACE]), fix('3', null, [RACE]), commit('4', `Answer\n\nTrend: ${RACE}: keep on going\ntrend: no answer here`)]
+  const report = trendOf(commits)
+  expect(report.unreadable).toEqual([`${RACE}: keep on going`, 'no answer here'])
+  expect(report.stops).toEqual([{ area: RACE, streak: 3 }])
+  expect(trendSection(report)).toContain('keep on going')
+})
+
+test('with no fix commits the trend section says none yet', () => {
+  const report = trendOf([commit('1', 'Build the thing')])
+  expect(trendSection(report)).toContain('None yet.')
+  expect(trendStopLine(report)).toBe(null)
 })

@@ -80,6 +80,9 @@ function fakeGitHub(on: On) {
   // `git rev-parse HEAD` in each folder it names waiting until its promise
   // resolves, as a slow git does, and it then answers the head from when it
   // was called, as git does once it has read HEAD.
+  // `messages` are the branch's commits, oldest first, with their full
+  // messages, as `git log --format=%H%x1f%B%x1e` prints them, and
+  // `messagesFail` makes that read exit with an error.
   // `states` gives the state that `gh pr view <n> --repo o/r --json state`
   // answers for pull request n; a number not listed answers the state of
   // `pr`. `stateRead`, when set, makes every such read exit with an error,
@@ -97,6 +100,7 @@ function fakeGitHub(on: On) {
     changed: {} as Record<string, string[]>, diffExit: null as number | null, notCheckouts: [] as string[],
     onQuietDiff: null as (() => void) | null, afterQuietDiff: null as (() => void) | null, headHolds: {} as Record<string, Promise<void>>,
     states: {} as Record<number, string>, stateRead: null as null | 'exit' | 'throw' | 'cut' | 'text',
+    messages: [{ sha: A, message: 'Build it' }] as { sha: string; message: string }[], messagesFail: false,
   }
   on('process.run', async ($, e) => {
     const argv = e.argv.join(' ')
@@ -144,6 +148,8 @@ function fakeGitHub(on: On) {
       return { value: { exitCode: 0, stdout: 'diff --git a/a.ts', stderr: '', isStdoutTruncated: true, isStderrTruncated: false } }
     }
     if (argv.startsWith('git diff')) return out('diff --git a/a.ts b/a.ts\n')
+    if (argv.startsWith('git log') && argv.includes('%x1f') && world.messagesFail) return exit(128)
+    if (argv.startsWith('git log') && argv.includes('%x1f')) return out(world.messages.map(m => `${m.sha}\u001f${m.message}\n\u001e\n`).join(''))
     if (argv.startsWith('git log')) return out('aaaaaaa Build it\nM\ta.ts\n')
     if (argv.startsWith('gh api repos/o/r/pulls/7/reviews') && world.postsToFail > 0) {
       world.postsToFail -= 1
@@ -860,6 +866,66 @@ test('the package tool writes the package and the diff for the head, with the ro
   expect(files.get('/repo/.git/builder/cccccccc/diff.patch')).toContain('diff --git a/a.ts b/a.ts')
 })
 
+test('the package tool lists the decided findings and the areas, and its first line stops the rounds at a streak of three', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  await watch($)
+  const area = 'hooks/a.ts: the parent race'
+  world.messages = [
+    { sha: A, message: `Fix the first round\n\nArea: ${area}\n\nDropped:\n- The cache can go stale. Refuted: it is rebuilt.` },
+    { sha: D, message: `Fix the second round\n\nArea: ${area}` },
+    { sha: C, message: `Fix the third round\n\nArea: ${area}` },
+  ]
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: D }, { oid: C }], reviews: [{ ...verdictReview(D, 'REQUEST_CHANGES', 'APPROVE'), body: 'VERDICTS dddddddd spec=REQUEST_CHANGES adversarial=APPROVE\n\nOutside the spec:\n- Surviving a restart.' }] })
+
+  const ran = await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
+  const text = files.get('/repo/.git/builder/cccccccc/package.md') ?? ''
+  const answer = String(ran.result).replace(/^builder: /, '')
+
+  expect(answer.split('\n')[0]).toContain('The review rounds stop here')
+  expect(answer.split('\n')[0]).toContain(area)
+  expect(answer).toContain(`Review package for ${C.slice(0, 8)}:`)
+  expect(text).toContain('## Already decided')
+  expect(text).toContain(`- D1 (commit ${A.slice(0, 8)}): The cache can go stale. Refuted: it is rebuilt.`)
+  expect(text).toContain(`- D2 (review at ${D.slice(0, 8)}): Surviving a restart.`)
+  expect(text).toContain('## Areas fixed so far')
+  expect(text).toContain(`- ${area}, fixed at 3 reviewed heads in a row`)
+})
+
+test('the package tool answers with the package first when no area stops the rounds', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  const files = fakeFiles(on)
+  await watch($)
+
+  const ran = await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
+
+  expect(String(ran.result).replace(/^builder: /, '').split('\n')[0]).toBe(`Review package for ${C.slice(0, 8)}:`)
+  const text = files.get('/repo/.git/builder/cccccccc/package.md') ?? ''
+  expect(text.slice(text.indexOf('## Already decided'), text.indexOf('## Areas fixed so far'))).toContain('None yet.')
+})
+
+test('the package tool writes no package when git cannot read the commit messages', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  await watch($)
+  world.messagesFail = true
+
+  const ran = await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
+
+  expect(String(ran.result)).toContain('commit messages')
+  expect(String(ran.result)).toContain('no package was written')
+  expect(files.has('/repo/.git/builder/cccccccc/package.md')).toBe(false)
+})
+
 test('the package tool writes no package when git fetch throws', async ($, on) => {
   mock.clock(on)
   mock.store(on)
@@ -950,7 +1016,7 @@ test('the package tool builds the package in the worktree that has the head bran
   expect(folderOf('git rev-parse HEAD')).toEqual(['/wt'])
   expect(folderOf('git fetch')).toEqual(['/wt'])
   expect(folderOf('git diff')).toEqual(['/wt', '/wt'])
-  expect(folderOf('git log')).toEqual(['/wt'])
+  expect(folderOf('git log')).toEqual(['/wt', '/wt'])
 })
 
 test('the review tool stages its body in the git folder of the worktree that has the head branch checked out', async ($, on) => {
