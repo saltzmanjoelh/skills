@@ -6029,6 +6029,20 @@ test('at a width where the bar drops its title, the terminal row has no link and
   expect((await barRowIn(band))?.children).toEqual(['spec · ██░░░░░░░░ 2 of 9 · 22%'])
 })
 
+test('at a width where the bar drops its title, the terminal pane\'s work row has no link and reads as it does without the fact', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  fakePanes(on)
+  issueLinkFact(fakeFiles(on), ISSUE_ADDRESS)
+  const terminal = await paneOn($, 'terminal', 50)
+  await reportSpec($, clock)
+
+  expect(await linksIn(terminal)).toEqual([])
+  expect((await barRowIn(terminal))?.children).toEqual(['spec · ██░░░░░░░░ 2 of 9 · 22%'])
+})
+
 test('a title that does not begin with an issue key has no link on the terminal or the desktop', async ($, on) => {
   const clock = mock.clock(on)
   mock.store(on)
