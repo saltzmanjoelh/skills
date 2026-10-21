@@ -89,8 +89,11 @@ the package: check that what they asked for was done. A settled point is
 listed under `## Already decided`, and you raise it again only as **Each
 finding** says. From round 3 a finding blocks only as `REGRESSION:`
 (works on the base, breaks after the merge, observably), `SAFETY:`
-(security, data loss, an exposed credential, a wrong deploy, or a guarantee
-the project's `CLAUDE.md` protects) or `UNFIXED:` (blocked earlier and still
+(a security hole, such as an authorization boundary, injection, untrusted
+text reaching a shell or a model as an instruction, or a widened privilege;
+data loss or corruption; a migration that cannot be undone safely; a
+credential exposed; a wrong deploy to production; or a guarantee the
+project's `CLAUDE.md` names as protected) or `UNFIXED:` (blocked earlier and still
 not fixed, which blocks in any round). Every other finding is
 `FOLLOW-UP:` and ends as **Each finding** says. Requesting changes with no
 blocking finding is not a valid verdict.
