@@ -224,10 +224,11 @@ reachable, has not failed.
      then enough. Any other exit status, such as one from a network or
      authentication error, or status 0 without a line for exactly that ref, is
      a failed command, and never means that the branch is missing.
-5. Find the issue's pull requests as steps 1 and 2 of the next section say,
-   with the same two `gh pr list` calls, the same stop when the open list holds
-   1000, and the same rule for matching the key, and check that none of them
-   is open. When the sentence names a ticket instead of an issue key, this
+5. Find the issue's pull requests as steps 1 and 2 of "<who> has not updated
+   its status file for <n> minutes and its session is not running, so restart
+   it or release the issue." say, with the same two `gh pr list` calls, the
+   same stop when the open list holds 1000, and the same rule for matching the
+   key, and check that none of them is open. When the sentence names a ticket instead of an issue key, this
    search cannot run, so tell the person in one line.
 6. Archive the session with `archive_session`.
 7. Then clear what git still holds for that folder, in this order. A refusal
@@ -244,8 +245,8 @@ reachable, has not failed.
      `-D`. After a squash merge git usually refuses, and that refusal is told
      to the person like any other.
 
-Every other case still goes to the person, as the paragraph before this
-subsection says, including a pull request that is not merged, an open pull
+Every other case still goes to the person, as the "For anything else"
+paragraph above says, including a pull request that is not merged, an open pull
 request for the issue, and a tip that differs from `headRefOid`.
 
 ## <who> has not updated its status file for <n> minutes and its session is not running, so restart it or release the issue.
