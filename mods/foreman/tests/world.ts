@@ -109,10 +109,14 @@ export function engine(on: On) {
   const answers = {
     notices: [] as string[],
     prompts: [] as string[],
+    // Where each prompt came from, in the same order as `prompts`.
+    origins: [] as unknown[],
     appended: [] as string[],
     started: [] as Record<string, unknown>[],
     notify: 'sent' as 'sent' | 'off' | 'throws' | 'hang',
-    submit: 'ok' as 'ok' | 'dropped',
+    submit: 'ok' as 'ok' | 'dropped' | 'hang',
+    // Called as each prompt is submitted, so a test can see what held then.
+    onSubmit: (() => undefined) as () => void,
     startAnswer: 'Started the session local_new1 (name: example).',
     // Whether start_session's answer leaves out the text, giving the result alone.
     startResultOnly: false,
@@ -128,7 +132,10 @@ export function engine(on: On) {
   })
   on('prompt.submit', ($, e) => {
     if (answers.submit === 'dropped') return { drop: 'a Stop stands' }
+    answers.onSubmit()
     answers.prompts.push(e.text)
+    answers.origins.push(e.origin)
+    if (answers.submit === 'hang') return new Promise<never>(() => {})
     return { text: e.text, ...(e.context === undefined ? {} : { context: e.context }) }
   })
   on('session.append', ($, a, next) => {

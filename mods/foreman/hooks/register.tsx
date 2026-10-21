@@ -3,7 +3,7 @@ import type { EngineInterface, PromptSubmitInput, Register, ResolveInput, ToolCa
 
 import { decide, desktopOf, needsList, slotOutcome, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
 import { isSvgSurface } from './art'
-import { becameParentAnswer, COMMAND, commandOf, slotsAnswer } from './commands'
+import { becameParentAnswer, COMMAND, commandOf, PASSED_ON, slotsAnswer, type Command } from './commands'
 import { failureLine, listSessions, NUDGE_TEXT, openSession, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
 import { keptLine, keptNames, NOTED, NOTES_KEPT, notesIn } from './notes'
 import { bandTree, PANE, paneTree, type Elements, type View } from './pane'
@@ -370,6 +370,9 @@ async function carryOut($: $) {
 // submitted as a prompt when none does. A wake that is refused or fails is
 // logged and not tried again, because the ledger already records it.
 async function wake($: $, line: string) {
+  if (wordsPending !== null && (await within($, wordsPending)) === TIMED_OUT) {
+    await addLog($, `Stopped waiting for the words after /start-foreman to be sent, after ${CALL_TIMEOUT_MS / 1000} seconds.`)
+  }
   try {
     if (await read($, turnRuns)) {
       const appended = await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: line }] } })
@@ -570,10 +573,58 @@ async function choiceFor($: $, e: PromptSubmitInput): Promise<Choice> {
   return names === null ? { kind: 'noted' } : { kind: 'keep', line: keptLine(names) }
 }
 
-// What /start-foreman answers once it is done.
+// While the words typed after /start-foreman wait to be sent, the promise
+// that settles once they have been, or null when no words wait. A wake waits
+// for it, so the model reads the person's words before any line of foreman's
+// own, such as a free slot that the first read finds. A wake waits at most
+// CALL_TIMEOUT_MS, so a timer that never runs or a submit that never answers
+// cannot silence every later wake.
+let wordsPending: Promise<void> | null = null
+
+// What /start-foreman answers once it is done. When the person typed words
+// after the command and the count, they go to the parent's model as the
+// person's own prompt, after the role is on. They are submitted from a timer,
+// because the engine refuses a prompt submitted from inside the command's
+// hook. Wakes are held back from before the role turns on, because turning it
+// on makes the first read, which may find a wake to send.
 async function runCommand($: $, args: string): Promise<string> {
   const command = commandOf(args)
   if (command.kind === 'refused') return command.text
+  const prompt = command.prompt
+  if (prompt === null) return applyCommand($, command)
+  let release = () => {}
+  const pending = new Promise<void>(resolve => {
+    release = resolve
+  })
+  wordsPending = pending
+  const done = () => {
+    release()
+    if (wordsPending === pending) wordsPending = null
+  }
+  try {
+    const answer = await applyCommand($, command)
+    later($, () => passOn($, prompt).finally(done))
+    return `${answer} ${PASSED_ON}`
+  } catch (error) {
+    done()
+    throw error
+  }
+}
+
+// Submits the words the person typed after /start-foreman as their own
+// prompt, only when the role is on, so that the model reads them as the
+// parent. A refusal is logged, so the person can see why nothing answered.
+async function passOn($: $, prompt: string) {
+  try {
+    if (!(await isOn($))) return await addLog($, 'Did not pass on the words after /start-foreman, because the session did not become the parent.')
+    const submitted = await $.prompt.submit({ text: prompt, asUser: true })
+    if (submitted.drop !== undefined) await addLog($, `Could not pass on the words after /start-foreman (${printable(submitted.drop, 120)}).`)
+  } catch (error) {
+    await addLog($, `Could not pass on the words after /start-foreman (${reasonOf(error)}).`)
+  }
+}
+
+async function applyCommand($: $, command: Exclude<Command, { kind: 'refused' }>): Promise<string> {
   // Setting the slot count also makes the session the parent, because a
   // count given to a session that is not one is never what the person meant.
   if (command.kind === 'slots') {

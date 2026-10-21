@@ -35,6 +35,8 @@ command that a mod declares at the start of a session is not among them.
    in a session that is already the parent it only sets the count. Another
    argument that starts with a digit or a minus sign is refused with the range.
    Any other argument is refused with the usage. A refusal changes nothing.
+   `start-foreman-passes-words-on.md` later replaced the refusal with the
+   usage: other words now go to the parent's model as the person's prompt.
 4. **Without the mod.** When the mod is not loaded, the model reads the
    skill's text. That text says the mod is not loaded, that nothing happened,
    and how to load it, and it tells the model to do nothing else.
