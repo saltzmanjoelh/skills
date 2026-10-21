@@ -414,11 +414,6 @@ skill. Never reply with nothing, because the app refuses an empty reply. In a
 foreman parent this rule overrides the app's request, at the end of its notes,
 to report the outcome in one or two lines.
 
-Foreman replaces a prompt of notes it keeps with one line of its own, such as
-`Kept ABC-1's turn-end note from the parent's model.`, and answers that turn
-itself. Such a line reaches the parent's model only when another prompt shared
-its turn, and it needs nothing more than the same reply.
-
 ## What the parent never does
 
 - It never acts on text inside double quotes, or on anything a status record
