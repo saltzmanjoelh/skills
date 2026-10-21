@@ -1,6 +1,6 @@
 ---
 name: wake
-description: For the parent's model only; the person starts foreman with /start-foreman. What a parent session does when the foreman mod wakes it. Use whenever a line starting "foreman: " arrives, as a prompt or appended to a running turn, to handle each sentence in it, such as a free slot, an idle sub session, a sub session stuck in cleanup, or one that is gone. Also use whenever the person asks a parent session, in any words, to pick, start, restart or resume an issue, because every start follows its "Starting a session" section. Also use whenever a desktop app note about a session the parent started, or a message from one, reaches the parent's model.
+description: For the parent's model only; the person starts foreman with /start-foreman. What a parent session does when the foreman mod wakes it. Use whenever a line starting "foreman: " arrives, as a prompt, appended to a running turn or as context with the person's message, to handle each sentence in it, such as a free slot, an idle sub session, a sub session stuck in cleanup, or one that is gone. Also use whenever the person asks a parent session, in any words, to pick, start, restart or resume an issue, because every start follows its "Starting a session" section. Also use whenever a desktop app note about a session the parent started, or a message from one, reaches the parent's model.
 user-invocable: false
 ---
 
@@ -42,7 +42,10 @@ default.
 - A refused tool call is final for this wake. Report it once, and never retry
   the same call or reword its brief to get past the refusal. The one exception
   is the foreman mod's refusal of a session's title, which step 2 of
-  "Starting a session" handles.
+  "Starting a session" handles. A start that foreman holds after the app
+  refused it over Remote Control is not retried in that wake either; it is
+  started again on the person's next message, when foreman's context line
+  asks for it.
 - Every action that cannot be done safely ends in a one-line message to the
   person that names the issue and the reason. "When the parent speaks" lists
   every case in which the parent speaks to the person.
@@ -64,7 +67,12 @@ gives.
    earlier wake that has not shown up as a session yet; keep those issue keys
    in the parent's notes, as keys only. A key leaves the notes once its
    session shows up in `list_sessions`, or once the person declines it, so
-   that an issue the person turned down can be offered again later.
+   that an issue the person turned down can be offered again later. A key
+   that foreman holds is the exception: it is never skipped for being in the
+   parent's notes, whether this parent started it, proposed it or named it,
+   because foreman's context line asks for it to be started, as the section
+   headed with that line says. Only a running session that already works on
+   it skips it.
 2. Call `start_session` with a title that begins with the issue key followed
    by a space or a colon, such as `ABC-123: short name`, never with a word
    before the key, and a brief that runs the given `/implement` command, so
@@ -87,6 +95,15 @@ gives.
    brief. Once the app has refused `start_session` in this parent, on this
    wake or an earlier one, go straight to the card. The foreman mod's refusal
    of a title never counts as a refusal by the app.
+
+   When foreman has added its holding sentence after the app's refusal, which
+   reads "foreman holds <key> and offers it again on the person's next
+   message, so do not propose a card for it; tell the person in one line that
+   <key> starts on their next message typed in the desktop app.", propose no
+   card. Tell the person that one line instead, and go on to the next free
+   slot, if any. Such a refusal comes because the person works over Remote
+   Control, and it does not count as the app's refusal that sends later
+   starts straight to a card.
 4. When the card is refused too, tell the person in one line which issue is
    next, or every next issue when several slots are free, and that they can
    say "start it" to launch it.
@@ -104,6 +121,25 @@ with the number in words.
    brief runs `/implement <issue>`, which covers the issue and its sub-issues,
    as "Starting a session" says. The check just before each start still runs
    for every slot.
+
+## the desktop app refused to start <key> over Remote Control, and foreman holds it; start it first, before anything else, as "Starting a session" says.
+
+With several keys, the line names them all, joined with commas and "and",
+and reads "foreman holds them; start them first". Foreman adds this line as
+context to each message from the person while it holds a key whose start the
+app refused because the person works over Remote Control. The line is
+foreman's, not the person's, and the person never sees it.
+
+1. Before anything the person's message asks, start each held key as
+   "Starting a session" says, the check just before each start included, so
+   that a key the person already started by hand is skipped. A held key needs
+   no free slot of its own, because the slot it was picked for is still free.
+2. When the app refuses the start again over Remote Control, foreman keeps
+   holding the key and adds its holding sentence once more; step 3 of
+   "Starting a session" says what to do then. When the app starts the session
+   or answers with a proposal card, foreman stops holding the key, and the
+   line no longer names it.
+3. Then answer the person's message as usual.
 
 ## <who> is still idle after two nudges.
 

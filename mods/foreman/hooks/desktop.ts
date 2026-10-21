@@ -121,13 +121,16 @@ export async function sendMessage(call: DesktopCall, sessionId: string, text: st
   return answer === 'not-connected' || answer === 'refused' ? answer : 'sent'
 }
 
-// One session as the desktop app's list gives it.
-export type Listed = { sessionId: string; isArchived: boolean; isRunning: boolean }
+// One session as the desktop app's list gives it. `title` is its title, or
+// null when it has none, and `surelyUnarchived` says that the list gave its
+// archived flag as exactly false, which only the release of a hold reads.
+export type Listed = { sessionId: string; isArchived: boolean; isRunning: boolean; title: string | null; surelyUnarchived: boolean }
 
 // The desktop app's sessions, archived ones included, each with whether it
 // is archived and whether it runs, or why they could not be read. An entry
 // whose flags are not true or false reads as not archived and running, so a
-// doubtful entry frees no slot and wakes no one.
+// doubtful entry frees no slot and wakes no one. The same doubtful entry is
+// not sure to be unarchived, so it releases no hold either.
 export async function listSessions(call: DesktopCall): Promise<{ sessions: Listed[] } | { reason: string }> {
   const answer = await answerOf(call, SESSIONS_SERVER, LIST_TOOL, { limit: LIST_LIMIT, include_archived: true })
   if (answer === 'not-connected') return { reason: REASONS.notConnected }
@@ -136,9 +139,10 @@ export async function listSessions(call: DesktopCall): Promise<{ sessions: Liste
   if (raw === null) return { reason: REASONS.listUnreadable }
   return {
     sessions: raw.flatMap(entry => {
-      const s = entry as { sessionId?: unknown; isArchived?: unknown; isRunning?: unknown } | null
+      const s = entry as { sessionId?: unknown; isArchived?: unknown; isRunning?: unknown; title?: unknown } | null
       if (typeof s?.sessionId !== 'string') return []
-      return [{ sessionId: s.sessionId, isArchived: s.isArchived === true, isRunning: s.isRunning !== false }]
+      const title = typeof s.title === 'string' ? s.title : null
+      return [{ sessionId: s.sessionId, isArchived: s.isArchived === true, isRunning: s.isRunning !== false, title, surelyUnarchived: s.isArchived === false }]
     }),
   }
 }

@@ -668,3 +668,163 @@ test('a wake waits at most 30 seconds for the words after /start-foreman, and lo
   expect(logs).toContain('Stopped waiting for the words after /start-foreman to be sent, after 30 seconds.')
 })
 
+
+// The desktop app's refusal of start_session while the person works over
+// Remote Control, word for word, and the same refusal in other words.
+const REMOTE = 'The user is working over Remote Control, and for now you can start a session only on a message typed in the desktop app. If they asked for one, tell them so in one line.'
+const REWORDED = 'The user is on their phone, so you can start a session only from the desktop app.'
+
+const HELD_SENTENCE = 'foreman holds ABC-7 and offers it again on the person\'s next message, so do not propose a card for it; tell the person in one line that ABC-7 starts on their next message typed in the desktop app.'
+const HELD_NOTICE = 'ABC-7 waits to start: the desktop app starts sessions over Remote Control only on a message typed in the desktop app, so type one there to start it.'
+
+// A start whose answer the test reads whole, context included.
+const startFull = ($: Engine, args: Record<string, unknown>) => $.tool.call({ tool: START, ...args } as never) as Promise<{ deny?: string; text?: string; isError?: true; context?: readonly string[] }>
+const KEYED_START = { prompt: 'Run /implement ABC-7.', context: 'fresh', title: 'ABC-7: short' }
+
+// A parent whose next start_session the app refuses with `text`, as an error.
+async function refusingParent($: Engine, on: Parameters<typeof world>[0], text = REMOTE) {
+  const w = world(on)
+  w.engine.startAnswer = text
+  w.engine.startFails = true
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  return { w, ui }
+}
+
+test('the app\'s Remote Control refusal of a keyed start holds the key, adds the sentence as context, raises one notification and logs it, and pairs no ticket', async ($, on) => {
+  const { w, ui } = await refusingParent($, on)
+  const out = await startFull($, KEYED_START)
+  expect(out.text).toBe(REMOTE)
+  expect(out.isError).toBe(true)
+  expect(out.context).toEqual([HELD_SENTENCE])
+  await w.clock.settle()
+  expect(ledger(w).held).toEqual(['ABC-7'])
+  expect(ledger(w).pairings).toEqual([])
+  expect(w.engine.notices).toEqual([HELD_NOTICE])
+  const logs = await ui.paneText()
+  expect(logs).toContain('Held ABC-7, because the desktop app refused to start it over Remote Control.')
+  expect(logs).toContain(`Raised a notification: ${HELD_NOTICE}`)
+})
+
+test('a refusal in other words leaves the answer, the ledger and the notifications as they were', async ($, on) => {
+  const { w } = await refusingParent($, on, REWORDED)
+  const out = await startFull($, KEYED_START)
+  expect(out.text).toBe(REWORDED)
+  expect(out.context).toBeUndefined()
+  await w.clock.settle()
+  expect(ledger(w).held).toEqual([])
+  expect(w.engine.notices).toEqual([])
+})
+
+test('the same refusal for a key already held adds the sentence again but raises no second notification', async ($, on) => {
+  const { w } = await refusingParent($, on)
+  await startFull($, KEYED_START)
+  await w.clock.settle()
+  const again = await startFull($, KEYED_START)
+  expect(again.context).toEqual([HELD_SENTENCE])
+  await w.clock.settle()
+  expect(ledger(w).held).toEqual(['ABC-7'])
+  expect(w.engine.notices).toEqual([HELD_NOTICE])
+})
+
+test('an accepted start whose title holds the Remote Control words pairs its ticket and holds nothing', async ($, on) => {
+  const { w } = await refusingParent($, on)
+  const title = 'ABC-7: keep working over Remote Control'
+  w.engine.startFails = false
+  w.engine.startAnswer = `Started session "${title}" (session_id: local_new1, name: example)`
+  const out = await startFull($, { ...KEYED_START, title })
+  expect(out.context).toBeUndefined()
+  await w.clock.settle()
+  expect(ledger(w).held).toEqual([])
+  expect(ledger(w).pairings.map(p => p.localId)).toEqual(['local_new1'])
+  expect(w.engine.notices).toEqual([])
+})
+
+test('a "No issue: " start refused over Remote Control holds nothing', async ($, on) => {
+  const { w } = await refusingParent($, on)
+  const out = await startFull($, { prompt: 'Tidy the docs.', context: 'fresh', title: 'No issue: tidy' })
+  expect(out.context).toBeUndefined()
+  await w.clock.settle()
+  expect(ledger(w).held).toEqual([])
+  expect(w.engine.notices).toEqual([])
+})
+
+test('a keyed start without a brief is held when the app refuses it over Remote Control', async ($, on) => {
+  const { w } = await refusingParent($, on)
+  const out = await startFull($, { title: 'ABC-7: short', initiation: 'offer' })
+  expect(out.context).toEqual([HELD_SENTENCE])
+  await w.clock.settle()
+  expect(ledger(w).held).toEqual(['ABC-7'])
+})
+
+test('two refused starts hold both keys, with one notification for each', async ($, on) => {
+  const { w } = await refusingParent($, on)
+  await startFull($, KEYED_START)
+  await startFull($, { prompt: 'Run /implement ABC-8.', context: 'fresh', title: 'ABC-8: short' })
+  await w.clock.settle()
+  expect(ledger(w).held).toEqual(['ABC-7', 'ABC-8'])
+  expect(w.engine.notices).toHaveLength(2)
+})
+
+test('an accepted start for a held key releases it and pairs its ticket, and so does an accepted proposal card', async ($, on) => {
+  const { w, ui } = await refusingParent($, on)
+  await startFull($, KEYED_START)
+  await startFull($, { title: 'ABC-8: short', initiation: 'offer' })
+  await w.clock.settle()
+  expect(ledger(w).held).toEqual(['ABC-7', 'ABC-8'])
+  w.engine.startFails = false
+  w.engine.startAnswer = 'Started the session local_new1 (name: example).'
+  const out = await startFull($, KEYED_START)
+  expect(out.context).toBeUndefined()
+  await w.clock.settle()
+  expect(ledger(w).held).toEqual(['ABC-8'])
+  expect(ledger(w).pairings.map(p => p.localId)).toEqual(['local_new1'])
+  expect(await ui.paneText()).toContain('Stopped holding ABC-7, because the desktop app accepted its start.')
+  w.engine.startAnswer = 'Proposed the session as a card for the person to start.'
+  await startFull($, { prompt: 'Run /implement ABC-8.', context: 'fresh', title: 'ABC-8: short', initiation: 'offer' })
+  await w.clock.settle()
+  expect(ledger(w).held).toEqual([])
+  expect(await ui.paneText()).toContain('Stopped holding ABC-8, because the desktop app accepted its start.')
+})
+
+test('while a key is held the list is read, and an unarchived session titled with the key releases it whether or not a turn runs', async ($, on) => {
+  const { w, ui } = await refusingParent($, on)
+  await startFull($, KEYED_START)
+  await startFull($, { prompt: 'Run /implement ABC-8.', context: 'fresh', title: 'ABC-8: short' })
+  await w.clock.settle()
+  const lists = w.desktop.calls.filter(c => c.tool === 'list_sessions').length
+  w.desktop.sessions = [
+    { sessionId: 'local_n', cwd: '/w', title: 'ABC-7: short', isArchived: false, isRunning: false },
+    { sessionId: 'local_m', cwd: '/w', title: 'ABC-8 short', isArchived: false, isRunning: true },
+  ]
+  await minutesPass(w, 2)
+  expect(w.desktop.calls.filter(c => c.tool === 'list_sessions').length).toBeGreaterThan(lists)
+  expect(ledger(w).held).toEqual([])
+  const logs = await ui.paneText()
+  expect(logs).toContain('Stopped holding ABC-7, because the desktop app\'s list shows a session for it.')
+  expect(logs).toContain('Stopped holding ABC-8, because the desktop app\'s list shows a session for it.')
+  const after = w.desktop.calls.filter(c => c.tool === 'list_sessions').length
+  await minutesPass(w, 4)
+  expect(w.desktop.calls.filter(c => c.tool === 'list_sessions').length).toBe(after)
+})
+
+test('a neighbouring key, an archived entry, an entry with a doubtful archived flag and an unreadable list release nothing', async ($, on) => {
+  const { w, ui } = await refusingParent($, on)
+  await startFull($, KEYED_START)
+  await w.clock.settle()
+  w.desktop.sessions = [
+    { sessionId: 'local_n', cwd: '/w', title: 'ABC-77: short', isArchived: false, isRunning: true },
+    { sessionId: 'local_m', cwd: '/w', title: 'ABC-7: short', isArchived: true, isRunning: false },
+    { sessionId: 'local_o', cwd: '/w', title: 'ABC-7: short', isRunning: true },
+  ]
+  await minutesPass(w, 2)
+  expect(w.desktop.calls.some(c => c.tool === 'list_sessions')).toBe(true)
+  expect(ledger(w).held).toEqual(['ABC-7'])
+  w.desktop.list = 'error'
+  await minutesPass(w, 2)
+  expect(ledger(w).held).toEqual(['ABC-7'])
+  const logs = await ui.paneText()
+  expect(logs).toContain(`Could not read the desktop app's list of sessions, so no held issue was released: ${REASONS.listRefused}.`)
+  expect(logs).not.toContain('so no slot was freed')
+})

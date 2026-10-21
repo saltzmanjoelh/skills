@@ -88,6 +88,12 @@ test('a stored ledger in any other shape reads as empty, and a pairing with a ba
   expect(outbox).toEqual({ logs: ['a'], effects: [{ kind: 'notify', text: 'n' }], lines: [] })
 })
 
+test('an old ledger holds no keys, and a held entry that is not an issue key or comes again is dropped', () => {
+  expect(ticketsIn({ pairings: [], folderMissing: false }).held).toEqual([])
+  expect(ticketsIn({ held: 'ABC-1' }).held).toEqual([])
+  expect(ticketsIn({ held: ['ABC-1', 'ABC-1', 'abc-2', 'ABC-3: x', 7, null, 'ABC-4'] }).held).toEqual(['ABC-1', 'ABC-4'])
+})
+
 test('the record whose desktop session is the one start_session named owns the ticket, even when another sorts first', () => {
   const p = newPairing('ft-a', 'local_b', T0)
   const out = joinOwners(withPairings(p), [row('a.json', { desktopSessionId: 'local_a' }), row('b.json', { desktopSessionId: 'local_b' })])

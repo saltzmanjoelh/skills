@@ -75,8 +75,10 @@ export type ForemanEffect = { kind: 'nudge'; to: string; name: string } | { kind
 export type ForemanOutbox = { logs: string[]; effects: ForemanEffect[]; lines: string[] }
 
 // Every pairing of this parent, and what is still to be carried out. `folderMissing` says the last read found no status folder, so
-// the log says so once.
-export type ForemanTickets = { pairings: ForemanPairing[]; folderMissing: boolean; outbox: ForemanOutbox }
+// the log says so once. `held` lists the issue keys whose start the desktop
+// app refused because the person works over Remote Control, which foreman
+// offers again on the person's next prompt until a sign that they started.
+export type ForemanTickets = { pairings: ForemanPairing[]; folderMissing: boolean; outbox: ForemanOutbox; held: string[] }
 
 declare module 'claude-code' {
   interface PluginState {
