@@ -56,8 +56,9 @@ Every finding has its `Scope:` part. Every finding you report is a safety
 finding, which is always in scope whatever the spec says, so its scope is
 one of two. Write `breaks working behaviour` with what works on the base
 branch and stops working at the head, or else `in the spec` with the
-passage of the spec that asks for the feature the finding is about, or the
-code the hole is in when no passage names it. A hole
+passage of the spec that asks for the feature the finding is about. When
+neither fits well, pick the closer one: a safety finding is in scope
+whichever of the two it carries. A hole
 in code that the pull request adds to deliver what the spec asks for is in
 the spec, even when the spec does not name the protection that is missing.
 

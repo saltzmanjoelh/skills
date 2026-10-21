@@ -136,7 +136,8 @@ export function recordItems(text: string, headings: readonly string[]): string[]
     }
     if (!inList || !line.startsWith('- ')) continue
     const item = line.slice(2).trim()
-    if (item !== '') items.push(item)
+    // An empty list says None., which is no item.
+    if (item !== '' && !sameText(item.replace(/\.$/, ''), 'None')) items.push(item)
   }
   return items
 }
@@ -232,10 +233,11 @@ function labelled(message: string, label: string): string[] {
 
 // The group a commit with Area: lines belongs to: its own sha when it has no
 // Reviewed: line, or the full sha of the branch commit whose sha starts with
-// the Reviewed: value. Any value that matches no branch commit, including one
-// that is not hex at all, keys a group of its own.
+// the Reviewed: value's first word, without trailing punctuation. Any value
+// that matches no branch commit, including one that is not hex at all, keys a
+// group of its own.
 function groupKeyOf(c: CommitRecord, reviewed: string | undefined, commits: readonly CommitRecord[]): string {
-  const prefix = reviewed?.toLowerCase() ?? ''
+  const prefix = (reviewed ?? '').split(/\s+/)[0]!.replace(/[^0-9a-z]+$/i, '').toLowerCase()
   if (prefix === '') return c.sha
   const matched = commits.find(other => other.sha.startsWith(prefix))
   if (matched === undefined) return `reviewed ${prefix}`

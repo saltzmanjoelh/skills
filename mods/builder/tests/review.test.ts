@@ -187,6 +187,15 @@ const fix = (c: string, reviewed: string | null, areas: string[], extra = '') =>
 const RACE = 'hooks/a.ts: the parent race'
 const CACHE = 'hooks/b.ts: the cache'
 
+test('a Reviewed: value with a trailing full stop names the same head as one without', () => {
+  const commits = [commit('1', 'Build'), fix('2', '11111111.', [RACE]), fix('3', '11111111', [RACE])]
+  expect(trendOf(commits).streaks).toEqual([])
+})
+
+test('an empty list written as None. holds no decided item', () => {
+  expect(recordItems('Fix\n\nDropped:\n- None.\n\nOutside the spec:\n- none', DECIDED_HEADINGS)).toEqual([])
+})
+
 test('two commits for one reviewed head are one group, whether the head is named short or in full', () => {
   const commits = [
     commit('1', 'Build'),
