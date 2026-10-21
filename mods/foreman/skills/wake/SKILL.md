@@ -206,7 +206,10 @@ these steps fails, tell the person in one line, naming the issue, and stop.
    When every check passes, step 7 may name this worktree folder. The
    **other worktrees** are every entry in that list except the worktree step
    3 accepted, or every entry, including the record's own folder, when step 3
-   accepted none.
+   accepted none. When one of the other worktrees says `detached`, as it does
+   while a rebase is stopped, the parent cannot tell which branch git holds
+   for it, so step 7 never reports the issue finished or starts a fresh
+   session while one does.
 4. **Find the local branches.** List every local branch name with
    `git branch --list --format='%(refname:short)'`, and keep the names that
    hold the key. Filter the names yourself rather than passing the key to git
@@ -246,7 +249,8 @@ these steps fails, tell the person in one line, naming the issue, and stop.
      older one for the issue merged or was closed.
    - A merged pull request: when no branch remains, no pull request for the
      issue that was closed without merging has a higher number than the
-     newest merged one, and the tracker does not show the issue open, start
+     newest merged one, none of the other worktrees says `detached`, and the
+     tracker does not show the issue open, start
      nothing and tell the person in one line that the issue is finished. A
      state that could not be read does not show the issue open. Otherwise ask
      the person in one line what to do, naming the remaining branch or the
@@ -255,7 +259,9 @@ these steps fails, tell the person in one line, naming the issue, and stop.
      do.
    - None: start a session whose brief runs `/implement <issue>`, after these
      checks in order:
-     1. When no branch remains, the brief names no branch or folder.
+     1. When one of the other worktrees says `detached`, tell the person in
+        one line and start nothing. Otherwise, when no branch remains, the
+        brief names no branch or folder.
      2. When one branch remains and one of the other worktrees from step 3
         has it checked out, tell the person in one line and start nothing,
         because another session may be working on it.

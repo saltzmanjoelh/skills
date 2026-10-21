@@ -20,22 +20,32 @@ inherits them. Its steps are:
 2. **Keep the issue's pull requests**, once each by number, not from a fork,
    with the key in the title or head branch.
 3. **Read the dead session's worktree**, as five ordered checks: the folder
-   is exactly the path of an entry in `git worktree list --porcelain` that is
-   not marked prunable; that entry is not the first, which is the main
-   checkout; it names a branch on its `branch refs/heads/<name>` line, and the
-   name holds only allowed characters; the branch holds the key; no running
-   session uses the folder.
+   holds only allowed characters and is exactly the path of an entry in
+   `git worktree list --porcelain` that is not marked prunable; that entry is
+   not the first, which is the main checkout; it names a branch on its
+   `branch refs/heads/<name>` line, and the name holds only allowed
+   characters, while an entry that says `detached` goes to the person; the
+   branch holds the key; no running session uses the folder. Step 3 also
+   defines the **other worktrees**, every entry but the accepted one.
 4. **Find the local branches** with
    `git branch --list --format='%(refname:short)'`, filtered by the key rule
-   in the parent rather than by a git pattern, and define **remaining**.
+   in the parent rather than by a git pattern, and define **remaining**. A
+   branch that one of the other worktrees has checked out, or the accepted
+   worktree's branch when that worktree has uncommitted changes, is always
+   remaining.
 5. **Read the issue's state.** A tracker that cannot be read is unknown, and
    is not a failed git or gh command.
 6. **Count the branches**: distinct names among the open pull requests' head
    branches and the remaining branches.
-7. **Decide**, in the spec's order. The "none" bullet names the one remaining
-   branch, names the worktree folder when step 3 accepted the worktree that
-   holds it, and sends the case to the person when another worktree in the
-   step 3 listing has that branch checked out.
+7. **Decide**, in the spec's order. A merged pull request counts as finished
+   only when no branch remains, no newer pull request was closed without
+   merging, and none of the other worktrees is detached. The "none" bullet
+   asks the person when one of the other worktrees is detached or has the
+   one remaining branch checked out; otherwise it names that branch, and the
+   worktree folder when step 3 accepted the worktree that holds it.
+
+These steps include what the review rounds added; the spec is the full
+description.
 
 ## Grafts
 
@@ -52,8 +62,9 @@ inherits them. Its steps are:
   silently for someone with more than 100 open pull requests, which is the
   case the second list exists for.
 - Relying on "Starting a session" alone for a branch that another worktree
-  holds: that check matches sessions by title, so a session whose title lacks
-  the key slips past, and git refuses to check out a branch a second time.
+  holds: that check matches running sessions by title and branch, so a
+  worktree that no running session uses, such as a dead session's, slips
+  past, and git refuses to check out a branch a second time.
 - Naming a command and a project fact for "the base branch": the cleanup case
   uses the phrase the same way, so defining it belongs to both cases and to a
   change of its own. A stale local base only causes an extra question.
@@ -67,8 +78,9 @@ inherits them. Its steps are:
 2. Rewrap cleanup step 1, checking with `git diff --word-diff` that no word
    changed.
 3. Replace the comment above the "every wake sentence is pinned" test with one
-   that names `skills/wake/SKILL.md`, says each sentence is a heading there,
-   and says no test can read the skill.
+   that names `skills/wake/SKILL.md`, says which sentences are headings there
+   and which forms the text under the cleanup heading quotes, and says no
+   test can read the skill.
 4. Run the four gates.
 
 ## Test plan

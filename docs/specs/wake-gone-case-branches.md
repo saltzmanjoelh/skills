@@ -64,6 +64,10 @@ what the parent will do on their behalf.
    keeps an owner. A kept branch with a character the cleanup case does not
    allow goes to the person, because the parent would have to put it in a
    command.
+   When a worktree other than the one step 3 accepted says `detached`, the
+   parent cannot tell which branch git holds for it, so it never reports the
+   issue finished or starts a fresh session while one does, and asks the
+   person instead.
 5. **Counting.** "More than one branch" counts distinct branch names among
    the open pull requests' head branches and the remaining branches, so a
    worktree's branch and an open pull request on that same branch count once.

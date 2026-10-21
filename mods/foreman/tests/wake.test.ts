@@ -26,9 +26,10 @@ test('the slot words count the free slots in words', () => {
 })
 
 // The skill at skills/wake/SKILL.md quotes each of these sentences, so they
-// are pinned word for word. Each is a heading there, except the cleanup
-// sentence's ending about the last error, which the text under the cleanup
-// heading quotes. When a change to a sentence makes this test fail, change
+// are pinned word for word. Each is a heading there, except two forms of the
+// cleanup sentence, which the text under the cleanup heading quotes: the
+// singular "1 failed call", and the ending about the last error. When a
+// change to a sentence makes this test fail, change
 // the skill to match as well, because no test can read the skill to catch the
 // drift.
 test('every wake sentence is pinned', () => {
