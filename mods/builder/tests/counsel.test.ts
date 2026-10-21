@@ -1142,6 +1142,14 @@ test('the brief offers a follow-up outside the spec only file and drop, keeping 
   expect(text).toContain('cannot be fixed in this pull request')
 })
 
+test('the brief names every follow-up outside the spec when there are several, and offers each only file and drop', () => {
+  const text = briefText(briefFactsOf(followUpsQuestion({ outsideSpec: [1, 3] })), [])
+  expect(text).toContain('Follow-ups 1 and 3 are outside the spec')
+  expect(text).toContain('VOTE 1: <file|drop|none>')
+  expect(text).toContain('VOTE 2: <fix|file|drop|none>')
+  expect(text).toContain('VOTE 3: <file|drop|none>')
+})
+
 test('a vote to fix a follow-up outside the spec is not counted and sends the member back, while fix on a follow-up in scope still counts', () => {
   const q = outsideQuestion()
   for (const fixVote of ['fix', '1', 'option 1', '**fix**']) {

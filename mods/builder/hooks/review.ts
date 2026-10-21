@@ -199,7 +199,8 @@ export const STREAK_STOP = 3
 export const TREND_ANSWERS = ['keep going', 'file the rest', 'cut it out'] as const
 export type TrendAnswer = (typeof TREND_ANSWERS)[number]
 
-// An area as the package names it: its first wording, cleaned to print.
+// The most of an area's first wording that the package prints, and of an
+// unreadable Trend: line, both cleaned to print.
 const AREA_CHARS = 200
 
 // What the fix commits on the branch say about the areas their findings lay
