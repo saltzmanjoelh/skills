@@ -213,7 +213,8 @@ waits on is real; if the wait is real, the session ends the turn.
 2. **An open question** to the person: wait for the answer.
 3. **Over a limit.** Set `stuck`, ask the person once with a summary of
    what keeps failing, tell the session that started this one as
-   **A streak of 3** says, and wait, when either of these holds:
+   **The line to the starting session** says, and wait, when either of
+   these holds:
    - **Pushes:** more commits since the last changes-requested verdict
      than `Max pushes per round`. Before the first such verdict, count the
      commits committed after the pull request was opened, from
@@ -492,12 +493,8 @@ streak has reached 3, launch no reviewer on that package. Put to the
 counsel, with `pull_request`, whether to keep going in that area, file the
 rest of the area's findings, or cut the area out, naming the area, its
 streak and the findings fixed there, read from the fix commits that name
-it. If the counsel does not decide, the person decides. When the session
-was started by another session that it can message, such as the session
-whose brief started it, it also sends that session one short line naming
-the issue and the area or the limit, saying that it waits on that
-question, whenever it puts a streak of 3 to the counsel or asks the person
-about a limit under **Over a limit**, whatever the counsel decides.
+it. If the counsel does not decide, the person decides. Tell the session
+that started this one, as **The line to the starting session** says.
 Record the answer in a commit of its own with the line
 `Trend: <area>: <keep going | file the rest | cut it out>`, made with
 `git commit --allow-empty` when nothing else needs committing. For cut it
@@ -508,6 +505,13 @@ half builds a new package. Keep going counts the area's streak from zero
 after that commit. File the rest and cut it out close the area. A `Trend:`
 line for one area changes nothing for any other, and its commit counts as a
 push like any other.
+
+**The line to the starting session.** When the session was started by
+another session that it can message, such as the session whose brief
+started it, it sends that session one short line whenever it puts a streak
+of 3 to the counsel or asks the person about a limit under **Over a
+limit**, whatever the counsel decides. The line names the issue and the
+area or the limit, and says that the session waits on that question.
 
 **First half, at a head where the focused reviewers have not run** (**The
 focused reviewers have not run at this head** says which heads those are).
