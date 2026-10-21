@@ -615,11 +615,13 @@ async function choiceFor($: $, e: PromptSubmitInput): Promise<Choice> {
 // itself: only when a rewritten note left its line as the marker, and the
 // conversation ends with that line as a user message that no other user
 // message comes right before, so the line is the turn's only prompt. The
-// marker is read and cleared in one swap before the conversation is read, so
-// a marker that a new note sets in between is not wiped. Any failure means
-// the model answers.
+// marker is read first, so a turn with no marker set writes nothing. A set
+// marker is then read and cleared in one swap before the conversation is
+// read, so a marker that a new note sets in between is not wiped. Any failure
+// means the model answers.
 async function answersAlone($: $): Promise<boolean> {
   try {
+    if ((await read($, quietLine)) === null) return false
     const held = { line: null as string | null }
     await update($, quietLine, line => {
       held.line = line
@@ -771,16 +773,19 @@ export const register: Register = (on, options) => {
   // dropped prompt as a warning, which is why the prompt is not dropped. Any
   // other prompt made only of the app's notes and messages goes on with the
   // Noted line as context, its text unchanged, and every other prompt goes on
-  // as it came. The line is written before the marker is set, and a hook that
+  // as it came. The marker is set before the line is written, and a hook that
   // throws, a failed write included, passes the prompt on as it came, so no
-  // prompt is rewritten without a line in the log or without its marker.
+  // prompt is rewritten without a line in the log or without its marker, and
+  // no line in the log speaks of a note that went on unchanged. A marker left
+  // by a failed log write is cleared by the next first step, whose last
+  // message is then not the line.
   on('prompt.submit', async ($, e, next) => {
     void ensureArmed($).catch(() => undefined)
     const choice = await choiceFor($, e)
     if (choice.kind === 'pass') return next(e)
     if (choice.kind === 'noted') return next({ ...e, context: [NOTED] })
-    await addLog($, choice.line)
     await update($, quietLine, () => choice.line)
+    await addLog($, choice.line)
     return next({ ...e, text: choice.line })
   }).catch(($, e, next) => next(e))
   // Whether a turn of the session's own loop runs decides how a wake goes in,
@@ -804,7 +809,10 @@ export const register: Register = (on, options) => {
   // before anything is yielded, because the engine keeps a chunk once it is
   // yielded, and a failure after it would let the model's answer follow
   // foreman's. The role is not checked, since the marker is set only while it
-  // is on.
+  // is on. Unlike the hooks around it, this one has no .catch on purpose: a
+  // hook that throws before it yields anything is skipped, so the model
+  // answers, while a .catch that called next after a yield would add the
+  // model's answer after foreman's.
   on('turn.step', async function* ($, e, next) {
     if (e.index !== 0 || e.agentId !== undefined) return yield* next(e)
     if (!(await answersAlone($))) return yield* next(e)

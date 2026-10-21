@@ -45,16 +45,21 @@ const ONE = 'Kept ABC-1\'s turn-end note from the parent\'s model.'
 const BOTH = 'Kept ABC-1\'s and ABC-2\'s turn-end notes from the parent\'s model.'
 
 // Follows foreman's writes of its marker, so a test can see the line it last
-// wrote there, or null when it cleared it or never set it. A test that seeds
-// the state with leftInState cannot follow them, because both hook state.set.
+// wrote there, or null when it cleared it or never set it. `seen.writes`
+// counts the writes, and `seen.refuses` makes every write fail. A test that
+// seeds the state with leftInState cannot follow them, because both hook
+// state.set.
 function markerOf(on: On) {
-  let held: unknown = null
+  const seen = { held: null as unknown, writes: 0, refuses: false }
   on('state.set', async ($, e, next) => {
+    if (e.plugin !== 'foreman' || e.key !== 'quietLine') return next(e)
+    seen.writes += 1
+    if (seen.refuses) return { deny: 'the state is gone' } as never
     const out = await next(e)
-    if (e.plugin === 'foreman' && e.key === 'quietLine') held = e.value
+    seen.held = e.value
     return out
   })
-  return () => held
+  return Object.assign(() => seen.held, { seen })
 }
 
 // Asserts that `text` went on rewritten to `line`, with no context, and that
@@ -398,4 +403,21 @@ test('after a hot reload, a marker left in state still answers', async ($, on) =
   talk.messages = [user(ONE)]
   await answersNoted($, asked)
   await asksModel($, asked)
+})
+
+test('a first step with no marker set reads nothing and writes no state', async ($, on) => {
+  const asked = model(on)
+  const talk = conversation(on)
+  const { marker } = await parentWith($, on)
+  talk.messages = [user(ONE)]
+  await asksModel($, asked)
+  expect(marker.seen.writes).toBe(0)
+  expect(talk.reads).toBe(0)
+})
+
+test('a marker that cannot be written lets the note pass unchanged, with no line in the log', async ($, on) => {
+  const { w, ui, marker } = await parentWith($, on)
+  marker.seen.refuses = true
+  await passes($, w, note('local_a'))
+  expect(await ui.newestLog()).not.toBe(ONE)
 })
