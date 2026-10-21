@@ -27,10 +27,14 @@ export function briefFor(args: Record<string, unknown>, uuid: string): Brief {
   return { kind: 'add', ticket, prompt: `${args.prompt.replace(/\s+$/, '')}\n\n${TICKET_LINE} ${ticket}` }
 }
 
+// The shape of a desktop session id, such as local_ab-12_c. The turn-end
+// notes in hooks/notes.ts read ids with it too, so the two cannot drift.
+export const LOCAL_ID = /local_[A-Za-z0-9_-]+/
+
 // The first desktop session id in a start_session answer, or null when it
 // names none, as for a proposal card, which starts no session yet.
 export function localIdIn(text: string): string | null {
-  return /local_[A-Za-z0-9_-]+/.exec(typeof text === 'string' ? text : '')?.[0] ?? null
+  return LOCAL_ID.exec(typeof text === 'string' ? text : '')?.[0] ?? null
 }
 
 // The store key that holds a parent's ledger.

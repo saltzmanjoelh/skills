@@ -7,6 +7,16 @@ export const MAX_SLOTS = 20
 export const USAGE = 'Use /foreman to make this session the parent, /foreman slots <n> to set how many sub sessions it runs at once, and /foreman pause or /foreman resume to pause or resume it.'
 export const RANGE = `The slot count must be a whole number from ${MIN_SLOTS} to ${MAX_SLOTS}, so it was left as it was.`
 
+// What /foreman slots answers once the count is set: one sub session in the
+// singular, and every other count in the plural.
+export const slotsAnswer = (count: number) => `This parent now runs ${count} sub ${subSessions(count)} at once.`
+
+// What /foreman slots answers when it also made the session the parent.
+export const becameParentAnswer = (count: number) =>
+  `This session is now the parent and runs ${count} sub ${subSessions(count)} at once, and foreman shows its sub sessions above the prompt and in its pane.`
+
+const subSessions = (count: number) => (count === 1 ? 'session' : 'sessions')
+
 export type Command =
   | { kind: 'on' }
   | { kind: 'slots'; count: number }

@@ -211,6 +211,7 @@ test('/foreman slots sets the count, a count outside 1 to 20 is refused and chan
   const ui = await mountBoth($, on)
   await start($)
   await foreman($)
+  expect((await foreman($, 'slots 1')).text).toBe('This parent now runs 1 sub session at once.')
   expect((await foreman($, 'slots 3')).text).toBe('This parent now runs 3 sub sessions at once.')
   expect(await ui.bandText()).toContain('0 of 3 slots busy')
   for (const bad of ['slots 0', 'slots 2.5', 'slots x']) {
@@ -229,7 +230,7 @@ test('/foreman slots before /foreman makes the session the parent with that coun
   const ui = await mountBoth($, on)
   await start($)
   const answer = await foreman($, 'slots 5')
-  expect(answer.text).toBe('This session is now the parent and runs 5 sub sessions at once, and foreman shows them above the prompt and in its pane.')
+  expect(answer.text).toBe('This session is now the parent and runs 5 sub sessions at once, and foreman shows its sub sessions above the prompt and in its pane.')
   expect(await ui.bandText()).toContain('0 of 5 slots busy')
   expect(w.folder.lists).toBe(1)
   expect(w.panes).toEqual(['foreman'])

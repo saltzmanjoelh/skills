@@ -107,6 +107,12 @@ The mod ships the skill `foreman:wake`, which tells the parent's model what each
 
 A desktop tool or a notification that has not answered within 30 seconds is given up on and counts as failed, so it cannot stop the reads.
 
+## Turn-end notes
+
+The desktop app sends the parent a note each time a session it started ends a turn, and each note would wake the parent's model only to repeat what the pane already shows. While the role is on, foreman drops a prompt that is made only of these "finished a turn" notes, with any "Linked sessions now" status block, when every note is about a sub session foreman tracks whose slot is in use or was freed. The person sees `Prompt dropped by a hook: foreman kept a sub session's turn-end note from the parent's model; its pane shows the sub sessions`, and the log gets a line such as `Kept ABC-1's and ABC-2's turn-end notes from the parent's model.`
+
+Everything else still reaches the model unchanged: a prompt in which the person typed anything, even after the notes, a message a sub session sends with SendMessage, a note about a sub session that foreman does not track or that the person released, a note of any other kind, such as one saying a session was archived, and foreman's own wake lines. The `foreman:wake` skill tells the model to answer such a note with nothing unless it reports a milestone or asks a question.
+
 ## Where foreman cannot see everything
 
 - Where an organization manages Claude Code, a mod the person installs receives no classic events, so builder's file never reads `needs-you` for a permission prompt and never reads `in-cleanup`. Foreman's rules for those states never fire there. The other states work.
