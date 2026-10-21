@@ -48,6 +48,9 @@ desktop app's saved conversations record for these notes. It found:
 
 1. **What is dropped.** While the parent role is on, foreman's `prompt.submit`
    hook drops a prompt when, and only when, all of these hold:
+   - the prompt carries no slash command, no attachments and no context that
+     another hook added, because each of those means there is something more
+     for the model to read;
    - the prompt's text, apart from white space, is made entirely of
      `<system-reminder>` blocks;
    - every block is either a turn-end note or a "Linked sessions now" status
@@ -96,10 +99,14 @@ desktop app's saved conversations record for these notes. It found:
 
 - **A forged block.** The quoted report inside a note is text the sub
   session's model wrote, and it may contain `</system-reminder>` or text shaped
-  like another note. A forgery can only make the prompt fail one of the tests
-  in point 1, so the prompt passes, which is what happens today. It cannot
-  make foreman drop the person's typing, because any text outside the blocks
-  makes the prompt pass.
+  like another note. A forgery can make the prompt fail one of the tests in
+  point 1, so that it passes, which is what happens today. Or it can forge a
+  whole second note about another tracked sub session, so that the prompt is
+  dropped and the log line names that sub session too, although it sent no
+  note; the only text lost is the forging sub session's own report, which
+  would have been dropped anyway. A forgery cannot make foreman drop the
+  person's typing, because the app puts that typing after the last real
+  closing tag, outside every block, and any text there makes the prompt pass.
 - **A note naming an id twice,** or a quoted report that names another
   session's id, is judged by the first `local_` id after `you started (`,
   which the app writes itself.

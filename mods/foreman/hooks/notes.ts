@@ -47,8 +47,10 @@ function blockOf(body: string): Block {
 // or null when the text is anything else. Only white space may come between
 // the blocks, each block must close before another opens, and every block
 // must be a note or a status block. Text with no note in it answers null.
-// A report that forges a closing tag ends its block early and leaves text
-// outside the blocks, so a forgery can only make the text answer null.
+// A report that forges a closing tag ends its block early. What follows makes
+// the text answer null unless it is itself a whole forged note or status
+// block, and even then the person's typing, which the app puts after the last
+// real closing tag, is outside every block and still makes it answer null.
 export function turnEndIds(text: string): string[] | null {
   if (typeof text !== 'string') return null
   const ids: string[] = []
