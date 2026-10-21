@@ -331,6 +331,15 @@ export function decide(input: DecideInput): Decision {
       if (p.standing === 'active') {
         freed += 1
         logs.push(`The slot of ${p.issueKey ?? byTicket(p.ticket)} is free, because its file left the status folder.`)
+        // Builder deletes a status file only when its session ends after the
+        // watched pull request merged, which can happen between two reads.
+        // So a file that leaves while the pull request was last told open
+        // means it merged, and the parent hears it before the slot-free
+        // sentence, which is added after every pairing.
+        const told = p.acts.announced
+        if (told !== null && told.number !== null && told.state === 'OPEN') {
+          reasons.push({ kind: 'merged', who: whoOf(p.issueKey, p.ticket), number: told.number })
+        }
       }
       return []
     }

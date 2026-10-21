@@ -126,6 +126,20 @@ test('a done session frees its slot once it is archived, not running or not list
   expect(read(paired(), done, T0, { sessions: { kind: 'failed' } }).tickets.pairings[0]!.standing).toBe('active')
 })
 
+test('a record whose file leaves while its pull request was last told open wakes with the merged sentence before the slot-free one', () => {
+  const open = read(paired(), [row({ state: 'working', pr: pr(7) })], T0)
+  const left = read(open.tickets, [], T0 + MINUTE)
+  expect(wakeLine(left.reasons)).toBe('foreman: ABC-1\'s pull request #7 merged. two slots free; pick the next issues and start them.')
+  const merged = read(open.tickets, [row({ state: 'working', pr: pr(7, 'MERGED') })], T0 + MINUTE)
+  expect(read(merged.tickets, [], T0 + 2 * MINUTE).reasons).toEqual([{ kind: 'slot-free', free: 2 }])
+  const closed = read(open.tickets, [row({ state: 'working', pr: pr(7, 'CLOSED') })], T0 + MINUTE)
+  expect(read(closed.tickets, [], T0 + 2 * MINUTE).reasons).toEqual([{ kind: 'slot-free', free: 2 }])
+  const none = read(paired(), [row({ state: 'working' })], T0)
+  expect(read(none.tickets, [], T0 + MINUTE).reasons).toEqual([{ kind: 'slot-free', free: 2 }])
+  const released = { ...open.tickets, pairings: open.tickets.pairings.map(p => ({ ...p, standing: 'released' as const })) }
+  expect(read(released, [], T0 + MINUTE).reasons).toEqual([])
+})
+
 test('a record whose file leaves frees its slot, but a missing folder frees nothing and forgets nothing', () => {
   const first = read(paired(), [row({ state: 'working' })], T0)
   const left = read(first.tickets, [], T0 + MINUTE)

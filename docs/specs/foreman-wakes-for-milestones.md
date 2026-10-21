@@ -94,7 +94,11 @@ pair at the current head.
    the announced state gives `<who>'s pull request #<n> merged.` or
    `<who>'s pull request #<n> was closed without merging.` A pull request
    that goes back to `OPEN` wakes nothing, but the announced state follows
-   it, so a second close wakes again.
+   it, so a second close wakes again. Builder deletes a status file only
+   when its session ends after the watched pull request merged, which can
+   happen between two reads, so an active pairing whose file leaves the
+   folder while its announced state is `OPEN` also gives the merged
+   sentence, before the slot-free one.
 9. **One line.** The sentences of one read come in the order above, after
    the sentences of the rules foreman already has for the same pairing and
    before the slot-free sentence, all in one `foreman: ` line, as today.

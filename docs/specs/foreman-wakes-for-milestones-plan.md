@@ -160,9 +160,6 @@ Each step writes its tests first and sees them fail.
 
 ## Known gaps for the pull request description
 
-- Builder deletes a merged session's status file when the session ends. If
-  that happens before foreman's next read, the merged sentence is lost and
-  only the slot-free sentence comes.
 - The fixed "Noted." line names only the question exception, so a streak or
   limit line that reaches the parent with it relies on the wake skill's
   rule, as it did before this change.
