@@ -30,7 +30,8 @@ case.
   title on with the rewritten prompt.
 - The refusal text names both valid forms and says the marker needs a brief:
   `foreman: start sub sessions with a title that begins with the issue key
-  and a colon, such as "ABC-123: short name", or, for work with no issue,
+  followed by a space or a colon, such as "ABC-123: short name", or, for
+  work with no issue,
   with "No issue: short name" and a brief, so that foreman and its wake
   skill can find the sub session by its title.`
 - The README's Tickets section gains a paragraph on the rule, quoting the

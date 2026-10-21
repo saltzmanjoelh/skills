@@ -520,7 +520,8 @@ async function releaseRow($: $, file: string) {
 // the call answered without an error the ticket is paired with the desktop
 // session id the answer names, or with none for a proposal card.
 // The call is typed as the engine gives an MCP tool's, with the tool's
-// arguments spread on it, so briefFor can read `prompt` and `context`.
+// arguments spread on it, so briefFor can read `prompt`, `context`, `title`
+// and `proposal_id`.
 async function startSession<E extends Record<string, unknown>>($: $, e: E, next: (e: E) => Promise<ToolCallResult>): Promise<ToolCallResult> {
   const brief = briefFor(e, crypto.randomUUID())
   if (brief.kind === 'deny') {
@@ -663,8 +664,8 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   // Every start_session call in a parent goes through startSession, which
-  // checks its title. In any other session the call passes unchanged. A hook that throws passes the
-  // call on as it came.
+  // checks its title. In any other session the call passes unchanged. A hook
+  // that throws passes the call on as it came.
   on('tool.call', { tool: START_TOOL }, async ($, e, next) => {
     if (!(await isOn($))) return next(e)
     return startSession($, e, next)
