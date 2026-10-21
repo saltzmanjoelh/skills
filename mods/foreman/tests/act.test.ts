@@ -4,7 +4,7 @@ import { decide, GONE_MS, needsList, type DecideInput, type Decision, type Sessi
 import { recordIn } from '../hooks/record'
 import type { SubRow } from '../hooks/subs'
 import { joinOwners, newPairing, TICKETS_EMPTY } from '../hooks/tickets'
-import type { ForemanTickets } from '../types'
+import type { ForemanStanding, ForemanTickets } from '../types'
 
 const T0 = Date.UTC(2026, 9, 20, 12, 0, 0)
 const MINUTE = 60_000
@@ -148,9 +148,21 @@ test('a slot that frees while every slot is still busy wakes nothing', () => {
 })
 
 test('a released or freed pairing gets no action', () => {
-  const t = joinOwners(paired(), [row()]).tickets
-  t.pairings[0]!.standing = 'released'
-  expect(readEvery(t, () => [row()], T0 + 30 * MINUTE)).toEqual([])
+  // Each run builds its own pairing, joined to the same idle row that draws a
+  // nudge for an active pairing, so that only the standing differs.
+  const run = (standing: ForemanStanding) => {
+    const t = joinOwners(paired(), [row()]).tickets
+    t.pairings[0]!.standing = standing
+    return { standing, seen: readEvery(t, () => [row()], T0 + 30 * MINUTE) }
+  }
+  // The same setup with the pairing active is nudged, so an empty result
+  // below cannot come from a setup that would never act at all.
+  const active = run('active')
+  expect({ standing: active.standing, nudged: active.seen.some(s => s.nudges > 0) }).toEqual({ standing: 'active', nudged: true })
+  expect((['released', 'freed'] as const).map(run)).toEqual([
+    { standing: 'released', seen: [] },
+    { standing: 'freed', seen: [] },
+  ])
 })
 
 test('a sub session whose file stopped and whose session is not running wakes the parent once, unless its pull request merged', () => {
