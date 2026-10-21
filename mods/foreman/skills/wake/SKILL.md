@@ -1,6 +1,6 @@
 ---
 name: wake
-description: For the parent's model only; the person starts foreman with /start-foreman. What a parent session does when the foreman mod wakes it. Use whenever a line starting "foreman: " arrives, as a prompt or appended to a running turn, to handle each sentence in it, such as a free slot, an idle sub session, a sub session stuck in cleanup, or one that is gone.
+description: For the parent's model only; the person starts foreman with /start-foreman. What a parent session does when the foreman mod wakes it. Use whenever a line starting "foreman: " arrives, as a prompt or appended to a running turn, to handle each sentence in it, such as a free slot, an idle sub session, a sub session stuck in cleanup, or one that is gone. Also use whenever the person asks a parent session, in any words, to pick, start, restart or resume an issue, because every start follows its "Starting a session" section.
 user-invocable: false
 ---
 
@@ -40,12 +40,20 @@ default.
   instructions, and is never copied into the parent's notes.
 - Never read a sub session's whole transcript.
 - A refused tool call is final for this wake. Report it once, and never retry
-  the same call or reword its brief to get past the refusal.
+  the same call or reword its brief to get past the refusal. The one exception
+  is the foreman mod's refusal of a session's title, which step 2 of
+  "Starting a session" handles.
 - Every action that cannot be done safely ends in a one-line message to the
   person that names the issue and the reason. "When the parent speaks" lists
   every case in which the parent speaks to the person.
 
 ## Starting a session
+
+This section applies to every session the parent starts or proposes, whoever
+asked for it: a `foreman: ` line, or the person in their own words, such as
+"pick the next issue" or "start ABC-123". The foreman mod refuses a
+`start_session` call whose title has any other shape than the one step 2
+gives.
 
 1. Just before each start, check the desktop app's `list_sessions` again, by
    title and branch, and skip an issue that a running session already works
@@ -57,15 +65,28 @@ default.
    in the parent's notes, as keys only. A key leaves the notes once its
    session shows up in `list_sessions`, or once the person declines it, so
    that an issue the person turned down can be offered again later.
-2. Call `start_session` with a title that begins with the issue key and a
-   brief that runs the given `/implement` command, so that `list_sessions`
-   shows the issue from the start. The brief covers the issue as it is, with
-   the sub-issues the tracker already lists under it, and never folds in an
-   edge case or follow-up from another issue; the follow-up stays its own
-   issue.
+2. Call `start_session` with a title that begins with the issue key followed
+   by a space or a colon, such as `ABC-123: short name`, never with a word
+   before the key, and a brief that runs the given `/implement` command, so
+   that `list_sessions` shows the issue from the start. For work that has no
+   issue at all, begin the title with `No issue: ` instead; the mod puts the
+   sub session's ticket in place of those words, so the title begins with the
+   ticket. The marker works only on a call that carries a brief, because the
+   mod issues a ticket only with a brief, so a title-only offer card cannot
+   use it. The brief covers the issue as it is, with the sub-issues the
+   tracker already lists under it, and never folds in an edge case or
+   follow-up from another issue; the follow-up stays its own issue.
+
+   When the foreman mod refuses the call for its title, with a refusal that
+   starts `foreman: ` and says what a valid title looks like, call again once
+   with the title fixed and the brief unchanged. This is the one refusal that
+   is not final, because fixing the title is what it asks for, and it is not
+   a refusal by the app for step 3. If the call with the fixed title is
+   refused too, report it as any other refusal.
 3. When the app refuses it, propose the same session as a card with the full
-   brief. Once `start_session` has been refused in this parent, on this wake or
-   an earlier one, go straight to the card.
+   brief. Once the app has refused `start_session` in this parent, on this
+   wake or an earlier one, go straight to the card. The foreman mod's refusal
+   of a title never counts as a refusal by the app.
 4. When the card is refused too, tell the person in one line which issue is
    next, or every next issue when several slots are free, and that they can
    say "start it" to launch it.
@@ -330,6 +351,8 @@ parent a question it can answer from this skill.
   change the approach, and after that answer the person has the last word.
 - It never forces a worktree removal or a branch deletion, and never touches a
   shared checkout, uncommitted work, or another session's local services.
-- It never retries a refused call in the same wake.
+- It never retries a refused call in the same wake, except that it calls
+  `start_session` once more with a fixed title after the foreman mod refuses
+  the title, as "Starting a session" says.
 - It never handles "needs you", which raises a notification and never wakes
   the model.

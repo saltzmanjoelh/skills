@@ -5,7 +5,7 @@
 
 import type { ForemanActs, ForemanEffect, ForemanOutbox, ForemanPairing, ForemanStanding, ForemanTickets } from '../types'
 import { byKeyThenFile, keyOf, nameOf, type SubRow } from './subs'
-import { byTicket } from './wake'
+import { byTicket, KEY } from './wake'
 
 // The line builder looks for in a sub session's first prompt.
 export const TICKET_LINE = 'foreman-ticket:'
@@ -15,16 +15,55 @@ export const TICKET_LINE = 'foreman-ticket:'
 // session is the parent's own, so such a sub session would never show.
 export const FORK_REFUSAL = 'foreman: start sub sessions with context "fresh", so the sub session finds its ticket in its first prompt and shows in foreman.'
 
-// What a start_session call's arguments become: refused when the context is
-// fork, passed unchanged when there is no brief to carry the line, or given
-// the ticket line after a blank line at the end of the brief.
-export type Brief = { kind: 'deny'; text: string } | { kind: 'pass' } | { kind: 'add'; prompt: string; ticket: string }
+// The marker a title begins with when its work has no issue. Foreman puts the
+// ticket it issues in place of the marker, so the wake skill can find the sub
+// session by the ticket at the start of its title.
+export const NO_ISSUE_MARKER = 'No issue: '
 
+// Why a start_session call is refused for its title. Foreman and its wake
+// skill find a sub session by the issue key, or the ticket, at the start of
+// its title.
+export const TITLE_REFUSAL = 'foreman: start sub sessions with a title that begins with the issue key followed by a space or a colon, such as "ABC-123: short name", or, for work with no issue, with "No issue: short name" and a brief, so that foreman and its wake skill can find the sub session by its title.'
+
+// The log lines for each refusal.
+const FORK_LOG = 'Refused a start_session call with forked context, because its sub session could not find its ticket.'
+export const TITLE_LOG = 'Refused a start_session call, because its title did not begin with an issue key and a space or a colon, or with "No issue: " on a call with a brief.'
+
+// A title that begins with an issue key followed by a space or a colon. A
+// hyphen does not count, so ABC-1-fix is never read as ABC-1.
+const KEYED_TITLE = new RegExp(`^${KEY}[ :]`)
+
+// What a start_session call's arguments become: refused when the context is
+// fork or the title has the wrong shape, passed unchanged when there is no
+// brief to carry the line, or given the ticket line after a blank line at the
+// end of the brief, with a "No issue: " title's marker replaced by the ticket.
+export type Brief =
+  | { kind: 'deny'; text: string; log: string }
+  | { kind: 'pass' }
+  | { kind: 'add'; prompt: string; ticket: string; title?: string }
+
+// Every check reads its argument's type first, because the hook passes a call
+// on unchanged when it throws, which would let a bad title through.
 export function briefFor(args: Record<string, unknown>, uuid: string): Brief {
-  if (args.context === 'fork') return { kind: 'deny', text: FORK_REFUSAL }
-  if (typeof args.prompt !== 'string' || args.prompt.trim() === '') return { kind: 'pass' }
+  if (args.context === 'fork') return { kind: 'deny', text: FORK_REFUSAL, log: FORK_LOG }
+  const title = typeof args.title === 'string' ? args.title : null
+  const brief = typeof args.prompt === 'string' && args.prompt.trim() !== '' ? args.prompt : null
+  // A proposal started by its id alone keeps the title it was proposed with,
+  // which this check saw when the proposal was made.
+  const fromProposal = typeof args.proposal_id === 'string' && args.proposal_id !== '' && (args.title === undefined || args.title === null)
+  // A title passes when it begins with an issue key and a space or a colon,
+  // or with the marker on a call whose brief gets a ticket to replace it.
+  const isKeyed = title !== null && KEYED_TITLE.test(title)
+  const isMarked = title !== null && title.startsWith(NO_ISSUE_MARKER)
+  if (!fromProposal) {
+    if (!isKeyed && !isMarked) return { kind: 'deny', text: TITLE_REFUSAL, log: TITLE_LOG }
+    if (isMarked && brief === null) return { kind: 'deny', text: TITLE_REFUSAL, log: TITLE_LOG }
+  }
+  if (brief === null) return { kind: 'pass' }
   const ticket = `ft-${uuid}`
-  return { kind: 'add', ticket, prompt: `${args.prompt.replace(/\s+$/, '')}\n\n${TICKET_LINE} ${ticket}` }
+  const prompt = `${brief.replace(/\s+$/, '')}\n\n${TICKET_LINE} ${ticket}`
+  if (title === null || !isMarked) return { kind: 'add', ticket, prompt }
+  return { kind: 'add', ticket, prompt, title: `${ticket}: ${title.slice(NO_ISSUE_MARKER.length)}` }
 }
 
 // The shape of a desktop session id, such as local_ab-12_c. The turn-end
