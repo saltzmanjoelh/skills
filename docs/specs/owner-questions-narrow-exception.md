@@ -31,8 +31,11 @@ the rule, which found the gap and could not fix it within its push limit.
 
 - **The rule for owner questions.** Its exception reads: a finding whose
   mechanism the claim checker refuted is dropped as before, and a cheap
-  follow-up that is only wording in specs, plans, comments or the README,
-  rewrapping, or a rename is fixed as before. Every other finding that
+  follow-up is fixed as before only when it is wording in specs, plans,
+  comments or the README, rewrapping, or a rename, and its fix changes
+  nothing a session or the code does. A rename of a configuration key or a
+  command-line flag, for example, does change what the code does, so it
+  goes to the owner. Every other finding that
   depends on how the owner works, including a cheap follow-up that is small
   test tightening and a visible problem small enough to fix, goes to the
   owner in the round's one question, as the rule already describes.
@@ -40,15 +43,20 @@ the rule, which found the gap and could not fix it within its push limit.
   the speculative kind already has: a finding the rule for owner questions
   sends to the owner is not fixed here as a cheap one. It waits on the
   owner's answer, and then goes on as any other finding or is dropped.
+- **The second half's point 4, the counsel kind.** It gains the same
+  exception, so that a finding taken out of the cheap kind is not put to the
+  counsel instead, where a vote could fix it without asking the owner. This
+  holds even for a finding outside the spec, which point 4 otherwise always
+  puts to the counsel.
 - Nothing else in the skill changes. The owner's answer is recorded, and the
   finding is listed, exactly as the rule for owner questions and the round's
   lists already say.
 
 ## Edge cases
 
-- A finding that depends on how the owner works and whose fix is a rename
-  inside code is still fixed without asking, because a rename changes
-  nothing the code does.
+- A finding that depends on how the owner works and whose fix renames a
+  local name inside code is still fixed without asking, because that rename
+  changes nothing the code does.
 - Wording in a file that Claude Code loads as instructions, such as a skill,
   was never cheap, so it already goes to the owner and does not change.
 - A round in which the only owner-dependent findings are wording, rewrapping
@@ -84,7 +92,8 @@ No gate reads `skills/` or `docs/`, so the reviewers verify this by reading.
    tightening and a visible problem small enough to fix as going to the
    owner.
 2. The cheap kind in the second half's point 4 says that a finding the rule
-   for owner questions sends to the owner is not fixed there as a cheap one.
+   for owner questions sends to the owner is not fixed there as a cheap one,
+   and the counsel kind says that such a finding is not put to the counsel.
 3. No other passage of `skills/implement/SKILL.md` lets an owner-dependent
    finding be fixed without asking, other than the narrowed exception.
 4. `foreman-build-lessons.md` and `foreman-build-lessons-plan.md` are
