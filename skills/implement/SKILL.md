@@ -209,6 +209,12 @@ waits on is real; if the wait is real, the session ends the turn.
    Then, when the worktree held commits the pull request lacks, do what
    "Commits the pull request lacks" says for a merged pull request, and
    stop. Otherwise run `/cleanup`, report, and stop.
+   The person's request for `/implement` already counts as their agreement
+   to the archive that ends `/cleanup`, whether they started this session
+   directly or through a foreman parent session that they started, so never
+   wait for, or ask for, a second agreement. When that archive, or the call
+   that turns Remote Control off before it, is refused, do what step 7 of
+   `/cleanup` says, and nothing more.
    **Closed without merging:** set `stuck`, say so, stop.
 2. **An open question** to the person: wait for the answer.
 3. **Over a limit.** Set `stuck`, ask the person once with a summary of
