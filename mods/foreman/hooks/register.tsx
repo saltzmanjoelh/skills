@@ -1,10 +1,11 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, ResolveInput, ToolCallResult } from 'claude-code'
+import type { EngineInterface, PromptSubmitInput, Register, ResolveInput, ToolCallResult } from 'claude-code'
 
 import { decide, desktopOf, needsList, PAUSED_SLOT_LOG, slotOutcome, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
 import { isSvgSurface } from './art'
-import { commandOf } from './commands'
+import { commandOf, slotsAnswer } from './commands'
 import { failureLine, listSessions, NUDGE_TEXT, openSession, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
+import { keptLine, keptNames, NOTES_KEPT, turnEndIds } from './notes'
 import { bandTree, PANE, paneTree, type Elements, type View } from './pane'
 import type { ForemanParent, ForemanTickets } from '../types'
 import { PARENT_OFF, parentIn, slotsOf, storeKey } from './parent'
@@ -557,13 +558,28 @@ async function startSession<E extends Record<string, unknown>>($: $, e: E, next:
   return out
 }
 
+// The log line for a prompt that foreman keeps from the parent's model, or
+// null when the prompt goes on. Only a prompt made of turn-end notes about sub
+// sessions this parent tracks is kept, and only while the role is on. A slash
+// command, attachments or context another hook added each mean there is
+// something more for the model to read, so such a prompt goes on. The text is
+// checked before any state is read, so a prompt the person typed never waits
+// on a read.
+async function keptLineFor($: $, e: PromptSubmitInput): Promise<string | null> {
+  if (e.command !== undefined || (e.attachments?.length ?? 0) > 0 || (e.context?.length ?? 0) > 0) return null
+  const ids = turnEndIds(e.text)
+  if (ids === null || !(await isOn($))) return null
+  const names = keptNames(ids, ticketsIn(await read($, tickets)).pairings)
+  return names === null ? null : keptLine(names)
+}
+
 // What each /foreman command answers once it is done.
 async function runCommand($: $, args: string): Promise<string> {
   const command = commandOf(args)
   if (command.kind === 'refused') return command.text
   if (command.kind === 'slots') {
     await writeParent($, p => ({ ...p, slots: command.count }))
-    return `This parent now runs ${command.count} sub sessions at once.`
+    return slotsAnswer(command.count)
   }
   if (command.kind === 'pause') {
     await writeParent($, p => ({ ...p, isPaused: true }))
@@ -631,12 +647,20 @@ export const register: Register = (on, options) => {
   })
 
   // After a hot reload, whichever of these hooks comes first arms the timers
-  // again. Each passes the event on unchanged and does not wait for the
-  // arming, as builder's do, because arming may read the whole status folder
-  // and the person's prompt or the turn's end should not wait for that read.
-  on('prompt.submit', ($, e, next) => {
+  // again. Neither waits for the arming, as builder's do not, because arming
+  // may read the whole status folder and the person's prompt or the turn's end
+  // should not wait for that read.
+  // A prompt made only of turn-end notes about sub sessions this parent
+  // tracks is dropped, with a line in the log, because the pane already shows
+  // them; every other prompt passes on unchanged. The line is written before
+  // the drop, and a hook that throws, a failed write included, passes the
+  // prompt on, so no prompt is dropped without a line in the log.
+  on('prompt.submit', async ($, e, next) => {
     void ensureArmed($).catch(() => undefined)
-    return next(e)
+    const line = await keptLineFor($, e)
+    if (line === null) return next(e)
+    await addLog($, line)
+    return { drop: NOTES_KEPT }
   }).catch(($, e, next) => next(e))
   // Whether a turn of the session's own loop runs decides how a wake goes in,
   // so the end of a turn and the start of one below keep turnRuns. A
