@@ -136,9 +136,9 @@ is that sub session's own worktree, and only in this order:
    `gh pr view '<branch>' --json state,headRefOid` says its pull request
    merged and that `headRefOid` equals `git rev-parse '<branch>'`, since a
    squash merge does not make the branch look merged and a reused branch name
-   can carry new work after an older pull request from it merged. If it is not merged, stop here and tell the person, without
-   archiving anything, because foreman counts an archived session that has not
-   merged as gone.
+   can carry new work after an older pull request from it merged. If it is
+   not merged, stop here and tell the person, without archiving anything,
+   because foreman counts an archived session that has not merged as gone.
 2. Archive that session with `archive_session`, or confirm with
    `list_sessions` that it has stopped, so that nothing writes to the worktree
    while it is checked.
@@ -162,40 +162,84 @@ the quoted error.
 ## <who> has not updated its status file for <n> minutes and its session is not running, so restart it or release the issue.
 
 Never trust a pull request number from the stale record. Find the issue's
-branch and pull request yourself. GitHub's search does not look at branch
+branches and pull requests yourself. GitHub's search does not look at branch
 names, and a title need not carry the issue key, so list pull requests rather
-than search for the key:
+than search for the key.
 
-1. **List.** Run
-   `gh pr list --state all --author @me --json number,state,title,headRefName,isCrossRepository --limit 100`.
-2. **Filter.** Keep only pull requests that are not from a fork and whose
-   title or head branch holds the exact issue key between characters that
-   cannot be part of a key, ignoring letter case, since branch names are
-   often lowercase. A pull request that only mentions the key in its body,
-   such as a sub-issue's, does not count.
-3. **Read the worktree's branch.** When the record's working folder is still a
-   listed worktree, is not the repository's main checkout, its branch holds
-   the exact key as in step 2, and no running session in `list_sessions` uses
-   that folder, read its branch with `git -C '<folder>' branch --show-current`,
-   under the cleanup case's rule for single quotes and allowed characters.
-   Otherwise ignore the folder.
-4. **Read the issue's state** with the same tracker the `Next issue:` fact
-   names. When that is not possible, treat the state as unknown and go on.
-5. **Decide**, taking the first of these that holds:
-   - More than one branch, or more than one open pull request: tell the
-     person in one line.
-   - The issue was closed or moved to done: ask the person in one line what
-     to do.
+A title or branch name holds the issue key when it contains the key, ignoring
+letter case, with no letter or digit directly before or after it. So
+`claude/abc-123-fix-search` holds `ABC-123`, and `abc-1234` does not. Every
+step below that matches the key uses this rule. Put every path and branch name
+in single quotes in every command, and never put a name in a command when it
+holds a character the cleanup case does not allow. When a git or gh command in
+these steps fails, tell the person in one line, naming the issue, and stop.
+
+1. **List pull requests.** Run
+   `gh pr list --state all --author @me --json number,state,title,headRefName,headRefOid,isCrossRepository --limit 100`,
+   which covers every state but stops at the newest 100. Then run the same
+   command with `--state open` and `--limit 1000` in place of `--state all`
+   and `--limit 100`, so that an open pull request older than the newest 100
+   is still found. When the open list holds 1000 pull requests, it may have
+   been cut, so tell the person in one line and stop.
+2. **Keep the issue's pull requests.** From both lists together, keep each
+   pull request once, by its number, when it is not from a fork and its title
+   or head branch holds the key. A pull request that only mentions the key in
+   its body, such as a sub-issue's, does not count.
+3. **Read the dead session's worktree.** Run `git worktree list --porcelain`,
+   and check the record's working folder against it in this order. At the
+   first check that fails, ignore the folder and go on to step 4.
+   1. The folder is exactly the path of an entry, and that entry is not marked
+      `prunable`, which would mean its folder is gone.
+   2. That entry is not the first one, which is the repository's main
+      checkout.
+   3. That entry names a branch on its `branch refs/heads/<name>` line, and
+      the name holds only the characters the cleanup case allows.
+   4. That branch holds the key.
+   5. No running session in `list_sessions` uses that folder.
+
+   When every check passes, step 7 may name this worktree folder.
+4. **Find the local branches.** List every local branch name with
+   `git branch --list --format='%(refname:short)'`, and keep the names that
+   hold the key. Filter the names yourself rather than passing the key to git
+   as a pattern, because a pattern there ignores the key rule and letter case.
+   When a kept name holds a character the cleanup case does not allow, tell
+   the person in one line and stop, because the parent would have to put that
+   name in a command. A kept branch is **remaining** unless one of these
+   holds:
+   - its commits are reachable from the base branch;
+   - it is the head branch of a merged or closed pull request from step 2, and
+     `git rev-parse '<branch>'` equals that pull request's `headRefOid`,
+     because that pull request already accounts for it.
+
+   So a branch that a squash merge left behind is not remaining, and a branch
+   name reused for new work after its pull request merged is remaining.
+5. **Read the issue's state** with the same tracker the `Next issue:` fact
+   names. When that is not possible, treat the state as unknown and go on;
+   this is not a failed git or gh command.
+6. **Count the branches.** Count the distinct branch names among the open
+   pull requests' head branches and the remaining branches. A branch that is
+   both a remaining branch and an open pull request's head branch counts once.
+7. **Decide**, taking the first of these that holds:
+   - More than one open pull request, or more than one branch: tell the person
+     in one line.
+   - The issue was closed or moved to done: ask the person in one line what to
+     do.
    - An open pull request: start a session whose brief runs
      `/implement --resume #N` with that pull request's number, even when an
      older one for the issue merged or was closed.
-   - A merged pull request: start nothing and tell the person in one line that
-     the issue is finished.
-   - A pull request closed without merging: ask the person in one line what
-     to do.
-   - None: start a session whose brief runs `/implement <issue>`. When step 3
-     found a branch, the brief names both that branch and its worktree folder,
-     so that the new session works there.
+   - A merged pull request: when no branch remains and the tracker does not
+     show the issue open, start nothing and tell the person in one line that
+     the issue is finished. A state that could not be read does not show the
+     issue open. Otherwise ask the person in one line what to do, naming the
+     remaining branch when there is one.
+   - A pull request closed without merging: ask the person in one line what to
+     do.
+   - None: start a session whose brief runs `/implement <issue>`. When one
+     branch remains and another entry in step 3's worktree list has it checked
+     out, tell the person in one line instead, because another session may be
+     working on it. Otherwise, when one branch remains, the brief names it, and
+     when step 3 accepted the worktree that holds it, the brief also names that
+     worktree folder, so that the new session works there.
 
 Starting goes through "Starting a session".
 
