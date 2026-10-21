@@ -3,7 +3,7 @@ import type { Engine } from 'claude-code/testing'
 
 import { REASONS } from '../hooks/desktop'
 import { DATA_NOTE } from '../hooks/wake'
-import { FORK_REFUSAL, newPairing, ticketsIn, ticketsKey } from '../hooks/tickets'
+import { FORK_REFUSAL, newPairing, ticketsIn, ticketsKey, TITLE_REFUSAL } from '../hooks/tickets'
 import { foreman, leftInState, MINUTE, mountBoth, record, SECOND, start, T0, world } from './world'
 
 const START = 'mcp__ccd_session__start_session'
@@ -31,7 +31,7 @@ test('in a parent, start_session gets the ticket line and the local_ id it answe
   const ui = await mountBoth($, on)
   await start($)
   await foreman($)
-  const out = await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh', title: 'ABC-7' })
+  const out = await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh', title: 'ABC-7: short' })
   expect(out.text).toContain('local_new1')
   const prompt = String(w.engine.started[0]!.prompt)
   expect(prompt).toMatch(/^Run \/implement ABC-7\.\n\nforeman-ticket: ft-[0-9a-f-]{36}$/)
@@ -49,7 +49,8 @@ test('a forked start is refused, a start with no brief passes unchanged, and an 
   await startSession($, { proposal_id: 'task-1' })
   expect(w.engine.started.map(s => s.prompt)).toEqual([undefined])
   w.engine.startFails = true
-  await startSession($, { prompt: 'Run it.', context: 'fresh' })
+  await startSession($, { prompt: 'Run it.', context: 'fresh', title: 'ABC-7: short' })
+  expect(w.engine.started).toHaveLength(2)
   expect(ledger(w).pairings).toEqual([])
 })
 
@@ -59,6 +60,70 @@ test('a session that is not a parent passes start_session unchanged, forked or n
   await startSession($, { prompt: 'Run it.', context: 'fork' })
   expect(w.engine.started.map(s => s.prompt)).toEqual(['Run it.'])
   expect(w.stored.has(ticketsKey('session-1'))).toBe(false)
+})
+
+// Calls whose title a parent refuses: the incident's title, a key with
+// nothing after it, a key in lower case, no title at all, a title-only offer
+// card, and the marker on a call with no brief.
+const BAD_STARTS: Record<string, unknown>[] = [
+  { prompt: 'Run /implement ABC-7.', context: 'fresh', title: 'Implement ABC-7: short' },
+  { prompt: 'Run /implement ABC-7.', context: 'fresh', title: 'ABC-7' },
+  { prompt: 'Run /implement ABC-7.', context: 'fresh', title: 'abc-7: x' },
+  { prompt: 'Run /implement ABC-7.', context: 'fresh' },
+  { title: 'Implement ABC-7', initiation: 'offer' },
+  { title: 'No issue: tidy', initiation: 'offer' },
+]
+
+test('in a parent, a title that begins with an issue key and a space or a colon goes on unchanged', async ($, on) => {
+  const w = world(on)
+  await start($)
+  await foreman($)
+  await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh', title: 'ABC-7: short' })
+  await startSession($, { prompt: 'Run /implement ABC-8.', context: 'fresh', title: 'ABC-8 short' })
+  expect(w.engine.started.map(s => s.title)).toEqual(['ABC-7: short', 'ABC-8 short'])
+  expect(ledger(w).pairings).toHaveLength(2)
+})
+
+test('in a parent, a title of any other shape is refused, starts nothing, issues no ticket and is logged', async ($, on) => {
+  const w = world(on)
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  for (const args of BAD_STARTS) expect((await startSession($, args)).deny).toBe(TITLE_REFUSAL)
+  expect(w.engine.started).toEqual([])
+  expect(ledger(w).pairings).toEqual([])
+  expect(await ui.newestLog()).toStartWith('Refused a start_session call')
+})
+
+test('in a parent, a "No issue: " title with a brief reaches the desktop app with its ticket in place of the marker', async ($, on) => {
+  const w = world(on)
+  await start($)
+  await foreman($)
+  await startSession($, { prompt: 'Tidy the docs.', context: 'fresh', title: 'No issue: tidy' })
+  const prompt = String(w.engine.started[0]!.prompt)
+  const ticket = prompt.slice(prompt.indexOf('ft-'))
+  expect(ticket).toMatch(/^ft-[0-9a-f-]{36}$/)
+  expect(w.engine.started[0]!.title).toBe(`${ticket}: tidy`)
+  expect(ledger(w).pairings.map(p => p.ticket)).toEqual([ticket])
+})
+
+test('in a parent, a proposal started by its id alone passes unchanged, one with a bad title is refused, and a fork is refused first', async ($, on) => {
+  const w = world(on)
+  await start($)
+  await foreman($)
+  await startSession($, { proposal_id: 'task-1' })
+  expect(w.engine.started.map(s => s.title)).toEqual([undefined])
+  expect((await startSession($, { proposal_id: 'task-2', title: 'Implement ABC-7' })).deny).toBe(TITLE_REFUSAL)
+  expect((await startSession($, { prompt: 'Run it.', context: 'fork', title: 'Implement ABC-7' })).deny).toBe(FORK_REFUSAL)
+  expect(w.engine.started).toHaveLength(1)
+})
+
+test('a session that is not a parent passes every title unchanged', async ($, on) => {
+  const w = world(on)
+  await start($)
+  const marker = { prompt: 'Tidy the docs.', context: 'fresh', title: 'No issue: tidy' }
+  for (const args of [...BAD_STARTS, marker]) expect((await startSession($, args)).deny).toBeUndefined()
+  expect(w.engine.started.map(s => [s.title, s.prompt])).toEqual([...BAD_STARTS, marker].map(a => [a.title, a.prompt]))
 })
 
 test('only records with a ticket of this parent show, and a fork\'s second file with the same ticket is left out and logged once', async ($, on) => {
@@ -492,12 +557,12 @@ test('a session start that comes again in a running session keeps the newer ledg
   const w = world(on)
   await start($)
   await foreman($)
-  await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh' })
+  await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh', title: 'ABC-7: short' })
   expect(ledger(w).pairings).toHaveLength(1)
   w.stored.set(ticketsKey('session-1'), { pairings: [], folderMissing: false })
   await start($)
   await w.clock.settle()
-  await startSession($, { prompt: 'Run /implement ABC-8.', context: 'fresh' })
+  await startSession($, { prompt: 'Run /implement ABC-8.', context: 'fresh', title: 'ABC-8: short' })
   expect(ledger(w).pairings).toHaveLength(2)
 })
 
@@ -531,7 +596,7 @@ test('an answer to start_session with no text still pairs the ticket with the lo
   w.engine.startResultOnly = true
   await start($)
   await foreman($)
-  await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh' })
+  await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh', title: 'ABC-7: short' })
   expect(ledger(w).pairings.map(p => p.localId)).toEqual(['local_new1'])
 })
 

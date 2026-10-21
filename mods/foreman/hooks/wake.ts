@@ -19,9 +19,13 @@ export type Reason =
   | { kind: 'gone'; who: string; minutes: number }
   | { kind: 'slot-free'; free: number }
 
-// The shape of an issue key, such as ABC-123. A key of any other shape could
-// be words a sub session wrote, so it is never put in the line.
-const KEY_SHAPE = /^[A-Z][A-Z0-9]*-\d+$/
+// The shape of an issue key, such as ABC-123, as a pattern for other patterns
+// to build on. The title check in tickets.ts uses it too, so the two agree.
+export const KEY = '[A-Z][A-Z0-9]*-[0-9]+'
+
+// A whole issue key. A key of any other shape could be words a sub session
+// wrote, so it is never put in the line.
+const KEY_SHAPE = new RegExp(`^${KEY}$`)
 
 // How a sub session is named when foreman has no key it can use: by its
 // ticket, which foreman made. The log and the wake line both use it.

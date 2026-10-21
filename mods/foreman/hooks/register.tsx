@@ -514,20 +514,21 @@ async function releaseRow($: $, file: string) {
   await slotFreed($)
 }
 
-// The tool.call hook on start_session, in a parent: a forked start is
-// refused, a call with a brief gets the ticket line, and once the call
-// answered without an error the ticket is paired with the desktop session id
-// the answer names, or with none for a proposal card.
+// The tool.call hook on start_session, in a parent: a forked start and a
+// title of the wrong shape are refused, a call with a brief gets the ticket
+// line, and a "No issue: " title gets the ticket in place of its marker. Once
+// the call answered without an error the ticket is paired with the desktop
+// session id the answer names, or with none for a proposal card.
 // The call is typed as the engine gives an MCP tool's, with the tool's
 // arguments spread on it, so briefFor can read `prompt` and `context`.
 async function startSession<E extends Record<string, unknown>>($: $, e: E, next: (e: E) => Promise<ToolCallResult>): Promise<ToolCallResult> {
   const brief = briefFor(e, crypto.randomUUID())
   if (brief.kind === 'deny') {
-    await addLog($, 'Refused a start_session call with forked context, because its sub session could not find its ticket.').catch(() => undefined)
+    await addLog($, brief.log).catch(() => undefined)
     return { deny: brief.text }
   }
   if (brief.kind === 'pass') return next(e)
-  const out = await next({ ...e, prompt: brief.prompt })
+  const out = await next({ ...e, prompt: brief.prompt, ...(brief.title === undefined ? {} : { title: brief.title }) })
   try {
     if (out.deny === undefined && out.isError !== true) {
       // Core answers the text the model reads beside the tool's result; a
@@ -661,8 +662,8 @@ export const register: Register = (on, options) => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
-  // Every start_session call in a parent goes through startSession. In any
-  // other session the call passes unchanged. A hook that throws passes the
+  // Every start_session call in a parent goes through startSession, which
+  // checks its title. In any other session the call passes unchanged. A hook that throws passes the
   // call on as it came.
   on('tool.call', { tool: START_TOOL }, async ($, e, next) => {
     if (!(await isOn($))) return next(e)
