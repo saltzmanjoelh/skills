@@ -314,7 +314,7 @@ export function trendOf(commits: readonly CommitRecord[]): TrendReport {
     if (streak >= STREAK_SHOWN) streaks.push({ area, streak })
   }
   for (const [k, { answer }] of answers) {
-    if (answer !== 'keep going') closed.push({ area: first.get(k) ?? k, answer })
+    if (answer !== 'keep going') closed.push({ area: first.get(k) ?? printable(k, AREA_CHARS), answer })
   }
   return {
     areas: [...first.values()],

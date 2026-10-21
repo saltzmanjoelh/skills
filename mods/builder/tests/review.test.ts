@@ -291,6 +291,18 @@ test('areas differing in case, spaces and a trailing full stop are one area, kep
   expect(report.stops).toEqual([{ area: RACE, streak: 3 }])
 })
 
+test('a Trend: line that names no area is unreadable, and a blank Area: line names no area', () => {
+  const report = trendOf([commit('1', 'Fix\n\nReviewed: abc\nArea:   '), commit('2', 'Answer\n\nTrend: : keep going')])
+  expect(report.unreadable).toEqual([': keep going'])
+  expect(report.areas).toEqual([])
+})
+
+test('a closed area that no Area: line named is cleaned before it is printed', () => {
+  const report = trendOf([commit('1', 'Answer\n\nTrend: hooks/x.ts: \u001b[31mred‮: file the rest')])
+  expect(report.closed).toHaveLength(1)
+  expect(report.closed[0]!.area).not.toMatch(/[\u0000-\u001f‮]/)
+})
+
 test('a Trend line that cannot be read is listed and changes nothing', () => {
   const commits = [fix('1', null, [RACE]), fix('2', null, [RACE]), fix('3', null, [RACE]), commit('4', `Answer\n\nTrend: ${RACE}: keep on going\ntrend: no answer here`)]
   const report = trendOf(commits)
