@@ -44,7 +44,7 @@ position in `diff.patch`; read the file to find it.
 
 One line per finding, exactly:
 
-`- [security] <file>:<line>: <the attack in one concrete sentence, naming who does what to whom>. Why: <why the code allows it>. Fix: <one sentence>. Needs checking: <yes|no>. Scope: <in the spec: the passage | breaks working behaviour: what works on the base and stops at the head | outside the spec>`
+`- [security] <file>:<line>: <the attack in one concrete sentence, naming who does what to whom>. Why: <why the code allows it>. Fix: <one sentence>. Needs checking: <yes|no>. Scope: <in the spec: the passage | breaks working behaviour: what works on the base and stops at the head>`
 
 Say `Needs checking: yes` when the finding rests on something you inferred
 rather than read: a caller you did not find, a policy you could not see, a
@@ -61,7 +61,8 @@ request adds to deliver what the spec asks for is in the spec, even when the
 spec does not name the protection that is missing. A security hole, data
 loss, an exposed credential, a wrong deploy or a breach of a hard rule in
 the project's `CLAUDE.md` is a safety finding, whatever its label, and is
-never outside the spec. A finding outside the spec does not block and is not fixed in this
+never outside the spec. Every finding you report is a safety finding, so
+never mark one `outside the spec`. A finding outside the spec does not block and is not fixed in this
 pull request; the counsel decides whether to file it.
 
 Before you report, read the `## Already decided` section of `package.md`:

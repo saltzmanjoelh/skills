@@ -110,10 +110,9 @@ behaviour` with what works on the base branch and stops working at the
 head, or `outside the spec` for a finding that asks for behaviour the spec
 does not ask for and the base does not have. A defect in code that the pull
 request adds to deliver what the spec asks for is in the spec, even when the
-spec does not name the protection that is missing. A security hole, data
-loss, an exposed credential, a wrong deploy or a breach of a hard rule in
-the project's `CLAUDE.md` is a safety finding, whatever its label, and is
-never outside the spec. A finding outside the spec does not block and is not fixed in this
+spec does not name the protection that is missing. Anything the `SAFETY:` class
+above describes is a safety finding, whatever its label, and is never
+outside the spec. A finding outside the spec does not block and is not fixed in this
 pull request; the counsel decides whether to file it.
 
 Before you report, read the `## Already decided` section of `package.md`:
