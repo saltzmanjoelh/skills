@@ -117,30 +117,48 @@ A repeat with new evidence goes through the claim checker like any finding.
 
 ### Rule three: a narrowing trend stops the rounds
 
+`narrowing-trend-counts-real-fixes.md` changes this rule in three places: a
+`Reviewed:` value must name exactly one commit, a fix that changes nothing
+the code does goes on a `Tidied:` line that counts toward no streak, with a
+`Retag:` line to correct a mislabel, and the stop always happens, whatever
+the findings behind the streak were. The text below says how.
+
 Every commit that fixes review findings, in a round's first half or for a
 blocking verdict, carries two kinds of line:
 
 - `Reviewed: <head>`, naming the head the findings were raised at;
-- `Area: <file>: <function or mechanism>`, one for each area a fixed
-  finding lies in, in the session's words.
+- `Area: <file>: <function or mechanism>`, one for each area a fix that
+  changes what the code does lies in, in the session's words, or
+  `Tidied: <file>: <function or mechanism>` for a fix that only touches
+  tests, comments, documentation, names or wording.
 
-A commit that fixes only cheap follow-ups carries no `Area:` line.
+A commit that fixes only cheap follow-ups carries neither line.
 
 The package tool groups the commits that carry `Area:` lines by the head
-their `Reviewed:` line names, or by the commit itself when it has none, in
-the order the groups first appear. An area's streak is the number of groups
+their `Reviewed:` line names, when the value has at least 7 hex characters
+and exactly one branch commit starts with it, by the value itself otherwise,
+or by the commit itself when it has none, in the order the groups first
+appear. A `Tidied:` line neither lengthens nor breaks a streak, unless a
+`Retag:` line turns it into an `Area:` line at its own commit. An area's streak is the number of groups
 in a row, ending with the newest, that name that area. Areas are compared
 ignoring case and runs of spaces. The package shows:
 
 - every area named so far on the pull request, so the session reuses the
   same wording for the same area;
 - each area's streak, when it is 2 or more;
-- each commit that fixed findings without an `Area:` line, by its short sha,
-  which neither lengthens nor breaks a streak;
+- each commit that fixed findings without an `Area:` or `Tidied:` line, by
+  its short sha, which neither lengthens nor breaks a streak;
+- each `Tidied:` line with its commit's short sha, each commit whose
+  `Reviewed:` value names no single commit, and each `Retag:` line that
+  changed nothing;
 - each area the person or the counsel closed, from the `Trend:` lines below.
 
 When any area's streak is 3 or more, the package says so, and the package
-tool's answer says it in its first line, so the session cannot miss it.
+tool's answer says it in its first line, so the session cannot miss it. The
+stop happens whatever the findings behind the streak were, and the stop line
+and the question below say that a later safety finding in the area, or one
+that breaks working behaviour, stays in scope and blocking whatever the
+answer, so the answer governs only the area's other later findings.
 
 Before launching the reviewers on such a package, the session stops and puts
 to the counsel, as a question about this pull request, whether to keep going

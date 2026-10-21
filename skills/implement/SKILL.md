@@ -452,7 +452,9 @@ block; it is listed under `Outside the spec:` and becomes a follow-up for
 the counsel (second half, point 4). Every later finding in an area that a
 `Trend:` line closed counts as outside the spec too, unless it breaks
 working behaviour or is a safety finding, which stays in scope as the rule
-above says (see **A streak of 3** below).
+above says (see **A streak of 3** below). A finding that a `Tidied:` line
+names a fix that changed what the code does is in the spec, whatever the
+spec says (see "The fix lines" below).
 
 The rule for repeats: the package's `## Already decided` section numbers the
 findings that earlier rounds dropped or put outside the spec, as `D1`, `D2`
@@ -489,18 +491,55 @@ item. An item repeated from an earlier list is copied word for word.
 The fix lines: every commit that fixes review findings, in the first half's
 point 4 or for a blocking verdict in step 8 of "With the pull request open",
 carries the line `Reviewed: <head>`, naming the head the findings were
-raised at, and one line `Area: <file>: <function or mechanism>` for each
-area a fixed finding lies in. Reuse the wording that the package's
-`## Areas fixed so far` gives an area already named, because an area worded
-differently starts a new streak. A commit that fixes only cheap follow-ups
-carries neither line.
+raised at, and one line for each area a fixed finding lies in, in the form
+`<file>: <function or mechanism>`:
+
+- `Area:` for a fix that changes what the code does. A change to an
+  instruction file that Claude Code loads, such as a skill, an agent, a
+  command or a mod, changes what a session does, so it is an `Area:` fix
+  even though the file is Markdown. An `Area:` line counts toward the
+  area's streak.
+- `Tidied:` for a fix that only adds or changes tests, comments,
+  documentation, names or wording, and changes nothing the code does. A
+  `Tidied:` line neither lengthens nor breaks a streak.
+
+A commit with fixes of both kinds carries both kinds of line. Reuse the
+wording that the package's `## Areas fixed so far` gives an area already
+named, because an area worded differently starts a new streak. A commit that
+fixes only cheap follow-ups carries neither line. Write every value bare,
+without backticks: the package reads a sha only from the value's first word,
+and only when it has at least 7 hex characters and names exactly one commit
+on the branch. Give `Reviewed:` the full head sha that the package tool's
+answer gives; a value it cannot match keys a group of its own, which the
+package lists.
+
+A reviewer raises a `Tidied:` line on a fix that changed what the code does
+as a finding in the spec. When the claim checker confirms it, the next
+commit corrects the record with the line `Retag: <sha>: <area>`, naming the
+mislabelled commit by the short sha that the `Tidied:` listing prints, or by
+its full sha, and the area as its `Tidied:` line words it. The package then
+reads that `Tidied:` line as an `Area:` line at its own commit's place, so
+the streak comes out as if it had been labelled right. A confirmed mislabel
+is fixed in this pull request in any round, and the rule for rounds does not
+change: in the first half its `Retag:` line goes in the round's fix commit,
+and in the second half it is a cheap fix at point 4, listed under `Fixed:`.
+When the limit rule makes no commit, the `Retag:` line goes in the next
+commit that is made, and until then the package keeps listing the `Tidied:`
+line as not corrected. There is no line that turns an `Area:` line into a
+`Tidied:` one.
 
 **A streak of 3.** When the package tool's first line says an area's
-streak has reached 3, launch no reviewer on that package. Put to the
-counsel, with `pull_request`, whether to keep going in that area, file the
-rest of the area's findings, or cut the area out, naming the area, its
-streak and the findings fixed there, read from the fix commits that name
-it. If the counsel does not decide, the person decides. Tell the session
+streak has reached 3, launch no reviewer on that package. The stop always
+happens, whatever the findings behind the streak were, safety findings and
+findings that break working behaviour included, and the session never skips
+it on its own judgement. Put to the counsel, with `pull_request`, whether to
+keep going in that area, file the rest of the area's findings, or cut the
+area out, naming the area, its streak and the findings fixed there, read
+from the fix commits that name it. The question says that a later safety
+finding in the area, or a later finding that breaks working behaviour,
+stays in scope and blocking whatever the answer, so the answer governs only
+the area's other later findings, and that cut it out removes the area's code
+and any hole in it with the code. If the counsel does not decide, the person decides. Tell the session
 that started this one, as **The line to the starting session** says.
 Record the answer in a commit of its own with the line
 `Trend: <area>: <keep going | file the rest | cut it out>`, made with
