@@ -199,7 +199,10 @@ these steps fails, tell the person in one line, naming the issue, and stop.
    4. That branch holds the key.
    5. No running session in `list_sessions` uses that folder.
 
-   When every check passes, step 7 may name this worktree folder.
+   When every check passes, step 7 may name this worktree folder. The
+   **other worktrees** are every entry in that list except the worktree step
+   3 accepted, or every entry, including the record's own folder, when step 3
+   accepted none.
 4. **Find the local branches.** List every local branch name with
    `git branch --list --format='%(refname:short)'`, and keep the names that
    hold the key. Filter the names yourself rather than passing the key to git
@@ -218,9 +221,8 @@ these steps fails, tell the person in one line, naming the issue, and stop.
 
    Whatever those two say, a kept branch is also remaining in either of these
    cases, because a worktree may hold work that has no commits of its own:
-   - an entry in step 3's worktree list has it checked out, other than the
-     worktree step 3 accepted (every entry, when step 3 accepted none),
-     because another session, running or not, may be working there;
+   - one of the other worktrees from step 3 has it checked out, because
+     another session, running or not, may be working there;
    - it is the branch of the worktree step 3 accepted, and
      `git -C '<folder>' status --porcelain` prints anything, because the dead
      session may have left edits it never committed.
@@ -238,22 +240,21 @@ these steps fails, tell the person in one line, naming the issue, and stop.
    - An open pull request: start a session whose brief runs
      `/implement --resume #N` with that pull request's number, even when an
      older one for the issue merged or was closed.
-   - A merged pull request: when no branch remains and the tracker does not
-     show the issue open, start nothing and tell the person in one line that
-     the issue is finished. A state that could not be read does not show the
-     issue open. Otherwise ask the person in one line what to do, naming the
-     remaining branch when there is one.
+   - A merged pull request: when no branch remains, no pull request for the
+     issue that was closed without merging has a higher number than the
+     newest merged one, and the tracker does not show the issue open, start
+     nothing and tell the person in one line that the issue is finished. A
+     state that could not be read does not show the issue open. Otherwise ask
+     the person in one line what to do, naming the remaining branch or the
+     newer closed pull request when there is one.
    - A pull request closed without merging: ask the person in one line what to
      do.
    - None: start a session whose brief runs `/implement <issue>`, after these
      checks in order:
      1. When no branch remains, the brief names no branch or folder.
-     2. When one branch remains, look at the entries in step 3's worktree
-        list other than the worktree step 3 accepted. When step 3 accepted no
-        worktree, that is every entry, including the record's own folder. If
-        one of those entries has the branch checked out, tell the person in
-        one line and start nothing, because another session may be working
-        on it.
+     2. When one branch remains and one of the other worktrees from step 3
+        has it checked out, tell the person in one line and start nothing,
+        because another session may be working on it.
      3. Otherwise the brief names the branch, and when step 3 accepted the
         worktree that holds it, the brief also names that worktree folder,
         so that the new session works there.
