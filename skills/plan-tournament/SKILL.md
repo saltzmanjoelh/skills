@@ -45,13 +45,20 @@ sentence.
    - **Most-extensible**: the spec's obvious next iterations land cheaply.
      Bias: seams and boundaries, WITHOUT speculative generality.
    Each returns: approach summary, files touched, data/migration changes,
-   test plan (mapped to the spec's Verification section), risks, and
+   the state it keeps and the edge cases that state creates (a restart, a
+   resumed or cleared session, a hot reload, and two copies running at
+   once), test plan (mapped to the spec's Verification section), risks, and
    what it deliberately does NOT do.
 3. **Judge.** A judge agent scores each plan against: the spec (does it
    fully satisfy Behavior + Edge cases + Verification?), the invariants in
    the architecture document when there is one, and the owner's stated preferences in `~/.claude/CLAUDE.md`
-   (e.g. infra-shaped problems prefer battle-tested dependencies). The
-   judge must name concrete weaknesses, not just rank.
+   (e.g. infra-shaped problems prefer battle-tested dependencies). For
+   each plan, the judge counts the edge cases its state creates on a
+   restart, a resumed or cleared session, a hot reload and two copies
+   running at once, and weighs the plan by that count as well as by its
+   size. It prefers state that is rebuilt from durable files on every read
+   over state saved under a session id or held only in memory. The judge
+   must name concrete weaknesses, not just rank.
 4. **Synthesize.** Take the winner; graft specific superior ideas from the
    runners-up (named, with why). Write the result to
    `<spec directory>/<feature>-plan.md`: chosen approach, grafts, rejected
