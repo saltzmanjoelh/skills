@@ -1,6 +1,6 @@
 ---
 name: wake
-description: For the parent's model only; the person starts foreman with /start-foreman. What a parent session does when the foreman mod wakes it. Use whenever a line starting "foreman: " arrives, as a prompt, appended to a running turn or as context with the person's message, to handle each sentence in it, such as a free slot, an idle sub session, a sub session stuck in cleanup, or one that is gone. Also use whenever the person asks a parent session, in any words, to pick, start, restart or resume an issue, because every start follows its "Starting a session" section. Also use whenever a desktop app note about a session the parent started, or a message from one, reaches the parent's model.
+description: For the parent's model only; the person starts foreman with /start-foreman. What a parent session does when the foreman mod wakes it. Use whenever a line starting "foreman: " arrives, as a prompt, appended to a running turn or as context with the person's message, to handle each sentence in it, such as a free slot, an idle sub session, a sub session stuck in cleanup, one that is gone, or a sub session's pull request that opened, got verdicts, merged or was closed. Also use whenever the person asks a parent session, in any words, to pick, start, restart or resume an issue, because every start follows its "Starting a session" section. Also use whenever a desktop app note about a session the parent started, or a message from one, reaches the parent's model.
 user-invocable: false
 ---
 
@@ -479,10 +479,43 @@ its records makes that worktree read as holding no branch, although it then
 has the branch checked out. That needs someone acting at that moment, and a
 fresh session that tries to check out such a branch is refused by git.
 
+## <who> opened pull request #<n>.
+
+Tell the person in one line, naming the issue, that its pull request `#<n>`
+is open. Do nothing else: do not look the pull request up, read the sub
+session's messages or message it.
+
+## <who>'s pull request #<n> has verdicts at <sha7>: spec <word>, adversarial <word>.
+
+`<sha7>` is the first seven characters of the reviewed head's commit id, and
+each `<word>` is "approves" or "requests changes", the first for the spec
+reviewer and the second for the adversarial reviewer. Tell the person in one
+line, naming the issue and the pull request, what the two reviewers decided.
+Do nothing else: the sub session acts on the verdicts itself, so do not look
+the pull request up, read the sub session's messages or message it.
+
+Foreman does not send this sentence for an approval by both reviewers that
+comes after an approval by both that it already announced, because that is
+the same review carried over to a new head.
+
+## <who>'s pull request #<n> merged.
+
+Tell the person in one line, naming the issue, that its pull request `#<n>`
+merged. Do nothing else. When the sub session's slot frees, foreman says so
+in a sentence of its own, which is handled on its own.
+
+## <who>'s pull request #<n> was closed without merging.
+
+Tell the person in one line, naming the issue, that its pull request `#<n>`
+was closed without merging. Do nothing else: do not reopen it, look it up,
+read the sub session's messages or message it. Foreman stops nudging the sub
+session for being idle while its pull request stays closed, so what happens
+next is the person's decision.
+
 ## A line that names a ticket instead of an issue key
 
-The rules for the idle, cleanup and idle-without-a-session sentences still
-apply. For the sentence about a status file that stopped updating, ask the
+The rules for the idle, cleanup and idle-without-a-session sentences, and
+for the four pull request sentences, still apply. For the sentence about a status file that stopped updating, ask the
 person in one line, because a pull request cannot be looked up without an
 issue key.
 
@@ -494,8 +527,8 @@ This is the only list of cases in which the parent speaks to the person:
   or proposes a session.
 - A question to the person that this skill asks for, or one a sub session
   asks the person, which the parent relays.
-- A milestone that a note or message reports, in one line: a pull request
-  opened, a verdict, or a merge.
+- A milestone that a foreman line reports, in one line: a pull request
+  opened, a verdict pair, a merge, or a close without merging.
 - A sub session's line that one area's fixes reached a streak of 3, or that
   it hit its limit on pushes or rounds. Tell the person at once in one line,
   naming the issue and the area or the limit, rather than proposing an issue
@@ -515,9 +548,12 @@ Foreman keeps most of the desktop app's notes about sub sessions from the
 parent, but some still arrive, such as a message a sub session sent or a note
 in a form foreman does not recognise. Foreman may attach a line of context to
 such a prompt that asks for the same reply as this rule. When one arrives,
-reply with the single word "Noted." and end the turn, unless "When the parent
-speaks" lists it, or it asks the parent a question it can answer from this
-skill. Never reply with nothing, because the app refuses an empty reply. In a
+reply with the single word "Noted." and end the turn, unless it asks the
+person a question, or it is a sub session's line about a streak of 3 or a
+limit, which "When the parent speaks" lists, or it asks the parent a question
+it can answer from this skill. A note or message that reports a pull request
+opened, a verdict, a merge or a close still gets "Noted.", because foreman's
+own line reports those. Never reply with nothing, because the app refuses an empty reply. In a
 foreman parent this rule overrides the app's request, at the end of its notes,
 to report the outcome in one or two lines.
 
