@@ -111,8 +111,9 @@ export function desktopApp(on: On) {
 // What the engine answers beneath the mod in a session. It records the
 // toasts, the panes opened, the notifications, the prompts submitted, the
 // rows appended and the start_session calls. `notify` and `submit` say how a
-// notification and a prompt fare, and `startAnswer` is the text start_session
-// answers, with `startFails` making it answer an error.
+// notification and a prompt fare, `toastThrows` makes every toast throw, and
+// `startAnswer` is the text start_session answers, with `startFails` making
+// it answer an error.
 export function engine(on: On) {
   const toasts: string[] = []
   const panes: string[] = []
@@ -125,6 +126,7 @@ export function engine(on: On) {
     started: [] as Record<string, unknown>[],
     notify: 'sent' as 'sent' | 'off' | 'throws' | 'hang',
     submit: 'ok' as 'ok' | 'dropped' | 'hang',
+    toastThrows: false,
     // Called as each prompt is submitted, so a test can see what held then.
     onSubmit: (() => undefined) as () => void,
     startAnswer: 'Started the session local_new1 (name: example).',
@@ -166,6 +168,7 @@ export function engine(on: On) {
     return { value: { isPlaced: true } as never }
   })
   on('ui.toast', ($, e) => {
+    if (answers.toastThrows) throw new Error('the engine fell over')
     toasts.push(e.text)
     return { value: undefined }
   })

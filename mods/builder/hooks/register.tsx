@@ -2473,11 +2473,26 @@ let mergePattern: RegExp | null = null
 // null when it names none or names one that cannot be used.
 let issueAddress: string | null = null
 
+// A read for the length of one session start, which reads each path at most
+// once, so that the facts taken from the same file share a single read. A
+// refused read is kept too, and each caller handles the refusal as before.
+function readOnce($: $): (path: string) => Promise<unknown> {
+  const started = new Map<string, Promise<unknown>>()
+  return path => {
+    let reading = started.get(path)
+    if (reading === undefined) {
+      reading = $.fs.read(path)
+      started.set(path, reading)
+    }
+    return reading
+  }
+}
+
 // Reads the Issue link fact from the session's folder, keeps its address, and
 // tells the person once when the fact was ignored. A refused toast changes
 // nothing, since the keys are plain either way.
-async function readIssueAddress($: $, dir: string) {
-  const found = await readIssueLink(path => $.fs.read(path), dir)
+async function readIssueAddress($: $, read: (path: string) => Promise<unknown>, dir: string) {
+  const found = await readIssueLink(read, dir)
   issueAddress = found.address
   if (found.ignored === null) return
   try {
@@ -2487,9 +2502,9 @@ async function readIssueAddress($: $, dir: string) {
   }
 }
 
-async function projectMergeCommand($: $, dir: string): Promise<string | null> {
+async function projectMergeCommand(read: (path: string) => Promise<unknown>, dir: string): Promise<string | null> {
   try {
-    const text = await $.fs.read(`${dir}/CLAUDE.md`)
+    const text = await read(`${dir}/CLAUDE.md`)
     return typeof text === 'string' ? factIn(text, 'Merge command') : null
   } catch {
     return null
@@ -3207,8 +3222,9 @@ export const register: Register = on => {
     await update($, calls, () => [])
     await update($, questions, list => list.map(q => (q.answered ? q : { ...q, answered: true })))
     void inLabelQueue(() => takeOffAnsweredLabels($))
-    await readIssueAddress($, e.cwd)
-    mergePattern = mergePatternOf(await projectMergeCommand($, e.cwd))
+    const readFile = readOnce($)
+    await readIssueAddress($, readFile, e.cwd)
+    mergePattern = mergePatternOf(await projectMergeCommand(readFile, e.cwd))
     refreshLater($)
     ensureLive($)
     void pruneTold($).catch(() => undefined)

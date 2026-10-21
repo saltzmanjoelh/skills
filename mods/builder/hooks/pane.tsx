@@ -272,7 +272,13 @@ function barRow(ui: Elements, bar: Bar, columns: number | undefined, key: string
   }
   const { Text } = ui
   const row = fitBar(bar, columns ?? Infinity)
-  if (link === null || issueKey === null || row !== fitBar(bar, Infinity) || !row.startsWith(issueKey)) return <Text key={key}>{row}</Text>
+  // linkOf already answers null for a null key, so the check on the key here
+  // only narrows its type.
+  if (link === null || issueKey === null) return <Text key={key}>{row}</Text>
+  // The key is drawn as a link only when the row still holds the whole title,
+  // and so begins with the key, rather than a row the width cut short.
+  const titleKept = row === fitBar(bar, Infinity) && row.startsWith(issueKey)
+  if (!titleKept) return <Text key={key}>{row}</Text>
   return <Text key={key}><Link href={link}>{issueKey}</Link>{row.slice(issueKey.length)}</Text>
 }
 
