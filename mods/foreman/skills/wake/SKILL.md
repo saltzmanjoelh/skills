@@ -1,6 +1,6 @@
 ---
 name: wake
-description: For the parent's model only; the person starts foreman with /start-foreman. What a parent session does when the foreman mod wakes it. Use whenever a line starting "foreman: " arrives, as a prompt or appended to a running turn, to handle each sentence in it, such as a free slot, an idle sub session, a sub session stuck in cleanup, or one that is gone.
+description: For the parent's model only; the person starts foreman with /start-foreman. What a parent session does when the foreman mod wakes it. Use whenever a line starting "foreman: " arrives, as a prompt or appended to a running turn, to handle each sentence in it, such as a free slot, an idle sub session, a sub session stuck in cleanup, or one that is gone. Also use whenever the person asks a parent session, in any words, to pick, start, restart or resume an issue, because every start follows its "Starting a session" section.
 user-invocable: false
 ---
 
@@ -47,6 +47,12 @@ default.
 
 ## Starting a session
 
+This section applies to every session the parent starts or proposes, whoever
+asked for it: a `foreman: ` line, or the person in their own words, such as
+"pick the next issue" or "start ABC-123". The foreman mod refuses a
+`start_session` call whose title has any other shape than the one step 2
+gives.
+
 1. Just before each start, check the desktop app's `list_sessions` again, by
    title and branch, and skip an issue that a running session already works
    on, so that two sessions never take one issue. A title matches an issue
@@ -57,9 +63,15 @@ default.
    in the parent's notes, as keys only. A key leaves the notes once its
    session shows up in `list_sessions`, or once the person declines it, so
    that an issue the person turned down can be offered again later.
-2. Call `start_session` with a title that begins with the issue key and a
-   brief that runs the given `/implement` command, so that `list_sessions`
-   shows the issue from the start. The brief covers the issue as it is, with
+2. Call `start_session` with a title that begins with the issue key followed
+   by a space or a colon, such as `ABC-123: short name`, never with a word
+   before the key, and a brief that runs the given `/implement` command, so
+   that `list_sessions` shows the issue from the start. For work that has no
+   issue at all, begin the title with `No issue: ` instead; the mod puts the
+   sub session's ticket in place of those words, so the title begins with the
+   ticket. The marker works only on a call that carries a brief, because the
+   mod issues a ticket only with a brief, so a title-only offer card cannot
+   use it. The brief covers the issue as it is, with
    the sub-issues the tracker already lists under it, and never folds in an
    edge case or follow-up from another issue; the follow-up stays its own
    issue.
