@@ -95,6 +95,11 @@ test('the items under Dropped and Outside the spec are read, and a bold heading 
   ])
 })
 
+test('a list ends at a Markdown heading that has no colon', () => {
+  const message = ['Fix the round', '', 'Dropped:', '- The dropped item.', '## Notes', '- A note, not a dropped item.'].join('\n')
+  expect(recordItems(message, DECIDED_HEADINGS)).toEqual(['The dropped item.'])
+})
+
 test('a list ends at a blank line or at another heading, and a line without a dash is skipped', () => {
   const message = [
     'Fix the round',
