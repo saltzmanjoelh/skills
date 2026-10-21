@@ -51,7 +51,9 @@ by its wording there. `<who>` is an issue key, or "the sub session with ticket
    - With several slots free, find that many issues with one search, then
      start one per slot, with the check just before each start.
 2. **Still idle after two nudges** ("<who> is still idle after two nudges.").
-   Read only that session's last few messages, at most 6, with `list_events`
+   Find that session in `list_sessions` by the exact key at the start of its
+   title, and tell the person in one line when none or several match. Read
+   only that session's last few messages, at most 6, with `list_events`
    and a small limit. Then send it one specific message that names the step it
    should take next. If those messages show it is waiting on the person or on
    a decision, or if `list_events` fails or returns nothing, tell the person in
@@ -92,10 +94,13 @@ by its wording there. `<who>` is an issue key, or "the sub session with ticket
    quoted error.
 5. **Gone** ("<who> has not updated its status file for <n> minutes and its
    session is not running, …").
-   - Find the issue's branch and pull request on GitHub by the issue key, and
-     from the record's folder only while it is still a listed worktree; never
-     trust a number from the stale record. When that does not give exactly
-     one branch, ask the person.
+   - Find the issue's branch and pull request on GitHub by the issue key,
+     keeping only pull requests whose title begins with the exact key or
+     whose head branch holds it, and from the record's folder only while it
+     is still a listed worktree that is not the main checkout; never trust a
+     number from the stale record. More than one branch or more than one open
+     pull request goes to the person; no branch and no pull request means
+     start fresh.
    - If it has an open pull request, start a session that runs
      `/implement --resume #N` with that pull request.
    - If it has none, start a fresh `/implement` on the issue. When the dead
@@ -136,7 +141,8 @@ not a sub-issue, and has no open pull request.
 ## Non-goals
 
 - No change to the foreman or builder mods, their wake lines, or their timers,
-  apart from adding the skill's file under `mods/foreman/skills/`.
+  apart from adding the skill's file under `mods/foreman/skills/` and pointing
+  at it from the mod's README and from the comment above `REASON_WORDS`.
 - Nothing for "needs you", which raises a notification and never wakes the
   model.
 - No handling of `/clear`, resume or fork in the parent.

@@ -82,11 +82,14 @@ with the number in words.
 
 ## <who> is still idle after two nudges.
 
-1. Read only that session's last few messages, at most 6, with `list_events`
+1. Find the session in `list_sessions` whose title begins with the exact key
+   or ticket, as "Starting a session" says. When none or several match, tell
+   the person in one line.
+2. Read only that session's last few messages, at most 6, with `list_events`
    and a small limit.
-2. Send it one specific message with `send_message` that names the step it
+3. Send it one specific message with `send_message` that names the step it
    should take next.
-3. If those messages show it is waiting on the person or on a decision, or if
+4. If those messages show it is waiting on the person or on a decision, or if
    `list_events` fails or returns nothing, tell the person in one line
    instead.
 
@@ -112,8 +115,9 @@ anything else in the record, because the sub session writes its own record.
 Find the worktree, its branch and the session yourself:
 
 - Take the session and its folder from `list_sessions`, matching the issue key
-  or ticket at the start of its title, as "Starting a session" says. The record's working folder is at most a hint, and
-  it counts only if it is exactly that folder.
+  or ticket at the start of its title, as "Starting a session" says. The
+  record's working folder is at most a hint, and it counts only if it is
+  exactly that folder.
 - Take the branch from `git worktree list --porcelain`, from the entry whose
   path is exactly that folder. When there is no such entry, when the entry is
   the repository's main checkout, or when several sessions match, tell the
@@ -127,19 +131,23 @@ The parent may fix only what the person's worktree rules already allow, which
 is that sub session's own worktree, and only in this order:
 
 1. Check that its branch is merged, either because its commits are reachable
-   from the base branch or because `gh pr view '<branch>' --json state` says
-   its pull request merged, since a squash merge does not make the branch look
-   merged. If it is not merged, stop here and tell the person, without
+   from the base branch, or because
+   `gh pr view '<branch>' --json state,headRefOid` says its pull request
+   merged and that `headRefOid` equals `git rev-parse '<branch>'`, since a
+   squash merge does not make the branch look merged and a reused branch name
+   can carry new work after an older pull request from it merged. If it is not merged, stop here and tell the person, without
    archiving anything, because foreman counts an archived session that has not
    merged as gone.
 2. Archive that session with `archive_session`, or confirm with
    `list_sessions` that it has stopped, so that nothing writes to the worktree
    while it is checked.
-3. Check that `git status --porcelain` in that worktree prints nothing, and
-   that `git status --porcelain --ignored | head -n 1` prints nothing either,
+3. Check that `git -C '<path>' status --porcelain` prints nothing, and that
+   `git -C '<path>' status --porcelain --ignored` lists no ignored file,
    because `git worktree remove` deletes ignored files such as a local
-   environment file without asking.
-
+   environment file without asking. A worktree that holds any ignored file,
+   such as installed dependencies or build output, therefore always goes to
+   the person. A git command that fails or writes to standard error also
+   sends the case to the person.
 4. Remove the worktree with `git worktree remove '<path>'`, never with
    `--force`.
 5. Check with `git worktree list` that nothing else holds the branch.
@@ -152,27 +160,32 @@ the quoted error.
 
 ## <who> has not updated its status file for <n> minutes and its session is not running, so restart it or release the issue.
 
-1. Find the issue's branch and pull request yourself. Search GitHub by the
-   issue key, with
-   `gh pr list --state all --author @me --search <issue key> --json number,state,headRefName,isCrossRepository --limit 10`,
-   and accept only pull requests that are not from a fork,
-   and when the record's working folder is still a listed worktree, also read
-   its branch with `git -C '<folder>' branch --show-current`, under the same
-   rule for single quotes and allowed characters as the cleanup case. Never trust a
-   pull request number from the stale record. When this does not give exactly
-   one branch, or gives more than one open pull request, ask the person in one
-   line.
-2. If its pull request has merged, start nothing and tell the person in one
-   line that the issue is finished. If the issue was closed or moved to done,
-   or its pull request was closed without merging, ask the person in one line
-   what to do.
-3. If it has an open pull request, start a session whose brief runs
-   `/implement --resume #N` with that pull request's number.
-4. If it has none, start a session whose brief runs `/implement <issue>`. When
-   the dead session left a branch or worktree for the issue, the brief or the
-   one-line message names it, so that the new session reuses it or the person
-   decides.
-5. Starting goes through "Starting a session".
+Never trust a pull request number from the stale record. Find the issue's
+branch and pull request yourself:
+
+1. **Search.** Run
+   `gh pr list --state all --author @me --search '<issue key>' --json number,state,title,headRefName,isCrossRepository --limit 10`.
+2. **Filter.** Keep only pull requests that are not from a fork and whose
+   title begins with the exact key, as "Starting a session" says, or whose
+   head branch holds the exact key between non-key characters. A pull request
+   that only mentions the key, such as a sub-issue's, does not count.
+3. **Read the worktree's branch.** When the record's working folder is still a
+   listed worktree and is not the repository's main checkout, also read its
+   branch with `git -C '<folder>' branch --show-current`, under the cleanup
+   case's rule for single quotes and allowed characters.
+4. **Decide.** More than one branch, or more than one open pull request, goes
+   to the person in one line. Otherwise:
+   - If the pull request has merged, start nothing and tell the person in one
+     line that the issue is finished.
+   - If the issue was closed or moved to done, or its pull request was closed
+     without merging, ask the person in one line what to do.
+   - If it has an open pull request, start a session whose brief runs
+     `/implement --resume #N` with that pull request's number.
+   - If it has none, start a session whose brief runs `/implement <issue>`.
+     When step 3 found a branch, the brief names it, so that the new session
+     reuses it.
+
+Starting goes through "Starting a session".
 
 ## A line that names a ticket instead of an issue key
 
