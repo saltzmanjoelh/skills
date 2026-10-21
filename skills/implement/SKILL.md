@@ -423,23 +423,27 @@ The rule for scope: every finding, focused and verdict alike, carries a
 `Scope:` line, either `in the spec` with the passage that asks for the
 feature the finding is about, `breaks working behaviour` with what works on
 the base branch and stops working at the head, or `outside the spec`, for a
-finding that asks for behaviour the spec does not ask for and the base branch
-does not have. A defect in code that the pull request adds to deliver what
-the spec asks for is in the spec, even when the spec does not name the
+finding that asks for behaviour the spec does not ask for and the base
+branch does not have. A defect in code that the pull request adds to deliver
+what the spec asks for is in the spec, even when the spec does not name the
 protection that is missing. A finding that breaks working behaviour is in
 scope, whatever the spec says, and so is a safety finding, which blocks as
-before. A safety finding is one that describes a security hole, data loss,
-an exposed credential, a wrong deploy or a breach of a hard rule in the
-project's `CLAUDE.md`, whatever its label or the reviewer that raised it,
-and every `[security]` finding is one. The claim checker checks every scope
-mark. A finding whose scope after the check is outside the spec, or
-unsettled because the spec and the base cannot settle it, and that is
-neither a safety finding nor one that breaks working behaviour, is not fixed in
-this pull request, in either half, and does not block; it is listed under
-`Outside the spec:` and becomes a follow-up for the counsel (second half,
-point 4). Every later finding in an area that a `Trend:` line closed counts
-as outside the spec too, unless it breaks working behaviour or is a
-safety finding, which stays in scope as the rule above says (see **A streak of 3** below).
+before. A safety finding is any finding classed `SAFETY:`, any `[security]`
+finding, and any other finding that describes a security hole (an
+authorization boundary, injection, untrusted text reaching a shell or a
+model as an instruction, a widened privilege), data loss or corruption, a
+migration that cannot be undone safely, a credential exposed, a wrong deploy
+to production, or a breach of a guarantee the project's `CLAUDE.md` names as
+protected, whatever its label or the reviewer that raised it. The claim
+checker checks every scope mark. A finding whose scope after the check is
+outside the spec, or unsettled because the spec and the base cannot settle
+it, and that is neither a safety finding nor one that breaks working
+behaviour, is not fixed in this pull request, in either half, and does not
+block; it is listed under `Outside the spec:` and becomes a follow-up for
+the counsel (second half, point 4). Every later finding in an area that a
+`Trend:` line closed counts as outside the spec too, unless it breaks
+working behaviour or is a safety finding, which stays in scope as the rule
+above says (see **A streak of 3** below).
 
 The rule for repeats: the package's `## Already decided` section numbers the
 findings that earlier rounds dropped or put outside the spec, as `D1`, `D2`

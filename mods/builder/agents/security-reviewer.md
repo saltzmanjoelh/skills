@@ -52,18 +52,14 @@ runtime value. The session sends those to the claim checker before anyone
 acts on them. Report only what you would want fixed; there is no nit tier,
 and an empty list is a valid result.
 
-Every finding has its `Scope:` part. Write `in the spec` with the passage
-of the spec that asks for the feature the finding is about, `breaks working
-behaviour` with what works on the base branch and stops working at the
-head, or `outside the spec` for a finding that asks for behaviour the spec
-does not ask for and the base does not have. A defect in code that the pull
-request adds to deliver what the spec asks for is in the spec, even when the
-spec does not name the protection that is missing. A security hole, data
-loss, an exposed credential, a wrong deploy or a breach of a hard rule in
-the project's `CLAUDE.md` is a safety finding, whatever its label, and is
-never outside the spec. Every finding you report is a safety finding, so
-never mark one `outside the spec`. A finding outside the spec does not block and is not fixed in this
-pull request; the counsel decides whether to file it.
+Every finding has its `Scope:` part. Every finding you report is a safety
+finding, which is always in scope whatever the spec says, so its scope is
+one of two. Write `breaks working behaviour` with what works on the base
+branch and stops working at the head, or else `in the spec` with the
+passage of the spec that asks for the feature the finding is about, or the
+code the hole is in when no passage names it. A hole
+in code that the pull request adds to deliver what the spec asks for is in
+the spec, even when the spec does not name the protection that is missing.
 
 Before you report, read the `## Already decided` section of `package.md`:
 the findings that earlier rounds settled, numbered `D1`, `D2` and so on.

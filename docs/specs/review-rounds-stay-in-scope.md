@@ -45,13 +45,17 @@ scope line, `Scope:`, with one of three values:
   not ask for and the base branch does not have.
 
 A finding that breaks behaviour that already works counts as in scope,
-whatever the spec says. So does a safety finding: one that describes a
-security hole, data loss, an exposed credential, a wrong deploy, or a breach
-of a hard rule in the project's `CLAUDE.md`, whatever its label or the
-reviewer that raised it, and every finding from the security reviewer. It is
-in scope whatever the spec says, and it blocks as it did before this rule.
-The claim checker never answers `outside the spec` or `unsettled` for a
-safety finding or for one that breaks working behaviour.
+whatever the spec says. So does a safety finding: any finding classed
+`SAFETY:`, any finding from the security reviewer, and any other finding
+that describes a security hole (an authorization boundary, injection,
+untrusted text reaching a shell or a model as an instruction, a widened
+privilege), data loss or corruption, a migration that cannot be undone
+safely, a credential exposed, a wrong deploy to production, or a breach of a
+guarantee the project's `CLAUDE.md` names as protected, whatever its label
+or the reviewer that raised it. It is in scope whatever the spec says, and
+it blocks as it did before this rule. The claim checker never answers
+`outside the spec` or `unsettled` for a safety finding or for one that
+breaks working behaviour.
 
 The claim checker checks every scope mark, not only the findings marked
 `Needs checking: yes`, against the spec and the base branch, the same way it

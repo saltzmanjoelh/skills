@@ -59,15 +59,18 @@ Answer `stands` when the mark is right, or the scope you find instead, or
 `unsettled` when the spec and the base cannot settle it. A finding that
 breaks working behaviour is in scope whatever the spec says, so look for
 that first. A safety finding is in scope whatever the spec says too. A
-safety finding is one that describes a security hole, data loss, an exposed
-credential, a wrong deploy or a breach of a hard rule in the project's
-`CLAUDE.md`, whatever its label, and every `[security]` finding is one. For
-a safety finding, and for one that breaks working behaviour, never answer
-`outside the spec` or `unsettled`: answer `stands` when it is marked in
-scope, and otherwise the in-scope value that fits. A finding in an area that
-the `## Areas fixed so far` section of `package.md` lists as closed counts
-as outside the spec, unless it breaks working behaviour or is a safety
-finding.
+safety finding is any finding classed `SAFETY:`, any `[security]` finding,
+and any other finding that describes a security hole (an authorization
+boundary, injection, untrusted text reaching a shell or a model as an
+instruction, a widened privilege), data loss or corruption, a migration that
+cannot be undone safely, a credential exposed, a wrong deploy to production,
+or a breach of a guarantee the project's `CLAUDE.md` names as protected,
+whatever its label. For a safety finding, and for one that breaks working
+behaviour, never answer `outside the spec` or `unsettled`: answer `stands`
+when it is marked in scope, and otherwise the in-scope value that fits. A
+finding in an area that the `## Areas fixed so far` section of `package.md`
+lists as closed counts as outside the spec, unless it breaks working
+behaviour or is a safety finding.
 
 ## Verdicts
 
