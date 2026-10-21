@@ -79,10 +79,8 @@ export type ForemanOutbox = { logs: string[]; effects: ForemanEffect[]; lines: s
 // Every pairing of this parent, whether a slot freed while it was paused, so
 // /foreman resume can wake the parent for it, and what is still to be
 // carried out. `folderMissing` says the last read found no status folder, so
-// the log says so once. `sessionId` is the parent session the ledger belongs
-// to, or null before one wrote it, so a process that goes on as another
-// session never takes this one's ledger for its own.
-export type ForemanTickets = { sessionId: string | null; pairings: ForemanPairing[]; freedWhilePaused: boolean; folderMissing: boolean; outbox: ForemanOutbox }
+// the log says so once.
+export type ForemanTickets = { pairings: ForemanPairing[]; freedWhilePaused: boolean; folderMissing: boolean; outbox: ForemanOutbox }
 
 declare module 'claude-code' {
   interface PluginState {
@@ -108,19 +106,6 @@ declare module 'claude-code' {
       // Whether a turn of the session's own loop is running, so a wake is
       // appended to it rather than submitted.
       turnRuns: boolean
-      // The session id whose settings and ledger $.state holds, or null
-      // before the first start. A /clear or a resume goes on under a new id
-      // with no new start, so the next hook that finds the id changed takes
-      // that session's own up then.
-      sessionOf: string | null
-      // Whether the session ended for a /clear, so the conversation that goes
-      // on under the new id is the same parent and keeps its role and
-      // tickets when it stored none of its own.
-      carryOver: boolean
-      // The session id of a conversation that a /clear cleared, whose stored
-      // tickets are to be emptied once the carried ones are stored under the
-      // new id, or null when no hand-over waits.
-      handOver: string | null
     }
   }
 }

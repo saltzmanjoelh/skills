@@ -164,7 +164,7 @@ test('a session whose stored role is on draws the band and reads the folder at i
 test('after a reload that lost the timer, the end of a turn arms it again and reads at once when the read is overdue', async ($, on) => {
   const w = world(on)
   twoSubs(w.folder)
-  leftInState(on, { sessionOf: 'session-1', tickets: w.stored.get(ticketsKey('session-1')), parent: { isOn: true, slots: null, isPaused: false }, nextReadAt: T0 - SECOND, readAt: T0 - 31 * SECOND })
+  leftInState(on, { tickets: w.stored.get(ticketsKey('session-1')), parent: { isOn: true, slots: null, isPaused: false }, nextReadAt: T0 - SECOND, readAt: T0 - 31 * SECOND })
   on('turn.complete', ($, e) => ({ text: e.answer }))
   await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as never)
   await w.clock.settle()
@@ -176,7 +176,7 @@ test('after a reload that lost the timer, the end of a turn arms it again and re
 test('after a reload that lost the timer, a submitted prompt arms it again and reads at once when the read is overdue', async ($, on) => {
   const w = world(on)
   twoSubs(w.folder)
-  leftInState(on, { sessionOf: 'session-1', tickets: w.stored.get(ticketsKey('session-1')), parent: { isOn: true, slots: null, isPaused: false }, nextReadAt: T0 - SECOND, readAt: T0 - 31 * SECOND })
+  leftInState(on, { tickets: w.stored.get(ticketsKey('session-1')), parent: { isOn: true, slots: null, isPaused: false }, nextReadAt: T0 - SECOND, readAt: T0 - 31 * SECOND })
   const passed = await $.prompt.submit({ text: 'next', wait: false, origin: { kind: 'person' } } as never)
   expect((passed as { text: string }).text).toBe('next')
   await w.clock.settle()
@@ -187,7 +187,7 @@ test('after a reload that lost the timer, a submitted prompt arms it again and r
 
 test('after a reload whose read is not yet due, the end of a turn arms the timer for the saved time', async ($, on) => {
   const w = world(on)
-  leftInState(on, { sessionOf: 'session-1', tickets: w.stored.get(ticketsKey('session-1')), parent: { isOn: true, slots: null, isPaused: false }, nextReadAt: T0 + 20 * SECOND, readAt: T0 - 100 * SECOND })
+  leftInState(on, { tickets: w.stored.get(ticketsKey('session-1')), parent: { isOn: true, slots: null, isPaused: false }, nextReadAt: T0 + 20 * SECOND, readAt: T0 - 100 * SECOND })
   on('turn.complete', ($, e) => ({ text: e.answer }))
   await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as never)
   await w.clock.advance(19 * SECOND)
@@ -198,7 +198,7 @@ test('after a reload whose read is not yet due, the end of a turn arms the timer
 
 test('after a reload that lost the timer, a /foreman subcommand arms it again', async ($, on) => {
   const w = world(on)
-  leftInState(on, { sessionOf: 'session-1', tickets: w.stored.get(ticketsKey('session-1')), parent: { isOn: true, slots: null, isPaused: false }, nextReadAt: T0 + 20 * SECOND, readAt: T0 - 100 * SECOND })
+  leftInState(on, { tickets: w.stored.get(ticketsKey('session-1')), parent: { isOn: true, slots: null, isPaused: false }, nextReadAt: T0 + 20 * SECOND, readAt: T0 - 100 * SECOND })
   await foreman($, 'pause')
   await w.clock.advance(19 * SECOND)
   expect(w.folder.lists).toBe(0)

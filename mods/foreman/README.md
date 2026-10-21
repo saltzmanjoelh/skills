@@ -39,7 +39,7 @@ Only status files whose ticket this parent issued show in its band and its pane 
 
 A ticket that no status file has carried for a day, as one given to a proposal card that never started, is forgotten.
 
-After a `/clear` the parent goes on with its role and its tickets. A resume to another conversation takes that conversation's own, or none.
+Foreman is not built for a `/clear` in the parent session. After one it goes on with the role and the tickets it already held, stored from then on under the new conversation, and nothing about that case is tested.
 
 A parent that ran the read-only version of foreman has no tickets, so sub sessions it started before the upgrade do not show.
 

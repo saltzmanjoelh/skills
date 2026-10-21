@@ -347,7 +347,7 @@ test('after a reload the ledger in $.state keeps a wake from coming twice', asyn
   w.folder.put('a.json', cleaning)
   const p = { ...newPairing('ft-ABC-1', 'local_a', T0), owner: 's-ABC-1', ownerFile: 'a.json', issueKey: 'ABC-1' }
   const acted = { ...p, acts: { ...p.acts, episode: { state: 'in-cleanup', since: T0 }, cleanupWokeFor: `in-cleanup@${T0}` } }
-  leftInState(on, { sessionOf: 'session-1',
+  leftInState(on, {
     tickets: { pairings: [acted], freedWhilePaused: false, folderMissing: false },
     parent: { isOn: true, slots: null, isPaused: false },
     nextReadAt: T0 - SECOND,
@@ -471,7 +471,7 @@ test('a notification that never answers is given up on after 30 seconds', async 
 test('work a read decided before a reload dropped its timer is carried out once the timers are armed again', async ($, on) => {
   const w = world(on)
   w.folder.put('a.json', record('ABC-1', 'working', { desktopSessionId: 'local_a' }))
-  leftInState(on, { sessionOf: 'session-1',
+  leftInState(on, {
     tickets: {
       ...ticketsIn(w.stored.get(ticketsKey('session-1'))),
       outbox: { logs: ['A line decided before the reload.'], effects: [{ kind: 'nudge', to: 'local_a', name: 'ABC-1' }], lines: ['foreman: one slot free; pick the next issue and start it.'] },
@@ -520,23 +520,6 @@ test('a session start that comes again in a running session keeps the newer ledg
   expect(ledger(w).pairings).toHaveLength(2)
 })
 
-test('a process that goes on as another session starts that session with its own ledger and role, not the last session\'s', async ($, on) => {
-  const w = world(on)
-  await start($)
-  await foreman($)
-  await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh' })
-  expect(ledger(w).pairings).toHaveLength(1)
-  w.engine.sessionId = 'session-2'
-  await start($)
-  await w.clock.settle()
-  await startSession($, { prompt: 'Run /implement ABC-8.', context: 'fresh' })
-  expect(w.engine.started.at(-1)?.prompt).toBe('Run /implement ABC-8.')
-  await foreman($)
-  await startSession($, { prompt: 'Run /implement ABC-9.', context: 'fresh' })
-  expect(ticketsIn(w.stored.get(ticketsKey('session-2'))).pairings).toHaveLength(1)
-  expect(ledger(w).pairings).toHaveLength(1)
-})
-
 test('the Nudge button on a sub session with no desktop session sends nothing and says why', async ($, on) => {
   const w = world(on)
   w.folder.put('a.json', record('ABC-1', 'idle'))
@@ -560,18 +543,6 @@ test('a list of sessions that never answers is given up on after 30 seconds and 
   await w.clock.settle()
   expect(await ui.paneText()).toContain('Could not read the desktop app\'s list of sessions, so no slot was freed: the desktop app did not answer within 30 seconds.')
   expect(ledger(w).pairings[0]!.standing).toBe('active')
-})
-
-test('a call after the process went on as another session that stored nothing, with no /clear, gives no ticket and leaves the last session\'s ledger alone', async ($, on) => {
-  const w = world(on)
-  await start($)
-  await foreman($)
-  await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh' })
-  w.engine.sessionId = 'session-2'
-  await startSession($, { prompt: 'Run /implement ABC-8.', context: 'fresh' })
-  expect(w.stored.has(ticketsKey('session-2'))).toBe(false)
-  expect(ticketsIn(w.stored.get(ticketsKey('session-1'))).pairings).toHaveLength(1)
-  expect(ledger(w).sessionId).toBe('session-1')
 })
 
 test('an answer to start_session with no text still pairs the ticket with the local_ id in its result', async ($, on) => {
@@ -603,126 +574,4 @@ test('a subagent\'s turn start does not count as the parent\'s turn, and the end
   await w.clock.settle()
   expect(w.engine.prompts).toHaveLength(2)
   expect(w.engine.appended).toEqual([])
-})
-
-test('after a /clear the parent goes on under the new session id with its role and its tickets', async ($, on) => {
-  const w = world(on)
-  await start($)
-  await foreman($)
-  await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh' })
-  await $.session.end({ reason: 'clear', sessionId: 'session-1', resume: { id: 'session-1' } } as never)
-  w.engine.sessionId = 'session-2'
-  await startSession($, { prompt: 'Run /implement ABC-8.', context: 'fresh' })
-  expect(String(w.engine.started.at(-1)?.prompt)).toContain('foreman-ticket: ft-')
-  expect(ticketsIn(w.stored.get(ticketsKey('session-2'))).pairings).toHaveLength(2)
-  expect((w.stored.get('parent:session-2') as { isOn?: boolean } | undefined)?.isOn).toBe(true)
-})
-
-test('after a resume to another conversation that stored nothing, the role is off and no ticket is added', async ($, on) => {
-  const w = world(on)
-  await start($)
-  await foreman($)
-  await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh' })
-  await $.session.end({ reason: 'resume', sessionId: 'session-1', resume: { id: 'session-3' } } as never)
-  w.engine.sessionId = 'session-3'
-  await startSession($, { prompt: 'Run /implement ABC-8.', context: 'fresh' })
-  expect(w.engine.started.at(-1)?.prompt).toBe('Run /implement ABC-8.')
-  expect(w.stored.has(ticketsKey('session-3'))).toBe(false)
-  expect(ticketsIn(w.stored.get(ticketsKey('session-1'))).pairings).toHaveLength(1)
-})
-
-// A role on and one pairing stored for a session id, as a parent leaves them.
-function storedParent(w: World, id: string, ticket: string) {
-  w.stored.set(`parent:${id}`, { isOn: true, slots: null, isPaused: false })
-  w.stored.set(ticketsKey(id), { sessionId: id, pairings: [newPairing(ticket, null, T0)], freedWhilePaused: false, folderMissing: false })
-}
-
-test('after a resume to a conversation that stored its own role and tickets, it takes those up', async ($, on) => {
-  const w = world(on)
-  storedParent(w, 'session-3', 'ft-theirs')
-  await start($)
-  await foreman($)
-  await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh' })
-  await $.session.end({ reason: 'resume', sessionId: 'session-1', resume: { id: 'session-3' } } as never)
-  w.engine.sessionId = 'session-3'
-  await startSession($, { prompt: 'Run /implement ABC-8.', context: 'fresh' })
-  expect(ticketsIn(w.stored.get(ticketsKey('session-3'))).pairings.map(p => p.ticket)[0]).toBe('ft-theirs')
-  expect(ticketsIn(w.stored.get(ticketsKey('session-3'))).pairings).toHaveLength(2)
-  expect(ticketsIn(w.stored.get(ticketsKey('session-1'))).pairings).toHaveLength(1)
-})
-
-test('after a /clear into an id that stored its own, the stored ones win over the carried ones', async ($, on) => {
-  const w = world(on)
-  storedParent(w, 'session-2', 'ft-theirs')
-  await start($)
-  await foreman($)
-  await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh' })
-  await $.session.end({ reason: 'clear', sessionId: 'session-1', resume: { id: 'session-1' } } as never)
-  w.engine.sessionId = 'session-2'
-  await startSession($, { prompt: 'Run /implement ABC-8.', context: 'fresh' })
-  const second = ticketsIn(w.stored.get(ticketsKey('session-2'))).pairings.map(p => p.ticket)
-  expect(second).toHaveLength(2)
-  expect(second[0]).toBe('ft-theirs')
-  expect(ticketsIn(w.stored.get(ticketsKey('session-1'))).pairings).toHaveLength(1)
-})
-
-test('after a /clear carries the tickets over, the cleared conversation keeps none, so resuming it cannot act on them again', async ($, on) => {
-  const w = world(on)
-  await start($)
-  await foreman($)
-  await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh' })
-  await $.session.end({ reason: 'clear', sessionId: 'session-1', resume: { id: 'session-1' } } as never)
-  w.engine.sessionId = 'session-2'
-  await $.prompt.submit({ text: 'next', wait: false, origin: { kind: 'person' } } as never)
-  await w.clock.settle()
-  expect(ticketsIn(w.stored.get(ticketsKey('session-2'))).pairings).toHaveLength(1)
-  expect(ticketsIn(w.stored.get(ticketsKey('session-1'))).pairings).toEqual([])
-})
-
-test('two calls that find the new session id at once take it up once, and neither loses the other\'s pairing', async ($, on) => {
-  const w = world(on)
-  await start($)
-  await foreman($)
-  await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh' })
-  await $.session.end({ reason: 'clear', sessionId: 'session-1', resume: { id: 'session-1' } } as never)
-  w.engine.sessionId = 'session-2'
-  await Promise.all([
-    startSession($, { prompt: 'Run /implement ABC-8.', context: 'fresh' }),
-    startSession($, { prompt: 'Run /implement ABC-9.', context: 'fresh' }),
-  ])
-  expect(ticketsIn(w.stored.get(ticketsKey('session-2'))).pairings).toHaveLength(3)
-})
-
-test('after a /clear whose save under the new id fails, the cleared conversation keeps its tickets', async ($, on) => {
-  const w = world(on)
-  await start($)
-  await foreman($)
-  await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh' })
-  await $.session.end({ reason: 'clear', sessionId: 'session-1', resume: { id: 'session-1' } } as never)
-  w.engine.sessionId = 'session-2'
-  w.store.refused.add(ticketsKey('session-2'))
-  await $.prompt.submit({ text: 'next', wait: false, origin: { kind: 'person' } } as never)
-  await w.clock.settle()
-  expect(ticketsIn(w.stored.get(ticketsKey('session-1'))).pairings).toHaveLength(1)
-  // The next save that lands finishes the hand-over.
-  w.store.refused.delete(ticketsKey('session-2'))
-  await startSession($, { prompt: 'Run /implement ABC-8.', context: 'fresh' })
-  expect(ticketsIn(w.stored.get(ticketsKey('session-2'))).pairings).toHaveLength(2)
-  expect(ticketsIn(w.stored.get(ticketsKey('session-1'))).pairings).toEqual([])
-})
-
-test('a write whose session id changes after the session was taken up drops its change and leaves the ledger as it was', async ($, on) => {
-  const w = world(on)
-  w.folder.put('a.json', record('ABC-1', 'working', { desktopSessionId: 'local_a' }))
-  const ui = await mountBoth($, on)
-  await start($)
-  await foreman($)
-  // The taking-up reads session-1, and the write's own read sees session-2.
-  w.engine.nextSessionIds = ['session-1', 'session-2']
-  await ui.pane.press({ key: 'release-a.json' })
-  await w.clock.settle()
-  w.engine.nextSessionIds = []
-  expect(ticketsIn(w.stored.get(ticketsKey('session-1'))).pairings.map(p => p.standing)).toEqual(['active'])
-  expect(w.stored.has(ticketsKey('session-2'))).toBe(false)
-  expect(w.engine.prompts).toEqual([])
 })

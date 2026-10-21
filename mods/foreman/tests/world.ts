@@ -117,10 +117,8 @@ export function engine(on: On) {
     // Whether start_session's answer leaves out the text, giving the result alone.
     startResultOnly: false,
     startFails: false,
-    // The session id the engine answers, or, while `nextSessionIds` holds
-    // any, the next of those, one for each call.
+    // The session id the engine answers.
     sessionId: 'session-1',
-    nextSessionIds: [] as string[],
   }
   on('ui.notify', ($, e) => {
     if (answers.notify === 'throws') throw new Error('no channel')
@@ -145,8 +143,7 @@ export function engine(on: On) {
   })
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
-  on('session.id', () => ({ value: answers.nextSessionIds.shift() ?? answers.sessionId }))
-  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+  on('session.id', () => ({ value: answers.sessionId }))
   on('command.run', () => ({ text: '' }))
   on('ui.open', ($, e) => {
     panes.push(e.id)
