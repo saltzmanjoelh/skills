@@ -258,16 +258,20 @@ function commitNamed(word: string, commits: readonly CommitRecord[]): number | u
   return matched.length === 1 ? matched[0] : undefined
 }
 
-// The group a commit with Area: lines belongs to: its own sha when it has no
+// What a commit's Reviewed: line says, read once. `key` is the group the
+// commit belongs to when it names an area: its own sha when it has no
 // Reviewed: line or a blank one, or the full sha of the branch commit that the
-// Reviewed: value's first word names. Any other value, too short, not hex, or
-// matching no branch commit or more than one, keys a group of its own, so
-// commits that give the same such value share a group.
-function groupKeyOf(c: CommitRecord, reviewed: string | undefined, commits: readonly CommitRecord[]): string {
-  const word = shaWord(reviewed ?? '')
-  if (word === '') return c.sha
+// value's first word names. Any other value, too short, not hex, or matching
+// no branch commit or more than one, keys a group of its own, so commits that
+// give the same such value share a group. `unmatched` is the value to list,
+// cleaned to print, when the line names no single commit, and null otherwise.
+function reviewedOf(c: CommitRecord, reviewed: string | undefined, commits: readonly CommitRecord[]): { key: string; unmatched: string | null } {
+  if (reviewed === undefined) return { key: c.sha, unmatched: null }
+  const word = shaWord(reviewed)
+  if (word === '') return { key: c.sha, unmatched: '(no value)' }
   const named = commitNamed(word, commits)
-  return named === undefined ? `reviewed ${word}` : commits[named]!.sha
+  if (named !== undefined) return { key: commits[named]!.sha, unmatched: null }
+  return { key: `reviewed ${word}`, unmatched: printable(reviewed.split(/\s+/)[0]!, AREA_CHARS) }
 }
 
 // The commit index and area of a Retag: line's value, or undefined when it has
@@ -306,7 +310,7 @@ function trendLineOf(value: string): { area: string; answer: TrendAnswer } | und
 // Tidied:, Retag: and Trend: lines of its commits, oldest first. Every Retag:
 // line is read first, wherever it stands, and turns the Tidied: line it names
 // into an Area: line at that Tidied: line's own commit. Commits with Area:
-// lines are grouped as groupKeyOf says, in the order the groups first appear.
+// lines are grouped as reviewedOf says, in the order the groups first appear.
 // A Tidied: line neither lengthens nor breaks a streak, so a commit whose
 // fixes are all tidied forms no group. A commit with a Reviewed: line and
 // neither line fixed findings without naming an area, so it is listed and is
@@ -347,16 +351,13 @@ export function trendOf(commits: readonly CommitRecord[]): TrendReport {
       ...tidiedHere.filter(area => corrected.has(areaKey(area))),
     ]
     const reviewed = labelled(c.message, 'Reviewed:')[0]
-    if (reviewed !== undefined) {
-      const word = shaWord(reviewed)
-      if (word === '') unmatched.push({ sha: c.sha.slice(0, 8), value: '(no value)' })
-      else if (commitNamed(word, commits) === undefined) unmatched.push({ sha: c.sha.slice(0, 8), value: printable(reviewed.split(/\s+/)[0]!, AREA_CHARS) })
-    }
+    const named = reviewedOf(c, reviewed, commits)
+    if (named.unmatched !== null) unmatched.push({ sha: c.sha.slice(0, 8), value: named.unmatched })
     if (areas.length === 0) {
       if (reviewed !== undefined && tidiedHere.length === 0) unlabelled.push(c.sha.slice(0, 8))
       return
     }
-    const key = groupKeyOf(c, reviewed, commits)
+    const key = named.key
     let group = groups.find(g => g.key === key)
     if (group === undefined) groups.push(group = { key, named: [] })
     for (const area of areas) {
