@@ -142,7 +142,8 @@ cut it out>`, and pushes it before any reviewer runs:
   three more groups in a row name the area.
 - **File the rest:** the area is closed. The package lists it as closed, and
   every later finding in it counts as outside the spec, so rule one sends it
-  to the counsel to file or drop.
+  to the counsel to file or drop, unless it breaks working behaviour, which
+  stays in scope as rule one says.
 - **Cut it out:** the session removes the code in that area that this pull
   request added, in the same commit as the `Trend:` line, and the area is
   closed as above.

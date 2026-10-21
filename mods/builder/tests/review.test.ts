@@ -197,6 +197,16 @@ test('two commits for one reviewed head are one group, whether the head is named
   expect(trendStopLine(report)).toBe(null)
 })
 
+test('two commits that name the same unknown reviewed head are one group, whether the value is hex or not', () => {
+  // Neither value matches a commit on the branch, so each groups by itself.
+  for (const unknown of ['abcdef99', 'the first head']) {
+    const commits = [fix('1', null, [RACE]), fix('2', unknown, [RACE]), fix('3', unknown.toUpperCase(), [RACE])]
+    const report = trendOf(commits)
+    expect(report.streaks).toEqual([{ area: RACE, streak: 2 }])
+    expect(report.stops).toEqual([])
+  }
+})
+
 test('a streak of three stops the rounds, at the top of the package', () => {
   const commits = [fix('1', null, [RACE]), fix('2', null, [RACE, CACHE]), fix('3', null, [RACE])]
   const report = trendOf(commits)

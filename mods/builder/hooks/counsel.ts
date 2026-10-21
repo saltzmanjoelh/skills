@@ -40,8 +40,9 @@ function hasRepeat(texts: readonly string[]): boolean {
 }
 
 // A follow-ups question puts every follow-up of a review round to the counsel
-// at once, each with the same three options in this order, which a member may
-// also name by the words in FOLLOW_UP_WORDS. Each member's report holds one
+// at once, each with the same three options in this order, except that a
+// follow-up outside the spec has only the last two, and a member may also
+// name an option by the words in FOLLOW_UP_WORDS. Each member's report holds one
 // vote per follow-up, so a question holds at most twenty. A follow-up is
 // decided by an option chosen by 4 of the 7 members, counted against all
 // seven whoever voted, so a missing vote only ever takes a vote away.
@@ -94,14 +95,21 @@ export function followUpsInput(raw: readonly unknown[]): { followUps: string[]; 
 // a follow-up outside the spec, which cannot be fixed in this pull request,
 // and all three otherwise. A question stored before follow-ups could be
 // outside the spec has no outsideSpec, so all its follow-ups allow all three.
-// The brief, the reading of the votes and the ask-again answer all use it.
+// The follow-ups brief and followUpVotesOf, which reads the votes, use it.
 export function optionsAllowed(q: Pick<CounselQuestion, 'outsideSpec'>, n: number): number[] {
-  return (q.outsideSpec ?? []).includes(n) ? [2, 3] : [1, 2, 3]
+  return isOutsideSpec(q, n) ? [2, 3] : [1, 2, 3]
+}
+
+// Whether follow-up n of a question was marked outside the spec. The options
+// it allows, the brief's marks and each follow-up's outcome all read it.
+export function isOutsideSpec(q: Pick<CounselQuestion, 'outsideSpec'>, n: number): boolean {
+  return (q.outsideSpec ?? []).includes(n)
 }
 
 // Why a follow-ups brief cannot be written, or null when it can. A
 // follow-ups call gives no options, because the mod gives every follow-up the
-// same three, and no pull_request, because the session's Follow-ups section
+// same three, or only file and drop to one outside the spec, and no
+// pull_request, because the session's Follow-ups section
 // is the only record of these decisions and nothing is owed to a review.
 export function followUpsRefusal(question: unknown, followUps: unknown, options: unknown, pullRequest: unknown): string | null {
   if (typeof question !== 'string' || question.trim() === '') return 'the question is empty.'
@@ -191,7 +199,7 @@ function followUpsBriefText(q: BriefFacts, followUps: readonly string[], unwritt
     '', ...backgroundLines(q, unwritten),
     '', '## Follow-ups', '',
   ]
-  const outside = followUps.map((_, i) => i + 1).filter(n => optionsAllowed(q, n).length < q.options.length)
+  const outside = followUps.map((_, i) => i + 1).filter(n => isOutsideSpec(q, n))
   followUps.forEach((text, i) => lines.push(`${i + 1}. ${text.trim()}${outside.includes(i + 1) ? ' (outside the spec: file or drop only)' : ''}`))
   lines.push('', '## Options', '', outside.length === 0 ? 'Every follow-up has the same three options:' : 'Every follow-up not marked outside the spec has these three options:', '')
   q.options.forEach((option, i) => lines.push(`${i + 1}. ${option.trim()}`))
@@ -904,7 +912,7 @@ export function followUpOutcomes(q: CounselQuestion, t: CounselTally): FollowUpO
     return {
       number: i + 1,
       text: (q.followUps?.[i] ?? '').trim().replace(/\s+/g, ' '),
-      outsideSpec: optionsAllowed(q, i + 1).length < q.options.length,
+      outsideSpec: isOutsideSpec(q, i + 1),
       decision: f.chosen === undefined ? null : (q.options[f.chosen - 1] ?? null),
       count: f.chosen === undefined ? 0 : (f.counts[f.chosen - 1] ?? 0),
       counts: f.counts,

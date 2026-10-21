@@ -229,6 +229,23 @@ function labelled(message: string, label: string): string[] {
   return values
 }
 
+// The group a commit with Area: lines belongs to: its own sha when it has no
+// Reviewed: line, the full sha of the branch commit whose sha starts with the
+// Reviewed: value, or the value itself when it is not hex or matches none.
+function groupKeyOf(c: CommitRecord, reviewed: string | undefined, commits: readonly CommitRecord[]): string {
+  const prefix = reviewed?.toLowerCase() ?? ''
+  if (prefix === '') return c.sha
+  if (!/^[0-9a-f]+$/.test(prefix)) return `reviewed ${prefix}`
+  const matched = commits.find(other => other.sha.startsWith(prefix))
+  if (matched === undefined) return `reviewed ${prefix}`
+  return matched.sha
+}
+
+// Whether a group names the area in a commit after the one at index after.
+function namesAreaAfter(group: { named: { index: number; area: string }[] }, area: string, after: number): boolean {
+  return group.named.some(n => n.area === area && n.index > after)
+}
+
 // The areas fixed on the branch and their streaks, from the Reviewed:, Area:
 // and Trend: lines of its commits, oldest first. Commits with Area: lines are
 // grouped by the head their Reviewed: line names, matched by prefix against
@@ -262,9 +279,7 @@ export function trendOf(commits: readonly CommitRecord[]): TrendReport {
       if (reviewed !== undefined) unlabelled.push(c.sha.slice(0, 8))
       return
     }
-    const prefix = reviewed?.toLowerCase() ?? ''
-    const matched = /^[0-9a-f]+$/.test(prefix) ? commits.find(other => other.sha.startsWith(prefix))?.sha : undefined
-    const key = prefix === '' ? c.sha : matched ?? `reviewed ${prefix}`
+    const key = groupKeyOf(c, reviewed, commits)
     let group = groups.find(g => g.key === key)
     if (group === undefined) groups.push(group = { key, named: [] })
     for (const area of areas) {
@@ -280,7 +295,10 @@ export function trendOf(commits: readonly CommitRecord[]): TrendReport {
     if (latest !== undefined && latest.answer !== 'keep going') continue
     const after = latest?.index ?? -1
     let streak = 0
-    for (let i = groups.length - 1; i >= 0 && groups[i]!.named.some(n => n.area === k && n.index > after); i -= 1) streak += 1
+    for (let i = groups.length - 1; i >= 0; i -= 1) {
+      if (!namesAreaAfter(groups[i]!, k, after)) break
+      streak += 1
+    }
     if (streak >= STREAK_SHOWN) streaks.push({ area, streak })
   }
   for (const [k, { answer }] of answers) {

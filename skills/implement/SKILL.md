@@ -430,7 +430,8 @@ unsettled because the spec and the base cannot settle it, is not fixed in
 this pull request, in either half, and does not block; it is listed under
 `Outside the spec:` and becomes a follow-up for the counsel (second half,
 point 4). Every later finding in an area that a `Trend:` line closed counts
-as outside the spec too (see **A streak of 3** below).
+as outside the spec too, unless it breaks working behaviour, which stays in
+scope as the rule above says (see **A streak of 3** below).
 
 The rule for repeats: the package's `## Already decided` section numbers the
 findings that earlier rounds dropped or put outside the spec, as `D1`, `D2`
