@@ -105,6 +105,9 @@ exit status, and what the edited skill tells the parent to do:
 - a bisect at a midpoint begun on a key branch, and one begun on a detached
   head (a commit id, lookup status 1);
 - a plain detached worktree;
+- a stopped `--update-refs` rebase whose `update-refs` record names a key
+  branch, and an attempt to start a bisect inside a stopped rebase;
+- a nested worktree whose `.git` file was deleted, both unlocked and locked;
 - the main checkout stopped in a rebase, read as an other worktree;
 - the conditions that cannot be settled: an unreadable record, an empty
   `BISECT_START`, a folder with a space, and a prunable nested worktree;
@@ -119,3 +122,7 @@ ignores a worktree that cannot be settled.
 The first review round found that a rebase run with `--update-refs` also
 holds the branches it lists in `rebase-merge/update-refs`, so the subsection
 reads that record too, and finds all four record paths with one command.
+The second round found that a locked worktree whose `.git` file is gone is
+never marked `prunable`, so the same command also prints the worktree's top
+folder, which must be the entry's own; it also limits the branch lookup to
+names that hold the key.

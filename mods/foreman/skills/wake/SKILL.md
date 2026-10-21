@@ -386,28 +386,34 @@ While a rebase or a bisect is stopped, git lists the worktree as `detached`,
 yet it still holds the branch the rebase or bisect began on, and any other
 branch the rebase will move, and refuses to delete them. For each of the
 other worktrees from step 3 whose entry says `detached`, find the branches it
-holds with the checks below, in order. When a check fails, or one of these commands fails,
-the worktree is one that **cannot be settled**, the parent reads no further
-for it, and the gone case goes on; step 7 says what such a worktree stops. A
-command that answers no through its exit status has not failed.
+holds with the checks below, in order. When a check fails, or one of these
+commands fails, the worktree is one that **cannot be settled**, the parent
+reads no further for it, and the gone case goes on; step 7 says what such a
+worktree stops. A command that answers no through its exit status has not
+failed.
 
 1. The worktree's folder holds only the characters the cleanup case allows,
    because the parent puts it in a command, and its entry is not marked
-   `prunable`. A worktree inside the main checkout whose `.git` file is gone
-   is marked `prunable`, and `git -C` there reads the main checkout's records
-   instead of its own, while git still holds its branch.
-2. Find the paths of all four records in the list below with one command,
-   `git -C '<folder>' rev-parse --path-format=absolute --git-path 'rebase-merge/head-name' --git-path 'rebase-merge/update-refs' --git-path 'rebase-apply/head-name' --git-path 'BISECT_START'`,
-   which prints one path per line in that order. Read each file with the
-   file-reading tool, never through the shell, because no check covers the
-   characters of those paths. A record whose file does not exist names no
-   branch. A file that exists but cannot be read fails.
-3. Turn the record's lines into names as the list says for that record.
-4. The name holds only the characters the cleanup case allows. Then
-   `git -C '<folder>' rev-parse --verify --quiet 'refs/heads/<name>'` decides.
-   Exit status 0 means the worktree holds that branch. Exit status 1 means no
-   branch has that name, so the record names no branch. Any other status
-   fails.
+   `prunable`.
+2. Run one command,
+   `git -C '<folder>' rev-parse --path-format=absolute --show-toplevel --git-path 'rebase-merge/head-name' --git-path 'rebase-merge/update-refs' --git-path 'rebase-apply/head-name' --git-path 'BISECT_START'`,
+   which prints the worktree's top folder and then the paths of the four
+   records in the list below, one per line in that order. The top folder must
+   be exactly the entry's folder. A worktree inside the main checkout whose
+   `.git` file is gone, whether or not it is locked, prints the main
+   checkout's folder there instead, and its record paths are the main
+   checkout's own, while git still holds its branch.
+3. Read each record's file with the file-reading tool, never through the
+   shell, because no check covers the characters of those paths. A record
+   whose file does not exist names no branch. A file that exists but cannot
+   be read fails. Turn the record's lines into names as the list says for
+   that record.
+4. Each name holds only the characters the cleanup case allows. A name that
+   does not hold the key changes nothing, so it needs no lookup. For a name
+   that holds the key,
+   `git -C '<folder>' rev-parse --verify --quiet 'refs/heads/<name>'` decides:
+   exit status 0 means the worktree holds that branch, exit status 1 means no
+   branch has that name, and any other status fails.
 
 The records, and how each one's line names a branch:
 
@@ -421,17 +427,16 @@ The records, and how each one's line names a branch:
   hold only hexadecimal digits, because it is a commit id. Any other line
   fails.
 - `BISECT_START`, which a bisect writes: its whole first line is the name,
-  and an empty line fails. A bisect that began on a detached head writes a commit id
-  there, which the branch lookup answers with exit status 1, so it names no
-  branch.
+  and an empty line fails. A bisect that began on a detached head writes a
+  commit id there, which never holds the key, so it names no branch the gone
+  case counts.
 
 The worktree holds every branch that any record names. A detached other
 worktree whose records name no branch holds no branch, the same as one made
 with `git worktree add --detach`, and changes nothing in the gone case. A
 branch it holds that does not hold the key also changes nothing. When the
-parent tells the
-person about a worktree that cannot be settled, the line names the issue and
-the folder and never repeats the text of a record.
+parent tells the person about a worktree that cannot be settled, the line
+names the issue and the folder and never repeats the text of a record.
 
 A rebase that ends between `git worktree list --porcelain` and the reading of
 its records makes that worktree read as holding no branch, although it then

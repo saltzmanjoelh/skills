@@ -36,15 +36,17 @@ below. Every other step keeps its current wording unless this list changes it.
    order, each settling to a branch name or to no branch:
    1. The worktree's folder holds only the characters the cleanup case allows,
       because the parent puts it in a command, and its entry is not marked
-      `prunable`, because `git -C` into a nested worktree whose `.git` file is
-      gone reads the main checkout's records instead of its own.
-   2. For `rebase-merge/head-name`, `rebase-merge/update-refs`,
-      `rebase-apply/head-name` and `BISECT_START`, the parent finds the
-      records' paths with one
-      `git -C '<folder>' rev-parse --path-format=absolute --git-path '<record>' ...`
-      call, which prints one path per line in order, and reads each file with
-      its file-reading tool, never through the shell, when the file exists.
-      A record that does not exist names no branch.
+      `prunable`.
+   2. One
+      `git -C '<folder>' rev-parse --path-format=absolute --show-toplevel --git-path '<record>' ...`
+      call prints the worktree's top folder and then the paths of
+      `rebase-merge/head-name`, `rebase-merge/update-refs`,
+      `rebase-apply/head-name` and `BISECT_START`, one per line in order. The
+      top folder must be exactly the entry's folder, because `git -C` into a
+      nested worktree whose `.git` file is gone, locked or not, climbs to the
+      main checkout and reads its records instead. The parent reads each file
+      with its file-reading tool, never through the shell, when the file
+      exists. A record that does not exist names no branch.
    3. In the two `head-name` records, the first line is either
       `refs/heads/<name>`, which names `<name>`, or exactly `detached HEAD`,
       which git writes for a rebase that began on a detached head and which
@@ -53,22 +55,25 @@ below. Every other step keeps its current wording unless this list changes it.
       that starts with `refs/heads/` names a branch, and every other line is a
       commit id of hexadecimal digits. In `BISECT_START`, the whole first line
       is the name.
-   4. The name holds only the characters the cleanup case allows. Then
-      `git -C '<folder>' rev-parse --verify --quiet 'refs/heads/<name>'` decides:
+   4. Every name holds only the characters the cleanup case allows. A name
+      without the key changes nothing, so only a name that holds the key is
+      looked up, with
+      `git -C '<folder>' rev-parse --verify --quiet 'refs/heads/<name>'`:
       exit status 0 means the worktree holds that branch, and exit status 1
-      means there is no such branch, as when `BISECT_START` holds the commit id
-      of a bisect that began on a detached head, so the record names no branch.
+      means there is no such branch. A commit id in `BISECT_START`, from a
+      bisect that began on a detached head, never holds the key, so it names
+      no branch the gone case counts.
 
    A detached worktree whose records name no branch holds no branch, the same
    as a plain `git worktree add --detach`, and affects nothing in the gone
    case.
 2. **A worktree that cannot be settled.** A detached other worktree cannot be
    settled when its folder fails the character check, its entry is marked
-   `prunable`, the path command fails,
-   a record exists but cannot be read, a rebase record's line has no form
-   above, `BISECT_START` is empty, a name fails the character check, or
-   the branch lookup exits with any status other than 0 or 1. Such a worktree
-   keeps today's block: the parent never reports the issue finished and never
+   `prunable`, the path command fails or prints a top folder other than the
+   entry's folder, a record exists but cannot be read, a rebase record's line
+   has no form above, `BISECT_START` is empty, a name fails the character
+   check, or the branch lookup exits with any status other than 0 or 1.
+   Such a worktree keeps today's block: the parent never reports the issue finished and never
    starts a fresh session while one exists, and tells the person in one line
    that names the issue and the folder. The message never repeats the text of
    a record.
@@ -106,7 +111,8 @@ below. Every other step keeps its current wording unless this list changes it.
 - A bisect or a rebase that started on a detached head: it names no branch.
 - A plain detached worktree: it holds no branch.
 - A worktree in a rebase and a bisect at once: every branch either record
-  names is held.
+  names is held. Git refused to start a bisect inside a rebase stopped on a
+  conflict, so this state is rare.
 - A rebase run with `--update-refs` of `claude/xyz-9-other`, stacked on
   `claude/abc-123-fix`: `rebase-merge/update-refs` names
   `claude/abc-123-fix`, so it is held, because git refuses to delete it while
@@ -114,6 +120,8 @@ below. Every other step keeps its current wording unless this list changes it.
 - A detached worktree nested inside the main checkout whose `.git` file was
   deleted: its entry is `prunable`, so it cannot be settled and keeps today's
   block, because reading it would read the main checkout's records.
+- The same worktree, but locked: git does not mark it `prunable`, yet its top
+  folder prints as the main checkout's, so it cannot be settled either.
 - The main checkout itself stopped in a rebase: it is one of the other
   worktrees, and its records are read under `.git/` the same way.
 - The dead session's own worktree saying `detached`: step 3.3 still sends the
@@ -150,9 +158,13 @@ walk-through in the pull request. The walk-through takes `ABC-123` through
 every edge case above against git states made in a scratch repository with
 git 2.54: a stopped rebase of a branch with the key and of one without it, a
 rebase begun on a detached head (`detached HEAD`), a bisect at a midpoint
-begun on a branch and one begun on a detached head (a commit id), and a plain
-detached worktree. For each, the pull request shows the record's content, the
-branch lookup's exit status, and what the skill tells the parent to do. The
+begun on a branch and one begun on a detached head (a commit id), a plain
+detached worktree, a stopped `--update-refs` rebase whose `update-refs`
+record names a key branch, an attempt to start a bisect inside a stopped
+rebase, the main checkout stopped in a rebase, and a nested worktree whose
+`.git` file was deleted, both unlocked and locked. For each, the pull request
+shows the record's content, the branch lookup's exit status, and what the
+skill tells the parent to do. The
 search in `.claude/rules/no-project-names.md` on the staged diff finds only
 placeholders.
 
@@ -162,7 +174,8 @@ prints a path relative to the folder for the main checkout; `git branch -d`
 and `git checkout` refuse a branch that a detached rebase or bisect holds;
 and `git -C` into a nested worktree whose `.git` file was deleted resolves
 the main checkout's `.git/rebase-merge/head-name`, while git still refuses to
-delete that worktree's branch.
+delete that worktree's branch. A locked worktree in that state is not marked
+`prunable`, and its `--show-toplevel` prints the main checkout's folder.
 
 ## Decided by the counsel
 
