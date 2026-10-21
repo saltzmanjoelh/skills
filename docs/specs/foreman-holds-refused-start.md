@@ -37,8 +37,9 @@ asked for one, tell them so in one line."
    with an issue key followed by a space or a colon, foreman adds that key to
    a list of held keys in its ledger, which survives reloads. The phrase lives
    in one named constant, with a comment quoting the app's whole refusal.
-2. **Telling the model.** The same hook adds one sentence to that refusal,
-   saying that foreman holds the key and offers it again on the person's next
+2. **Telling the model.** The same hook adds one sentence after that
+   refusal, as context the model reads with it, leaving the app's own words
+   unchanged. The sentence says that foreman holds the key and offers it again on the person's next
    message, that the model should not propose a card for it, and that it
    should tell the person in one line that the issue starts on their next
    message typed in the desktop app.
@@ -64,15 +65,22 @@ asked for one, tell them so in one line."
    again, and the key stays held with no new notification.
 6. **Releasing.** A key stops being held on any sign that it started: a
    `start_session` call for that key that the app accepts, seen by the start
-   hook; a read of the desktop app's list of sessions that shows a session
-   whose `isRunning` is exactly true, which is not archived, and whose title
-   begins with that exact key followed by a space or a colon; or the person
-   turning foreman off. Foreman reads the list for this only while a key is
-   held, as part of its periodic read, and logs each release.
+   hook, including one the app answers with a proposal card, because the
+   decision then sits with the person; or a read of the desktop app's list of
+   sessions that shows a session whose `isRunning` is exactly true, which is
+   not archived, and whose title begins with that exact key followed by a
+   space or a colon. Foreman reads the list for this only while a key is
+   held, as part of its periodic read, and logs each release. Foreman has no
+   command that turns the role off, so the holds live in the parent's ledger
+   for as long as the parent does, and a session that becomes a parent
+   afresh, such as a cleared or new one, holds nothing.
 7. **The wake skill.** Its "Starting a session" step 3 says that a refusal to
    which foreman added its holding sentence goes to no card, and the model
-   says the one line instead. A new section, headed with the context line's
-   sentence, says what to do with it.
+   says the one line instead, and that such a refusal does not count as the
+   app's refusal that sends later starts straight to a card. Its step 1 keeps
+   skipping keys this parent named in a "start it" line, except a key foreman
+   holds, which the context line asks it to start. A new section, headed with
+   the context line's sentence, says what to do with it.
 
 ## Edge cases
 
@@ -90,6 +98,8 @@ asked for one, tell them so in one line."
   archived, releases nothing. A list that cannot be read releases nothing.
 - The app rewords its refusal: foreman no longer recognises it and holds
   nothing, and the parent falls back to today's card and one line.
+- A start for a held key comes without a brief: it is held and released the
+  same way, because the hook looks at every keyed start's answer.
 - A freed slot picks the held key again: the start is refused again, and the
   key is already held, so nothing new is raised.
 
@@ -132,7 +142,7 @@ Tests in `mods/foreman/tests`, through the fake desktop app in
 - An accepted start for the key releases it; a list read with a running,
   unarchived session titled with the key releases it; a neighbouring key, an
   archived entry, an entry with a doubtful running flag and an unreadable
-  list release nothing; turning foreman off releases every key.
+  list release nothing.
 - The context line's sentence is pinned by a test and quoted in the wake
   skill, as the other wake sentences are.
 
