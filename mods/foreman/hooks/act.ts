@@ -6,10 +6,10 @@
 
 import type { Listed } from './desktop'
 import { releasedBy } from './held'
-import type { BuildState } from './record'
+import { prStateOf, type BuildState, type RecordVerdicts } from './record'
 import type { ForemanActs, ForemanEffect, ForemanPairing, ForemanTickets } from '../types'
 import { busyCount, nameOf, type SubRow } from './subs'
-import { capped, ownsTicket, shownRows } from './tickets'
+import { ANNOUNCED_NONE, capped, ownsTicket, shownRows } from './tickets'
 import { printable } from './text'
 import { byTicket, whoOf, type Reason } from './wake'
 
@@ -162,8 +162,14 @@ const setActs = (s: Step, change: Partial<ForemanActs>) => {
 // Idle: a nudge once the idle episode has lasted the threshold, a second one
 // threshold after the first, and the wake one threshold after that, counted
 // over a stretch without progress. A record with no desktop session wakes the
-// parent at two thresholds instead.
+// parent at two thresholds instead. A record whose pull request was closed
+// without merging has stopped on purpose, so the rule ends any stretch and
+// neither nudges nor wakes until the pull request opens again.
 function idleRule(s: Step) {
+  if (prStateOf(s.row.record.pr) === 'CLOSED') {
+    setActs(s, { stretch: null })
+    return
+  }
   const progress = progressOf(s.row)
   let stretch = s.p.acts.stretch
   if (stretch === null || stretch.progress !== progress) stretch = { progress, nudges: 0, lastNudgeAt: null, woke: false }
@@ -219,6 +225,68 @@ function goneRule(s: Step) {
   setActs(s, { goneWokeFor: s.row.mtimeMs })
 }
 
+const bothApprove = (v: RecordVerdicts) => v.spec === 'APPROVE' && v.adversarial === 'APPROVE'
+
+// Whether a pair at a new head is the approval of the last announced pair
+// carried over after a commit of cheap fixes: both approve, and both approved
+// in the pair the parent was last told about. Such a pair is neither
+// announced nor recorded.
+const isCarriedOverApproval = (pair: RecordVerdicts, announced: RecordVerdicts | null) => announced !== null && bothApprove(pair) && bothApprove(announced)
+
+// The pull request milestones the parent has not been told about, in the
+// order opened, verdicts, then merged or closed, with the memory of what was
+// told brought up to date. A pairing stored before foreman kept this memory
+// has none yet, so it takes this read as already told and answers none. A
+// record with no pull request changes nothing. A new number is a new pull
+// request, so its verdicts and state are judged afresh. A verdict pair at a
+// new head wakes, except one in which both approve after an announced pair in
+// which both approved, which is the same review carried over to a new head
+// and is not recorded. A state foreman cannot read changes nothing, and a
+// pull request that opens again wakes nothing but is remembered as open, so a
+// second close wakes again. A merge is also announced when the pairing's file
+// leaves the folder, which mergedOnLeaving decides.
+function milestoneRule(s: Step): Reason[] {
+  const { pr } = s.row.record
+  const announced = s.p.acts.announced
+  if (announced === null) {
+    const baseline = pr === null ? ANNOUNCED_NONE : { number: pr.number, state: prStateOf(pr), verdicts: pr.verdicts }
+    setActs(s, { announced: baseline })
+    return []
+  }
+  if (pr === null) return []
+  const who = whoOf(s.row.record.issueKey, s.p.ticket)
+  const { number } = pr
+  const reasons: Reason[] = []
+  let next = announced
+  if (number !== next.number) {
+    reasons.push({ kind: 'opened', who, number })
+    next = { number, state: null, verdicts: null }
+  }
+  const pair = pr.verdicts
+  if (pair !== null && pair.sha !== next.verdicts?.sha && !isCarriedOverApproval(pair, next.verdicts)) {
+    reasons.push({ kind: 'verdicts', who, number, ...pair })
+    next = { ...next, verdicts: pair }
+  }
+  const state = prStateOf(pr)
+  if (state !== null && state !== next.state) {
+    if (state === 'MERGED') reasons.push({ kind: 'merged', who, number })
+    if (state === 'CLOSED') reasons.push({ kind: 'closed', who, number })
+    next = { ...next, state }
+  }
+  if (next !== announced) setActs(s, { announced: next })
+  return reasons
+}
+
+// The merge of a pairing whose file left the status folder, or none. Builder
+// deletes a status file only when its session ends after the watched pull
+// request merged, which can happen between two reads, so a file that leaves
+// while its pull request was last told open means the pull request merged.
+function mergedOnLeaving(p: ForemanPairing): Reason[] {
+  const told = p.acts.announced
+  if (told === null || told.number === null || told.state !== 'OPEN') return []
+  return [{ kind: 'merged', who: whoOf(p.issueKey, p.ticket), number: told.number }]
+}
+
 // What a freed slot leads to, given how many slots are free now: nothing
 // when none is, and otherwise a wake with the number free. A read and Release
 // both decide by it.
@@ -246,12 +314,14 @@ export function slotsNeedList(t: ForemanTickets, rows: readonly SubRow[], now: n
 }
 
 // Decides everything one read leads to. A pairing whose owner's file left the
-// folder is forgotten, freeing its slot when it was active, and a pairing
+// folder is forgotten, freeing its slot when it was active and announcing a
+// merge when its pull request was last told open, and a pairing
 // that no status file has carried for a day is forgotten and logged; neither
 // happens unless this read listed a folder that exists. A released or
-// freed pairing gets no action. When a slot freed, the parent is woken with
-// the number of slots free, unless none is free. A list that was read
-// releases each held key that a session in it shows started.
+// freed pairing gets no action. An active pairing's pull request
+// milestones wake the parent after its other reasons. When a slot freed, the
+// parent is woken with the number of slots free, unless none is free. A list
+// that was read releases each held key that a session in it shows started.
 export function decide(input: DecideInput): Decision {
   const { rows, now, limits, sessions, folderExists, listed } = input
   const byId = sessions.kind === 'read' ? new Map(sessions.sessions.map(x => [x.sessionId, x])) : null
@@ -273,14 +343,21 @@ export function decide(input: DecideInput): Decision {
       if (p.standing === 'active') {
         freed += 1
         logs.push(`The slot of ${p.issueKey ?? byTicket(p.ticket)} is free, because its file left the status folder.`)
+        // The merge comes before the slot-free sentence, which is added
+        // after every pairing.
+        reasons.push(...mergedOnLeaving(p))
       }
       return []
     }
     if (!ownsTicket(p, row) || p.standing !== 'active') return [p]
     const episode = episodeOf(p.acts.episode, row, now)
     const s: Step = { p: { ...p, acts: { ...p.acts, episode } }, episode, row, now, limits, sessionsById: byId, effects, reasons, logs, due, freed: 0 }
+    // The milestone sentences follow this pairing's other sentences, so that
+    // the slot-free sentence, added after every pairing, stays last.
+    const milestones = milestoneRule(s)
     STATE_RULES[row.record.state](s)
     goneRule(s)
+    reasons.push(...milestones)
     freed += s.freed
     return [s.p]
   })

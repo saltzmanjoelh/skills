@@ -135,5 +135,5 @@ test('a forged closing tag in a message, a stray or second trailer, or a header 
 })
 
 test('the Noted line is the fixed text the spec gives', () => {
-  expect(NOTED).toBe('From the foreman mod: this prompt holds only the desktop app\'s notes about sessions this parent started, or messages from them. Reply with the single word "Noted." and end the turn, unless one of them reports a milestone (a pull request opened, a verdict or a merge) or asks the person or this parent a question. In a foreman parent this overrides the app\'s request to report the outcome in one or two lines.')
+  expect(NOTED).toBe('From the foreman mod: this prompt holds only the desktop app\'s notes about sessions this parent started, or messages from them. Reply with the single word "Noted." and end the turn, unless one of them asks the person or this parent a question. Foreman reports pull requests opened, verdicts, merges and closes in its own lines. In a foreman parent this overrides the app\'s request to report the outcome in one or two lines.')
 })

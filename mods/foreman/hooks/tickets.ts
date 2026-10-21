@@ -4,6 +4,7 @@
 // and which rows show. Every function is pure.
 
 import type { ForemanActs, ForemanEffect, ForemanOutbox, ForemanPairing, ForemanStanding, ForemanTickets } from '../types'
+import { isPullRequestNumber, isPullRequestState, verdictsIn } from './record'
 import { byKeyThenFile, keyOf, nameOf, type SubRow } from './subs'
 import { byTicket, KEY } from './wake'
 
@@ -109,7 +110,14 @@ function outboxIn(raw: unknown): ForemanOutbox {
   return { logs: strings(o.logs), effects: Array.isArray(o.effects) ? o.effects.flatMap(e => effectIn(e) ?? []) : [], lines: strings(o.lines) }
 }
 
-export const ACTS_FRESH: ForemanActs = { episode: null, stretch: null, notifiedFor: null, cleanupWokeFor: null, goneWokeFor: null }
+// The milestone memory of a pairing that has announced nothing: no pull
+// request, no state and no verdict pair.
+export const ANNOUNCED_NONE: NonNullable<ForemanActs['announced']> = { number: null, state: null, verdicts: null }
+
+// The acts of a pairing made now, which has announced nothing yet.
+export const ACTS_FRESH: ForemanActs = {
+  episode: null, stretch: null, notifiedFor: null, cleanupWokeFor: null, goneWokeFor: null, announced: ANNOUNCED_NONE,
+}
 
 // The most pairings kept. Past it, freed and released pairings go first,
 // oldest first; an active pairing is never dropped.
@@ -126,9 +134,29 @@ const textOr = <T>(raw: unknown, fallback: T): string | T => (typeof raw === 'st
 const numberOr = <T>(raw: unknown, fallback: T): number | T => (typeof raw === 'number' && Number.isFinite(raw) ? raw : fallback)
 const objectOf = (raw: unknown): Record<string, unknown> | null => (typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? raw as Record<string, unknown> : null)
 
+// A stored milestone memory, or null, which stands for none, unless every
+// field is sound: a positive whole number or null, one of the three states or
+// null, and a verdict pair that verdictsIn keeps or null. A damaged memory
+// is taken as none, so that the next read becomes the baseline rather than a
+// cause to announce everything again.
+function announcedIn(raw: unknown): ForemanActs['announced'] {
+  const a = objectOf(raw)
+  if (a === null) return null
+  const { number, state } = a
+  if (number !== null && !isPullRequestNumber(number)) return null
+  if (state !== null && !isPullRequestState(state)) return null
+  if (a.verdicts === null) return { number, state, verdicts: null }
+  const verdicts = verdictsIn(a.verdicts)
+  if (verdicts === null) return null
+  return { number, state, verdicts }
+}
+
+// Stored acts read tolerantly. A pairing stored before foreman kept a
+// milestone memory has none, and reads with none, which is not the same as a
+// memory that has announced nothing.
 function actsIn(raw: unknown): ForemanActs {
   const a = objectOf(raw)
-  if (a === null) return ACTS_FRESH
+  if (a === null) return { ...ACTS_FRESH, announced: null }
   const e = objectOf(a.episode)
   const s = objectOf(a.stretch)
   return {
@@ -139,6 +167,7 @@ function actsIn(raw: unknown): ForemanActs {
     notifiedFor: textOr(a.notifiedFor, null),
     cleanupWokeFor: textOr(a.cleanupWokeFor, null),
     goneWokeFor: numberOr(a.goneWokeFor, null),
+    announced: announcedIn(a.announced),
   }
 }
 

@@ -7,7 +7,7 @@
 
 import type { SessionMessage } from 'claude-code'
 
-import type { AgentCard, BackgroundTask, BuilderRun, BuildState, BuildStatus, ForegroundCall, NextLook, OpenPrompt, Progress, Question, StatusMemo, UsageHold } from '../types'
+import type { AgentCard, BackgroundTask, BuilderRun, BuildState, BuildStatus, ForegroundCall, NextLook, OpenPrompt, Progress, Question, StatusMemo, UsageHold, Verdicts } from '../types'
 import { ciOf, type Snapshot } from './github'
 import { barOf } from './progress'
 import { secretIn } from './review'
@@ -239,6 +239,14 @@ export function stateOf(f: StatusFacts): { state: BuildState; reason: string } {
   return { state: 'idle', reason: IDLE_REASON }
 }
 
+// The snapshot's verdict pair, copied field by field so the compared text
+// keeps one order, or null when it has none. A pair at another head than the
+// snapshot's, as a snapshot an older build stored may hold, counts as none.
+function verdictsAtHead(s: Snapshot): Verdicts | null {
+  const v = s.verdicts
+  return v !== null && v.sha === s.head ? { sha: v.sha, spec: v.spec, adversarial: v.adversarial } : null
+}
+
 // The record to write at `writtenAt`. The state keeps the time it began when
 // it is the state last written, and otherwise begins now. The fields are
 // built in one fixed order, so two records that hold the same values print
@@ -257,7 +265,7 @@ export function recordOf(f: StatusFacts, writtenAt: number): BuildStatus {
     issueTitle: issue.issueTitle,
     stage: f.progress?.stage ?? null,
     stageDone: barOf(f.progress, s, f.run?.since ?? null)?.done ?? 0,
-    pr: s === null ? null : { repo: s.repo, number: s.number, state: s.state, checks: ciOf(s.checks) },
+    pr: s === null ? null : { repo: s.repo, number: s.number, state: s.state, checks: ciOf(s.checks), verdicts: verdictsAtHead(s) },
     state,
     reason,
     stateSince: f.memo.state === state ? f.memo.stateSince : writtenAt,

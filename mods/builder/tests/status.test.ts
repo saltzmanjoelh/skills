@@ -164,9 +164,17 @@ test('the record holds the ticket, the ids, the issue, the stage, the bar\'s cou
   }), NOW)
   expect(record).toEqual({
     version: 1, sessionId: 'session-1', ticket: 't-1', desktopSessionId: 'desk-1', cwd: '/repo', issueKey: 'ABC-123', issueTitle: 'short issue name',
-    stage: 'review', stageDone: 7, pr: { repo: 'o/r', number: 7, state: 'OPEN', checks: 'failed' }, state: 'waiting-on-builder',
+    stage: 'review', stageDone: 7, pr: { repo: 'o/r', number: 7, state: 'OPEN', checks: 'failed', verdicts: null }, state: 'waiting-on-builder',
     reason: 'Builder has a look at the pull request scheduled.', stateSince: NOW, writtenAt: NOW,
   })
+})
+
+test('the record\'s pull request holds the verdict pair at the head, and null when the head has none or the pair is at another head', () => {
+  const pair = { sha: HEAD, spec: 'APPROVE' as const, adversarial: 'REQUEST_CHANGES' as const }
+  const withPair = (verdicts: typeof pair | null) => recordOf(facts({ run: watched, pr: { ...pullRequest(), verdicts } }), NOW).pr
+  expect(withPair(pair)?.verdicts).toEqual({ sha: HEAD, spec: 'APPROVE', adversarial: 'REQUEST_CHANGES' })
+  expect(withPair(null)?.verdicts).toBeNull()
+  expect(withPair({ ...pair, sha: 'b'.repeat(40) })?.verdicts).toBeNull()
 })
 
 test('before any report the record has no issue, no stage and no count, and no desktop id or cleanup when there are none', () => {

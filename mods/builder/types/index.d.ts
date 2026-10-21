@@ -266,8 +266,16 @@ export type BuildStatus = {
   stageDone: number
   // The watched pull request, or null before a watch has read it. `checks`
   // is the checks' overall state as the band shows it, and `none` when the
-  // pull request has no checks.
-  pr: { repo: string; number: number; state: 'OPEN' | 'MERGED' | 'CLOSED'; checks: 'pending' | 'passed' | 'failed' | 'none' } | null
+  // pull request has no checks. `verdicts` is the newest verdict pair at the
+  // current head, with the head's full commit id, or null when the head has
+  // none. No review text is ever written.
+  pr: {
+    repo: string
+    number: number
+    state: 'OPEN' | 'MERGED' | 'CLOSED'
+    checks: 'pending' | 'passed' | 'failed' | 'none'
+    verdicts: Verdicts | null
+  } | null
   state: BuildState
   // One line that says why the state holds. It names a tool but never copies
   // a tool's input, which can hold commands, paths or secrets.

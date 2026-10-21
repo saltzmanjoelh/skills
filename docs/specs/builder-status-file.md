@@ -93,7 +93,7 @@ survives the parent being closed.
     | `issueTitle` | the rest of that title, or the empty string before any report |
     | `stage` | the stage last reported, or null before any report |
     | `stageDone` | the stages done out of nine, as the progress bar counts them |
-    | `pr` | `{ repo, number, state, checks }` of the watched pull request, where `state` is `OPEN`, `MERGED` or `CLOSED` and `checks` is `none`, `pending`, `passed` or `failed`; null before a watch |
+    | `pr` | `{ repo, number, state, checks, verdicts }` of the watched pull request, where `state` is `OPEN`, `MERGED` or `CLOSED`, `checks` is `none`, `pending`, `passed` or `failed`, and `verdicts` is `{ sha, spec, adversarial }`, the newest verdict pair at the current head with the head's full commit id and each verdict `APPROVE` or `REQUEST_CHANGES`, or null when the head has none; no review text is written; null before a watch |
     | `state` | one of the six states below |
     | `reason` | one line that says why the state holds |
     | `stateSince` | when the state began |

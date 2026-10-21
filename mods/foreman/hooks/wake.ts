@@ -9,14 +9,21 @@
 // by tests/wake.test.ts, listed in the README and quoted in that skill. Change
 // all four together.
 
+import type { RecordVerdicts } from './record'
 import { printable } from './text'
 
 // Why foreman wakes the parent. `who` is already safe to put in the line, as
-// whoOf makes it.
+// whoOf makes it. The four pull request milestones carry only what builder
+// wrote from its own GitHub reads and foreman's reader checked: the number,
+// and for a verdict pair the reviewed head's commit id and the two verdicts.
 export type Reason =
   | { kind: 'idle'; who: string; nudged: boolean; minutes: number }
   | { kind: 'cleanup'; who: string; minutes: number; failedCalls: number; lastError: string }
   | { kind: 'gone'; who: string; minutes: number }
+  | { kind: 'opened'; who: string; number: number }
+  | ({ kind: 'verdicts'; who: string; number: number } & RecordVerdicts)
+  | { kind: 'merged'; who: string; number: number }
+  | { kind: 'closed'; who: string; number: number }
   | { kind: 'slot-free'; free: number }
 
 // The shape of an issue key, such as ABC-123, as a pattern for other patterns
@@ -59,6 +66,9 @@ export function slotWords(free: number): string {
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
+// A verdict as the verdict sentence words it.
+const verdictWord = (v: RecordVerdicts['spec']) => (v === 'APPROVE' ? 'approves' : 'requests changes')
+
 // Whether a reason quotes record text that is not empty once cleaned.
 const quotesText = (r: Reason) => r.kind === 'cleanup' && printable(r.lastError, 120) !== ''
 
@@ -73,6 +83,10 @@ export const REASON_WORDS: { [K in Reason['kind']]: (r: Extract<Reason, { kind: 
     return quotesText(r) ? `${head}; its record's last error, quoted: ${quoted(r.lastError)}.` : `${head}.`
   },
   'gone': r => `${r.who} has not updated its status file for ${r.minutes} minutes and its session is not running, so restart it or release the issue.`,
+  'opened': r => `${r.who} opened pull request #${r.number}.`,
+  'verdicts': r => `${r.who}'s pull request #${r.number} has verdicts at ${r.sha.slice(0, 7)}: spec ${verdictWord(r.spec)}, adversarial ${verdictWord(r.adversarial)}.`,
+  'merged': r => `${r.who}'s pull request #${r.number} merged.`,
+  'closed': r => `${r.who}'s pull request #${r.number} was closed without merging.`,
   'slot-free': r => slotWords(r.free),
 }
 

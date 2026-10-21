@@ -423,6 +423,49 @@ test('after a reload the ledger in $.state keeps a wake from coming twice', asyn
   expect(w.engine.prompts).toEqual([])
 })
 
+test('a sub session\'s pull request opening wakes the parent once', async ($, on) => {
+  const w = world(on)
+  const working = record('ABC-1', 'working', { desktopSessionId: 'local_a' })
+  const opened = record('ABC-1', 'working', { desktopSessionId: 'local_a', pr: { repo: 'o/r', number: 7, state: 'OPEN', checks: 'pending', verdicts: null } })
+  w.folder.put('a.json', working)
+  await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await minutesPass(w, 2, { 'a.json': working })
+  expect(w.engine.prompts).toEqual([])
+  await minutesPass(w, 3, { 'a.json': opened })
+  expect(w.engine.prompts).toEqual(['foreman: ABC-1 opened pull request #7.'])
+  await minutesPass(w, 10, { 'a.json': opened })
+  expect(w.engine.prompts).toHaveLength(1)
+})
+
+test('a pairing stored before foreman remembered milestones stays silent on its first read, stores that read as its baseline, and wakes for a later merge', async ($, on) => {
+  const w = world(on)
+  const verdicts = { sha: 'a'.repeat(40), spec: 'APPROVE', adversarial: 'APPROVE' }
+  const pr = (state: string) => ({ repo: 'o/r', number: 7, state, checks: 'passed', verdicts })
+  const open = record('ABC-1', 'working', { desktopSessionId: 'local_a', pr: pr('OPEN') })
+  w.folder.put('a.json', open, T0, false)
+  const p = { ...newPairing('ft-ABC-1', 'local_a', T0), owner: 's-ABC-1', ownerFile: 'a.json', issueKey: 'ABC-1' }
+  const { announced, ...before } = p.acts
+  void announced
+  leftInState(on, {
+    tickets: { pairings: [{ ...p, acts: before }], folderMissing: false },
+    parent: { isOn: true, slots: null },
+    nextReadAt: T0 - SECOND,
+    readAt: T0 - MINUTE,
+  })
+  on('turn.complete', ($, e) => ({ text: e.answer }) as never)
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as never)
+  await w.clock.settle()
+  expect(w.folder.lists).toBe(1)
+  expect(w.engine.prompts).toEqual([])
+  expect(ledger(w).pairings[0]!.acts.announced).toEqual({ number: 7, state: 'OPEN', verdicts })
+  await minutesPass(w, 3, { 'a.json': open })
+  expect(w.engine.prompts).toEqual([])
+  await minutesPass(w, 3, { 'a.json': record('ABC-1', 'working', { desktopSessionId: 'local_a', pr: pr('MERGED') }) })
+  expect(w.engine.prompts).toEqual(['foreman: ABC-1\'s pull request #7 merged.'])
+})
+
 test('a read that fails partway still schedules the next read after two minutes', async ($, on) => {
   const w = world(on)
   w.folder.put('a.json', record('ABC-1', 'working', { desktopSessionId: 'local_a' }))

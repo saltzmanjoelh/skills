@@ -42,6 +42,33 @@ test('every wake sentence is pinned', () => {
   expect(REASON_WORDS.gone({ kind: 'gone', who: 'ABC-1', minutes: 6 }))
     .toBe('ABC-1 has not updated its status file for 6 minutes and its session is not running, so restart it or release the issue.')
   expect(REASON_WORDS['slot-free']({ kind: 'slot-free', free: 1 })).toBe('one slot free; pick the next issue and start it.')
+  expect(REASON_WORDS.opened({ kind: 'opened', who: 'ABC-1', number: 7 })).toBe('ABC-1 opened pull request #7.')
+  expect(REASON_WORDS.verdicts({ kind: 'verdicts', who: 'ABC-1', number: 7, sha: 'abcdef0123456789', spec: 'APPROVE', adversarial: 'REQUEST_CHANGES' }))
+    .toBe('ABC-1\'s pull request #7 has verdicts at abcdef0: spec approves, adversarial requests changes.')
+  expect(REASON_WORDS.merged({ kind: 'merged', who: 'ABC-1', number: 7 })).toBe('ABC-1\'s pull request #7 merged.')
+  expect(REASON_WORDS.closed({ kind: 'closed', who: 'ABC-1', number: 7 })).toBe('ABC-1\'s pull request #7 was closed without merging.')
+})
+
+test('the verdict sentence gives each verdict in words and only the first seven characters of the sha', () => {
+  expect(REASON_WORDS.verdicts({ kind: 'verdicts', who: 'ABC-1', number: 7, sha: 'abc1234', spec: 'REQUEST_CHANGES', adversarial: 'APPROVE' }))
+    .toBe('ABC-1\'s pull request #7 has verdicts at abc1234: spec requests changes, adversarial approves.')
+  expect(REASON_WORDS.verdicts({ kind: 'verdicts', who: 'ABC-1', number: 7, sha: 'f'.repeat(40), spec: 'APPROVE', adversarial: 'APPROVE' }))
+    .toBe('ABC-1\'s pull request #7 has verdicts at fffffff: spec approves, adversarial approves.')
+})
+
+test('a milestone sentence names a sub session with no usable key by its ticket, and its line has no data sentence', () => {
+  const who = whoOf(null, TICKET)
+  const line = wakeLine([
+    { kind: 'opened', who, number: 7 },
+    { kind: 'verdicts', who, number: 7, sha: 'abc1234', spec: 'APPROVE', adversarial: 'APPROVE' },
+    { kind: 'merged', who, number: 7 },
+    { kind: 'closed', who, number: 8 },
+  ])
+  expect(line).toBe('foreman: the sub session with ticket ft-1234 opened pull request #7.'
+    + ' the sub session with ticket ft-1234\'s pull request #7 has verdicts at abc1234: spec approves, adversarial approves.'
+    + ' the sub session with ticket ft-1234\'s pull request #7 merged.'
+    + ' the sub session with ticket ft-1234\'s pull request #8 was closed without merging.')
+  expect(line).not.toContain(DATA_NOTE)
 })
 
 test('several reasons make one line, which ends with the data sentence only when it quotes record text', () => {

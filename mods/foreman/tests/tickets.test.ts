@@ -88,6 +88,30 @@ test('a stored ledger in any other shape reads as empty, and a pairing with a ba
   expect(outbox).toEqual({ logs: ['a'], effects: [{ kind: 'notify', text: 'n' }], lines: [] })
 })
 
+test('a new pairing has announced nothing, with the number, the state and the verdicts all null', () => {
+  expect(newPairing('ft-a', null, 1).acts.announced).toEqual({ number: null, state: null, verdicts: null })
+})
+
+test('a stored pairing without acts, or with acts that have no announced field, reads with no milestone memory', () => {
+  const stored = (acts: unknown) => ticketsIn({ pairings: [{ ticket: 'ft-a', acts }] }).pairings[0]!.acts.announced
+  expect(ticketsIn({ pairings: [{ ticket: 'ft-a' }] }).pairings[0]!.acts.announced).toBeNull()
+  expect(stored({ episode: null })).toBeNull()
+  expect(stored({ announced: null })).toBeNull()
+})
+
+test('a stored milestone memory reads back only when every field is sound, and as none otherwise', () => {
+  const stored = (announced: unknown) => ticketsIn({ pairings: [{ ticket: 'ft-a', acts: { announced } }] }).pairings[0]!.acts.announced
+  const good = { number: 7, state: 'MERGED', verdicts: { sha: 'abc1234', spec: 'APPROVE', adversarial: 'REQUEST_CHANGES' } }
+  expect(stored(good)).toEqual(good)
+  expect(stored({ number: null, state: null, verdicts: null })).toEqual({ number: null, state: null, verdicts: null })
+  expect(stored({ ...good, state: 'OPEN', verdicts: null })).toEqual({ ...good, state: 'OPEN', verdicts: null })
+  for (const bad of [
+    'yes', [], { ...good, number: 0 }, { ...good, number: 2.5 }, { ...good, number: '7' }, { ...good, state: 'open' }, { ...good, state: 'unknown' },
+    { ...good, verdicts: { sha: 'abc', spec: 'APPROVE', adversarial: 'APPROVE' } }, { ...good, verdicts: 'APPROVE' },
+    { state: 'OPEN', verdicts: null }, { number: 7, verdicts: null }, { number: 7, state: 'OPEN' },
+  ]) expect(stored(bad)).toBeNull()
+})
+
 test('an old ledger holds no keys, and a held entry that is not an issue key or comes again is dropped', () => {
   expect(ticketsIn({ pairings: [], folderMissing: false }).held).toEqual([])
   expect(ticketsIn({ held: 'ABC-1' }).held).toEqual([])
