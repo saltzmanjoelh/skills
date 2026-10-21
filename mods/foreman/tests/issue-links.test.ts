@@ -54,7 +54,8 @@ async function expectLinkedRow(ui: Awaited<ReturnType<typeof mountBoth>>, file: 
 // copied from a run of that code on the base branch rather than from this
 // code, so that a change to how a chip or a row is drawn without a fact shows
 // as a failure here. Each Button's press handle is left out, since its number
-// changes from run to run. The band is the same on both surfaces.
+// changes from run to run, and so is each drawing's source, as `compared`
+// says. The band is the same on both surfaces.
 const BAND_BEFORE = {
   type: 'Box', props: { key: 'foreman-band', flexDirection: 'row' },
   children: [
@@ -90,12 +91,12 @@ const PANE_BEFORE = {
     type: 'Box', props: { key: 'foreman-pane', flexDirection: 'column' },
     children: [
       { type: 'Button', props: { key: 'open-a.json', label: '→ ABC-1 · #4 open · checks passed', variant: 'primary' } },
-      { type: 'Svg', props: { source: '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="34" viewBox="0 0 1600 34"><style>text{font:12px ui-sans-serif,system-ui,-apple-system,sans-serif}.t{fill:#1f1e1d}.m{fill:#73726c}.b{font-weight:600}.e{text-anchor:end}.k{fill:#e8e6dc}.f{fill:#d97757}.ok{fill:#5f8a4c}.bad{fill:#c0453a}.o{fill:none;stroke:#73726c;stroke-width:1.5}@media (prefers-color-scheme: dark){.t{fill:#ecebe8}.m{fill:#a3a29c}.k{fill:#3a3936}.f{fill:#e08a6c}.ok{fill:#7fae6a}.bad{fill:#e06c5f}.o{stroke:#a3a29c}}</style><text x="0" y="14"><tspan class="t b">Title of ABC-1</tspan><tspan class="m"> · </tspan><tspan class="t">plan tournament</tspan></text><text class="m e" x="1600" y="14">3 of 9 · 33%</text><rect class="k" x="0" y="22" width="1600" height="6" rx="3"/><rect class="f" x="0" y="22" width="533" height="6" rx="3"/></svg>', alt: 'Title of ABC-1 · plan tournament · ███░░░░░░░ 3 of 9 · 33%', width: 1600, height: 34 } },
+      { type: 'Svg', props: { alt: 'Title of ABC-1 · plan tournament · ███░░░░░░░ 3 of 9 · 33%', width: 1600, height: 34 } },
       { type: 'Text', children: ['working'] },
       { type: 'Box', props: { key: 'actions-a.json', flexDirection: 'row' }, children: [{ type: 'Button', props: { key: 'nudge-a.json', label: 'Nudge' } }, { type: 'Text', children: [' '] }, { type: 'Button', props: { key: 'release-a.json', label: 'Release' } }] },
       { type: 'Text', children: [' '] },
       { type: 'Button', props: { key: 'open-b.json', label: '→ ABC-2 · no pull request yet', variant: 'primary' } },
-      { type: 'Svg', props: { source: '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="34" viewBox="0 0 1600 34"><style>text{font:12px ui-sans-serif,system-ui,-apple-system,sans-serif}.t{fill:#1f1e1d}.m{fill:#73726c}.b{font-weight:600}.e{text-anchor:end}.k{fill:#e8e6dc}.f{fill:#d97757}.ok{fill:#5f8a4c}.bad{fill:#c0453a}.o{fill:none;stroke:#73726c;stroke-width:1.5}@media (prefers-color-scheme: dark){.t{fill:#ecebe8}.m{fill:#a3a29c}.k{fill:#3a3936}.f{fill:#e08a6c}.ok{fill:#7fae6a}.bad{fill:#e06c5f}.o{stroke:#a3a29c}}</style><text x="0" y="14"><tspan class="t b">Title of ABC-2</tspan><tspan class="m"> · </tspan><tspan class="t">spec</tspan></text><text class="m e" x="1600" y="14">2 of 9 · 22%</text><rect class="k" x="0" y="22" width="1600" height="6" rx="3"/><rect class="f" x="0" y="22" width="356" height="6" rx="3"/></svg>', alt: 'Title of ABC-2 · spec · ██░░░░░░░░ 2 of 9 · 22%', width: 1600, height: 34 } },
+      { type: 'Svg', props: { alt: 'Title of ABC-2 · spec · ██░░░░░░░░ 2 of 9 · 22%', width: 1600, height: 34 } },
       { type: 'Text', props: { color: 'error' }, children: ['needs you'] },
       { type: 'Box', props: { key: 'actions-b.json', flexDirection: 'row' }, children: [{ type: 'Button', props: { key: 'nudge-b.json', label: 'Nudge' } }, { type: 'Text', children: [' '] }, { type: 'Button', props: { key: 'release-b.json', label: 'Release' } }] },
       { type: 'Text', children: [' '] },
@@ -106,11 +107,14 @@ const PANE_BEFORE = {
   },
 }
 
-// A drawn tree with each Button's press handle taken out.
-function withoutPresses(part: unknown): unknown {
-  if (Array.isArray(part)) return part.map(withoutPresses)
+// A drawn tree as these tests compare it: each Button's press handle and each
+// drawing's source taken out. The bar's drawing is held to builder's by the
+// art test, so its source here would only make a change of the bar's style
+// fail a test about links.
+function compared(part: unknown): unknown {
+  if (Array.isArray(part)) return part.map(compared)
   if (part === null || typeof part !== 'object') return part
-  return Object.fromEntries(Object.entries(part).filter(([name]) => name !== 'press').map(([name, value]) => [name, withoutPresses(value)]))
+  return Object.fromEntries(Object.entries(part).filter(([name]) => name !== 'press' && name !== 'source').map(([name, value]) => [name, compared(value)]))
 }
 
 // A copy of a pane tree whose last row, the log's only line, reads `line`.
@@ -199,11 +203,11 @@ for (const surface of SURFACES) {
       await foreman($)
       await ui.band.redraw()
       await ui.pane.redraw()
-      expect(withoutPresses(await ui.band.drawn())).toEqual(BAND_BEFORE)
+      expect(compared(await ui.band.drawn())).toEqual(BAND_BEFORE)
       // An unusable fact also writes why it was ignored to the log, which
       // is the only part of the pane that differs from before.
       const pane = text === null ? PANE_BEFORE[surface] : withLogLine(PANE_BEFORE[surface], '12:00:00 foreman: the Issue link fact was ignored because it does not begin with https://')
-      expect(withoutPresses(await ui.pane.drawn())).toEqual(pane)
+      expect(compared(await ui.pane.drawn())).toEqual(pane)
     })
   }
 }
