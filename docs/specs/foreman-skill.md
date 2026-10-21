@@ -36,7 +36,10 @@ by its wording there. `<who>` is an issue key, or "the sub session with ticket
      such fact, ask the person once which issue to start, and stop.
    - Skip an issue that a running session already works on: the desktop app's
      `list_sessions` shows those, by title and branch. Check this again just
-     before starting, so that two sessions never take one issue.
+     before starting, so that two sessions never take one issue. Also skip
+     an issue the parent started, proposed or named on an earlier wake that
+     has not shown up as a session yet, and give every session it starts or
+     proposes a title that begins with the issue key.
    - Start a desktop session with `start_session` whose brief runs
      `/implement <issue>`, which covers the issue and its sub-issues. When the
      app refuses it, propose the same session as a card with the full brief.
@@ -73,7 +76,10 @@ by its wording there. `<who>` is an issue key, or "the sub session with ticket
      prints nothing, and `git status --porcelain --ignored` lists no ignored
      file, because `git worktree remove` deletes ignored files without
      asking;
-   - first archive the sub session or confirm it has stopped, then remove the
+   - every path and branch name goes in single quotes, and one holding
+     anything but letters, digits, `/`, `.`, `_` and `-` goes to the person;
+   - first archive the sub session or confirm it has stopped, and only then
+     run the clean and ignored-file checks; then remove the
      worktree with `git worktree remove` (never `--force`), check with
      `git worktree list` that nothing else holds the branch, and delete it with
      `git branch -d` (never `-D`).

@@ -48,8 +48,13 @@ default.
 
 1. Just before each start, check the desktop app's `list_sessions` again, by
    title and branch, and skip an issue that a running session already works
-   on, so that two sessions never take one issue.
-2. Call `start_session` with a brief that runs the given `/implement` command.
+   on, so that two sessions never take one issue. Also skip an issue this
+   parent started, proposed as a card or named in a "start it" line on an
+   earlier wake that has not shown up as a session yet; keep those issue keys
+   in the parent's notes, as keys only.
+2. Call `start_session` with a title that begins with the issue key and a
+   brief that runs the given `/implement` command, so that `list_sessions`
+   shows the issue from the start.
 3. When the app refuses it, propose the same session as a card with the full
    brief. Once `start_session` has been refused in this parent, on this wake or
    an earlier one, go straight to the card.
@@ -109,13 +114,19 @@ Find the worktree, its branch and the session yourself:
   path is exactly that folder. When there is no such entry, when the entry is
   the repository's main checkout, or when several sessions match, tell the
   person in one line.
-- Put the path in quotes in every command.
+- Put every path and branch name in single quotes in every command. When a
+  path or branch name holds anything other than letters, digits, `/`, `.`,
+  `_` and `-`, run nothing and tell the person in one line, because the sub
+  session chose that name and the shell would act on such characters.
 
-The parent may fix only what the person's worktree rules already allow, which
-is that sub session's own worktree when all of these hold:
+First archive that session with `archive_session`, or confirm with
+`list_sessions` that it has stopped, so that nothing writes to the worktree
+while it is checked. Then the parent may fix only what the person's worktree
+rules already allow, which is that sub session's own worktree when all of these
+hold:
 
 - its branch is merged, either because its commits are reachable from the base
-  branch or because `gh pr view <branch> --json state` says its pull request
+  branch or because `gh pr view '<branch>' --json state` says its pull request
   merged, since a squash merge does not make the branch look merged;
 - `git status --porcelain` in that worktree prints nothing;
 - `git status --porcelain --ignored` there lists no ignored file, because
@@ -124,12 +135,10 @@ is that sub session's own worktree when all of these hold:
 
 Then, in this order:
 
-1. Archive that session with `archive_session`, or confirm with
-   `list_sessions` that it has stopped.
-2. Remove the worktree with `git worktree remove "<path>"`, never with
+1. Remove the worktree with `git worktree remove '<path>'`, never with
    `--force`.
-3. Check with `git worktree list` that nothing else holds the branch.
-4. Delete the branch with `git branch -d`, never with `-D`.
+2. Check with `git worktree list` that nothing else holds the branch.
+3. Delete the branch with `git branch -d '<branch>'`, never with `-D`.
 
 For anything else, including a shared checkout on a branch, uncommitted work,
 ignored files, a refusal from git or from the permission check, or local
@@ -141,7 +150,8 @@ the quoted error.
 1. Find the issue's branch and pull request yourself. Search GitHub by the
    issue key, for example with `gh pr list --state all --search <issue key>`,
    and when the record's working folder is still a listed worktree, also read
-   its branch with `git -C "<folder>" branch --show-current`. Never trust a
+   its branch with `git -C '<folder>' branch --show-current`, under the same
+   rule for single quotes and allowed characters as the cleanup case. Never trust a
    pull request number from the stale record. When this does not give exactly
    one branch, or gives more than one open pull request, ask the person in one
    line.
