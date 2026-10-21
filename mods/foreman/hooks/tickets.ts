@@ -51,18 +51,18 @@ export function briefFor(args: Record<string, unknown>, uuid: string): Brief {
   // A proposal started by its id alone keeps the title it was proposed with,
   // which this check saw when the proposal was made.
   const fromProposal = typeof args.proposal_id === 'string' && args.proposal_id !== '' && (args.title === undefined || args.title === null)
+  // A title passes when it begins with an issue key and a space or a colon,
+  // or with the marker on a call whose brief gets a ticket to replace it.
+  const isKeyed = title !== null && KEYED_TITLE.test(title)
+  const isMarked = title !== null && title.startsWith(NO_ISSUE_MARKER)
   if (!fromProposal) {
-    // A title passes when it begins with an issue key and a space or a colon,
-    // or with the marker on a call whose brief gets a ticket to replace it.
-    const isKeyed = title !== null && KEYED_TITLE.test(title)
-    const isMarked = title !== null && title.startsWith(NO_ISSUE_MARKER)
     if (!isKeyed && !isMarked) return { kind: 'deny', text: TITLE_REFUSAL, log: TITLE_LOG }
     if (isMarked && brief === null) return { kind: 'deny', text: TITLE_REFUSAL, log: TITLE_LOG }
   }
   if (brief === null) return { kind: 'pass' }
   const ticket = `ft-${uuid}`
   const prompt = `${brief.replace(/\s+$/, '')}\n\n${TICKET_LINE} ${ticket}`
-  if (title === null || !title.startsWith(NO_ISSUE_MARKER)) return { kind: 'add', ticket, prompt }
+  if (title === null || !isMarked) return { kind: 'add', ticket, prompt }
   return { kind: 'add', ticket, prompt, title: `${ticket}: ${title.slice(NO_ISSUE_MARKER.length)}` }
 }
 
