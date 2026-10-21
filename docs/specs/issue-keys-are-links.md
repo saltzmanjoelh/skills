@@ -26,12 +26,14 @@ address. A project that names none sees everything exactly as it does today.
 
 ### The address
 
-1. The address is a project fact, one line `Issue link: <address>` read the
-   way builder already reads its other facts (`factIn` in
-   `mods/builder/hooks/review.ts`: the first line that starts with the
-   label, trimmed, with surrounding backticks removed). The address holds the
-   placeholder `{key}`, for example
-   `Issue link: https://tracker.example.com/issue/{key}`.
+1. The address is a project fact, one line `Issue link: <address>`. Its
+   value is the rest of the first line that starts with `Issue link:`,
+   trimmed, with surrounding backticks removed, as builder reads its other
+   facts with `factIn` in `mods/builder/hooks/review.ts`, with one
+   difference: the value never runs past the end of its own line, so a bare
+   `Issue link:` has an empty value rather than taking the next line or
+   counting as missing. The address holds the placeholder `{key}`, for
+   example `Issue link: https://tracker.example.com/issue/{key}`.
 2. The fact is looked for in this order, and the first file that has it
    wins:
    - `CLAUDE.md` in the session's working folder;
@@ -47,12 +49,18 @@ address. A project that names none sees everything exactly as it does today.
    `commondir` is missing, there is no third place.
 4. A fact is usable only when its address begins with `https://`, contains
    `{key}` at least once, and contains no white space and no control
-   characters. A usable fact in an earlier file wins even over a later one;
+   characters. The three are checked in that order, and the first that fails
+   is the reason the fact is ignored. A usable fact in an earlier file wins even over a later one;
    an unusable fact in an earlier file also stops the search, so that a
    mistake in `CLAUDE.md` is not hidden by an older `CLAUDE.local.md`.
-5. Each mod reads the fact once, when its session starts (the
-   `session.start` hook, from the session's working folder, as builder reads
-   its merge command), and keeps it in memory. Drawing never reads a file.
+5. Builder reads the fact when its session starts (the `session.start`
+   hook, from the session's working folder, as it reads its merge command),
+   and keeps it in memory. Foreman does nothing in a session that is not a
+   parent, so it reads the fact only at the start of a session that is a
+   parent again from the store, and when a session becomes a parent through
+   `/start-foreman`. `session.start` runs again after a hot reload, so a
+   reload reads the fact again. The third place is read only when neither of
+   the first two has the line. Drawing never reads a file.
 6. An unusable fact is ignored, and the keys stay plain. What the person is
    told is under **Failure modes**.
 
@@ -85,8 +93,9 @@ split out and drawn as its own `Link` directly before it. The button keeps
 the rest of its text and its press.
 
 10. **Foreman's band.** Each chip that has a link is the `Link` with the key,
-    followed by the chip's button holding the rest of the chip's text (a
-    space, then the stage or the state, and for a stale chip its age). The
+    followed by a space as its own text, so that no surface can trim it,
+    then the chip's button holding the rest of the chip's text (the stage or
+    the state, and for a stale chip its age). The
     button keeps its press, which opens the sub session, and its color or
     dimness. The chips are fitted to the band's width exactly as today, by
     the length of the whole chip's text, key included.
@@ -140,7 +149,10 @@ the rest of its text and its press.
   mod cannot tell which kind of terminal it is drawing on, so it fits the
   chips by the key's text, as today. This is a known limit.
 - The fact is read once per session; a change to it shows in the next
-  session, or after the mod reloads.
+  session, or after the mod reloads. A hot reload also shows the toast for
+  an unusable fact again, and foreman's log then counts the line twice.
+- An address longer than the engine's 2048 characters is drawn by the
+  engine as plain text, without a toast from the mod.
 - Foreman reads the fact from the parent's own working folder. It does not
   read a fact per sub session, so sub sessions in another repository share
   the parent's address.
