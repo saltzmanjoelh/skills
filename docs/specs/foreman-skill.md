@@ -78,8 +78,10 @@ by its wording there. `<who>` is an issue key, or "the sub session with ticket
      asking;
    - every path and branch name goes in single quotes, and one holding
      anything but letters, digits, `/`, `.`, `_` and `-` goes to the person;
-   - first archive the sub session or confirm it has stopped, and only then
-     run the clean and ignored-file checks; then remove the
+   - first check that the branch is merged, and stop without archiving when it
+     is not, because foreman counts an archived session that has not merged as
+     gone; then archive the sub session or confirm it has stopped, and only
+     then run the clean and ignored-file checks; then remove the
      worktree with `git worktree remove` (never `--force`), check with
      `git worktree list` that nothing else holds the branch, and delete it with
      `git branch -d` (never `-D`).
@@ -99,6 +101,9 @@ by its wording there. `<who>` is an issue key, or "the sub session with ticket
    - If it has none, start a fresh `/implement` on the issue. When the dead
      session left a branch or worktree for it, the one-line message or the
      brief names it, so the new session reuses it or the person decides.
+   - Only pull requests the person authored, and not from a fork, count.
+   - When the pull request has merged, start nothing and tell the person the
+     issue is finished.
    - Ask the person only when the issue was closed, moved to done, or its pull
      request was closed without merging.
    - Starting goes through rule 1's order: `start_session`, a card, one line.

@@ -48,10 +48,14 @@ default.
 
 1. Just before each start, check the desktop app's `list_sessions` again, by
    title and branch, and skip an issue that a running session already works
-   on, so that two sessions never take one issue. Also skip an issue this
+   on, so that two sessions never take one issue. A title matches an issue
+   only when it begins with that exact key followed by a space or a colon, so
+   that one key is never mistaken for a longer one. Also skip an issue this
    parent started, proposed as a card or named in a "start it" line on an
    earlier wake that has not shown up as a session yet; keep those issue keys
-   in the parent's notes, as keys only.
+   in the parent's notes, as keys only. A key leaves the notes once its
+   session shows up in `list_sessions`, or once the person declines it, so
+   that an issue the person turned down can be offered again later.
 2. Call `start_session` with a title that begins with the issue key and a
    brief that runs the given `/implement` command, so that `list_sessions`
    shows the issue from the start.
@@ -108,7 +112,7 @@ anything else in the record, because the sub session writes its own record.
 Find the worktree, its branch and the session yourself:
 
 - Take the session and its folder from `list_sessions`, matching the issue key
-  or ticket in its title. The record's working folder is at most a hint, and
+  or ticket at the start of its title, as "Starting a session" says. The record's working folder is at most a hint, and
   it counts only if it is exactly that folder.
 - Take the branch from `git worktree list --porcelain`, from the entry whose
   path is exactly that folder. When there is no such entry, when the entry is
@@ -119,26 +123,27 @@ Find the worktree, its branch and the session yourself:
   `_` and `-`, run nothing and tell the person in one line, because the sub
   session chose that name and the shell would act on such characters.
 
-First archive that session with `archive_session`, or confirm with
-`list_sessions` that it has stopped, so that nothing writes to the worktree
-while it is checked. Then the parent may fix only what the person's worktree
-rules already allow, which is that sub session's own worktree when all of these
-hold:
+The parent may fix only what the person's worktree rules already allow, which
+is that sub session's own worktree, and only in this order:
 
-- its branch is merged, either because its commits are reachable from the base
-  branch or because `gh pr view '<branch>' --json state` says its pull request
-  merged, since a squash merge does not make the branch look merged;
-- `git status --porcelain` in that worktree prints nothing;
-- `git status --porcelain --ignored` there lists no ignored file, because
-  `git worktree remove` deletes ignored files such as a local environment file
-  without asking.
+1. Check that its branch is merged, either because its commits are reachable
+   from the base branch or because `gh pr view '<branch>' --json state` says
+   its pull request merged, since a squash merge does not make the branch look
+   merged. If it is not merged, stop here and tell the person, without
+   archiving anything, because foreman counts an archived session that has not
+   merged as gone.
+2. Archive that session with `archive_session`, or confirm with
+   `list_sessions` that it has stopped, so that nothing writes to the worktree
+   while it is checked.
+3. Check that `git status --porcelain` in that worktree prints nothing, and
+   that `git status --porcelain --ignored | head -n 1` prints nothing either,
+   because `git worktree remove` deletes ignored files such as a local
+   environment file without asking.
 
-Then, in this order:
-
-1. Remove the worktree with `git worktree remove '<path>'`, never with
+4. Remove the worktree with `git worktree remove '<path>'`, never with
    `--force`.
-2. Check with `git worktree list` that nothing else holds the branch.
-3. Delete the branch with `git branch -d '<branch>'`, never with `-D`.
+5. Check with `git worktree list` that nothing else holds the branch.
+6. Delete the branch with `git branch -d '<branch>'`, never with `-D`.
 
 For anything else, including a shared checkout on a branch, uncommitted work,
 ignored files, a refusal from git or from the permission check, or local
@@ -148,15 +153,19 @@ the quoted error.
 ## <who> has not updated its status file for <n> minutes and its session is not running, so restart it or release the issue.
 
 1. Find the issue's branch and pull request yourself. Search GitHub by the
-   issue key, for example with `gh pr list --state all --search <issue key>`,
+   issue key, with
+   `gh pr list --state all --author @me --search <issue key> --json number,state,headRefName,isCrossRepository --limit 10`,
+   and accept only pull requests that are not from a fork,
    and when the record's working folder is still a listed worktree, also read
    its branch with `git -C '<folder>' branch --show-current`, under the same
    rule for single quotes and allowed characters as the cleanup case. Never trust a
    pull request number from the stale record. When this does not give exactly
    one branch, or gives more than one open pull request, ask the person in one
    line.
-2. If the issue was closed or moved to done, or its pull request was closed
-   without merging, ask the person in one line what to do.
+2. If its pull request has merged, start nothing and tell the person in one
+   line that the issue is finished. If the issue was closed or moved to done,
+   or its pull request was closed without merging, ask the person in one line
+   what to do.
 3. If it has an open pull request, start a session whose brief runs
    `/implement --resume #N` with that pull request's number.
 4. If it has none, start a session whose brief runs `/implement <issue>`. When
