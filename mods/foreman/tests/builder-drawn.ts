@@ -1,10 +1,11 @@
-// What builder's own drawing code answered for each of these inputs, at the
-// commit foreman's copies in hooks/art.ts, hooks/text.ts and hooks/stages.ts
-// were taken from. A test cannot import builder's files, because they lie
-// outside this plugin's folder, so these answers were written down by running
-// builder's functions on the inputs. tests/art.test.ts holds the copies to
-// them. When builder's drawing changes, copy the change into foreman and
-// write these answers again from builder's functions.
+// What builder's own drawing code and issue link rules answered for each of
+// these inputs, at the commit foreman's copies in hooks/art.ts, hooks/text.ts,
+// hooks/stages.ts and hooks/links.ts were taken from. A test cannot import
+// builder's files, because they lie outside this plugin's folder, so these
+// answers were written down by running builder's functions on the inputs.
+// tests/art.test.ts holds the copies to them. When builder's drawing or its
+// hooks/links.ts changes, copy the change into foreman and write these answers
+// again from builder's functions.
 
 export type Drawn = { fn: string; args: unknown[]; out: unknown }
 
@@ -166,4 +167,74 @@ export const BUILDER_DRAWN: Drawn[] = [
   { fn: "stageLabel", args: ["pr"], out: "pull request open" },
   { fn: "stageLabel", args: ["review"], out: "review rounds" },
   { fn: "stageLabel", args: ["merge"], out: "merge" },
+  { fn: "linkFactIn", args: ["Issue link: https://tracker.example.com/issue/{key}"], out: "https://tracker.example.com/issue/{key}" },
+  { fn: "linkFactIn", args: ["# Notes\nIssue link: https://tracker.example.com/issue/{key}\nOther: x"], out: "https://tracker.example.com/issue/{key}" },
+  { fn: "linkFactIn", args: ["Issue link:   `https://tracker.example.com/issue/{key}`  "], out: "https://tracker.example.com/issue/{key}" },
+  { fn: "linkFactIn", args: ["Issue link:\thttps://tracker.example.com/issue/{key}\r\n"], out: "https://tracker.example.com/issue/{key}" },
+  { fn: "linkFactIn", args: ["Issue link: one\nIssue link: two"], out: "one" },
+  { fn: "linkFactIn", args: ["  Issue link: indented"], out: null },
+  { fn: "linkFactIn", args: [""], out: null },
+  { fn: "linkFactIn", args: ["Issue link:"], out: "" },
+  { fn: "linkFactIn", args: ["Issue link:   "], out: "" },
+  { fn: "linkFactIn", args: ["Issue link:\nhttps://tracker.example.com/issue/{key}"], out: "" },
+  { fn: "linkFactIn", args: ["Issue link: http://tracker.example.com/{key}"], out: "http://tracker.example.com/{key}" },
+  { fn: "linkFactIn", args: ["Issue link: https://tracker.example.com/"], out: "https://tracker.example.com/" },
+  { fn: "whyUnusable", args: ["https://tracker.example.com/issue/{key}"], out: null },
+  { fn: "whyUnusable", args: ["https://tracker.example.com/{key}/and/{key}"], out: null },
+  { fn: "whyUnusable", args: [""], out: "it does not begin with https://" },
+  { fn: "whyUnusable", args: ["http://tracker.example.com/{key}"], out: "it does not begin with https://" },
+  { fn: "whyUnusable", args: ["javascript:alert({key})"], out: "it does not begin with https://" },
+  { fn: "whyUnusable", args: ["https://tracker.example.com/issue/"], out: "it has no {key}" },
+  { fn: "whyUnusable", args: ["https://tracker.example.com/issue/{key} now"], out: "it holds spaces or control characters" },
+  { fn: "whyUnusable", args: ["https://tracker.example.com/issue/\t{key}"], out: "it holds spaces or control characters" },
+  { fn: "whyUnusable", args: ["https://tracker.example.com/\u001b[31m{key}"], out: "it holds spaces or control characters" },
+  { fn: "whyUnusable", args: ["https://tracker.example.com/\u0085{key}"], out: "it holds spaces or control characters" },
+  { fn: "whyUnusable", args: ["http://no key here"], out: "it does not begin with https://" },
+  { fn: "whyUnusable", args: ["https://no key here"], out: "it has no {key}" },
+  { fn: "issueLinkIn", args: [null], out: null },
+  { fn: "issueLinkIn", args: ["No fact here."], out: null },
+  { fn: "issueLinkIn", args: ["Issue link: https://tracker.example.com/issue/{key}"], out: { address: "https://tracker.example.com/issue/{key}", ignored: null } },
+  { fn: "issueLinkIn", args: ["# Notes\nIssue link: https://tracker.example.com/issue/{key}\nOther: x"], out: { address: "https://tracker.example.com/issue/{key}", ignored: null } },
+  { fn: "issueLinkIn", args: ["Issue link:   `https://tracker.example.com/issue/{key}`  "], out: { address: "https://tracker.example.com/issue/{key}", ignored: null } },
+  { fn: "issueLinkIn", args: ["Issue link:\thttps://tracker.example.com/issue/{key}\r\n"], out: { address: "https://tracker.example.com/issue/{key}", ignored: null } },
+  { fn: "issueLinkIn", args: ["Issue link: one\nIssue link: two"], out: { address: null, ignored: "it does not begin with https://" } },
+  { fn: "issueLinkIn", args: ["  Issue link: indented"], out: null },
+  { fn: "issueLinkIn", args: [""], out: null },
+  { fn: "issueLinkIn", args: ["Issue link:"], out: { address: null, ignored: "it does not begin with https://" } },
+  { fn: "issueLinkIn", args: ["Issue link:   "], out: { address: null, ignored: "it does not begin with https://" } },
+  { fn: "issueLinkIn", args: ["Issue link:\nhttps://tracker.example.com/issue/{key}"], out: { address: null, ignored: "it does not begin with https://" } },
+  { fn: "issueLinkIn", args: ["Issue link: http://tracker.example.com/{key}"], out: { address: null, ignored: "it does not begin with https://" } },
+  { fn: "issueLinkIn", args: ["Issue link: https://tracker.example.com/"], out: { address: null, ignored: "it has no {key}" } },
+  { fn: "linkOf", args: ["https://tracker.example.com/issue/{key}", "ABC-123"], out: "https://tracker.example.com/issue/ABC-123" },
+  { fn: "linkOf", args: ["https://tracker.example.com/issue/{key}", "A1-7"], out: "https://tracker.example.com/issue/A1-7" },
+  { fn: "linkOf", args: ["https://tracker.example.com/issue/{key}", "abc-123"], out: null },
+  { fn: "linkOf", args: ["https://tracker.example.com/issue/{key}", "ABC-"], out: null },
+  { fn: "linkOf", args: ["https://tracker.example.com/issue/{key}", "ABC-12a"], out: null },
+  { fn: "linkOf", args: ["https://tracker.example.com/issue/{key}", "ABC 123"], out: null },
+  { fn: "linkOf", args: ["https://tracker.example.com/issue/{key}", "1BC-123"], out: null },
+  { fn: "linkOf", args: ["https://tracker.example.com/issue/{key}", "ABC-123 "], out: null },
+  { fn: "linkOf", args: ["https://tracker.example.com/issue/{key}", "ABC-\u001b[31m123"], out: null },
+  { fn: "linkOf", args: ["https://tracker.example.com/issue/{key}", "ABC-123\nx"], out: null },
+  { fn: "linkOf", args: ["https://tracker.example.com/issue/{key}", ""], out: null },
+  { fn: "linkOf", args: ["https://tracker.example.com/issue/{key}", null], out: null },
+  { fn: "linkOf", args: ["https://tracker.example.com/{key}?q={key}", "ABC-123"], out: "https://tracker.example.com/ABC-123?q=ABC-123" },
+  { fn: "linkOf", args: [null, "ABC-123"], out: null },
+  { fn: "resolved", args: ["/work/repo", "CLAUDE.md"], out: "/work/repo/CLAUDE.md" },
+  { fn: "resolved", args: ["/work/repo/", "CLAUDE.md"], out: "/work/repo/CLAUDE.md" },
+  { fn: "resolved", args: ["/work/repo", "/elsewhere//git/./x"], out: "/elsewhere/git/x" },
+  { fn: "resolved", args: ["/main/.git/worktrees/wt", "../.."], out: "/main/.git" },
+  { fn: "resolved", args: ["/a", "../../.."], out: "/" },
+  { fn: "resolved", args: ["/a/b", "."], out: "/a/b" },
+  { fn: "gitDirOf", args: ["/wt", "gitdir: /main/.git/worktrees/wt\n"], out: "/main/.git/worktrees/wt" },
+  { fn: "gitDirOf", args: ["/work/wt", "gitdir: ../main/.git/worktrees/wt"], out: "/work/main/.git/worktrees/wt" },
+  { fn: "gitDirOf", args: ["/wt", "gitdir:   /main/.git/worktrees/wt  \r\n"], out: "/main/.git/worktrees/wt" },
+  { fn: "gitDirOf", args: ["/wt", ""], out: null },
+  { fn: "gitDirOf", args: ["/wt", "gitdir:"], out: null },
+  { fn: "gitDirOf", args: ["/wt", "something else\ngitdir: /main/.git"], out: null },
+  { fn: "mainCheckoutOf", args: ["/main/.git/worktrees/wt", "../..\n"], out: "/main" },
+  { fn: "mainCheckoutOf", args: ["/main/.git/worktrees/wt", "/main/.git"], out: "/main" },
+  { fn: "mainCheckoutOf", args: ["/main/.git/worktrees/wt", ""], out: null },
+  { fn: "mainCheckoutOf", args: ["/main/.git/worktrees/wt", "  \n"], out: null },
+  { fn: "ignoredLine", args: ["builder", "it has no {key}"], out: "builder: the Issue link fact was ignored because it has no {key}" },
+  { fn: "ignoredLine", args: ["foreman", "it does not begin with https://"], out: "foreman: the Issue link fact was ignored because it does not begin with https://" },
 ]
