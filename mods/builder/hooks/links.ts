@@ -3,9 +3,11 @@
 // This module imports nothing, so every other module can import it.
 //
 // Builder's hooks/links.ts and foreman's hooks/links.ts are the same file,
-// byte for byte, because a mod cannot import another plugin's files.
-// mods/foreman/tests/art.test.ts holds foreman's copy to builder's, so change
-// the two only together.
+// byte for byte, because a mod cannot import another plugin's files, so change
+// the two only together. No test compares the two files. Foreman's
+// tests/art.test.ts holds the pure functions of foreman's copy to the answers
+// that builder's copy gave, and readIssueLink is checked in each mod by its
+// own tests/links.test.ts, which are copies of one another.
 
 // The issue-key shape: an upper-case letter, then upper-case letters or
 // digits, a hyphen, and digits. A key of this shape is safe in an address as
