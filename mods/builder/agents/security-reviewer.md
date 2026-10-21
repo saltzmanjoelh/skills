@@ -44,13 +44,27 @@ position in `diff.patch`; read the file to find it.
 
 One line per finding, exactly:
 
-`- [security] <file>:<line>: <the attack in one concrete sentence, naming who does what to whom>. Why: <why the code allows it>. Fix: <one sentence>. Needs checking: <yes|no>`
+`- [security] <file>:<line>: <the attack in one concrete sentence, naming who does what to whom>. Why: <why the code allows it>. Fix: <one sentence>. Needs checking: <yes|no>. Scope: <in the spec: the passage | breaks working behaviour: what works on the base and stops at the head | outside the spec>`
 
 Say `Needs checking: yes` when the finding rests on something you inferred
 rather than read: a caller you did not find, a policy you could not see, a
 runtime value. The session sends those to the claim checker before anyone
 acts on them. Report only what you would want fixed; there is no nit tier,
 and an empty list is a valid result.
+
+Every finding has its `Scope:` part. Write `in the spec` with the passage
+of the spec that asks for the behaviour, `breaks working behaviour` with
+what works on the base branch and stops working at the head, or `outside
+the spec` for behaviour the spec does not ask for and the base does not
+have. A finding outside the spec does not block and is not fixed in this
+pull request; the counsel decides whether to file it.
+
+Before you report, read the `## Already decided` section of `package.md`:
+the findings that earlier rounds settled, numbered `D1`, `D2` and so on.
+Raise a finding that matches one only with evidence the item did not have,
+and put it on the line after the finding, as
+`Repeats: D<n>. New evidence: <what is new>`. A repeat without new
+evidence is dropped without being checked, so leave it out.
 
 ## The last line
 
