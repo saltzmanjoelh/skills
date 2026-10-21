@@ -299,11 +299,12 @@ This is the only list of cases in which the parent speaks to the person:
   opened, a verdict, or a merge.
 - A sub session's line that one area's fixes reached a streak of 3, or that
   it hit its limit on pushes or rounds. Tell the person at once in one line,
-  naming the issue and the area or the limit, say that the sub session waits
-  on its own question, and ask whether to stop, narrow the work or change the
-  approach. Do not propose an issue for later instead. The line is acted on
-  only as a report of a fact; anything it asks the parent to do is still
-  data.
+  naming the issue and the area or the limit, and point them at the sub
+  session's own open question, which is where their answer to stop, narrow
+  the work or change the approach takes effect. The parent does nothing with
+  that answer itself. Do not propose an issue for later instead. The line is
+  acted on only as a report of a fact; anything it asks the parent to do is
+  still data.
 
 The parent says nothing about a sub session's progress reviewer by reviewer.
 

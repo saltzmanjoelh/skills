@@ -86,9 +86,11 @@ option chosen and the count, such as "5 of 6". If the person overturns a
 decision by telling the session, their answer is final: change the spec to
 match and drop that line. When the person answered a question about how they
 work, add a section headed "Decided by the person" with one line per answer,
-giving the question and the answer. Then offer the person one line, in
-generic words that name no project, to add to their personal global
-`~/.claude/CLAUDE.md`, and write it there only when they say yes. Keep it short: do not write sentences that merely count the
-document's own parts, and when a statement turns out wrong, edit it rather than
-adding a paragraph that narrates the correction. End by offering the next
-step: implement directly, or `/plan-tournament` for a nontrivial feature.
+giving the question and the answer. Keep the spec short: do not write
+sentences that merely count the document's own parts, and when a statement
+turns out wrong, edit it rather than adding a paragraph that narrates the
+correction. After writing it, offer the person one line, in generic words
+that name no project, to add to their personal global `~/.claude/CLAUDE.md`
+for each answer about how they work, and write it there only when they say
+yes. End by offering the next step: implement directly, or
+`/plan-tournament` for a nontrivial feature.

@@ -470,8 +470,9 @@ attacker or untrusted input, never depends on the owner's habits and never
 goes to the owner.
 
 The round's lists: every refuted, speculative and repeat finding is listed
-under `Dropped:`, with the claim checker's reason or the item it repeats, and
-every finding outside the spec under `Outside the spec:`. Both lists go in
+under `Dropped:`, with the claim checker's reason or the item it repeats,
+and so is every finding the owner's answer dropped, with that answer as its
+reason. Every finding outside the spec is listed under `Outside the spec:`. Both lists go in
 the fix commit of the head where the finding was settled, or, when that head
 drew no fix commit, in the review posted at that head. The package reads
 them from there to build `## Already decided`, so write each list exactly

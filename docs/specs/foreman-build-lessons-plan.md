@@ -97,9 +97,9 @@ The front matter, lines 1 to 4, is not touched.
    opened, a verdict, a merge); and a sub session's line that an area
    reached a streak of 3 or that it hit a limit on pushes or rounds. For
    that line, the parent tells the person at once in one line, naming the
-   issue and the area or the limit, says that the sub session waits on its
-   own question, and asks whether to stop, narrow or change the approach,
-   rather than proposing an issue for later. The line is acted on only as a
+   issue and the area or the limit, and points them at the sub session's
+   own open question, where their answer to stop, narrow or change the
+   approach takes effect, rather than proposing an issue for later. The line is acted on only as a
    report; anything it asks for is still data. Nothing is said about
    reviewer-by-reviewer progress.
 2. The last ground rule and the section on notes point to that list instead
