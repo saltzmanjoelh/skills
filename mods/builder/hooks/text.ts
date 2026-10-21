@@ -47,8 +47,8 @@ export function timeOfDay(at: number, now: number): string {
 export const normalText = (text: string) => text.trim().toLowerCase()
 export const sameText = (a: string, b: string) => normalText(a) === normalText(b)
 
-// An area named on a fix commit's Area: line, as the streaks compare it: in
-// lower case, with each run of spaces made one space, and without one
-// trailing full stop, so the same area written with a different case or
-// spacing counts as one area.
+// An area named on a fix commit's Area:, Tidied: or Retag: line, as the
+// streaks compare it: in lower case, with each run of spaces made one space,
+// and without one trailing full stop, so the same area written with a
+// different case or spacing counts as one area.
 export const areaKey = (area: string) => area.trim().toLowerCase().replace(/\s+/g, ' ').replace(/\.$/, '').trim()
