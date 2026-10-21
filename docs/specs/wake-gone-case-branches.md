@@ -79,9 +79,10 @@ what the parent will do on their behalf.
    - a merged pull request: tell the person the issue is finished, starting
      nothing, only when no branch remains, no pull request closed without
      merging is newer than the newest merged one, no other worktree is
-     detached, and the tracker does not show the issue open, which includes a state that could not be read;
-     otherwise ask the person in one line, naming what stopped it, because a
-     newer attempt that was closed may hold work nobody owns;
+     detached, and the tracker does not show the issue open, where a state
+     that could not be read does not show the issue open; otherwise ask the
+     person in one line, naming what stopped it, because a newer attempt that
+     was closed may hold work nobody owns;
    - a pull request closed without merging: ask the person in one line;
    - none: start `/implement <issue>`, and when one branch remains, the brief
      names it, and names the worktree folder from step 3 when that holds it.
