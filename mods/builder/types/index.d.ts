@@ -157,7 +157,10 @@ export type CounselTally = {
 // question, in the order the session gave them, and such a question holds
 // the three fixed options in `options`, never has `pr`, has one round only
 // and never reruns. An ordinary question, and every question stored before
-// follow-ups questions existed, has no `followUps`.
+// follow-ups questions existed, has no `followUps`. `outsideSpec` holds the
+// numbers, counted from 1, of the follow-ups outside the spec, which the
+// counsel may only file or drop. A question stored before follow-ups could be
+// outside the spec has none, and all its follow-ups are in scope.
 export type CounselQuestion = {
   id: string
   question: string
@@ -176,6 +179,7 @@ export type CounselQuestion = {
   // plans no members.
   launchedAt?: number
   followUps?: string[]
+  outsideSpec?: number[]
 }
 
 // The nine stages of /implement, in order. hooks/progress.ts lists them with

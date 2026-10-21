@@ -3446,6 +3446,31 @@ test('a follow-ups call with options, an empty list, twenty-one follow-ups, two 
   expect(files.get('/repo/.git/builder/counsel/session-1/c1/brief.md') ?? '').toContain('VOTE 20: <fix|file|drop|none>')
 })
 
+test('a follow-up given as an object outside the spec is offered only file and drop, and a vote to fix it sends its member back', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  const files = fakeFiles(on)
+  await startOnly($)
+
+  const asked = String((await loose($)({ ...followUpsBrief, follow_ups: [FOLLOW_UPS[0], { text: FOLLOW_UPS[1], outside_spec: true }, FOLLOW_UPS[2]] })).result)
+  const text = files.get('/repo/.git/builder/counsel/session-1/c1/brief.md') ?? ''
+  expect(asked).toContain('Counsel brief: /repo/.git/builder/counsel/session-1/c1.')
+  expect(text).toContain(`2. ${FOLLOW_UPS[1]} (outside the spec: file or drop only)`)
+  expect(text).toContain('VOTE 2: <file|drop|none>')
+  expect(text).toContain('VOTE 1: <fix|file|drop|none>')
+
+  const rows = DECIDING_ROWS.map(row => [...row])
+  rows[1]![0] = 'fix'
+  const refused = String((await loose($)({ tool: TALLY, id: 'c1', round: 1, votes: followUpBallots(rows) })).result)
+  expect(refused).toContain('follow-up 2 is outside the spec and cannot be fixed in this pull request')
+  expect(refused).toContain(`Launch exactly this member again, with the prompt "Counsel brief: /repo/.git/builder/counsel/session-1/c1.": ${MEMBERS[0]}.`)
+
+  const refusedObject = String((await loose($)({ ...followUpsBrief, follow_ups: [{ text: 'x', outside_spec: false }] })).result)
+  expect(refusedObject).toContain('Refused')
+})
+
 test('with a pull request watched, a follow-ups tally owes nothing, and the next review has no paragraph of counsel decisions', async ($, on) => {
   mock.clock(on)
   const stored = memoryStore(on)

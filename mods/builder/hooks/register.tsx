@@ -4,7 +4,7 @@ import type { EngineInterface, Next, PromptOrigin, Register, ResolveInput, ToolC
 import type { AgentCard, BackgroundTask, BuilderRun, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, StatusMemo, Wake } from '../types'
 import { isSvgSurface } from './art'
 import { checkoutSentence, worktreeWithBranch, type Checkout } from './checkout'
-import { afterAskAgain, afterTally, askAgainAnswer, briefAnswer, briefFactsOf, briefRefusal, briefText, counselAnswer, decisionLine, destinationOf, endedDecisionLines, FOLLOW_UP_OPTIONS, followUpAnswer, followUpAskAgainAnswer, followUpsRefusal, followUpStepOf, followUpVotesOf, keepCounsel, MAX_BRIEF_OPTIONS, MAX_FOLLOW_UPS, MIN_OPTIONS, neverStartedCandidatesOf, neverStartedOf, type PullRequestRef, reviewParagraph, stepOf, type UnreadableVote, votesOf } from './counsel'
+import { afterAskAgain, afterTally, askAgainAnswer, briefAnswer, briefFactsOf, briefRefusal, briefText, counselAnswer, decisionLine, destinationOf, endedDecisionLines, FOLLOW_UP_OPTIONS, followUpAnswer, followUpAskAgainAnswer, followUpsInput, followUpsRefusal, followUpStepOf, followUpVotesOf, keepCounsel, MAX_BRIEF_OPTIONS, MAX_FOLLOW_UPS, MIN_OPTIONS, neverStartedCandidatesOf, neverStartedOf, type PullRequestRef, reviewParagraph, stepOf, type UnreadableVote, votesOf } from './counsel'
 import { carriedRuns, changesBetween, DECISION_LABEL, isCiMonitorEvent, isSameState, PR_FIELDS, pullRequestStateIn, roundInProgress, RUNS_JQ, runsOf, snapshotIn, snapshotOf, verdictsOf, type GhPullRequest, type Snapshot, type Verdict, type WorkflowRun } from './github'
 import { afterComparison, afterLoad, dueComparisons, isStale, LOADED_PATHS, loadBegunAs, loadBegunIn, loadedIn, type Found } from './loaded'
 import { AGENT_PANE, agentPaneTree, bandTree, isDrawable, messagesReadOf, NAMED_AFTER_MS, PANE, paneTree, secondRow, type Elements, type MessagesRead, type View } from './pane'
@@ -1899,6 +1899,14 @@ async function counselDestination($: $, named: unknown): Promise<ReturnType<type
   return destinationOf(named, watched, state)
 }
 
+// The follow-ups a question records, with the numbers of those outside the
+// spec only when there are any, so a question with none in that list is
+// stored as one was before follow-ups could be outside the spec.
+function followUpsRecord(raw: readonly unknown[]): Pick<CounselQuestion, 'followUps' | 'outsideSpec'> {
+  const { followUps, outsideSpec } = followUpsInput(raw)
+  return { followUps, ...(outsideSpec.length > 0 ? { outsideSpec } : {}) }
+}
+
 // Writes the brief, then records the question; a refusal or a failed write
 // records nothing. Where a decision goes is settled first, before an id is
 // taken or anything is written, and when the question is put, not when it is
@@ -1946,7 +1954,7 @@ async function serveCounsel($: $, input: CounselInput): Promise<string> {
     tallies: [],
     ...(owedTo ? { pr: owedTo } : {}),
     launchedAt: await $.clock.now(),
-    ...(isFollowUps ? { followUps: (input.follow_ups as string[]).map(text => text.trim()) } : {}),
+    ...(isFollowUps ? followUpsRecord(input.follow_ups as unknown[]) : {}),
   }
   try {
     await $.fs.write(`${folder}/brief.md`, briefText(briefFactsOf(q), unwritten))
@@ -3081,13 +3089,32 @@ export const register: Register = on => {
     })
     await $.tool.register({
       name: 'counsel',
-      description: 'Put a question to the counsel of seven members, the six reviewers and the owner\'s advocate, before asking the person. The mod writes the brief (without the lean) and answers with the question id, the brief folder and which members to launch. A decision is recorded in the spec unless pull_request names the watched pull request while it is open; then the mod lists it in that pull request\'s next review. To put a review round\'s follow-ups, give follow_ups and no options or pull_request: each follow-up gets the same three options, fix it in this pull request, file it as an issue or drop it, and is decided on its own; the decisions are recorded only in the round\'s Follow-ups section.',
+      description: 'Put a question to the counsel of seven members, the six reviewers and the owner\'s advocate, before asking the person. The mod writes the brief (without the lean) and answers with the question id, the brief folder and which members to launch. A decision is recorded in the spec unless pull_request names the watched pull request while it is open; then the mod lists it in that pull request\'s next review. To put a review round\'s follow-ups, give follow_ups and no options or pull_request: each follow-up gets the same three options, fix it in this pull request, file it as an issue or drop it, and is decided on its own; the decisions are recorded only in the round\'s Follow-ups section. A follow-up outside the spec, given as { text, outside_spec: true }, is offered only file and drop, and a vote to fix it is not counted.',
       inputSchema: {
         type: 'object',
         properties: {
           question: { type: 'string', description: 'The question, as it would be asked.' },
           options: { type: 'array', items: { type: 'string' }, minItems: MIN_OPTIONS, maxItems: MAX_BRIEF_OPTIONS, description: `${MIN_OPTIONS} to ${MAX_BRIEF_OPTIONS} options, in the order given; no recommendation. Required unless follow_ups is given, and refused with it.` },
-          follow_ups: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: MAX_FOLLOW_UPS, description: `1 to ${MAX_FOLLOW_UPS} follow-ups, each in one or two sentences saying what it is and what a person would see if it is never fixed. Give it in place of options, and without pull_request.` },
+          follow_ups: {
+            type: 'array',
+            items: {
+              anyOf: [
+                { type: 'string' },
+                {
+                  type: 'object',
+                  properties: {
+                    text: { type: 'string' },
+                    outside_spec: { type: 'boolean', enum: [true] },
+                  },
+                  required: ['text', 'outside_spec'],
+                  additionalProperties: false,
+                },
+              ],
+            },
+            minItems: 1,
+            maxItems: MAX_FOLLOW_UPS,
+            description: `1 to ${MAX_FOLLOW_UPS} follow-ups, each in one or two sentences saying what it is and what a person would see if it is never fixed. Give a follow-up as its text, or, for a finding the claim checker confirmed is outside the spec, as { text, outside_spec: true }, which the counsel may only file or drop. Give it in place of options, and without pull_request.`,
+          },
           background: { type: 'string', description: 'The issue in a few lines, what was tried, and what is at stake.' },
           paths: { type: 'array', items: { type: 'string' }, description: 'Paths, relative to the checkout, of the spec, plan or code the question touches.' },
           lean: { type: 'string', description: 'The session\'s own lean. Kept out of the brief and shown to the person only if they are asked.' },
