@@ -346,7 +346,7 @@ export function trendSection(report: TrendReport): string {
     lines.push('', `Commits that fixed findings without an Area: line, which neither lengthen nor break a streak: ${report.unlabelled.join(', ')}.`)
   }
   if (report.closed.length > 0) {
-    lines.push('', 'Closed areas, in which every later finding counts as outside the spec:')
+    lines.push('', 'Closed areas, in which every later finding counts as outside the spec, unless it breaks working behaviour or is a safety finding:')
     for (const { area, answer } of report.closed) lines.push(`- ${area}: ${answer}`)
   }
   if (report.unreadable.length > 0) {

@@ -270,6 +270,7 @@ test('file the rest and cut it out close an area, which then never stops', () =>
     expect(report.streaks).toEqual([])
     expect(report.closed).toEqual([{ area: RACE, answer }])
     expect(trendSection(report)).toContain(`- ${RACE}: ${answer}`)
+    expect(trendSection(report)).toContain('unless it breaks working behaviour or is a safety finding')
   }
 })
 
