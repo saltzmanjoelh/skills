@@ -42,7 +42,7 @@ export const ticketsKey = (sessionId: string) => `tickets:${sessionId}`
 
 export const OUTBOX_EMPTY: ForemanOutbox = { logs: [], effects: [], lines: [] }
 
-export const TICKETS_EMPTY: ForemanTickets = { pairings: [], freedWhilePaused: false, folderMissing: false, outbox: OUTBOX_EMPTY }
+export const TICKETS_EMPTY: ForemanTickets = { pairings: [], folderMissing: false, outbox: OUTBOX_EMPTY }
 
 // Whether the outbox holds anything to carry out.
 export const hasWork = (o: ForemanOutbox) => o.logs.length > 0 || o.effects.length > 0 || o.lines.length > 0
@@ -125,7 +125,7 @@ export function ticketsIn(raw: unknown): ForemanTickets {
   const t = objectOf(raw)
   if (t === null) return TICKETS_EMPTY
   const pairings = Array.isArray(t.pairings) ? t.pairings.flatMap(p => pairingIn(p) ?? []) : []
-  return { pairings, freedWhilePaused: t.freedWhilePaused === true, folderMissing: t.folderMissing === true, outbox: outboxIn(t.outbox) }
+  return { pairings, folderMissing: t.folderMissing === true, outbox: outboxIn(t.outbox) }
 }
 
 // The ledger with the pairings past MAX_PAIRINGS dropped, freed and released

@@ -35,7 +35,7 @@ test('a stored ledger in any other shape reads as empty, and a pairing with a ba
   expect(ticketsIn(undefined)).toEqual(TICKETS_EMPTY)
   expect(ticketsIn('garbage')).toEqual(TICKETS_EMPTY)
   const read = ticketsIn({ pairings: [{ ticket: 'ft-a', standing: 'odd', localId: 7 }, { ticket: 3 }, null], freedWhilePaused: true })
-  expect(read.freedWhilePaused).toBe(true)
+  expect(read).not.toHaveProperty('freedWhilePaused')
   expect(read.pairings).toHaveLength(1)
   expect(read.pairings[0]!.standing).toBe('active')
   expect(read.pairings[0]!.localId).toBeNull()

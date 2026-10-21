@@ -28,7 +28,7 @@ const ledgerOf = (pairings: readonly ForemanPairing[]) => ({ ...ticketsIn(undefi
 // A parent whose role is on, or off when `isOn` is false, with `pairings` in
 // its stored ledger, started and mounted.
 async function parentWith($: Engine, on: Parameters<typeof world>[0], pairings: readonly ForemanPairing[] = PAIRINGS, isOn = true) {
-  const w = world(on, { store: { 'parent:session-1': { isOn, slots: null, isPaused: false }, [ticketsKey('session-1')]: ledgerOf(pairings) } })
+  const w = world(on, { store: { 'parent:session-1': { isOn, slots: null }, [ticketsKey('session-1')]: ledgerOf(pairings) } })
   const ui = await mountBoth($, on)
   await start($)
   await w.clock.settle()
@@ -111,7 +111,7 @@ test('a ledger that cannot be read lets the note pass', async ($, on) => {
 
 test('after a hot reload, the ledger left in state decides', async ($, on) => {
   const w = world(on)
-  leftInState(on, { parent: { isOn: true, slots: null, isPaused: false }, tickets: ledgerOf([paired('local_a', 'ABC-1')]), nextReadAt: T0 + 20_000 })
+  leftInState(on, { parent: { isOn: true, slots: null }, tickets: ledgerOf([paired('local_a', 'ABC-1')]), nextReadAt: T0 + 20_000 })
   const ui = await mountBoth($, on)
   expect(await submit($, note('local_a'))).toEqual({ drop: NOTES_KEPT })
   expect(w.engine.prompts).toEqual([])

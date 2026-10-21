@@ -1,9 +1,9 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PromptSubmitInput, Register, ResolveInput, ToolCallResult } from 'claude-code'
 
-import { decide, desktopOf, needsList, PAUSED_SLOT_LOG, slotOutcome, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
+import { decide, desktopOf, needsList, slotOutcome, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
 import { isSvgSurface } from './art'
-import { becameParentAnswer, commandOf, slotsAnswer } from './commands'
+import { becameParentAnswer, COMMAND, commandOf, slotsAnswer } from './commands'
 import { failureLine, listSessions, NUDGE_TEXT, openSession, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
 import { keptLine, keptNames, NOTES_KEPT, turnEndIds } from './notes'
 import { bandTree, PANE, paneTree, type Elements, type View } from './pane'
@@ -52,7 +52,7 @@ const START_TOOL = 'mcp__ccd_session__start_session'
 const IDLE_MINUTES = 5
 const CLEANUP_MINUTES = 15
 
-// The foreman mod: in a session that ran /foreman, the parent, it adds a
+// The foreman mod: in a session that ran /start-foreman, the parent, it adds a
 // ticket to every start_session brief, reads the status files builder
 // writes, one per /implement sub session, shows the ones whose ticket it
 // issued in a band above the prompt and in a pane, and acts on them: it
@@ -268,7 +268,7 @@ async function readAndSchedule($: $) {
 // Runs `work` from a timer of its own rather than from the hook that asked
 // for it, without waiting for it. The engine refuses a prompt submitted from
 // inside a command's hook, which would wait on the turn the hook holds, and
-// the first read runs inside /foreman's hook.
+// the first read runs inside /start-foreman's hook.
 function later($: $, work: () => Promise<unknown>) {
   $.clock.after(0, () => {
     void work().catch(() => undefined)
@@ -294,7 +294,7 @@ async function decideNow($: $, folderExists: boolean, listed: boolean, now: numb
     }
   }
   const settings = parentIn(await read($, parent))
-  const input = { rows, now, limits: limitsOf(currentOptions), sessions, folderExists, listed, isPaused: settings.isPaused, slots: slotsOf(settings, currentOptions.slots) }
+  const input = { rows, now, limits: limitsOf(currentOptions), sessions, folderExists, listed, slots: slotsOf(settings, currentOptions.slots) }
   let decision: Decision = { tickets: TICKETS_EMPTY, effects: [], reasons: [], logs: [], nextDueAt: null }
   await writeTickets($, t => {
     const joined = joinOwners(t, rows)
@@ -417,7 +417,6 @@ async function view($: $): Promise<View> {
   return {
     isOn: settings.isOn,
     slots: slotsOf(settings, currentOptions.slots),
-    isPaused: settings.isPaused,
     rows: settings.isOn ? await shownNow($) : [],
     now: await $.clock.now(),
     nextReadAt: typeof due === 'number' && Number.isFinite(due) ? due : null,
@@ -470,35 +469,25 @@ async function nudgeRow($: $, file: string) {
   await nudge($, to, nameOf(row), ', because Nudge was pressed')
 }
 
-// What a freed slot leads to now, from the slots free and the pause.
+// What a freed slot leads to now, from the slots free.
 async function slotOutcomeNow($: $) {
   const settings = parentIn(await read($, parent))
-  return slotOutcome(slotsOf(settings, currentOptions.slots) - busyCount(await shownNow($)), settings.isPaused)
+  return slotOutcome(slotsOf(settings, currentOptions.slots) - busyCount(await shownNow($)))
 }
 
-// The ledger with a freed slot's outcome applied: the pause remembered, or
-// the slot wake put in the outbox, which carryOut then sends, as a read's
-// wakes are, so a reload before it is sent loses nothing.
+// The ledger with a freed slot's outcome applied: the slot wake put in the
+// outbox, which carryOut then sends, as a read's wakes are, so a reload
+// before it is sent loses nothing.
 function withSlotOutcome(t: ForemanTickets, outcome: SlotOutcome): ForemanTickets {
-  if (outcome.kind === 'remember') return { ...t, freedWhilePaused: true }
   if (outcome.kind === 'none') return t
   return { ...t, outbox: addWork(t.outbox, { logs: [], effects: [], lines: [wakeLine([outcome.reason])!] }) }
 }
 
 // After Release freed a slot: the parent is woken with the number of slots
-// free, or the pause remembers it. Nothing happens when no slot is free.
+// free. Nothing happens when no slot is free.
 async function slotFreed($: $) {
   const outcome = await slotOutcomeNow($)
   await writeTickets($, t => withSlotOutcome(t, outcome))
-  if (outcome.kind === 'remember') await addLog($, PAUSED_SLOT_LOG)
-  later($, () => carryOut($))
-}
-
-// On /foreman resume: when a slot freed while paused, the mark is cleared and
-// the parent is woken with the number of slots free, in one update.
-async function resumeWake($: $) {
-  const outcome = await slotOutcomeNow($)
-  await writeTickets($, t => (t.freedWhilePaused ? withSlotOutcome({ ...t, freedWhilePaused: false }, outcome) : t))
   later($, () => carryOut($))
 }
 
@@ -573,7 +562,7 @@ async function keptLineFor($: $, e: PromptSubmitInput): Promise<string | null> {
   return names === null ? null : keptLine(names)
 }
 
-// What each /foreman command answers once it is done.
+// What /start-foreman answers once it is done.
 async function runCommand($: $, args: string): Promise<string> {
   const command = commandOf(args)
   if (command.kind === 'refused') return command.text
@@ -585,21 +574,6 @@ async function runCommand($: $, args: string): Promise<string> {
     if (wasOn) return slotsAnswer(command.count)
     await becomeParent($)
     return becameParentAnswer(command.count)
-  }
-  // Pause and resume leave the role as it is. Before /foreman they are kept,
-  // and the answer says so, because they do nothing until the role is on.
-  const notYet = ' This session is not the parent yet, so it takes effect once /foreman makes it one.'
-  if (command.kind === 'pause') {
-    await writeParent($, p => ({ ...p, isPaused: true }))
-    return (await isOn($)) ? 'This parent is paused.' : `The pause is kept.${notYet}`
-  }
-  if (command.kind === 'resume') {
-    await writeParent($, p => ({ ...p, isPaused: false }))
-    if (!(await isOn($))) return `The pause is cleared.${notYet}`
-    // The wake goes in the outbox and is carried out from a timer, so the
-    // command answers at once.
-    await resumeWake($)
-    return 'This parent is no longer paused.'
   }
   await becomeParent($)
   return 'This session is now the parent, and foreman shows its sub sessions above the prompt and in its pane.'
@@ -619,15 +593,8 @@ export const register: Register = (on, options) => {
   currentOptions = options
   // At the start of a session, and of a resumed one, the store says whether
   // this session is the parent. The role is turned back on from it.
-  // Settings stored while the role was off, such as a slot count or a pause
-  // set before /foreman, are copied into $.state too, because the next
-  // /foreman builds the store's entry from $.state and would otherwise write
-  // the defaults over them. The timers are armed only when the role is on.
+  // The timers are armed only when the role is on.
   on('session.start', async ($, e, next) => {
-    await $.command.register({
-      name: 'foreman',
-      description: 'Make this session the parent and show its /implement sub sessions. `/foreman slots <n>` does the same and sets how many it runs at once, `/foreman pause` and `/foreman resume` pause and resume it.',
-    })
     const id = await $.session.id()
     const rawParent = await $.store.get(storeKey(id))
     const rawTickets = await $.store.get(ticketsKey(id))
@@ -649,12 +616,16 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // /start-foreman is a skill in the person's skills folder, so that the
+  // desktop app lists it before a session starts. This hook answers it
+  // without calling next, so the skill's own text, which says that the mod is
+  // not loaded, never reaches the model while the mod runs.
   // The host already puts the mod's name in front of a command's output.
-  // Every /foreman command also arms the timers again when a hot reload has
+  // Every /start-foreman also arms the timers again when a hot reload has
   // dropped them, as the hooks below do. Arming does nothing while the role
-  // is off or the timers are already armed, so a plain /foreman, which armed
-  // them in runCommand before opening the pane, changes nothing here.
-  on('command.run', { command: 'foreman' }, async ($, e) => {
+  // is off or the timers are already armed, so a plain /start-foreman, which
+  // armed them in runCommand before opening the pane, changes nothing here.
+  on('command.run', { command: COMMAND }, async ($, e) => {
     const text = await runCommand($, typeof e.args === 'string' ? e.args : '')
     await ensureArmed($).catch(() => undefined)
     return { text }

@@ -126,7 +126,7 @@ test('each way an open can fail shows a toast that is the newest log line, with 
   expect(await ui.paneText()).not.toContain(SECRET)
 })
 
-test('a session that never ran /foreman draws no band of its own and reads no file', async ($, on) => {
+test('a session that never ran /start-foreman draws no band of its own and reads no file', async ($, on) => {
   const w = world(on)
   twoSubs(w.folder)
   const ui = await mountBoth($, on)
@@ -138,19 +138,19 @@ test('a session that never ran /foreman draws no band of its own and reads no fi
   expect(w.folder.reads).toBe(0)
 })
 
-test('/foreman turns the role on, opens the pane and keeps the role in the store under the session id', async ($, on) => {
+test('/start-foreman turns the role on, opens the pane and keeps the role in the store under the session id', async ($, on) => {
   const w = world(on)
   await mountBoth($, on)
   await start($)
   const answer = await foreman($)
   expect(answer.text).toBe('This session is now the parent, and foreman shows its sub sessions above the prompt and in its pane.')
-  expect(w.stored.get('parent:session-1')).toEqual({ isOn: true, slots: null, isPaused: false })
+  expect(w.stored.get('parent:session-1')).toEqual({ isOn: true, slots: null })
   expect(w.panes).toEqual(['foreman'])
   expect(w.folder.lists).toBe(1)
 })
 
 test('a session whose stored role is on draws the band and reads the folder at its start, and reads again 30 seconds on', async ($, on) => {
-  const w = world(on, { store: { 'parent:session-1': { isOn: true, slots: 3, isPaused: false } } })
+  const w = world(on, { store: { 'parent:session-1': { isOn: true, slots: 3 } } })
   twoSubs(w.folder)
   const ui = await mountBoth($, on)
   await start($)
@@ -164,7 +164,7 @@ test('a session whose stored role is on draws the band and reads the folder at i
 test('after a reload that lost the timer, the end of a turn arms it again and reads at once when the read is overdue', async ($, on) => {
   const w = world(on)
   twoSubs(w.folder)
-  leftInState(on, { tickets: w.stored.get(ticketsKey('session-1')), parent: { isOn: true, slots: null, isPaused: false }, nextReadAt: T0 - SECOND, readAt: T0 - 31 * SECOND })
+  leftInState(on, { tickets: w.stored.get(ticketsKey('session-1')), parent: { isOn: true, slots: null }, nextReadAt: T0 - SECOND, readAt: T0 - 31 * SECOND })
   on('turn.complete', ($, e) => ({ text: e.answer }))
   await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as never)
   await w.clock.settle()
@@ -176,7 +176,7 @@ test('after a reload that lost the timer, the end of a turn arms it again and re
 test('after a reload that lost the timer, a submitted prompt arms it again and reads at once when the read is overdue', async ($, on) => {
   const w = world(on)
   twoSubs(w.folder)
-  leftInState(on, { tickets: w.stored.get(ticketsKey('session-1')), parent: { isOn: true, slots: null, isPaused: false }, nextReadAt: T0 - SECOND, readAt: T0 - 31 * SECOND })
+  leftInState(on, { tickets: w.stored.get(ticketsKey('session-1')), parent: { isOn: true, slots: null }, nextReadAt: T0 - SECOND, readAt: T0 - 31 * SECOND })
   const passed = await $.prompt.submit({ text: 'next', wait: false, origin: { kind: 'person' } } as never)
   expect((passed as { text: string }).text).toBe('next')
   await w.clock.settle()
@@ -187,7 +187,7 @@ test('after a reload that lost the timer, a submitted prompt arms it again and r
 
 test('after a reload whose read is not yet due, the end of a turn arms the timer for the saved time', async ($, on) => {
   const w = world(on)
-  leftInState(on, { tickets: w.stored.get(ticketsKey('session-1')), parent: { isOn: true, slots: null, isPaused: false }, nextReadAt: T0 + 20 * SECOND, readAt: T0 - 100 * SECOND })
+  leftInState(on, { tickets: w.stored.get(ticketsKey('session-1')), parent: { isOn: true, slots: null }, nextReadAt: T0 + 20 * SECOND, readAt: T0 - 100 * SECOND })
   on('turn.complete', ($, e) => ({ text: e.answer }))
   await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as never)
   await w.clock.advance(19 * SECOND)
@@ -196,70 +196,57 @@ test('after a reload whose read is not yet due, the end of a turn arms the timer
   expect(w.folder.lists).toBe(1)
 })
 
-test('after a reload that lost the timer, a /foreman subcommand arms it again', async ($, on) => {
+test('after a reload that lost the timer, a refused /start-foreman arms it again', async ($, on) => {
   const w = world(on)
-  leftInState(on, { tickets: w.stored.get(ticketsKey('session-1')), parent: { isOn: true, slots: null, isPaused: false }, nextReadAt: T0 + 20 * SECOND, readAt: T0 - 100 * SECOND })
-  await foreman($, 'pause')
+  leftInState(on, { tickets: w.stored.get(ticketsKey('session-1')), parent: { isOn: true, slots: null }, nextReadAt: T0 + 20 * SECOND, readAt: T0 - 100 * SECOND })
+  await foreman($, 'x')
   await w.clock.advance(19 * SECOND)
   expect(w.folder.lists).toBe(0)
   await w.clock.advance(SECOND)
   expect(w.folder.lists).toBe(1)
 })
 
-test('/foreman slots sets the count, a count outside 1 to 20 is refused and changes nothing, and pause adds paused until resume', async ($, on) => {
+test('/start-foreman <n> sets the count, and a count outside 1 to 20 or any other argument is refused and changes nothing', async ($, on) => {
   world(on)
   const ui = await mountBoth($, on)
   await start($)
   await foreman($)
-  expect((await foreman($, 'slots 1')).text).toBe('This parent now runs 1 sub session at once.')
-  expect((await foreman($, 'slots 3')).text).toBe('This parent now runs 3 sub sessions at once.')
+  expect((await foreman($, '1')).text).toBe('This parent now runs 1 sub session at once.')
+  expect((await foreman($, '3')).text).toBe('This parent now runs 3 sub sessions at once.')
   expect(await ui.bandText()).toContain('0 of 3 slots busy')
-  for (const bad of ['slots 0', 'slots 2.5', 'slots x']) {
+  for (const bad of ['0', '2.5', '21']) {
     expect((await foreman($, bad)).text).toContain('from 1 to 20')
     expect(await ui.bandText()).toContain('0 of 3 slots busy')
   }
-  expect((await foreman($, 'slots')).text).toContain('Use /foreman')
-  expect((await foreman($, 'pause')).text).toBe('This parent is paused.')
-  expect(await ui.bandText()).toContain('foreman: 0 of 3 slots busy · paused · ')
-  expect((await foreman($, 'resume')).text).toBe('This parent is no longer paused.')
-  expect(await ui.bandText()).not.toContain('paused')
+  for (const bad of ['x', 'pause', 'slots 3']) {
+    expect((await foreman($, bad)).text).toContain('Use /start-foreman')
+    expect(await ui.bandText()).toContain('0 of 3 slots busy')
+  }
 })
 
-test('/foreman slots before /foreman makes the session the parent with that count, reads the folder and opens the pane', async ($, on) => {
+test('/start-foreman <n> in a session that is not the parent makes it the parent with that count, reads the folder and opens the pane', async ($, on) => {
   const w = world(on)
   const ui = await mountBoth($, on)
   await start($)
-  const answer = await foreman($, 'slots 5')
+  const answer = await foreman($, '5')
   expect(answer.text).toBe('This session is now the parent and runs 5 sub sessions at once, and foreman shows its sub sessions above the prompt and in its pane.')
   expect(await ui.bandText()).toContain('0 of 5 slots busy')
   expect(w.folder.lists).toBe(1)
   expect(w.panes).toEqual(['foreman'])
-  expect(w.stored.get('parent:session-1')).toEqual({ isOn: true, slots: 5, isPaused: false })
+  expect(w.stored.get('parent:session-1')).toEqual({ isOn: true, slots: 5 })
 })
 
-test('a pause or a resume before /foreman is kept, says it waits for /foreman, and leaves the role off', async ($, on) => {
+test('a refused /start-foreman leaves a session that is not the parent as it was', async ($, on) => {
   const w = world(on)
   const ui = await mountBoth($, on)
   await start($)
-  expect((await foreman($, 'pause')).text).toBe('The pause is kept. This session is not the parent yet, so it takes effect once /foreman makes it one.')
+  expect((await foreman($, 'pause')).text).toContain('Use /start-foreman')
   expect(await ui.bandText()).toBe('')
   expect(w.folder.lists).toBe(0)
   expect(w.panes).toEqual([])
-  await foreman($)
-  expect(await ui.bandText()).toContain('paused')
 })
 
-test('a resume before /foreman clears a kept pause and says it waits for /foreman', async ($, on) => {
-  const w = world(on, { store: { 'parent:session-1': { isOn: false, slots: null, isPaused: true } } })
-  const ui = await mountBoth($, on)
-  await start($)
-  expect((await foreman($, 'resume')).text).toBe('The pause is cleared. This session is not the parent yet, so it takes effect once /foreman makes it one.')
-  expect(w.folder.lists).toBe(0)
-  await foreman($)
-  expect(await ui.bandText()).not.toContain('paused')
-})
-
-test('slots and pause stored before /foreman survive a resume, and /foreman then keeps them in the band and the store', async ($, on) => {
+test('a slot count stored while the role was off survives a resume, and /start-foreman then keeps it in the band and the store', async ($, on) => {
   const w = world(on, { store: { 'parent:session-1': { isOn: false, slots: 3, isPaused: true } } })
   const ui = await mountBoth($, on)
   await start($)
@@ -267,8 +254,8 @@ test('slots and pause stored before /foreman survive a resume, and /foreman then
   await foreman($)
   const band = await ui.bandText()
   expect(band).toContain('0 of 3 slots busy')
-  expect(band).toContain('paused')
-  expect(w.stored.get('parent:session-1')).toEqual({ isOn: true, slots: 3, isPaused: true })
+  expect(band).not.toContain('paused')
+  expect(w.stored.get('parent:session-1')).toEqual({ isOn: true, slots: 3 })
 })
 
 test('the slots option sets the count when no command has', { options: { slots: 4 } }, async ($, on) => {

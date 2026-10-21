@@ -16,22 +16,28 @@ ln -s <path to this repository>/mods/foreman ~/.claude/skills/foreman
 
 As with builder, use one way or the other, not both, because an installed copy takes precedence over a linked folder.
 
+Either way, also link the `start-foreman` skill from this repository's `skills` folder, because that skill is the command that starts foreman:
+
+```bash
+ln -s <path to this repository>/skills/start-foreman ~/.claude/skills/start-foreman
+```
+
 ## Becoming the parent
 
-Foreman does nothing in a session until that session runs `/foreman` or `/foreman slots <n>`. Every session that never ran it, sub sessions included, looks and behaves exactly as it does without the mod: the band is the host's own, no timer runs and no file is read.
+Foreman does nothing in a session until that session runs `/start-foreman`. Every session that never ran it, sub sessions included, looks and behaves exactly as it does without the mod: the band is the host's own, no timer runs and no file is read.
 
 | Command | What it does |
 |---|---|
-| `/foreman` | Makes this session the parent, reads the status folder at once and opens the pane. |
-| `/foreman slots <n>` | Sets how many sub sessions this parent runs at once, a whole number from 1 to 20, and makes the session the parent as `/foreman` does when it is not one yet. Any other count is refused with the range and changes nothing. |
-| `/foreman pause` | Pauses this parent: a slot that frees no longer wakes the parent's model, and the band says `paused`. Nudges, notifications and the other wakes go on. |
-| `/foreman resume` | Clears the pause, and wakes the parent's model once when a slot freed while it was paused and a slot is free. |
+| `/start-foreman` | Makes this session the parent, reads the status folder at once and opens the pane. |
+| `/start-foreman <n>` | Does the same, and sets how many sub sessions this parent runs at once, a whole number from 1 to 20. In a session that is already the parent, it only changes the count. Any other count is refused with the range, any other argument is refused with the usage, and neither changes anything. |
 
-The role, the slot count, the pause and the tickets are kept in the session's state and in the mod's store under the session's id, so a resumed session or a reload of the mod finds them again. Without `/foreman slots`, the count is the `slots` option in the mod's settings, which defaults to two. A pause or resume given before the session is the parent is kept, its answer says that it waits for `/foreman`, and it takes effect once the session becomes the parent.
+The role, the slot count and the tickets are kept in the session's state and in the mod's store under the session's id, so a resumed session or a reload of the mod finds them again. Without a count, the count is the `slots` option in the mod's settings, which defaults to two.
+
+`/start-foreman` is a skill in the person's skills folder rather than a command that the mod declares while the session runs. The desktop app's prompt box lists skills before a session starts, but it does not list a command that a mod declares, so a command declared by the mod showed as unknown in a new session. Foreman's `command.run` hook answers `/start-foreman` itself, so the model never reads the skill's text while the mod runs. When the mod is not loaded, the skill's text tells the model to say so and to do nothing else.
+
+The `foreman:wake` skill is for the parent's model only, so it is marked `user-invocable: false` and does not show in the prompt box.
 
 Start sub sessions only after the session is the parent. Foreman adds its ticket to a `start_session` brief only in a parent, and builder writes a status file only for a sub session that holds a ticket, so a sub session started earlier never shows in the band or the pane.
-
-The Claude Code desktop app's prompt box does not list a command that a mod declares while the session runs, so it shows only foreman's `foreman:wake` skill and may say that `/foreman` is not a command. Type the command anyway: the session runs it, and foreman answers with a line that starts with `foreman:`.
 
 ## Tickets
 
@@ -57,7 +63,7 @@ A file whose modification time is more than three minutes older than the read th
 
 ## The band
 
-The band is one row, in the parent only, such as `foreman: 2 of 2 slots busy · ABC-123 build · ABC-124 needs you · next read in 30s`. It counts every listed sub session whose state is not done as busy, adds `paused` while paused, and shows a chip for each sub session: its issue key with its stage while it works or waits on builder, or its state in words otherwise. Only `needs you` is red, and only `idle` and `in cleanup` are amber. When the chips do not all fit, the band ends with `+N more`. Pressing a chip opens that sub session.
+The band is one row, in the parent only, such as `foreman: 2 of 2 slots busy · ABC-123 build · ABC-124 needs you · next read in 30s`. It counts every listed sub session whose state is not done as busy, and shows a chip for each sub session: its issue key with its stage while it works or waits on builder, or its state in words otherwise. Only `needs you` is red, and only `idle` and `in cleanup` are amber. When the chips do not all fit, the band ends with `+N more`. Pressing a chip opens that sub session.
 
 ## The pane
 
@@ -83,7 +89,7 @@ A sub session whose file leaves the folder, as builder deletes it at the end of 
 
 ## Slots, Release and Nudge
 
-The slots busy are the shown sub sessions that are not released and not done. When a slot frees and foreman is not paused, it wakes the parent's model with the number of slots free, such as `one slot free; pick the next issue and start it.` A slot that frees while every slot is still busy, because the slot count went down, wakes nothing.
+The slots busy are the shown sub sessions that are not released and not done. When a slot frees, foreman wakes the parent's model with the number of slots free, such as `one slot free; pick the next issue and start it.` A slot that frees while every slot is still busy, because the slot count went down, wakes nothing.
 
 Release frees a sub session's slot without archiving its session or touching its status file. Its row stays in the pane, dimmed, with `released` in place of its state and no Nudge or Release button, and its issue button still opens the session. It has no chip in the band, does not count as busy, and foreman takes no action on it. The row leaves when its file leaves the folder.
 

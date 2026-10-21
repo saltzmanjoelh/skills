@@ -1,6 +1,7 @@
 ---
 name: wake
-description: For the parent's model, not for typing. To start foreman, type /foreman. What a parent session does when the foreman mod wakes it. Use whenever a line starting "foreman: " arrives, as a prompt or appended to a running turn, to handle each sentence in it, such as a free slot, an idle sub session, a sub session stuck in cleanup, or one that is gone.
+description: For the parent's model only; the person starts foreman with /start-foreman. What a parent session does when the foreman mod wakes it. Use whenever a line starting "foreman: " arrives, as a prompt or appended to a running turn, to handle each sentence in it, such as a free slot, an idle sub session, a sub session stuck in cleanup, or one that is gone.
+user-invocable: false
 ---
 
 # Foreman wake

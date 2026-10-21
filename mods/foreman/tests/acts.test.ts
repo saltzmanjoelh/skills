@@ -218,7 +218,7 @@ test('a done sub session whose session is archived frees its slot and wakes the 
 })
 
 test('a sub session whose file leaves the folder frees its slot, and a missing folder frees nothing', async ($, on) => {
-  const w = world(on, { store: { 'parent:session-1': { isOn: true, slots: 1, isPaused: false } } })
+  const w = world(on, { store: { 'parent:session-1': { isOn: true, slots: 1 } } })
   const working = record('ABC-1', 'working', { desktopSessionId: 'local_a' })
   w.folder.put('a.json', working)
   const ui = await mountBoth($, on)
@@ -261,25 +261,6 @@ test('Release frees the slot, leaves the row dimmed and labelled released, and w
   await minutesPass(w, 1)
   await ui.paneText()
   expect(await ui.pane.find({ key: 'open-a.json' })).toBeUndefined()
-  expect(w.engine.prompts).toHaveLength(1)
-})
-
-test('a slot that frees while paused wakes nothing, and /foreman resume then wakes the parent once', async ($, on) => {
-  const w = world(on)
-  w.folder.put('a.json', record('ABC-1', 'working', { desktopSessionId: 'local_a' }))
-  const ui = await mountBoth($, on)
-  await start($)
-  await foreman($)
-  await foreman($, 'pause')
-  await ui.pane.press({ key: 'release-a.json' })
-  await w.clock.settle()
-  expect(w.engine.prompts).toEqual([])
-  await foreman($, 'resume')
-  await w.clock.settle()
-  expect(w.engine.prompts).toEqual(['foreman: two slots free; pick the next issues and start them.'])
-  await foreman($, 'pause')
-  await foreman($, 'resume')
-  await w.clock.settle()
   expect(w.engine.prompts).toHaveLength(1)
 })
 
@@ -348,8 +329,8 @@ test('after a reload the ledger in $.state keeps a wake from coming twice', asyn
   const p = { ...newPairing('ft-ABC-1', 'local_a', T0), owner: 's-ABC-1', ownerFile: 'a.json', issueKey: 'ABC-1' }
   const acted = { ...p, acts: { ...p.acts, episode: { state: 'in-cleanup', since: T0 }, cleanupWokeFor: `in-cleanup@${T0}` } }
   leftInState(on, {
-    tickets: { pairings: [acted], freedWhilePaused: false, folderMissing: false },
-    parent: { isOn: true, slots: null, isPaused: false },
+    tickets: { pairings: [acted], folderMissing: false },
+    parent: { isOn: true, slots: null },
     nextReadAt: T0 - SECOND,
     readAt: T0 - MINUTE,
   })
@@ -413,8 +394,8 @@ test('after a restart, a first listing that fails frees no slot and forgets no t
   const p = { ...newPairing('ft-ABC-1', 'local_a', T0), owner: 's-ABC-1', ownerFile: 'a.json', issueKey: 'ABC-1' }
   const w = world(on, {
     store: {
-      'parent:session-1': { isOn: true, slots: null, isPaused: false },
-      [ticketsKey('session-1')]: { pairings: [p], freedWhilePaused: false, folderMissing: false },
+      'parent:session-1': { isOn: true, slots: null },
+      [ticketsKey('session-1')]: { pairings: [p], folderMissing: false },
     },
   })
   w.folder.put('a.json', record('ABC-1', 'working', { desktopSessionId: 'local_a' }), T0, false)
@@ -476,7 +457,7 @@ test('work a read decided before a reload dropped its timer is carried out once 
       ...ticketsIn(w.stored.get(ticketsKey('session-1'))),
       outbox: { logs: ['A line decided before the reload.'], effects: [{ kind: 'nudge', to: 'local_a', name: 'ABC-1' }], lines: ['foreman: one slot free; pick the next issue and start it.'] },
     },
-    parent: { isOn: true, slots: null, isPaused: false },
+    parent: { isOn: true, slots: null },
     nextReadAt: T0 + 20 * SECOND,
     readAt: T0 - 10 * SECOND,
   })
@@ -513,7 +494,7 @@ test('a session start that comes again in a running session keeps the newer ledg
   await foreman($)
   await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh' })
   expect(ledger(w).pairings).toHaveLength(1)
-  w.stored.set(ticketsKey('session-1'), { pairings: [], freedWhilePaused: false, folderMissing: false })
+  w.stored.set(ticketsKey('session-1'), { pairings: [], folderMissing: false })
   await start($)
   await w.clock.settle()
   await startSession($, { prompt: 'Run /implement ABC-8.', context: 'fresh' })

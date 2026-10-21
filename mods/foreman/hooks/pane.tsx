@@ -16,11 +16,10 @@ export const PANE = 'foreman'
 
 // What the band and the pane draw from, read by the hooks.
 export type View = {
-  // Whether this session ran /foreman and so is a parent.
+  // Whether this session ran /start-foreman and so is a parent.
   isOn: boolean
   // The slot count in force.
   slots: number
-  isPaused: boolean
   // The sub sessions, in issue-key order.
   rows: SubRow[]
   now: number
@@ -43,11 +42,9 @@ export function nextReadWords(v: View): string {
   return when === null ? 'next read due now' : `next read in ${when}`
 }
 
-// The start of the band: the slots busy out of the slots allowed, and
-// `paused` while paused.
+// The start of the band: the slots busy out of the slots allowed.
 export function bandHead(v: View): string {
-  const head = `foreman: ${busyCount(v.rows)} of ${v.slots} slots busy`
-  return v.isPaused ? `${head}${SEPARATOR}paused` : head
+  return `foreman: ${busyCount(v.rows)} of ${v.slots} slots busy`
 }
 
 export type BandPresses = { open: (file: string) => void }
@@ -174,7 +171,7 @@ function subTree(ui: Elements, row: SubRow, now: number, columns: number | undef
   ]
 }
 
-export const NOT_A_PARENT = 'This session is not a parent. Run /foreman to make it one.'
+export const NOT_A_PARENT = 'This session is not a parent. Run /start-foreman to make it one.'
 export const NO_SUBS = 'No sub sessions are in the status folder.'
 
 // The pane: one row for each sub session, then the log, newest last, each
