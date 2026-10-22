@@ -26,6 +26,18 @@ export const NO_ISSUE_MARKER = 'No issue: '
 // its title.
 export const TITLE_REFUSAL = 'foreman: start sub sessions with a title that begins with the issue key followed by a space or a colon, such as "ABC-123: short name", or, for work with no issue, with "No issue: short name" and a brief, so that foreman and its wake skill can find the sub session by its title.'
 
+// Why the first start_session call in a session that runs /implement is
+// refused while the role is off. Without the role, the sub session gets no
+// ticket, so builder writes no status file for foreman to read and nobody
+// watches it. The refusal is given once per session, so a second call starts
+// the sub session as the person chose.
+export const OFF_REFUSAL = 'foreman: foreman is off in this session, so this sub session would get no ticket and nobody would watch it.'
+  + ' Tell the person so in one line and wait for their answer before you call start_session again.'
+  + ' The person can type /start-foreman to have it watched; if they want it started without foreman, calling start_session again starts it.'
+
+// The sentence added to the answer of a start that went on without a ticket.
+export const NO_TICKET_SENTENCE = 'This sub session has no ticket from foreman, so foreman does not watch it.'
+
 // The log lines for each refusal.
 const FORK_LOG = 'Refused a start_session call with forked context, because its sub session could not find its ticket.'
 export const TITLE_LOG = 'Refused a start_session call, because its title did not begin with an issue key and a space or a colon, or with "No issue: " on a call with a brief.'
@@ -78,12 +90,19 @@ export function localIdIn(text: string): string | null {
   return LOCAL_ID.exec(typeof text === 'string' ? text : '')?.[0] ?? null
 }
 
+// Whether a start_session call's brief runs /implement: it holds `/implement`
+// as a word, so neither /implementation nor a path that ends in
+// /implement counts.
+export function runsImplement(args: Record<string, unknown>): boolean {
+  return typeof args.prompt === 'string' && /(?<![\w./-])\/implement(?![\w/-])/.test(args.prompt)
+}
+
 // The store key that holds a parent's ledger.
 export const ticketsKey = (sessionId: string) => `tickets:${sessionId}`
 
 export const OUTBOX_EMPTY: ForemanOutbox = { logs: [], effects: [], lines: [] }
 
-export const TICKETS_EMPTY: ForemanTickets = { pairings: [], folderMissing: false, outbox: OUTBOX_EMPTY, held: [] }
+export const TICKETS_EMPTY: ForemanTickets = { pairings: [], folderMissing: false, outbox: OUTBOX_EMPTY, held: [], offRefusedFor: null, unwatched: [] }
 
 // Whether the outbox holds anything to carry out.
 export const hasWork = (o: ForemanOutbox) => o.logs.length > 0 || o.effects.length > 0 || o.lines.length > 0
@@ -99,7 +118,9 @@ function effectIn(raw: unknown): ForemanEffect | null {
   const e = objectOf(raw)
   if (e?.kind === 'notify' && typeof e.text === 'string') return { kind: 'notify', text: e.text }
   if (e?.kind === 'nudge' && typeof e.to === 'string' && typeof e.name === 'string') {
-    return { kind: 'nudge', to: e.to, name: e.name }
+    // A nudge stored before a reload keeps its kind, so it is still sent with
+    // the background text.
+    return e.about === 'background' ? { kind: 'nudge', to: e.to, name: e.name, about: 'background' } : { kind: 'nudge', to: e.to, name: e.name }
   }
   return null
 }
@@ -116,7 +137,7 @@ export const ANNOUNCED_NONE: NonNullable<ForemanActs['announced']> = { number: n
 
 // The acts of a pairing made now, which has announced nothing yet.
 export const ACTS_FRESH: ForemanActs = {
-  episode: null, stretch: null, notifiedFor: null, cleanupWokeFor: null, goneWokeFor: null, announced: ANNOUNCED_NONE,
+  episode: null, stretch: null, notifiedFor: null, cleanupWokeFor: null, goneWokeFor: null, unseenWoke: false, announced: ANNOUNCED_NONE,
 }
 
 // The most pairings kept. Past it, freed and released pairings go first,
@@ -124,9 +145,11 @@ export const ACTS_FRESH: ForemanActs = {
 export const MAX_PAIRINGS = 200
 
 // A pairing for a ticket just issued: active, with no owner yet and no
-// action memory.
-export function newPairing(ticket: string, localId: string | null, at: number): ForemanPairing {
-  return { ticket, localId, pairedAt: at, owner: null, ownerFile: null, issueKey: null, standing: 'active', forks: [], acts: ACTS_FRESH }
+// action memory. `issueKey` is the key the start's title began with, if any,
+// so a wake about a sub session that never wrote a status file names
+// something the parent can find. An owner record's key replaces it.
+export function newPairing(ticket: string, localId: string | null, at: number, issueKey: string | null = null): ForemanPairing {
+  return { ticket, localId, pairedAt: at, owner: null, ownerFile: null, issueKey, standing: 'active', forks: [], acts: ACTS_FRESH }
 }
 
 const STANDINGS: readonly ForemanStanding[] = ['active', 'freed', 'released']
@@ -153,7 +176,9 @@ function announcedIn(raw: unknown): ForemanActs['announced'] {
 
 // Stored acts read tolerantly. A pairing stored before foreman kept a
 // milestone memory has none, and reads with none, which is not the same as a
-// memory that has announced nothing.
+// memory that has announced nothing. A stretch stored before stretches kept
+// their wait reads as an idle one, and acts stored before the unseen wake
+// read as not having given it.
 function actsIn(raw: unknown): ForemanActs {
   const a = objectOf(raw)
   if (a === null) return { ...ACTS_FRESH, announced: null }
@@ -162,11 +187,15 @@ function actsIn(raw: unknown): ForemanActs {
   return {
     episode: e !== null && typeof e.state === 'string' && typeof e.since === 'number' ? { state: e.state, since: e.since } : null,
     stretch: s !== null && typeof s.progress === 'string'
-      ? { progress: s.progress, nudges: Math.max(Math.floor(numberOr(s.nudges, 0)), 0), lastNudgeAt: numberOr(s.lastNudgeAt, null), woke: s.woke === true }
+      ? {
+        progress: s.progress, nudges: Math.max(Math.floor(numberOr(s.nudges, 0)), 0), lastNudgeAt: numberOr(s.lastNudgeAt, null), woke: s.woke === true,
+        wait: numberOr(s.wait, null),
+      }
       : null,
     notifiedFor: textOr(a.notifiedFor, null),
     cleanupWokeFor: textOr(a.cleanupWokeFor, null),
     goneWokeFor: numberOr(a.goneWokeFor, null),
+    unseenWoke: a.unseenWoke === true,
     announced: announcedIn(a.announced),
   }
 }
@@ -194,14 +223,49 @@ const HELD_SHAPE = new RegExp(`^${KEY}$`)
 // once, so a ledger from before holds existed reads as holding none.
 const heldIn = (raw: unknown): string[] => [...new Set(strings(raw).filter(key => HELD_SHAPE.test(key)))]
 
+// The most unwatched sub sessions kept, the newest ones.
+export const MAX_UNWATCHED = 50
+
+// A whole desktop session id, which is all an unwatched entry may be.
+const UNWATCHED_SHAPE = new RegExp(`^${LOCAL_ID.source}$`)
+
+// The unwatched ids read tolerantly: only whole desktop session ids, each
+// once, the newest MAX_UNWATCHED, so a ledger from before the list existed
+// reads as holding none.
+const unwatchedIn = (raw: unknown): string[] => [...new Set(strings(raw).filter(id => UNWATCHED_SHAPE.test(id)))].slice(-MAX_UNWATCHED)
+
 // A stored ledger read tolerantly: a value in any other shape, such as none
 // at all from a parent of the read-only build, reads as empty, and a pairing
 // without a ticket is dropped while any other bad field takes its default.
+// A ledger from before the role-off facts were kept reads with no refusal
+// given and no unwatched sub sessions.
 export function ticketsIn(raw: unknown): ForemanTickets {
   const t = objectOf(raw)
   if (t === null) return TICKETS_EMPTY
   const pairings = Array.isArray(t.pairings) ? t.pairings.flatMap(p => pairingIn(p) ?? []) : []
-  return { pairings, folderMissing: t.folderMissing === true, outbox: outboxIn(t.outbox), held: heldIn(t.held) }
+  return {
+    pairings,
+    folderMissing: t.folderMissing === true,
+    outbox: outboxIn(t.outbox),
+    held: heldIn(t.held),
+    offRefusedFor: textOr(t.offRefusedFor, null),
+    unwatched: unwatchedIn(t.unwatched),
+  }
+}
+
+// The ledger with the off refusal recorded as given in session `sessionId`.
+export const withOffRefusal = (t: ForemanTickets, sessionId: string): ForemanTickets => ({ ...t, offRefusedFor: sessionId })
+
+// Whether the off refusal was already given in session `sessionId`. One
+// given before a /clear, under another session id, does not count.
+export const isOffRefused = (t: ForemanTickets, sessionId: string) => t.offRefusedFor === sessionId
+
+// The ledger with desktop session `id` added to the unwatched list, the
+// oldest dropped past MAX_UNWATCHED. An id already listed, or one that is not
+// a whole desktop session id, leaves the ledger as it was.
+export function withUnwatched(t: ForemanTickets, id: string): ForemanTickets {
+  if (!UNWATCHED_SHAPE.test(id) || t.unwatched.includes(id)) return t
+  return { ...t, unwatched: [...t.unwatched, id].slice(-MAX_UNWATCHED) }
 }
 
 // The ledger with the pairings past MAX_PAIRINGS dropped, freed and released
