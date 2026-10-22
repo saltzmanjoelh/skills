@@ -19,7 +19,7 @@
 // shape, such as one the person typed into, reaches the model as before.
 
 import type { ForemanPairing } from '../types'
-import { listOf } from './text'
+import { listOf, plural } from './text'
 import { LOCAL_ID } from './tickets'
 import { whoOf } from './wake'
 
@@ -48,7 +48,7 @@ export function checkLine(ids: readonly string[], minutes: number): string {
   const one = sorted.length === 1
   const list = listOf(sorted)
   const them = one ? `the sub session ${list}, so nobody watches it` : `the sub sessions ${list}, so nobody watches them`
-  return `From the foreman mod: foreman holds no record of ${them}. Instead of replying with a bare "Noted.", schedule one check of ${one ? 'it' : 'each'} for ${minutes} minute${minutes === 1 ? '' : 's'} from now, as the foreman:wake skill's section "Checking a sub session foreman does not watch" says, and reply briefly to the rest of this prompt.`
+  return `From the foreman mod: foreman holds no record of ${them}. Instead of replying with a bare "Noted.", schedule one check of ${one ? 'it' : 'each'} for ${plural(minutes, 'minute')} from now, as the foreman:wake skill's section "Checking a sub session foreman does not watch" says, and reply briefly to the rest of this prompt.`
 }
 
 const OPEN = '<system-reminder>'

@@ -10,7 +10,7 @@
 // all four together.
 
 import type { RecordVerdicts } from './record'
-import { printable } from './text'
+import { plural, printable } from './text'
 
 // Why foreman wakes the parent. `who` is already safe to put in the line, as
 // whoOf makes it. The four pull request milestones carry only what builder
@@ -70,8 +70,6 @@ export function slotWords(free: number): string {
   const n = NUMBER_WORDS[free] ?? String(free)
   return free === 1 ? 'one slot free; pick the next issue and start it.' : `${n} slots free; pick the next issues and start them.`
 }
-
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
 // A verdict as the verdict sentence words it.
 const verdictWord = (v: RecordVerdicts['spec']) => (v === 'APPROVE' ? 'approves' : 'requests changes')

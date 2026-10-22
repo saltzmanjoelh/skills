@@ -34,3 +34,6 @@ export function timeOfDay(at: number, now: number): string {
 
 // Names joined as a sentence lists them: "A", "A and B", "A, B and C".
 export const listOf = (names: readonly string[]) => (names.length === 1 ? names[0]! : `${names.slice(0, -1).join(', ')} and ${names.at(-1)!}`)
+
+// A count with its word, plural unless the count is one: "1 minute", "5 minutes".
+export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
