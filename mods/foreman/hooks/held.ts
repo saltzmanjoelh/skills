@@ -11,6 +11,7 @@
 import type { PromptSubmitInput, ToolCallResult } from 'claude-code'
 
 import type { Listed } from './desktop'
+import { listOf } from './text'
 import { KEYED_TITLE, LOCAL_ID } from './tickets'
 
 // The words foreman recognises the refusal by. The desktop app refuses
@@ -40,9 +41,6 @@ export function isRemoteRefusal(out: ToolCallResult, title?: unknown): boolean {
   const rest = typeof title === 'string' && title !== '' ? text.split(title).join('') : text
   return rest.includes(REMOTE_REFUSAL)
 }
-
-// Keys joined as a sentence names them: "A", "A and B", "A, B and C".
-const listOf = (keys: readonly string[]) => (keys.length === 1 ? keys[0]! : `${keys.slice(0, -1).join(', ')} and ${keys.at(-1)!}`)
 
 // The sentence added after the refusal, as context the model reads with it.
 export const heldSentence = (key: string) => `foreman holds ${key} and offers it again on the person's next message, so do not propose a card for it; tell the person in one line that ${key} starts on their next message typed in the desktop app.`

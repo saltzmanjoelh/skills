@@ -114,14 +114,25 @@ type Step = {
 // builder's record fails the type check until it has a rule here.
 const STATE_RULES: Record<BuildState, (s: Step) => void> = {
   'working': s => {
+    // A record that waits only on background work goes through the idle
+    // rule, counted from when that wait began.
+    const wait = s.row.record.backgroundOnly
+    if (wait !== undefined) {
+      idleRule(s, wait.since, { task: wait.tasks[0] ?? null })
+      return
+    }
     // A working episode inside an idle stretch keeps the stretch, unless the
-    // record made progress or the work lasted a whole threshold.
+    // record made progress or the work lasted a whole threshold. A stretch of
+    // a background wait ends only on progress, because the short turn that
+    // answers a nudge is working without the field, and its episode began
+    // with the wait.
     const { stretch } = s.p.acts
     if (stretch === null) return
-    if (stretch.progress !== progressOf(s.row) || s.now - s.episode.since >= s.limits.idleMs) setActs(s, { stretch: null })
+    if (stretch.progress !== progressOf(s.row)) setActs(s, { stretch: null })
+    else if (stretch.wait === null && s.now - s.episode.since >= s.limits.idleMs) setActs(s, { stretch: null })
   },
   'waiting-on-builder': s => setActs(s, { stretch: null }),
-  'idle': idleRule,
+  'idle': s => idleRule(s, s.episode.since, null),
   'needs-you': s => {
     setActs(s, { stretch: null })
     const key = episodeKey(s)
@@ -159,47 +170,61 @@ const setActs = (s: Step, change: Partial<ForemanActs>) => {
   s.p = { ...s.p, acts: { ...s.p.acts, ...change } }
 }
 
-// Idle: a nudge once the idle episode has lasted the threshold, a second one
+// Idle, and a working record that waits only on background work: a nudge
+// once the wait has lasted the threshold since `since`, a second one
 // threshold after the first, and the wake one threshold after that, counted
-// over a stretch without progress. A record with no desktop session wakes the
+// over a stretch without progress. `background` is null for an idle record
+// and holds the background wait's first task, or null, otherwise. The
+// stretch keeps which wait it counts, null for idleness and the background
+// wait's `since` otherwise, and a stretch of another wait starts afresh, so a
+// stretch that already woke for one wait cannot silence the next. Progress
+// inside the same wait also starts the stretch afresh. An idle stretch then
+// counts from the idle episode's start, as it always has. A background
+// stretch counts from that read instead, because a background wait's `since`
+// does not move with progress, so counting from it would nudge at once. A
+// background wait's nudge and wake say so, and the wake quotes its first
+// task when there is one. A record with no desktop session wakes the
 // parent at two thresholds instead. A record whose pull request was closed
 // without merging has stopped on purpose, so the rule ends any stretch and
 // neither nudges nor wakes until the pull request opens again.
-function idleRule(s: Step) {
+function idleRule(s: Step, since: number, background: { task: string | null } | null) {
   if (prStateOf(s.row.record.pr) === 'CLOSED') {
     setActs(s, { stretch: null })
     return
   }
   const progress = progressOf(s.row)
+  const wait = background === null ? null : since
   let stretch = s.p.acts.stretch
-  if (stretch === null || stretch.progress !== progress) stretch = { progress, nudges: 0, lastNudgeAt: null, woke: false }
+  if (stretch === null || stretch.wait !== wait) stretch = { progress, nudges: 0, lastNudgeAt: null, countFrom: null, woke: false, wait }
+  else if (stretch.progress !== progress) stretch = { progress, nudges: 0, lastNudgeAt: null, countFrom: wait === null ? null : s.now, woke: false, wait }
   setActs(s, { stretch })
   if (stretch.woke) return
-  const since = s.episode.since
+  const from = Math.max(since, stretch.countFrom ?? since, stretch.lastNudgeAt ?? since)
   const to = desktopOf(s.p, s.row)
   const who = whoOf(s.row.record.issueKey, s.p.ticket)
+  const minutes = minutesOf(s.now - since)
   if (to === null) {
-    const due = since + 2 * s.limits.idleMs
+    const due = from + 2 * s.limits.idleMs
     if (s.now < due) {
       s.due.push(due)
       return
     }
-    s.reasons.push({ kind: 'idle', who, nudged: false, minutes: minutesOf(s.now - since) })
+    s.reasons.push(background !== null ? { kind: 'background', who, nudged: false, minutes, task: background.task } : { kind: 'idle', who, nudged: false, minutes })
     setActs(s, { stretch: { ...stretch, woke: true } })
     return
   }
-  const due = Math.max(since, stretch.lastNudgeAt ?? since) + s.limits.idleMs
+  const due = from + s.limits.idleMs
   if (s.now < due) {
     s.due.push(due)
     return
   }
   if (stretch.nudges < 2) {
-    s.effects.push({ kind: 'nudge', to, name: nameOf(s.row) })
+    s.effects.push(background !== null ? { kind: 'nudge', to, name: nameOf(s.row), about: 'background' } : { kind: 'nudge', to, name: nameOf(s.row) })
     setActs(s, { stretch: { ...stretch, nudges: stretch.nudges + 1, lastNudgeAt: s.now } })
     s.due.push(s.now + s.limits.idleMs)
     return
   }
-  s.reasons.push({ kind: 'idle', who, nudged: true, minutes: minutesOf(s.now - since) })
+  s.reasons.push(background !== null ? { kind: 'background', who, nudged: true, minutes, task: background.task } : { kind: 'idle', who, nudged: true, minutes })
   setActs(s, { stretch: { ...stretch, woke: true } })
 }
 
@@ -223,6 +248,25 @@ function goneRule(s: Step) {
   if (endedIn(s.sessionsById, desktopOf(s.p, s.row)) === null) return
   s.reasons.push({ kind: 'gone', who: whoOf(s.row.record.issueKey, s.p.ticket), minutes: minutesOf(s.now - s.row.mtimeMs) })
   setActs(s, { goneWokeFor: s.row.mtimeMs })
+}
+
+// A started sub session that foreman cannot watch: an active pairing with a
+// desktop session id that still has no owner GONE_MS after it was paired
+// wakes the parent once, with the mismatch sentence when some file carries
+// its ticket but names another desktop session or none. A pairing with no
+// desktop session id, from a proposal card that may never have started, is
+// left out. The caller runs it only when this read listed a folder that
+// exists, so a missing folder never makes every pairing look unseen.
+function unseenRule(p: ForemanPairing, rows: readonly SubRow[], now: number, reasons: Reason[], due: number[]): ForemanPairing {
+  if (p.standing !== 'active' || p.localId === null || p.acts.unseenWoke) return p
+  const at = p.pairedAt + GONE_MS
+  if (now < at) {
+    due.push(at)
+    return p
+  }
+  const mismatch = rows.some(r => r.record.ticket === p.ticket)
+  reasons.push({ kind: 'unseen', who: whoOf(p.issueKey, p.ticket), minutes: minutesOf(now - p.pairedAt), mismatch })
+  return { ...p, acts: { ...p.acts, unseenWoke: true } }
 }
 
 const bothApprove = (v: RecordVerdicts) => v.spec === 'APPROVE' && v.adversarial === 'APPROVE'
@@ -317,7 +361,9 @@ export function slotsNeedList(t: ForemanTickets, rows: readonly SubRow[], now: n
 // folder is forgotten, freeing its slot when it was active and announcing a
 // merge when its pull request was last told open, and a pairing
 // that no status file has carried for a day is forgotten and logged; neither
-// happens unless this read listed a folder that exists. A released or
+// happens unless this read listed a folder that exists. On such a read, a
+// younger pairing with no owner may wake the parent once, as unseenRule
+// says. A released or
 // freed pairing gets no action. An active pairing's pull request
 // milestones wake the parent after its other reasons. When a slot freed, the
 // parent is woken with the number of slots free, unless none is free. A list
@@ -333,9 +379,12 @@ export function decide(input: DecideInput): Decision {
   const byFile = new Map(rows.map(r => [r.file, r]))
   const pairings = input.tickets.pairings.flatMap(p => {
     if (p.owner === null || p.ownerFile === null) {
-      if (!folderExists || !listed || now - p.pairedAt <= UNOWNED_FOR_MS) return [p]
-      logs.push(`Forgot ticket ${p.ticket}, because no status file carried it for a day.`)
-      return []
+      if (!folderExists || !listed) return [p]
+      if (now - p.pairedAt > UNOWNED_FOR_MS) {
+        logs.push(`Forgot ticket ${p.ticket}, because no status file carried it for a day.`)
+        return []
+      }
+      return [unseenRule(p, rows, now, reasons, due)]
     }
     const row = byFile.get(p.ownerFile)
     if (row === undefined) {

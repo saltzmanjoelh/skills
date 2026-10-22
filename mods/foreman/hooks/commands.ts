@@ -5,6 +5,23 @@
 // before a session starts. The mod answers it in place of the skill.
 export const COMMAND = 'start-foreman'
 
+// A line that begins with the command as text, as when the person pasted it
+// rather than typed it, so it never ran: after optional spaces or tabs and an
+// optional chain of opening tags, such as the one that wraps pasted text,
+// comes the command followed by white space or the end of the line. A
+// closing tag does not count, and neither does the command inside a sentence
+// or glued to other characters.
+const PASTED = new RegExp(`^[ \\t]*(?:<[A-Za-z][\\w-]*(?:\\s[^<>]*)?>[ \\t]*)*/${COMMAND}(?=\\s|$)`, 'm')
+
+// Whether `text` holds the command as text at the start of a line.
+export const pastedCommandIn = (text: string) => typeof text === 'string' && PASTED.test(text)
+
+// The context line for a person's prompt that holds the command as text while
+// the role is off. It repeats nothing from the prompt, so a pasted count or
+// words are never acted on as though the command had run.
+export const PASTED_LINE = 'foreman: this prompt holds /start-foreman as text, but the command did not run, so foreman is off in this session.'
+  + ' Tell the person so in one line and ask them to type /start-foreman themselves, and start no sub session until they have.'
+
 // The fewest and the most slots a parent may have.
 export const MIN_SLOTS = 1
 export const MAX_SLOTS = 20

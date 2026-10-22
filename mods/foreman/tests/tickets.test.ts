@@ -2,7 +2,11 @@ import { expect, test } from 'claude-code/testing'
 
 import { recordIn } from '../hooks/record'
 import type { SubRow } from '../hooks/subs'
-import { briefFor, capped, FORK_REFUSAL, joinOwners, localIdIn, MAX_PAIRINGS, newPairing, shownRows, ticketsIn, TICKETS_EMPTY, TITLE_REFUSAL } from '../hooks/tickets'
+import {
+  carriesTicket, fallbackOf, noTicketLog,
+  briefFor, capped, FORK_REFUSAL, isOffRefused, joinOwners, localIdIn, MAX_PAIRINGS, newPairing, NO_TICKET_SENTENCE, OFF_REFUSAL, runsImplement, shownRows, ticketsIn,
+  TICKETS_EMPTY, TITLE_REFUSAL, withOffRefusal, withUnwatched,
+} from '../hooks/tickets'
 import type { ForemanTickets } from '../types'
 
 const T0 = Date.UTC(2026, 9, 20, 12, 0, 0)
@@ -172,4 +176,109 @@ test('a ticket carried by many fork files settles after one read, logging each f
   const second = joinOwners(first.tickets, rows)
   expect(second.logs).toEqual([])
   expect(second.tickets).toEqual(first.tickets)
+})
+
+test('an old ledger reads with no refusal given and no unwatched sub sessions', () => {
+  const old = ticketsIn({ pairings: [], folderMissing: false, outbox: { logs: [], effects: [], lines: [] }, held: [] })
+  expect(old.offRefusedFor).toBeNull()
+  expect(old.unwatched).toEqual([])
+  expect(TICKETS_EMPTY.offRefusedFor).toBeNull()
+  expect(TICKETS_EMPTY.unwatched).toEqual([])
+})
+
+test('old acts read with no unseen wake given and a stretch without a wait as an idle one', () => {
+  const acts = ticketsIn({ pairings: [{ ticket: 'ft-a', acts: { stretch: { progress: 'p', nudges: 1, lastNudgeAt: 5, woke: false } } }] }).pairings[0]!.acts
+  expect(acts.unseenWoke).toBe(false)
+  expect(acts.stretch).toEqual({ progress: 'p', nudges: 1, lastNudgeAt: 5, countFrom: null, woke: false, wait: null })
+  const stored = (raw: Record<string, unknown>) => ticketsIn({ pairings: [{ ticket: 'ft-a', acts: raw }] }).pairings[0]!.acts
+  expect(stored({ unseenWoke: true }).unseenWoke).toBe(true)
+  expect(stored({ unseenWoke: 'yes' }).unseenWoke).toBe(false)
+  expect(stored({ stretch: { progress: 'p', nudges: 0, lastNudgeAt: null, woke: false, wait: 1500 } }).stretch?.wait).toBe(1500)
+  expect(stored({ stretch: { progress: 'p', nudges: 0, lastNudgeAt: null, countFrom: 1700, woke: false, wait: 1500 } }).stretch?.countFrom).toBe(1700)
+  expect(stored({ stretch: { progress: 'p', nudges: 0, lastNudgeAt: null, woke: false, wait: 'then' } }).stretch?.wait).toBeNull()
+  expect(newPairing('ft-a', null, 1).acts.unseenWoke).toBe(false)
+})
+
+test('a stored nudge keeps its kind only when it is exactly background', () => {
+  const effects = (about: unknown) => ticketsIn({ outbox: { effects: [{ kind: 'nudge', to: 'local_a', name: 'ABC-1', about }] } }).outbox.effects
+  expect(effects('background')).toEqual([{ kind: 'nudge', to: 'local_a', name: 'ABC-1', about: 'background' }])
+  for (const other of [undefined, null, 'idle', 'Background', 7]) {
+    expect(effects(other)).toEqual([{ kind: 'nudge', to: 'local_a', name: 'ABC-1' }])
+    expect(effects(other)[0]).not.toHaveProperty('about')
+  }
+})
+
+test('the refusal is read as the session id it was given for, and counts only for that session', () => {
+  expect(ticketsIn({ offRefusedFor: 'session-1' }).offRefusedFor).toBe('session-1')
+  for (const bad of ['', 7, true, null, ['session-1']]) expect(ticketsIn({ offRefusedFor: bad }).offRefusedFor).toBeNull()
+  const refused = withOffRefusal(TICKETS_EMPTY, 'session-1')
+  expect(isOffRefused(refused, 'session-1')).toBe(true)
+  expect(isOffRefused(refused, 'session-2')).toBe(false)
+  expect(isOffRefused(TICKETS_EMPTY, 'session-1')).toBe(false)
+  expect(ticketsIn(JSON.parse(JSON.stringify(refused))).offRefusedFor).toBe('session-1')
+})
+
+test('the unwatched list keeps only whole local_ ids, each once, the newest 50', () => {
+  expect(ticketsIn({ unwatched: 'local_a' }).unwatched).toEqual([])
+  expect(ticketsIn({ unwatched: ['local_a', 'local_a', 'local_b', 'Local_c', 'local_', 'x local_d', 'local_e f', 'local_g!', 7, null, 'local_h-1_x'] }).unwatched)
+    .toEqual(['local_a', 'local_b', 'local_h-1_x'])
+  const many = Array.from({ length: 60 }, (_, i) => `local_${i}`)
+  expect(ticketsIn({ unwatched: many }).unwatched).toEqual(many.slice(10))
+  let t = TICKETS_EMPTY
+  for (const id of many) t = withUnwatched(t, id)
+  expect(t.unwatched).toEqual(many.slice(10))
+  const once = withUnwatched(TICKETS_EMPTY, 'local_a')
+  expect(withUnwatched(once, 'local_a')).toBe(once)
+  expect(withUnwatched(once, 'not an id')).toBe(once)
+  expect(withUnwatched(once, 'local_b').unwatched).toEqual(['local_a', 'local_b'])
+})
+
+test('a brief runs /implement only when it holds /implement as a word', () => {
+  for (const prompt of ['/implement ABC-1', 'Run /implement ABC-1 please.', 'Run `/implement` on it', '(/implement)', 'line one\n/implement', '/implement']) {
+    expect(runsImplement({ prompt })).toBe(true)
+  }
+  for (const prompt of ['/implementation ABC-1', 'see skills/implement/SKILL.md', 'path/implement ABC-1', '../implement', '/implement-other', '/implemented', 'implement ABC-1', '']) {
+    expect(runsImplement({ prompt })).toBe(false)
+  }
+  for (const prompt of [undefined, null, 7, ['/implement']]) expect(runsImplement({ prompt })).toBe(false)
+  expect(runsImplement({ title: '/implement ABC-1' })).toBe(false)
+})
+
+test('the off refusal begins as foreman\'s lines do and says how to go on, and the no-ticket sentence says nobody watches', () => {
+  expect(OFF_REFUSAL.startsWith('foreman: ')).toBe(true)
+  for (const words of ['foreman is off in this session', 'no ticket', '/start-foreman', 'start_session again']) expect(OFF_REFUSAL).toContain(words)
+  expect(NO_TICKET_SENTENCE).toContain('no ticket')
+  expect(NO_TICKET_SENTENCE).toContain('foreman does not watch it')
+})
+
+test('a new pairing takes the issue key it is given, and a record with no key leaves it in place', () => {
+  expect(newPairing('ft-a', 'local_a', T0).issueKey).toBeNull()
+  const p = newPairing('ft-a', 'local_a', T0, 'ABC-9')
+  expect(p.issueKey).toBe('ABC-9')
+  const none = joinOwners(withPairings(p), [row('a.json', { desktopSessionId: 'local_a', issueKey: null })])
+  expect(none.tickets.pairings[0]!.owner).toBe('s-a.json')
+  expect(none.tickets.pairings[0]!.issueKey).toBe('ABC-9')
+  const keyed = joinOwners(withPairings(p), [row('a.json', { desktopSessionId: 'local_a', issueKey: 'ABC-10' })])
+  expect(keyed.tickets.pairings[0]!.issueKey).toBe('ABC-10')
+})
+
+test('a call carries a ticket line only when its prompt holds one at the start of a line', () => {
+  expect(carriesTicket({ prompt: 'Run /implement ABC-123.\n\nforeman-ticket: ft-a' })).toBe(true)
+  expect(carriesTicket({ prompt: 'Run /implement ABC-123.' })).toBe(false)
+  expect(carriesTicket({ prompt: 'Mentions foreman-ticket: in a sentence.' })).toBe(false)
+  expect(carriesTicket({})).toBe(false)
+})
+
+// The fallback cannot be reached with a call that went on and answered, so
+// the decision it makes is checked here on its own.
+test('the start_session fallback adds nothing to a call that went on, or to one that carries its ticket', () => {
+  expect(fallbackOf(true, 'timeout', false, true)).toEqual({ log: null, sentence: false })
+  expect(fallbackOf(true, 'throw', false, false)).toEqual({ log: null, sentence: false })
+  expect(fallbackOf(false, 're-entry', true, true)).toEqual({ log: null, sentence: false })
+})
+
+test('the start_session fallback logs a call that went on without a ticket, and adds the sentence only when it started a sub session', () => {
+  expect(fallbackOf(false, 'throw', false, true)).toEqual({ log: noTicketLog('throw'), sentence: true })
+  expect(fallbackOf(false, 're-entry', false, true)).toEqual({ log: noTicketLog('re-entry'), sentence: true })
+  expect(fallbackOf(false, 'timeout', false, false)).toEqual({ log: noTicketLog('timeout', false), sentence: false })
 })

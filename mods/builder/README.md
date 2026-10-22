@@ -193,6 +193,7 @@ When the session ends after its pull request merged, builder deletes the file wi
 | `stateSince` | when the state began: the time of the write at which it last changed, kept across a hot reload |
 | `writtenAt` | when the file was written |
 | `cleanup` | `{ failedCalls, lastError }` once the cleanup skill has started, whatever the state; left out before |
+| `backgroundOnly` | `{ since, tasks }` while the state is `working` only because background work runs, as described below; left out otherwise, and an older record has no such field |
 
 Every time is milliseconds since the epoch. The types are `BuildStatus`, `BuildState` and `BuildStage` in `types/index.d.ts`, so the foreman can name builder as a dependency and type-check its reader against them.
 
@@ -208,6 +209,8 @@ The state is the first of these that holds, in this order:
 So `done` and `in-cleanup` show only once nothing runs, and the foreman sees `done` only when the merged session has stopped working.
 
 The cleanup record counts every failed tool call since the cleanup skill started, the session's own and its subagents', and keeps the last line of the newest error that is not blank, cleaned of control characters and cut to 200 characters. A line that looks like it holds a secret is replaced by `(withheld: it looks like a secret)`. The record never copies a tool's input, which can hold commands, paths or secrets, and a permission prompt's reason names the tool only.
+
+The `backgroundOnly` field tells the foreman that the session is `working` only because its background work is in flight: the session's own turn is not running, no agent and no tool call of its own is running, and at least one background task is. A background command that hangs would otherwise read as healthy work for ever. `since` is when this background-only wait began, which is the time of the first write that found only background work running. Builder keeps the wait in its memo with the tasks it began with, each known by its id, or by its kind and description when the engine reported no id, so two tasks without ids cannot keep one wait alive. The wait keeps its `since` as long as at least one of those tasks is still in flight, so a short turn of the session's own, such as its answer to a nudge, does not restart it, and neither does a task that joins partway. The field is left out while that turn runs and comes back with the same `since` once the turn ends. When none of the wait's tasks is in flight any more, the wait ends, and the next time only background work runs a new wait begins with a new `since`. Builder stores the wait before it writes the file, so a write that fails does not move it. `tasks` holds the descriptions of at most three tasks in flight, the wait's own first, each cleaned of control characters and cut to 80 characters, with empty ones left out. A description that looks like it holds a secret, before or after it is cleaned, is replaced by `(withheld: it looks like a secret)`. A task's command is never written, because it can hold paths or secrets.
 
 The permission prompts, the failed calls and the cleanup skill reach the mod through classic events and `skill.prompt`, which the engine does not raise for a plugin a person installs where an organization manages Claude Code. There the file still shows every other state, but never a permission prompt or the cleanup.
 

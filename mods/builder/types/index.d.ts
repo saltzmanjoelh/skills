@@ -288,6 +288,17 @@ export type BuildStatus = {
   // tool calls have failed since, and the last line of the newest failure's
   // error, cleaned, or the empty string until a call fails.
   cleanup?: { failedCalls: number; lastError: string }
+  // Present only while the state is working and the only thing running is
+  // background work: the session's own turn is not running, no agent and no
+  // tool call of its own is running, and at least one background task is in
+  // flight. `since` is when this background-only wait began. It is kept across
+  // a short turn of the session's own as long as one of the tasks the wait
+  // began with is still in flight, and a wait begins afresh once none is.
+  // `tasks` holds the descriptions of at most three tasks, the wait's own
+  // first, each cleaned and cut short, or the withheld text in place of one
+  // that looks like a secret. A task's command is never written. An older
+  // record has no such field.
+  backgroundOnly?: { since: number; tasks: string[] }
 }
 
 // The permission prompts of one loop and one tool that are open: `loop` is
@@ -323,6 +334,12 @@ export type StatusMemo = {
   prompts: OpenPrompt[]
   // The cleanup record, or null before the cleanup skill started.
   cleanup: { failedCalls: number; lastError: string } | null
+  // The background-only wait the record's `backgroundOnly` reports, or null
+  // when none has begun: when it began, and the keys of the tasks in flight
+  // then, each a task's id, or its kind and description when it has no id. It
+  // is kept while one of those keys is in flight. A memo an older build saved
+  // without it, or with a value in another shape, reads as none.
+  backgroundWait: { since: number; keys: string[] } | null
   // The load stamp of the module's copy that owns the memo, which orders the
   // copies by when they loaded. Only a copy whose stamp is not below it may
   // take the memo up, and taking it up sets it to that copy's stamp, so a

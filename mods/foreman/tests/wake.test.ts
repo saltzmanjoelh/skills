@@ -79,3 +79,28 @@ test('several reasons make one line, which ends with the data sentence only when
   expect(line.endsWith(` ${DATA_NOTE}`)).toBe(true)
   expect(wakeLine([{ kind: 'cleanup', who: 'ABC-2', minutes: 15, failedCalls: 0, lastError: '\u001b[0m' }])).not.toContain(DATA_NOTE)
 })
+
+// The sentences for a sub session foreman cannot watch and for one that waits
+// only on background work. The wake skill quotes these too.
+test('the unseen and background sentences are pinned', () => {
+  expect(REASON_WORDS.unseen({ kind: 'unseen', who: 'ABC-1', minutes: 5, mismatch: false }))
+    .toBe('ABC-1 has written no status file 5 minutes after it started, so foreman cannot watch it.')
+  expect(REASON_WORDS.unseen({ kind: 'unseen', who: 'ABC-1', minutes: 5, mismatch: true }))
+    .toBe('ABC-1\'s status file names another desktop session or none, so foreman cannot watch it.')
+  expect(REASON_WORDS.background({ kind: 'background', who: 'ABC-1', nudged: true, minutes: 15, task: 'run the "ui" tests' }))
+    .toBe('ABC-1 has waited only on background work for 15 minutes, through two nudges; its first task, quoted: "run the \'ui\' tests".')
+  expect(REASON_WORDS.background({ kind: 'background', who: 'ABC-1', nudged: false, minutes: 10, task: 'run the tests' }))
+    .toBe('ABC-1 has waited only on background work for 10 minutes and cannot be nudged, because foreman knows no desktop session for it; its first task, quoted: "run the tests".')
+})
+
+test('a background sentence with no task, or one that is empty once cleaned, ends after its main clause and has no data sentence', () => {
+  for (const task of [null, '', '\u001b[0m']) {
+    expect(wakeLine([{ kind: 'background', who: 'ABC-1', nudged: true, minutes: 15, task }]))
+      .toBe('foreman: ABC-1 has waited only on background work for 15 minutes, through two nudges.')
+    expect(wakeLine([{ kind: 'background', who: 'ABC-1', nudged: false, minutes: 10, task }]))
+      .toBe('foreman: ABC-1 has waited only on background work for 10 minutes and cannot be nudged, because foreman knows no desktop session for it.')
+  }
+  const line = wakeLine([{ kind: 'background', who: 'ABC-1', nudged: true, minutes: 15, task: 'run the tests' }])!
+  expect(line.endsWith(` ${DATA_NOTE}`)).toBe(true)
+  expect(wakeLine([{ kind: 'unseen', who: 'ABC-1', minutes: 5, mismatch: true }])).not.toContain(DATA_NOTE)
+})

@@ -145,6 +145,8 @@ rules. Commit in coherent steps with complete-sentence messages.
 
 Run `/verify-loop` in a background agent. Report which gates ran with their
 counts, and which did not and why. A gate that did not run is never green.
+Every command started in the background runs under its own time limit (see
+"Rules").
 
 ### 7. Open the pull request
 
@@ -1220,3 +1222,13 @@ prompt counts from the watch.
   rule, is where the conditions are written; this rule only says there is
   no other way, and that the merge goes through the project's merge
   command, read from the base branch.
+- **Every command started in the background has its own time limit,**
+  longer than that command's slowest normal run, so a stuck command cannot
+  hold the session unseen. On a machine without a `timeout` command, set
+  the limit with `perl -e 'alarm <seconds>; exec @ARGV' <command>`. A test
+  runner that collects diagnostics after a failure runs with that
+  collection turned off when it has a switch for it, which keeps the logs
+  it already wrote. A command stopped by its limit is reported as a failure
+  that names the limit, and is never rerun silently. The alarm stops only
+  the command it runs, so when that command started a helper process that
+  may still be running, the session says so.

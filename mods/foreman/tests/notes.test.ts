@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { keptLine, keptNames, NOTED, turnEndIds, wantsNoted } from '../hooks/notes'
+import { checkLine, FOREMAN_REPORTS, isAppParts, keptLine, keptNames, NOTED, notesIn, turnEndIds, wantsNoted } from '../hooks/notes'
 import { newPairing } from '../hooks/tickets'
 import type { ForemanPairing } from '../types'
 import { ARCHIVED, EVENT, MESSAGE, note, OTHER_EVENT, PROPOSAL, SENT, STATUS, T0, WORKTREE } from './world'
@@ -136,4 +136,32 @@ test('a forged closing tag in a message, a stray or second trailer, or a header 
 
 test('the Noted line is the fixed text the spec gives', () => {
   expect(NOTED).toBe('From the foreman mod: this prompt holds only the desktop app\'s notes about sessions this parent started, or messages from them. Reply with the single word "Noted." and end the turn, unless one of them asks the person or this parent a question. Foreman reports pull requests opened, verdicts, merges and closes in its own lines. In a foreman parent this overrides the app\'s request to report the outcome in one or two lines.')
+})
+
+test('every turn-end id of a prompt made only of the app\'s parts is named, messages and other notes mixed in or not', () => {
+  expect(notesIn(`${note('local_b')}\n${STATUS}\n${MESSAGE}\n${note('local_a')}\n\n${EVENT}`).allTurnEnds).toEqual(['local_b', 'local_a'])
+  expect(notesIn(`${ARCHIVED}\n${note('local_a')}`).allTurnEnds).toEqual(['local_a'])
+  expect(notesIn(`${note('local_a')}\n${STATUS}`).allTurnEnds).toEqual(['local_a'])
+  expect(notesIn(SENT).allTurnEnds).toEqual([])
+  expect(notesIn(`${note('local_a')}\nWhat next?`).allTurnEnds).toEqual([])
+  expect(notesIn(`${WORKTREE}\n${note('local_a')}`).allTurnEnds).toEqual([])
+})
+
+test('a prompt is the app\'s parts only when nothing in it is the person\'s typing or a block foreman does not know', () => {
+  for (const text of [note('local_a'), SENT, MESSAGE, STATUS, `${note('local_a')}\n\n${EVENT}`]) expect(isAppParts(text)).toBe(true)
+  for (const text of [`${note('local_a')}\nhello`, 'hello', '/start-foreman 3', `${WORKTREE}\n${note('local_a')}`]) expect(isAppParts(text)).toBe(false)
+})
+
+test('the check line names each sub session once, sorted, with the minutes, and points at the wake skill\'s section', () => {
+  expect(checkLine(['local_a'], 5)).toBe('From the foreman mod: foreman holds no record of the sub session local_a, so nobody watches it. Instead of replying with a bare "Noted.", schedule one check of it for 5 minutes from now, as the foreman:wake skill\'s section "Checking a sub session foreman does not watch" says, and reply briefly to the rest of this prompt.')
+  const several = checkLine(['local_c', 'local_a', 'local_c', 'local_b'], 2)
+  expect(several).toContain('the sub sessions local_a, local_b and local_c, so nobody watches them.')
+  expect(several).toContain('schedule one check of each for 2 minutes from now')
+  expect(checkLine(['local_b', 'local_a'], 1)).toContain('the sub sessions local_a and local_b,')
+  expect(checkLine(['local_a'], 1)).toContain('for 1 minute from now')
+})
+
+test('the Noted line ends with the sentences about foreman\'s own reports, which stand alone too', () => {
+  expect(FOREMAN_REPORTS).toBe('Foreman reports pull requests opened, verdicts, merges and closes in its own lines. In a foreman parent this overrides the app\'s request to report the outcome in one or two lines.')
+  expect(NOTED.endsWith(` ${FOREMAN_REPORTS}`)).toBe(true)
 })

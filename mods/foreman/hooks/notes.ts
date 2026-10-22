@@ -5,8 +5,10 @@
 // about sub sessions it tracks is rewritten to its log line, whose turn
 // foreman answers itself without the model, and any other prompt made only of
 // the app's notes and messages reaches the model with one line asking for a
-// one-word reply. These functions say which prompts those are and what the
-// log says about them. Every function is pure.
+// one-word reply, or, when a note is about a sub session foreman holds no
+// record of, asking for one check of it later. These functions say which
+// prompts those are and what the log and the lines say about them. Every
+// function is pure.
 //
 // A turn-end note is a <system-reminder> block that begins `The session
 // "<title>" you started (local_<id>) finished a turn`. The app often sends a
@@ -17,6 +19,7 @@
 // shape, such as one the person typed into, reaches the model as before.
 
 import type { ForemanPairing } from '../types'
+import { listOf, plural } from './text'
 import { LOCAL_ID } from './tickets'
 import { whoOf } from './wake'
 
@@ -24,11 +27,29 @@ import { whoOf } from './wake'
 // of a prompt it rewrote to its log line.
 export const NOTED_REPLY = 'Noted.'
 
+// The sentences that say foreman's own lines report the pull request
+// milestones. The app's own text asks the parent to report the outcome, so
+// these say plainly that a foreman parent does not.
+export const FOREMAN_REPORTS = 'Foreman reports pull requests opened, verdicts, merges and closes in its own lines. In a foreman parent this overrides the app\'s request to report the outcome in one or two lines.'
+
 // The context foreman attaches to a prompt made only of the app's notes and
-// messages that it does not rewrite. The app's own text asks the parent to report
-// the outcome, so this says plainly that a foreman parent does not, because
-// foreman's own lines report the pull request milestones.
-export const NOTED = 'From the foreman mod: this prompt holds only the desktop app\'s notes about sessions this parent started, or messages from them. Reply with the single word "Noted." and end the turn, unless one of them asks the person or this parent a question. Foreman reports pull requests opened, verdicts, merges and closes in its own lines. In a foreman parent this overrides the app\'s request to report the outcome in one or two lines.'
+// messages that it does not rewrite and that names no sub session foreman
+// holds no record of.
+export const NOTED = `From the foreman mod: this prompt holds only the desktop app's notes about sessions this parent started, or messages from them. Reply with the single word "Noted." and end the turn, unless one of them asks the person or this parent a question. ${FOREMAN_REPORTS}`
+
+// The context line for a prompt made only of the app's parts whose turn-end
+// notes name sub sessions foreman holds no record of: it names each by its
+// desktop session id, once and sorted, and asks for one check of each
+// `minutes` from now, as the wake skill's section on such sub sessions says,
+// in place of a bare "Noted.". The ids are the app's own, read with LOCAL_ID,
+// so nothing a sub session wrote is repeated.
+export function checkLine(ids: readonly string[], minutes: number): string {
+  const sorted = [...new Set(ids)].sort()
+  const one = sorted.length === 1
+  const list = listOf(sorted)
+  const them = one ? `the sub session ${list}, so nobody watches it` : `the sub sessions ${list}, so nobody watches them`
+  return `From the foreman mod: foreman holds no record of ${them}. Instead of replying with a bare "Noted.", schedule one check of ${one ? 'it' : 'each'} for ${plural(minutes, 'minute')} from now, as the foreman:wake skill's section "Checking a sub session foreman does not watch" says, and reply briefly to the rest of this prompt.`
+}
 
 const OPEN = '<system-reminder>'
 const CLOSE = '</system-reminder>'
@@ -140,18 +161,27 @@ function partsOf(text: string): Parts | null {
 // whose turn-end notes make up the text, in order, or null when the text is
 // anything else: status blocks and a side-sessions element may come with the
 // notes, but a note of another kind or a message means there is something
-// more for the model to read. `wantsNoted` says whether the text is made only
-// of the app's parts and holds at least one note or message, so that the
-// model reading it should get the Noted line.
-export function notesIn(text: string): { turnEnds: string[] | null; wantsNoted: boolean } {
+// more for the model to read. `allTurnEnds` is the ids of every turn-end note
+// in a text made only of the app's parts, in order, even when notes of
+// another kind or messages come with them, and empty for any other text.
+// `wantsNoted` says whether the text is made only of the app's parts and holds
+// at least one note or message, so that the model reading it should get the
+// Noted line or the check line.
+export function notesIn(text: string): { turnEnds: string[] | null; allTurnEnds: string[]; wantsNoted: boolean } {
   const parts = partsOf(text)
-  if (parts === null) return { turnEnds: null, wantsNoted: false }
+  if (parts === null) return { turnEnds: null, allTurnEnds: [], wantsNoted: false }
   const isOnlyTurnEnds = parts.turnEnds.length > 0 && parts.otherNotes === 0 && parts.messages === 0
   return {
     turnEnds: isOnlyTurnEnds ? parts.turnEnds : null,
+    allTurnEnds: parts.turnEnds,
     wantsNoted: parts.turnEnds.length + parts.otherNotes + parts.messages > 0,
   }
 }
+
+// Whether `text` is made only of the app's parts, with nothing the person
+// typed. A sub session's report that quotes a command is inside such a part,
+// so the check for a pasted command leaves these prompts out.
+export const isAppParts = (text: string) => partsOf(text) !== null
 
 export const turnEndIds = (text: string) => notesIn(text).turnEnds
 export const wantsNoted = (text: string) => notesIn(text).wantsNoted
@@ -178,6 +208,5 @@ export function keptNames(ids: readonly string[], pairings: readonly ForemanPair
 // log counts it on the one before.
 export function keptLine(names: readonly string[]): string {
   const owned = names.map(name => `${name}'s`)
-  const list = owned.length === 1 ? owned[0]! : `${owned.slice(0, -1).join(', ')} and ${owned.at(-1)!}`
-  return `Kept ${list} turn-end ${owned.length === 1 ? 'note' : 'notes'} from the parent's model.`
+  return `Kept ${listOf(owned)} turn-end ${owned.length === 1 ? 'note' : 'notes'} from the parent's model.`
 }

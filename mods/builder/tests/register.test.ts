@@ -10005,6 +10005,71 @@ test('a refused write is tried again at the next minute', async ($, on) => {
   expect(s.statusAt()).toMatchObject({ state: 'idle', writtenAt: S0 + MINUTE })
 })
 
+// Ends a turn of the session's own as the engine does: its Stop reports the
+// background work still in flight, and then the turn completes.
+async function ownTurnLeaving($: Engine, clock: ReturnType<typeof mock.clock>, turnId: string, tasks: object[]) {
+  await $.turn.start({ text: 'go', turnId } as never)
+  await clock.settle()
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: tasks } as never)
+  await turnEnds($, turnId)
+  await clock.settle()
+}
+
+test('a turn that leaves only a shell task in flight writes the background-only wait from that moment, naming the task and never its command', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  await s.clock.advance(MINUTE / 2)
+  await ownTurnLeaving($, s.clock, 't1', [shellTask])
+
+  expect(s.statusAt()).toMatchObject({ state: 'working', reason: '1 background task is running.', backgroundOnly: { since: S0 + MINUTE / 2, tasks: ['Run the suite'] } })
+  expect(s.files.get(BUILD)).not.toContain('npm test')
+})
+
+test('a later turn that leaves the same task keeps the wait\'s start, one that leaves another task starts a new wait, and one that leaves nothing drops the field', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  await ownTurnLeaving($, s.clock, 't1', [shellTask])
+  const since = S0
+  expect(s.statusAt()?.backgroundOnly?.since).toBe(since)
+
+  // The session answers a nudge with a short turn of its own, and the task is
+  // still in flight at its end.
+  await s.clock.advance(3 * MINUTE)
+  await $.turn.start({ text: 'Is the suite still running?', turnId: 't2' } as never)
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('working')
+  expect(s.statusAt() !== undefined && 'backgroundOnly' in s.statusAt()!).toBe(false)
+  await s.clock.advance(MINUTE / 4)
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [shellTask] } as never)
+  await turnEnds($, 't2')
+  await s.clock.settle()
+  expect(s.statusAt()?.backgroundOnly).toEqual({ since, tasks: ['Run the suite'] })
+
+  await s.clock.advance(MINUTE / 4)
+  const later = await s.clock.now()
+  await ownTurnLeaving($, s.clock, 't3', [monitorTask])
+  expect(s.statusAt()?.backgroundOnly).toEqual({ since: later, tasks: ['Watch the build'] })
+
+  await ownTurnLeaving($, s.clock, 't4', [])
+  expect(s.statusAt()?.state).toBe('idle')
+  expect('backgroundOnly' in s.statusAt()!).toBe(false)
+})
+
+test('a refused write does not move the background-only wait\'s start', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  await s.clock.advance(MINUTE / 2)
+  s.files.writes.refused = true
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [shellTask] } as never)
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('idle')
+
+  s.files.writes.refused = false
+  await s.clock.advance(MINUTE)
+  expect(s.statusAt()).toMatchObject({ state: 'working', backgroundOnly: { since: S0 + MINUTE / 2 } })
+  expect(s.statusAt()?.writtenAt).toBeGreaterThan(S0 + MINUTE / 2)
+})
+
 test('after a merge the session\'s end deletes the file, and nothing is written after the end', async ($, on) => {
   const s = foremanSession(on)
   await firstPrompt($, s.clock)

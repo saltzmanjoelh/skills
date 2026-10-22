@@ -10,14 +10,21 @@
 // all four together.
 
 import type { RecordVerdicts } from './record'
-import { printable } from './text'
+import { plural, printable } from './text'
 
 // Why foreman wakes the parent. `who` is already safe to put in the line, as
 // whoOf makes it. The four pull request milestones carry only what builder
 // wrote from its own GitHub reads and foreman's reader checked: the number,
 // and for a verdict pair the reviewed head's commit id and the two verdicts.
+// `unseen` is a pairing with a desktop session that has no status file
+// foreman can join: `mismatch` says a file carries its ticket but names
+// another desktop session or none. `background` is a working sub session
+// that waits only on background work, with its first task's description as
+// builder wrote it, or null when the record names none.
 export type Reason =
   | { kind: 'idle'; who: string; nudged: boolean; minutes: number }
+  | { kind: 'unseen'; who: string; minutes: number; mismatch: boolean }
+  | { kind: 'background'; who: string; nudged: boolean; minutes: number; task: string | null }
   | { kind: 'cleanup'; who: string; minutes: number; failedCalls: number; lastError: string }
   | { kind: 'gone'; who: string; minutes: number }
   | { kind: 'opened'; who: string; number: number }
@@ -64,13 +71,12 @@ export function slotWords(free: number): string {
   return free === 1 ? 'one slot free; pick the next issue and start it.' : `${n} slots free; pick the next issues and start them.`
 }
 
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
-
 // A verdict as the verdict sentence words it.
 const verdictWord = (v: RecordVerdicts['spec']) => (v === 'APPROVE' ? 'approves' : 'requests changes')
 
 // Whether a reason quotes record text that is not empty once cleaned.
-const quotesText = (r: Reason) => r.kind === 'cleanup' && printable(r.lastError, 120) !== ''
+const quotesText = (r: Reason) => (r.kind === 'cleanup' && printable(r.lastError, 120) !== '')
+  || (r.kind === 'background' && r.task !== null && printable(r.task, 120) !== '')
 
 // The sentence for each kind of reason. It is typed over every kind, so a
 // kind added to Reason fails the type check until it has a sentence.
@@ -78,6 +84,15 @@ export const REASON_WORDS: { [K in Reason['kind']]: (r: Extract<Reason, { kind: 
   'idle': r => (r.nudged
     ? `${r.who} is still idle after two nudges.`
     : `${r.who} has been idle for ${r.minutes} minutes and cannot be nudged, because foreman knows no desktop session for it.`),
+  'unseen': r => (r.mismatch
+    ? `${r.who}'s status file names another desktop session or none, so foreman cannot watch it.`
+    : `${r.who} has written no status file ${r.minutes} minutes after it started, so foreman cannot watch it.`),
+  'background': r => {
+    const head = r.nudged
+      ? `${r.who} has waited only on background work for ${r.minutes} minutes, through two nudges`
+      : `${r.who} has waited only on background work for ${r.minutes} minutes and cannot be nudged, because foreman knows no desktop session for it`
+    return quotesText(r) ? `${head}; its first task, quoted: ${quoted(r.task ?? '')}.` : `${head}.`
+  },
   'cleanup': r => {
     const head = `${r.who} has been in cleanup for ${r.minutes} minutes with ${plural(r.failedCalls, 'failed call')}`
     return quotesText(r) ? `${head}; its record's last error, quoted: ${quoted(r.lastError)}.` : `${head}.`

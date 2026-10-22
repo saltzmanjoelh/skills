@@ -3,17 +3,20 @@ import type { EngineInterface, PromptSubmitInput, Register, ResolveInput, ToolCa
 
 import { decide, desktopOf, needsList, slotOutcome, slotsNeedList, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
 import { isSvgSurface } from './art'
-import { becameParentAnswer, COMMAND, commandOf, PASSED_ON, slotsAnswer, type Command } from './commands'
-import { failureLine, listSessions, NUDGE_TEXT, openSession, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
+import { becameParentAnswer, COMMAND, commandOf, PASSED_ON, PASTED_LINE, pastedCommandIn, slotsAnswer, type Command } from './commands'
+import { BACKGROUND_NUDGE_TEXT, failureLine, listSessions, NUDGE_TEXT, openSession, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
 import { acceptedLog, heldLine, heldLog, heldNotice, heldSentence, isPersonPrompt, isRemoteRefusal, keyOfTitle } from './held'
 import { ignoredLine, readIssueLink } from './links'
-import { keptLine, keptNames, NOTED, NOTED_REPLY, notesIn } from './notes'
+import { checkLine, FOREMAN_REPORTS, isAppParts, keptLine, keptNames, NOTED, NOTED_REPLY, notesIn } from './notes'
 import { bandTree, PANE, paneTree, type Elements, type View } from './pane'
 import type { ForemanParent, ForemanTickets } from '../types'
 import { PARENT_OFF, parentIn, slotsOf, storeKey } from './parent'
 import { afterRead, busyCount, nameOf, nextReadDelay, READ_LATER_MS, rowsOf, type FileRead, type SubRow } from './subs'
 import { printable } from './text'
-import { addWork, briefFor, hasWork, joinOwners, localIdIn, newPairing, OUTBOX_EMPTY, ownsTicket, shownRows, ticketsIn, ticketsKey, TICKETS_EMPTY } from './tickets'
+import {
+  addWork, briefFor, carriesTicket, fallbackOf, hasWork, isOffRefused, joinOwners, localIdIn, newPairing, NO_TICKET_SENTENCE, OFF_LOG, OFF_REFUSAL, OUTBOX_EMPTY, ownsTicket,
+  runsImplement, shownRows, ticketsIn, ticketsKey, TICKETS_EMPTY, withOffRefusal, withUnwatched,
+} from './tickets'
 import { wakeLine } from './wake'
 
 type $ = EngineInterface
@@ -370,10 +373,10 @@ function sendFailure(result: SendResult | typeof TIMED_OUT): string {
   return result === 'not-connected' ? REASONS.notConnected : REASONS.sendRefused
 }
 
-// Sends the nudge to one sub session and logs how it went.
-async function nudge($: $, to: string, name: string, why: string) {
-  const result = await within($, sendMessage(desktopCall($), to, NUDGE_TEXT))
-  await addLog($, result === 'sent' ? `Nudged ${name} with "${NUDGE_TEXT}"${why}.` : `Could not nudge ${name}: ${sendFailure(result)}.`)
+// Sends the nudge `text` to one sub session and logs how it went.
+async function nudge($: $, to: string, name: string, why: string, text = NUDGE_TEXT) {
+  const result = await within($, sendMessage(desktopCall($), to, text))
+  await addLog($, result === 'sent' ? `Nudged ${name} with "${text}"${why}.` : `Could not nudge ${name}: ${sendFailure(result)}.`)
 }
 
 // Raises one native notification and logs how it went.
@@ -390,7 +393,8 @@ async function notify($: $, text: string) {
 
 // Carries out what the ledger's outbox holds: its log lines, then its nudges
 // and notifications, then the lines that wake the parent, each logged with
-// how it went. The outbox is emptied first, in one update, so two callers
+// how it went. A nudge for a sub session that waits only on background work
+// asks about that work, and its log line says so. The outbox is emptied first, in one update, so two callers
 // never carry out the same work.
 async function carryOut($: $) {
   let work = OUTBOX_EMPTY
@@ -400,9 +404,12 @@ async function carryOut($: $) {
   })
   if (!hasWork(work)) return
   await addLogs($, work.logs)
-  await Promise.all(work.effects.map(effect => (effect.kind === 'nudge'
-    ? nudge($, effect.to, effect.name, ', because it has been idle').catch(() => undefined)
-    : notify($, effect.text).catch(() => undefined))))
+  await Promise.all(work.effects.map(effect => {
+    if (effect.kind === 'notify') return notify($, effect.text).catch(() => undefined)
+    return (effect.about === 'background'
+      ? nudge($, effect.to, effect.name, ', because it has waited only on background work', BACKGROUND_NUDGE_TEXT)
+      : nudge($, effect.to, effect.name, ', because it has been idle')).catch(() => undefined)
+  }))
   for (const line of work.lines) await wake($, line)
 }
 
@@ -583,6 +590,58 @@ async function startSession<E extends Record<string, unknown>>($: $, e: E, next:
   }
 }
 
+// Whether start_session's answer is a start that went on: neither refused
+// nor an error.
+const wentOn = (out: ToolCallResult): out is Extract<ToolCallResult, { result: unknown }> => out.deny === undefined && out.isError !== true
+
+// The desktop session id start_session's answer names, or null. Core answers
+// the text the model reads beside the tool's result; a hook beneath may
+// answer the result alone, whose text blocks hold the id then.
+const localIdOf = (out: Extract<ToolCallResult, { result: unknown }>) => localIdIn(typeof out.text === 'string' ? out.text : JSON.stringify(out.result ?? ''))
+
+// The tool.call hook on start_session while the role is off. A call whose
+// brief does not run /implement goes on untouched. The first one that does,
+// in this session, is refused, so the parent's model tells the person that
+// foreman is off before anything starts; whether this session was already
+// refused is decided inside the ledger's update, so two calls at once give
+// exactly one refusal, and a store write that fails, which persistTickets
+// logs, still refuses. Every later one goes on as it came, and an answer that
+// is not a deny or an error gets the sentence that says foreman does not
+// watch the sub session, whose id joins the unwatched list. Each step after
+// the call has its own try, so a failure there returns the answer as it came.
+async function offStart<E extends Record<string, unknown>>($: $, e: E, next: (e: E) => Promise<ToolCallResult>): Promise<ToolCallResult> {
+  if (!runsImplement(e)) return next(e)
+  const id = await $.session.id()
+  let refuses = false
+  await writeTickets($, t => {
+    refuses = !isOffRefused(t, id)
+    return refuses ? withOffRefusal(t, id) : t
+  })
+  if (refuses) {
+    await addLog($, OFF_LOG).catch(() => undefined)
+    return { deny: OFF_REFUSAL }
+  }
+  const out = await next(e)
+  if (!wentOn(out)) return out
+  let answer: ToolCallResult = out
+  try {
+    answer = withNoTicket(out)
+  } catch {
+    // The answer goes back as it came.
+  }
+  try {
+    const localId = localIdOf(out)
+    if (localId !== null) await writeTickets($, t => withUnwatched(t, localId))
+  } catch {
+    // A sub session that is not listed gets today's Noted line for its notes.
+  }
+  return answer
+}
+
+// The answer with the sentence that says the sub session has no ticket added
+// to its context.
+const withNoTicket = (out: Extract<ToolCallResult, { result: unknown }>): ToolCallResult => ({ ...out, context: [...(out.context ?? []), NO_TICKET_SENTENCE] })
+
 // What foreman does with start_session's answer, for a call whose title
 // began with `key`, or null, that went on with `title`, which the app repeats
 // in its answers, and that carried `ticket`, or null. The app's
@@ -601,13 +660,11 @@ async function afterStart($: $, key: string | null, title: unknown, ticket: stri
     later($, () => carryOut($))
     return { ...out, context: [...(out.context ?? []), heldSentence(key)] }
   }
-  if (out.deny !== undefined || out.isError === true) return out
-  // Core answers the text the model reads beside the tool's result; a hook
-  // beneath may answer the result alone, whose text blocks hold the id then.
-  const localId = localIdIn(typeof out.text === 'string' ? out.text : JSON.stringify(out.result ?? ''))
+  if (!wentOn(out)) return out
+  const localId = localIdOf(out)
   const at = await $.clock.now()
   await writeTickets($, t => {
-    const paired = ticket === null ? t : { ...t, pairings: [...t.pairings, newPairing(ticket, localId, at)] }
+    const paired = ticket === null ? t : { ...t, pairings: [...t.pairings, newPairing(ticket, localId, at, key)] }
     if (key === null || !paired.held.includes(key)) return paired
     return { ...paired, held: paired.held.filter(k => k !== key), outbox: addWork(paired.outbox, { logs: [acceptedLog(key)], effects: [], lines: [] }) }
   })
@@ -624,23 +681,53 @@ async function afterStart($: $, key: string | null, title: unknown, ticket: stri
 // another hook added each mean there is something more for the model to read.
 const isPlain = (e: PromptSubmitInput) => e.command === undefined && (e.attachments?.length ?? 0) === 0 && (e.context?.length ?? 0) === 0
 
-// What foreman does with a prompt while the role is on: keep it from the
-// parent's model by rewriting it to the log line for it, when it is made of
-// turn-end notes about sub sessions this parent tracks; let it go on with the
-// Noted line when it is made only of the app's notes and messages; or let it
-// go on as it came, which withHeld may give the held line.
+// What foreman does with a prompt made only of the app's notes and messages.
+// While the role is on, it keeps the prompt from the parent's model by
+// rewriting it to the log line for it, when it is made of turn-end notes about
+// sub sessions this parent tracks. Otherwise, when a turn-end note in it is
+// about a sub session foreman holds no record of, the prompt goes on with the
+// check line, which asks for one later check of each such sub session: while
+// the role is on, one whose id no pairing holds, whatever its standing, and
+// while it is off, one in the unwatched list. While the role is on, any other
+// such prompt goes on with the Noted line. Every other prompt goes on as it
+// came, which withPasted or withHeld may give a line.
 // The text is checked before any state is read, so a prompt the person typed
-// waits here on no read, and the ledger is read only for a prompt that may be
-// kept. A prompt the person typed that goes on does wait in withHeld for
-// reads of the role and the ledger, to learn whether any key is held.
-type Choice = { kind: 'keep'; line: string } | { kind: 'noted' } | { kind: 'pass' }
+// waits here on no read, and the ledger is read only for a prompt that holds
+// a turn-end note. A prompt the person typed that goes on does wait for
+// reads of the role and the ledger, to learn whether foreman is off or any key
+// is held.
+type Choice = { kind: 'keep'; line: string } | { kind: 'check'; context: string[] } | { kind: 'noted' } | { kind: 'pass' }
 
 async function choiceFor($: $, e: PromptSubmitInput): Promise<Choice> {
   if (!isPlain(e)) return { kind: 'pass' }
   const notes = notesIn(e.text)
-  if (!notes.wantsNoted || !(await isOn($))) return { kind: 'pass' }
-  const names = notes.turnEnds === null ? null : keptNames(notes.turnEnds, ticketsIn(await read($, tickets)).pairings)
-  return names === null ? { kind: 'noted' } : { kind: 'keep', line: keptLine(names) }
+  if (!notes.wantsNoted) return { kind: 'pass' }
+  const minutes = limitsOf(currentOptions).idleMs / 60_000
+  // While the role is off, only a sub session in the unwatched list gets the
+  // check line, and every other prompt goes on as it came.
+  if (!(await isOn($))) {
+    if (notes.allTurnEnds.length === 0) return { kind: 'pass' }
+    const { unwatched } = ticketsIn(await read($, tickets))
+    const unrecorded = notes.allTurnEnds.filter(id => unwatched.includes(id))
+    return unrecorded.length === 0 ? { kind: 'pass' } : { kind: 'check', context: [checkLine(unrecorded, minutes)] }
+  }
+  if (notes.allTurnEnds.length === 0) return { kind: 'noted' }
+  const { pairings } = ticketsIn(await read($, tickets))
+  const names = notes.turnEnds === null ? null : keptNames(notes.turnEnds, pairings)
+  if (names !== null) return { kind: 'keep', line: keptLine(names) }
+  const unrecorded = notes.allTurnEnds.filter(id => !pairings.some(p => p.localId === id))
+  return unrecorded.length === 0 ? { kind: 'noted' } : { kind: 'check', context: [checkLine(unrecorded, minutes), FOREMAN_REPORTS] }
+}
+
+// The prompt with the pasted line added to its context, when it is the
+// person's own, holds no slash command, is not made only of the app's parts,
+// holds /start-foreman as text at the start of a line, and the role is off,
+// or else as it came. The text is checked before the role is read, so most
+// prompts read nothing here, and nothing is written.
+async function withPasted($: $, e: PromptSubmitInput): Promise<PromptSubmitInput> {
+  if (e.command !== undefined || !isPersonPrompt(e) || isAppParts(e.text) || !pastedCommandIn(e.text)) return e
+  if (await isOn($)) return e
+  return { ...e, context: [...(e.context ?? []), PASTED_LINE] }
 }
 
 // The prompt with the held line added to its context, when it is the
@@ -757,6 +844,25 @@ async function becomeParent($: $) {
   await $.ui.open({ id: PANE, title: 'foreman' }).catch(() => undefined)
 }
 
+// What the start_session hook answers when it failed, as fallbackOf decides.
+// When the call had gone on, next hands back its settled answer rather than
+// starting the session again, as builder's own tool.call hook relies on.
+// Nothing here may throw, and on a re-entry every $ call rejects.
+async function startFallback<E extends Record<string, unknown>>(
+  $: $,
+  e: E,
+  next: ((e: E) => Promise<ToolCallResult>) & { readonly called: boolean; readonly error: { readonly kind: 'throw' | 'timeout' | 're-entry' } },
+): Promise<ToolCallResult> {
+  const out = await next(e)
+  try {
+    const { log, sentence } = fallbackOf(next.called, next.error.kind, carriesTicket(e), wentOn(out))
+    if (log !== null) await addLog($, log).catch(() => undefined)
+    return sentence && wentOn(out) ? withNoTicket(out) : out
+  } catch {
+    return out
+  }
+}
+
 export const register: Register = (on, options) => {
   currentOptions = options
   // At the start of a session, and of a resumed one, the store says whether
@@ -775,7 +881,8 @@ export const register: Register = (on, options) => {
       const storedTickets = ticketsIn(rawTickets)
       await update($, tickets, heldRaw => {
         const held = ticketsIn(heldRaw)
-        return held.pairings.length === 0 && !hasWork(held.outbox) && held.held.length === 0 ? storedTickets : held
+        const isEmpty = held.pairings.length === 0 && !hasWork(held.outbox) && held.held.length === 0 && held.offRefusedFor === null && held.unwatched.length === 0
+        return isEmpty ? storedTickets : held
       })
     }
     if (rawParent !== undefined && rawParent !== null) {
@@ -826,8 +933,9 @@ export const register: Register = (on, options) => {
   on('prompt.submit', async ($, e, next) => {
     void ensureArmed($).catch(() => undefined)
     const choice = await choiceFor($, e)
-    if (choice.kind === 'pass') return next(await withHeld($, e))
+    if (choice.kind === 'pass') return next(await withHeld($, await withPasted($, e)))
     if (choice.kind === 'noted') return next({ ...e, context: [NOTED] })
+    if (choice.kind === 'check') return next({ ...e, context: choice.context })
     await update($, quietLine, () => choice.line)
     await addLog($, choice.line)
     return next({ ...e, text: choice.line })
@@ -866,18 +974,13 @@ export const register: Register = (on, options) => {
   })
 
   // Every start_session call in a parent goes through startSession, which
-  // checks its title. In any other session the call passes unchanged. A hook
-  // that throws passes the call on as it came.
+  // checks its title. In any other session it goes through offStart, which
+  // refuses the first /implement start once and passes every other call. A
+  // hook that throws passes the call on as it came.
   on('tool.call', { tool: START_TOOL }, async ($, e, next) => {
-    if (!(await isOn($))) return next(e)
+    if (!(await isOn($))) return offStart($, e, next)
     return startSession($, e, next)
-  }).catch(($, e, next) => {
-    // Before the call went on, it goes on as it came, without a ticket. Once
-    // it went on, a failure is the tool's own, and next hands back its
-    // settled answer rather than starting the session again, as builder's
-    // own tool.call hook relies on.
-    return next(e)
-  })
+  }).catch(startFallback)
 
   // The pane. Its presses open, nudge or release a sub session.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {

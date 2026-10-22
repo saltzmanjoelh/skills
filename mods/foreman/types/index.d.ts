@@ -31,8 +31,15 @@ export type ForemanActs = {
   episode: { state: string; since: number } | null
   // The idle stretch without progress: the progress it began with, written
   // as text, how many nudges went out, when the last one went, and whether
-  // the parent was woken for it. Null outside such a stretch.
-  stretch: { progress: string; nudges: number; lastNudgeAt: number | null; woke: boolean } | null
+  // the parent was woken for it. Null outside such a stretch. `wait` is null
+  // for a stretch of an idle record, and the `since` of the record's
+  // background-only wait for a stretch of a working record that waits only
+  // on background work, so a change from one wait to another starts a fresh
+  // stretch. `countFrom` is the read that progress started a background
+  // stretch afresh at, inside the same wait, so the count runs from that read
+  // rather than from the wait's start; it is null for an idle stretch and for
+  // a stretch that began with its wait.
+  stretch: { progress: string; nudges: number; lastNudgeAt: number | null; countFrom: number | null; woke: boolean; wait: number | null } | null
   // The episode, as `<state>@<since>`, that the needs-you notification and
   // the cleanup wake were last given for, or null.
   notifiedFor: string | null
@@ -40,6 +47,10 @@ export type ForemanActs = {
   // The file modification time that the gone wake was last given for, or
   // null.
   goneWokeFor: number | null
+  // Whether the parent was woken because the pairing, started with a desktop
+  // session id, still had no status file it could join five minutes after
+  // it was paired. It is given once per pairing.
+  unseenWoke: boolean
   // The pull request milestones the parent was told about: the pull
   // request's number and state, and the last verdict pair, each null until
   // there is one. `sha` is the reviewed head's full commit id, and each
@@ -76,8 +87,10 @@ export type ForemanPairing = {
 }
 
 // Something to do outside the ledger: a nudge to a desktop session, naming
-// the sub session for the log, or a notification with its text.
-export type ForemanEffect = { kind: 'nudge'; to: string; name: string } | { kind: 'notify'; text: string }
+// the sub session for the log, or a notification with its text. A nudge's
+// `about` is 'background' for a sub session that waits only on background
+// work, which gets its own text, and is absent for an idle one.
+export type ForemanEffect = { kind: 'nudge'; to: string; name: string; about?: 'background' } | { kind: 'notify'; text: string }
 
 // What foreman decided and has not yet carried out: log lines, effects, and
 // lines that wake the parent. A read puts its decision here in the same
@@ -89,7 +102,19 @@ export type ForemanOutbox = { logs: string[]; effects: ForemanEffect[]; lines: s
 // the log says so once. `held` lists the issue keys whose start the desktop
 // app refused because the person works over Remote Control, which foreman
 // offers again on the person's next prompt until a sign that they started.
-export type ForemanTickets = { pairings: ForemanPairing[]; folderMissing: boolean; outbox: ForemanOutbox; held: string[] }
+// `offRefusedFor` is the session id for which foreman refused the first
+// /implement start while the role was off, or null, so the refusal counts
+// only in the conversation that saw it. `unwatched` lists the `local_…` ids
+// of sub sessions started while the role was off, which foreman does not
+// watch, oldest first.
+export type ForemanTickets = {
+  pairings: ForemanPairing[]
+  folderMissing: boolean
+  outbox: ForemanOutbox
+  held: string[]
+  offRefusedFor: string | null
+  unwatched: string[]
+}
 
 declare module 'claude-code' {
   interface PluginState {

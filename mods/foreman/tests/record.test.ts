@@ -133,3 +133,19 @@ test('the cleanup counts are read in any state once present, and are absent unti
   expect(recordIn(text({ state: 'in-cleanup' }))?.cleanup).toBeUndefined()
   expect(recordIn(text({ state: 'working', cleanup: 'soon' }))?.cleanup).toBeUndefined()
 })
+
+test('a background-only wait is read with its since and at most three of its string tasks, and is absent until then', () => {
+  const since = 1500
+  expect(recordIn(text({ backgroundOnly: { since, tasks: ['run the tests', 'build'] } }))?.backgroundOnly).toEqual({ since, tasks: ['run the tests', 'build'] })
+  expect(recordIn(text({ backgroundOnly: { since, tasks: ['a', 7, 'b', null, 'c', 'd'] } }))?.backgroundOnly).toEqual({ since, tasks: ['a', 'b', 'c'] })
+  expect(recordIn(text())?.backgroundOnly).toBeUndefined()
+  expect(recordIn(text())).not.toHaveProperty('backgroundOnly')
+})
+
+test('a background-only wait without a finite since reads as none, and one whose tasks are not a list reads with no tasks', () => {
+  for (const bad of ['soon', 3, null, [], {}, { since: 'then', tasks: [] }, { since: Number.NaN, tasks: ['x'] }, { since: null, tasks: ['x'] }, { tasks: ['x'] }]) {
+    expect(recordIn(text({ backgroundOnly: bad }))).not.toHaveProperty('backgroundOnly')
+  }
+  expect(recordIn(text({ backgroundOnly: { since: 1500 } }))?.backgroundOnly).toEqual({ since: 1500, tasks: [] })
+  expect(recordIn(text({ backgroundOnly: { since: 1500, tasks: 'run the tests' } }))?.backgroundOnly).toEqual({ since: 1500, tasks: [] })
+})
