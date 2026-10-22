@@ -178,8 +178,10 @@ const setActs = (s: Step, change: Partial<ForemanActs>) => {
 // stretch keeps which wait it counts, null for idleness and the background
 // wait's `since` otherwise, and a stretch of another wait starts afresh, so a
 // stretch that already woke for one wait cannot silence the next. Progress
-// inside the same wait also starts the stretch afresh, counted from that
-// read, since a background wait's `since` does not move with it. A
+// inside the same wait also starts the stretch afresh. An idle stretch then
+// counts from the idle episode's start, as it always has. A background
+// stretch counts from that read instead, because a background wait's `since`
+// does not move with progress, so counting from it would nudge at once. A
 // background wait's nudge and wake say so, and the wake quotes its first
 // task when there is one. A record with no desktop session wakes the
 // parent at two thresholds instead. A record whose pull request was closed
@@ -194,7 +196,7 @@ function idleRule(s: Step, since: number, background: { task: string | null } | 
   const wait = background === null ? null : since
   let stretch = s.p.acts.stretch
   if (stretch === null || stretch.wait !== wait) stretch = { progress, nudges: 0, lastNudgeAt: null, countFrom: null, woke: false, wait }
-  else if (stretch.progress !== progress) stretch = { progress, nudges: 0, lastNudgeAt: null, countFrom: s.now, woke: false, wait }
+  else if (stretch.progress !== progress) stretch = { progress, nudges: 0, lastNudgeAt: null, countFrom: wait === null ? null : s.now, woke: false, wait }
   setActs(s, { stretch })
   if (stretch.woke) return
   const from = Math.max(since, stretch.countFrom ?? since, stretch.lastNudgeAt ?? since)

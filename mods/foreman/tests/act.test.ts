@@ -76,6 +76,14 @@ test('a sub session that answers each nudge with a short turn and goes idle agai
   ])
 })
 
+test('progress inside an unchanged idle episode still counts from the episode, as before background waits', () => {
+  const progressed = (now: number) => ((now - T0) / MINUTE < 3 ? [row()] : [row({ stageDone: 5 })])
+  expect(readEvery(paired(), progressed, T0 + 11 * MINUTE)).toEqual([
+    { at: 5, nudges: 1, reasons: [] },
+    { at: 10, nudges: 1, reasons: [] },
+  ])
+})
+
 test('progress, or a working stretch as long as the threshold, starts the count again', () => {
   const progressed = (now: number) => ((now - T0) / MINUTE < 7 ? [row()] : [row({ stage: 'verify', stateSince: T0 + 7 * MINUTE })])
   expect(readEvery(paired(), progressed, T0 + 13 * MINUTE)).toEqual([

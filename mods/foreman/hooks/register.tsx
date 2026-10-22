@@ -702,17 +702,21 @@ async function choiceFor($: $, e: PromptSubmitInput): Promise<Choice> {
   if (!isPlain(e)) return { kind: 'pass' }
   const notes = notesIn(e.text)
   if (!notes.wantsNoted) return { kind: 'pass' }
-  const on = await isOn($)
-  if (notes.allTurnEnds.length === 0) return on ? { kind: 'noted' } : { kind: 'pass' }
-  const t = ticketsIn(await read($, tickets))
-  const names = !on || notes.turnEnds === null ? null : keptNames(notes.turnEnds, t.pairings)
-  if (names !== null) return { kind: 'keep', line: keptLine(names) }
-  const unknown = notes.allTurnEnds.filter(id => (on ? !t.pairings.some(p => p.localId === id) : t.unwatched.includes(id)))
-  if (unknown.length > 0) {
-    const line = checkLine(unknown, limitsOf(currentOptions).idleMs / 60_000)
-    return { kind: 'check', context: on ? [line, FOREMAN_REPORTS] : [line] }
+  const minutes = limitsOf(currentOptions).idleMs / 60_000
+  // While the role is off, only a sub session in the unwatched list gets the
+  // check line, and every other prompt goes on as it came.
+  if (!(await isOn($))) {
+    if (notes.allTurnEnds.length === 0) return { kind: 'pass' }
+    const { unwatched } = ticketsIn(await read($, tickets))
+    const unrecorded = notes.allTurnEnds.filter(id => unwatched.includes(id))
+    return unrecorded.length === 0 ? { kind: 'pass' } : { kind: 'check', context: [checkLine(unrecorded, minutes)] }
   }
-  return on ? { kind: 'noted' } : { kind: 'pass' }
+  if (notes.allTurnEnds.length === 0) return { kind: 'noted' }
+  const { pairings } = ticketsIn(await read($, tickets))
+  const names = notes.turnEnds === null ? null : keptNames(notes.turnEnds, pairings)
+  if (names !== null) return { kind: 'keep', line: keptLine(names) }
+  const unrecorded = notes.allTurnEnds.filter(id => !pairings.some(p => p.localId === id))
+  return unrecorded.length === 0 ? { kind: 'noted' } : { kind: 'check', context: [checkLine(unrecorded, minutes), FOREMAN_REPORTS] }
 }
 
 // The prompt with the pasted line added to its context, when it is the
