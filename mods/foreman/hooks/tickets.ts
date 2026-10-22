@@ -38,6 +38,22 @@ export const OFF_REFUSAL = 'foreman: foreman is off in this session, so this sub
 // The sentence added to the answer of a start that went on without a ticket.
 export const NO_TICKET_SENTENCE = 'This sub session has no ticket from foreman, so foreman does not watch it.'
 
+// The log line for a start_session call that went on without a ticket,
+// because foreman's hook failed before it could add one, worded by how it
+// failed: it threw, ran out of time, or did not run because the call reached
+// it again from beneath it.
+export function noTicketLog(kind: 'throw' | 'timeout' | 're-entry'): string {
+  const why = kind === 'throw'
+    ? 'foreman\'s start_session hook threw an error before the call went on, so'
+    : kind === 'timeout'
+      ? 'foreman\'s start_session hook ran out of time before the call went on, so'
+      : 'the call reached foreman\'s start_session hook again from beneath it, so the hook did not run and'
+  return `Started a sub session without a ticket, because ${why} foreman does not watch it.`
+}
+
+// The log line for the off refusal.
+export const OFF_LOG = 'Refused the first start_session call in this session whose brief runs /implement, because foreman is off.'
+
 // The log lines for each refusal.
 const FORK_LOG = 'Refused a start_session call with forked context, because its sub session could not find its ticket.'
 export const TITLE_LOG = 'Refused a start_session call, because its title did not begin with an issue key and a space or a colon, or with "No issue: " on a call with a brief.'

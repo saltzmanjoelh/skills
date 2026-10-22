@@ -113,7 +113,7 @@ export function desktopApp(on: On) {
 // rows appended and the start_session calls. `notify` and `submit` say how a
 // notification and a prompt fare, `toastThrows` makes every toast throw, and
 // `startAnswer` is the text start_session answers, with `startFails` making
-// it answer an error.
+// it answer an error and `startThrows` making it throw.
 export function engine(on: On) {
   const toasts: string[] = []
   const panes: string[] = []
@@ -135,6 +135,9 @@ export function engine(on: On) {
     // Whether start_session's answer leaves out the text, giving the result alone.
     startResultOnly: false,
     startFails: false,
+    // Whether start_session throws instead of answering, as a tool that fails
+    // after foreman's hook let the call go on.
+    startThrows: false,
     // The session id the engine answers.
     sessionId: 'session-1',
   }
@@ -159,6 +162,7 @@ export function engine(on: On) {
   })
   on('tool.call', { tool: 'mcp__ccd_session__start_session' }, ($, call) => {
     answers.started.push({ ...call })
+    if (answers.startThrows) throw new Error('the desktop app fell over')
     const result = { content: [{ type: 'text', text: answers.startAnswer }], isError: answers.startFails }
     if (answers.startResultOnly) return { result } as never
     return { result, text: answers.startAnswer, ...(answers.startFails ? { isError: true } : {}) } as never

@@ -3,7 +3,8 @@ import type { Engine } from 'claude-code/testing'
 
 import { REASONS } from '../hooks/desktop'
 import { DATA_NOTE } from '../hooks/wake'
-import { FORK_REFUSAL, newPairing, ticketsIn, ticketsKey, TITLE_LOG, TITLE_REFUSAL } from '../hooks/tickets'
+import { BACKGROUND_NUDGE_TEXT } from '../hooks/desktop'
+import { FORK_REFUSAL, newPairing, NO_TICKET_SENTENCE, noTicketLog, OFF_REFUSAL, ticketsIn, ticketsKey, TICKETS_EMPTY, TITLE_LOG, TITLE_REFUSAL } from '../hooks/tickets'
 import { foreman, leftInState, MINUTE, mountBoth, record, SECOND, start, T0, world } from './world'
 
 const START = 'mcp__ccd_session__start_session'
@@ -24,7 +25,7 @@ async function minutesPass(w: World, minutes: number, live: Record<string, strin
 }
 
 const ledger = (w: World) => ticketsIn(w.stored.get(ticketsKey('session-1')))
-const startSession = ($: Engine, args: Record<string, unknown>) => $.tool.call({ tool: START, ...args } as never) as Promise<{ deny?: string; text?: string }>
+const startSession = ($: Engine, args: Record<string, unknown>) => $.tool.call({ tool: START, ...args } as never) as Promise<{ deny?: string; text?: string; context?: readonly string[] }>
 
 test('in a parent, start_session gets the ticket line and the local_ id it answers is paired with the ticket', async ($, on) => {
   const w = world(on)
@@ -136,7 +137,9 @@ test('in a parent, a proposal started by its id alone passes unchanged, one with
 })
 
 test('a session that is not a parent passes every title unchanged', async ($, on) => {
-  const w = world(on)
+  // The off refusal was already given in this session, so the starts that run
+  // /implement pass too.
+  const w = world(on, { store: { [ticketsKey('session-1')]: { ...TICKETS_EMPTY, offRefusedFor: 'session-1' } } })
   await start($)
   const marker = { prompt: 'Tidy the docs.', context: 'fresh', title: 'No issue: tidy' }
   for (const args of [...BAD_STARTS, marker]) expect((await startSession($, args)).deny).toBeUndefined()
@@ -870,4 +873,164 @@ test('a neighbouring key, an archived entry, an entry with a doubtful archived f
   const logs = await ui.paneText()
   expect(logs).toContain(`Could not read the desktop app's list of sessions, so no held issue was released: ${REASONS.listRefused}.`)
   expect(logs).not.toContain('so no slot was freed')
+})
+
+// A start whose brief runs /implement, and one whose brief does not.
+const IMPLEMENT = { prompt: 'Run /implement ABC-7.', context: 'fresh', title: 'ABC-7: short' }
+const OTHER = { prompt: 'Tidy the docs.', context: 'fresh', title: 'No issue: tidy' }
+
+test('while off, the first /implement start is refused and starts nothing, and the second passes with the no-ticket sentence and is kept as unwatched', async ($, on) => {
+  const w = world(on)
+  await start($)
+  const first = await startSession($, IMPLEMENT)
+  expect(first.deny).toBe(OFF_REFUSAL)
+  expect(first.deny!.startsWith('foreman: ')).toBe(true)
+  expect(w.engine.started).toEqual([])
+  expect(ledger(w).offRefusedFor).toBe('session-1')
+  const reworded = { ...IMPLEMENT, prompt: 'Please run /implement ABC-7 now.' }
+  const second = await startSession($, reworded)
+  expect(second.deny).toBeUndefined()
+  expect(second.context).toEqual([NO_TICKET_SENTENCE])
+  expect(w.engine.started.map(s => [s.prompt, s.title])).toEqual([[reworded.prompt, reworded.title]])
+  expect(ledger(w).unwatched).toEqual(['local_new1'])
+  expect(ledger(w).pairings).toEqual([])
+  w.engine.startAnswer = 'Started the session local_new2 (name: example).'
+  expect((await startSession($, IMPLEMENT)).context).toEqual([NO_TICKET_SENTENCE])
+  expect(ledger(w).unwatched).toEqual(['local_new1', 'local_new2'])
+  expect(w.stored.get('parent:session-1')).toBeUndefined()
+})
+
+test('while off, a start whose brief does not run /implement passes untouched and stores nothing', async ($, on) => {
+  const w = world(on)
+  await start($)
+  const out = await startSession($, OTHER)
+  expect(out.deny).toBeUndefined()
+  expect(out.context).toBeUndefined()
+  expect(w.engine.started.map(s => [s.prompt, s.title])).toEqual([[OTHER.prompt, OTHER.title]])
+  expect(w.stored.has(ticketsKey('session-1'))).toBe(false)
+})
+
+test('while off, an /implement start whose answer is an error gets no sentence and keeps no id', async ($, on) => {
+  const w = world(on, { store: { [ticketsKey('session-1')]: { ...TICKETS_EMPTY, offRefusedFor: 'session-1' } } })
+  w.engine.startFails = true
+  await start($)
+  const out = await startSession($, IMPLEMENT)
+  expect(out.context).toBeUndefined()
+  expect(ledger(w).unwatched).toEqual([])
+})
+
+test('a refusal stored for this session lets the first /implement start pass after a reload, and one stored for another session does not', async ($, on) => {
+  const w = world(on, { store: { [ticketsKey('session-1')]: { ...TICKETS_EMPTY, offRefusedFor: 'session-1' } } })
+  await start($)
+  expect((await startSession($, IMPLEMENT)).context).toEqual([NO_TICKET_SENTENCE])
+  w.engine.sessionId = 'session-2'
+  w.stored.set(ticketsKey('session-2'), { ...TICKETS_EMPTY, offRefusedFor: 'session-1' })
+  await start($)
+  expect((await startSession($, IMPLEMENT)).deny).toBe(OFF_REFUSAL)
+})
+
+test('a refusal left in $.state by a reload outweighs an older stored ledger that holds only unwatched ids', async ($, on) => {
+  const w = world(on, { store: { [ticketsKey('session-1')]: { ...TICKETS_EMPTY, unwatched: ['local_old'] } } })
+  leftInState(on, { tickets: { ...TICKETS_EMPTY, offRefusedFor: 'session-1' } })
+  await start($)
+  expect((await startSession($, IMPLEMENT)).context).toEqual([NO_TICKET_SENTENCE])
+  expect(ledger(w).offRefusedFor).toBe('session-1')
+})
+
+test('a ledger left in $.state that holds only unwatched ids outweighs an older stored one', async ($, on) => {
+  const w = world(on, { store: { [ticketsKey('session-1')]: { ...TICKETS_EMPTY, offRefusedFor: 'session-1' } } })
+  leftInState(on, { tickets: { ...TICKETS_EMPTY, unwatched: ['local_old'] } })
+  await start($)
+  expect((await startSession($, IMPLEMENT)).deny).toBe(OFF_REFUSAL)
+  expect(ledger(w).unwatched).toEqual(['local_old'])
+})
+
+test('two /implement starts at once while off give exactly one refusal', async ($, on) => {
+  const w = world(on)
+  await start($)
+  const outs = await Promise.all([startSession($, IMPLEMENT), startSession($, { ...IMPLEMENT, title: 'ABC-8: other' })])
+  expect(outs.filter(o => o.deny === OFF_REFUSAL)).toHaveLength(1)
+  expect(outs.filter(o => o.context?.includes(NO_TICKET_SENTENCE))).toHaveLength(1)
+  expect(w.engine.started).toHaveLength(1)
+})
+
+test('a refusal whose store write fails is still given, and the write is logged', async ($, on) => {
+  const w = world(on)
+  w.store.refused.add(ticketsKey('session-1'))
+  await start($)
+  expect((await startSession($, IMPLEMENT)).deny).toBe(OFF_REFUSAL)
+  expect(w.engine.started).toEqual([])
+  expect((await startSession($, IMPLEMENT)).context).toEqual([NO_TICKET_SENTENCE])
+})
+
+test('in a parent, a start whose hook throws before the call went on goes on without a ticket, with the sentence and a log line', async ($, on) => {
+  let isFailing = false
+  on('state.get', ($, e, next) => (isFailing && e.plugin === 'foreman' && e.key === 'parent' ? { deny: 'the state is gone' } : next(e)))
+  const w = world(on)
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  isFailing = true
+  const out = await startSession($, IMPLEMENT)
+  isFailing = false
+  expect(out.deny).toBeUndefined()
+  expect(out.context).toEqual([NO_TICKET_SENTENCE])
+  expect(w.engine.started.map(s => s.prompt)).toEqual([IMPLEMENT.prompt])
+  expect(ledger(w).pairings).toEqual([])
+  expect(await ui.newestLog()).toBe(noTicketLog('throw'))
+})
+
+test('a start whose hook throws before the call went on and whose answer is an error gets no sentence', async ($, on) => {
+  let isFailing = false
+  on('state.get', ($, e, next) => (isFailing && e.plugin === 'foreman' && e.key === 'parent' ? { deny: 'the state is gone' } : next(e)))
+  const w = world(on)
+  w.engine.startFails = true
+  await start($)
+  await foreman($)
+  isFailing = true
+  const out = await startSession($, IMPLEMENT)
+  isFailing = false
+  expect(out.context).toBeUndefined()
+})
+
+// A failure after the call went on with an answer cannot be provoked, because
+// every step of the hook after the call is guarded, so this provokes the one
+// that can happen: the tool itself fails beneath the hook.
+test('a start whose tool fails after the call went on is not started again and gets no sentence and no log line', async ($, on) => {
+  const w = world(on)
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  w.engine.startThrows = true
+  const out = await startSession($, IMPLEMENT).catch((error: unknown) => ({ thrown: error }))
+  expect(w.engine.started).toHaveLength(1)
+  expect(JSON.stringify(out)).not.toContain(NO_TICKET_SENTENCE)
+  expect(await ui.paneText()).not.toContain('without a ticket')
+})
+
+test('the log line for a start without a ticket names how the hook failed', () => {
+  expect(noTicketLog('throw')).toBe('Started a sub session without a ticket, because foreman\'s start_session hook threw an error before the call went on, so foreman does not watch it.')
+  expect(noTicketLog('timeout')).toBe('Started a sub session without a ticket, because foreman\'s start_session hook ran out of time before the call went on, so foreman does not watch it.')
+  expect(noTicketLog('re-entry')).toBe('Started a sub session without a ticket, because the call reached foreman\'s start_session hook again from beneath it, so the hook did not run and foreman does not watch it.')
+})
+
+test('a start in a parent pairs its ticket with the issue key of its title, and a "No issue: " start with none', async ($, on) => {
+  const w = world(on)
+  await start($)
+  await foreman($)
+  await startSession($, IMPLEMENT)
+  await startSession($, OTHER)
+  expect(ledger(w).pairings.map(p => p.issueKey)).toEqual(['ABC-7', null])
+})
+
+test('a sub session that waits only on background work is nudged with the background text', async ($, on) => {
+  const w = world(on)
+  const waiting = record('ABC-1', 'working', { desktopSessionId: 'local_a', backgroundOnly: { since: T0, tasks: ['Run the tests'] } })
+  w.folder.put('a.json', waiting)
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await minutesPass(w, 5, { 'a.json': waiting })
+  expect(w.desktop.sent).toEqual([['local_a', BACKGROUND_NUDGE_TEXT]])
+  expect(await ui.newestLog()).toBe(`Nudged ABC-1 with "${BACKGROUND_NUDGE_TEXT}", because it has waited only on background work.`)
 })

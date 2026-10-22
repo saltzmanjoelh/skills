@@ -2,7 +2,8 @@ import { expect, test } from 'claude-code/testing'
 import type { On, SessionMessage, TurnStepChunk, TurnStepInput } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
-import { NOTED } from '../hooks/notes'
+import { PASTED_LINE } from '../hooks/commands'
+import { checkLine, FOREMAN_REPORTS, NOTED } from '../hooks/notes'
 import { newPairing, ticketsIn, ticketsKey } from '../hooks/tickets'
 import type { ForemanPairing } from '../types'
 import { ARCHIVED, EVENT, leftInState, MESSAGE, mountBoth, note, OTHER_EVENT, PROPOSAL, SENT, start, STATUS, T0, world, WORKTREE } from './world'
@@ -90,6 +91,17 @@ async function noted($: Engine, w: ReturnType<typeof world>, text: string, over:
   expect(w.engine.prompts.at(-1)).toBe(text)
 }
 
+// Asserts that `text` reached the model exactly as it came, with the check
+// line for `ids` at `minutes` as its context, followed by the sentences about
+// foreman's own reports while the role is on.
+async function checked($: Engine, w: ReturnType<typeof world>, text: string, ids: string[], { minutes = 5, isOn = true } = {}) {
+  const out = await submit($, text)
+  expect(out.drop).toBeUndefined()
+  expect(out.text).toBe(text)
+  expect(out.context).toEqual(isOn ? [checkLine(ids, minutes), FOREMAN_REPORTS] : [checkLine(ids, minutes)])
+  expect(w.engine.prompts.at(-1)).toBe(text)
+}
+
 test('a prompt of tracked turn-end notes goes on as its log line, with the marker set and one line in the log, while the role is on', async ($, on) => {
   const { w, ui, marker } = await parentWith($, on)
   await kept($, w, marker, `${note('local_a')}\n${STATUS}`, ONE)
@@ -108,12 +120,12 @@ test('a prompt in which the person typed after the notes passes byte for byte', 
   await passes($, w, `${note('local_a')}\n${STATUS}\n\nWhat should we do next?  `)
 })
 
-test('a note about an untracked, a released or a trimmed sub session passes with the Noted line, and a freed one\'s is rewritten', async ($, on) => {
+test('a note about an untracked or a trimmed sub session passes with the check line, a released one\'s with the Noted line, and a freed one\'s is rewritten', async ($, on) => {
   const { w, ui, marker } = await parentWith($, on)
   expect(ticketsIn(w.stored.get(ticketsKey('session-1'))).pairings.map(p => p.localId)).not.toContain('local_t')
-  await noted($, w, note('local_z'))
+  await checked($, w, note('local_z'), ['local_z'])
   await noted($, w, note('local_r'))
-  await noted($, w, note('local_t'))
+  await checked($, w, note('local_t'), ['local_t'])
   await noted($, w, `${note('local_a')}\n${note('local_r')}`)
   await kept($, w, marker, note('local_f'), 'Kept ABC-6\'s turn-end note from the parent\'s model.')
   expect(await ui.newestLog()).toBe('Kept ABC-6\'s turn-end note from the parent\'s model.')
@@ -139,9 +151,9 @@ test('foreman\'s own wake line still reaches the model', async ($, on) => {
   await passes($, w, 'foreman: one slot free; pick the next issue and start it.')
 })
 
-test('with an empty ledger every note passes with the Noted line', async ($, on) => {
+test('with an empty ledger every note passes with the check line', async ($, on) => {
   const { w } = await parentWith($, on, [])
-  await noted($, w, note('local_a'))
+  await checked($, w, note('local_a'), ['local_a'])
 })
 
 test('a ledger that cannot be read lets the note pass', async ($, on) => {
@@ -195,12 +207,12 @@ test('an element the hook does not recognise makes the prompt pass unchanged, wi
   expect(await ui.newestLog()).toBe('')
 })
 
-test('the Noted line is attached, with the text unchanged, to notes bundled with a delivery, to a lone delivery and to a note about an untracked session', async ($, on) => {
+test('the Noted line is attached, with the text unchanged, to tracked notes bundled with a delivery and to a lone delivery, and the check line to a note about an untracked session', async ($, on) => {
   const { w } = await parentWith($, on)
   await noted($, w, `${note('local_a')}\n${STATUS}\n${MESSAGE}\n\n${EVENT}`)
   await noted($, w, `${note('local_a')}\n${STATUS}\n${MESSAGE}`)
   await noted($, w, SENT, { origin: { kind: 'sdk' } })
-  await noted($, w, `${note('local_z')}\n\n${EVENT}`)
+  await checked($, w, `${note('local_z')}\n\n${EVENT}`, ['local_z'])
 })
 
 test('the Noted line is not attached to a prompt with the person\'s typing, a worktree reminder or a proposal block', async ($, on) => {
@@ -476,4 +488,61 @@ test('while a key is held, the app\'s notes keep their own handling and get no h
   const { w, marker } = await holdingParent($, on)
   await kept($, w, marker, `${note('local_a')}\n${STATUS}`, ONE)
   await noted($, w, SENT, { origin: { kind: 'sdk' } })
+})
+
+test('while the role is on, a note mixed with tracked ones names only the untracked sub sessions, and a delivery mixed in keeps the line', async ($, on) => {
+  const { w } = await parentWith($, on)
+  await checked($, w, `${note('local_a')}\n${note('local_z')}\n${STATUS}`, ['local_z'])
+  await checked($, w, `${note('local_y')}\n${MESSAGE}\n${note('local_z')}\n${note('local_b')}`, ['local_y', 'local_z'])
+  await checked($, w, `${ARCHIVED}\n${note('local_z')}`, ['local_z'])
+})
+
+test('the check line gives the idleMinutes option as its minutes', { options: { idleMinutes: 2 } }, async ($, on) => {
+  const { w } = await parentWith($, on)
+  await checked($, w, note('local_z'), ['local_z'], { minutes: 2 })
+})
+
+test('while the role is off, a note about an unwatched sub session gets the check line alone, and every other prompt passes unchanged', async ($, on) => {
+  const w = world(on, { store: { 'parent:session-1': { isOn: false, slots: null }, [ticketsKey('session-1')]: { ...ledgerOf(PAIRINGS), unwatched: ['local_u'] } } })
+  await mountBoth($, on)
+  await start($)
+  await w.clock.settle()
+  await checked($, w, note('local_u'), ['local_u'], { isOn: false })
+  await checked($, w, `${note('local_a')}\n${MESSAGE}\n${note('local_u')}`, ['local_u'], { isOn: false })
+  await passes($, w, note('local_a'))
+  await passes($, w, note('local_z'))
+  await passes($, w, SENT, { origin: { kind: 'sdk' } })
+})
+
+// A person's prompt that holds /start-foreman as text, as pasting it gives.
+const PASTED = '/start-foreman 3 start the next three issues'
+
+test('while the role is off, a person\'s prompt that holds /start-foreman as text gets the pasted line and leaves the role off', async ($, on) => {
+  const { w, ui } = await parentWith($, on, PAIRINGS, false)
+  for (const text of [PASTED, `<pasted_content id="p1">${PASTED}</pasted_content>`, `Here it is:\n  ${PASTED}`]) {
+    const out = await submit($, text)
+    expect([out.text, out.context]).toEqual([text, [PASTED_LINE]])
+    expect(w.engine.prompts.at(-1)).toBe(text)
+  }
+  expect((await submit($, PASTED, { origin: { kind: 'bridge' } })).context).toEqual([PASTED_LINE])
+  expect(w.stored.get('parent:session-1')).toEqual({ isOn: false, slots: null })
+  expect(await ui.bandText()).toBe('')
+  await w.clock.advance(10 * 60_000)
+  await w.clock.settle()
+  expect(w.desktop.calls).toEqual([])
+})
+
+test('a typed command, the command inside a sentence, a plugin\'s prompt and a sub session\'s message that quotes it get no pasted line', async ($, on) => {
+  const { w } = await parentWith($, on, PAIRINGS, false)
+  await passes($, w, PASTED, { command: { name: 'start-foreman', args: '3 start the next three issues' } })
+  await passes($, w, 'Please run /start-foreman 3 for me.')
+  await passes($, w, PASTED, { origin: { kind: 'plugin', name: 'other', asUser: true } })
+  await passes($, w, PASTED, { origin: { kind: 'composer' }, isMeta: true })
+  await passes($, w, MESSAGE.replace('I opened the pull request.', PASTED), { origin: { kind: 'sdk' } })
+})
+
+test('while the role is on, a prompt that holds /start-foreman as text gets no pasted line', async ($, on) => {
+  const { w } = await parentWith($, on)
+  await passes($, w, PASTED)
+  await passes($, w, `<pasted_content id="p1">${PASTED}</pasted_content>`)
 })
