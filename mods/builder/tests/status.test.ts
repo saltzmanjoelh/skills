@@ -3,10 +3,10 @@ import { expect, test } from 'claude-code/testing'
 import { snapshotOf } from '../hooks/github'
 import {
   afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite,
-  buildPathOf, comparedTextOf, configDirOf, ERROR_CHARS, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, issueOf, newMemo, recordOf, STATE_RULES, stateOf,
-  statusMemoIn, ticketIn, WITHHELD, type StatusFacts,
+  backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, ERROR_CHARS, errorLineOf, firstPromptOf, generationIn, isBackgroundOnly, isCleanupSkill, issueOf, newMemo,
+  recordOf, shownOrWithheld, STATE_RULES, stateOf, statusMemoIn, TASK_CHARS, taskKeyOf, ticketIn, WITHHELD, type StatusFacts,
 } from '../hooks/status'
-import type { AgentCard, StatusMemo } from '../types'
+import type { AgentCard, BackgroundTask, StatusMemo } from '../types'
 
 const NOW = 1_000_000
 const HEAD = 'a'.repeat(40)
@@ -264,4 +264,117 @@ test('the counsel\'s question is cleared by a question that started after the ta
   expect(afterQuestionEnd(asked, NOW).askedAt).toBe(NOW)
   expect(afterQuestionEnd(asked, NOW + 1).askedAt).toBeNull()
   expect(afterPersonPrompt(asked).askedAt).toBeNull()
+})
+
+// A shell task in flight, with a command the record must never show.
+function task(id: string, description: string, over: Partial<BackgroundTask> = {}): BackgroundTask {
+  return { id, type: 'shell', status: 'running', description, command: `secret-command-${id}`, ...over }
+}
+
+const suite = task('b1', 'Run the suite')
+const waiting = (since: number, keys: string[]) => memo({ backgroundWait: { since, keys } })
+
+test('a background-only wait shows in the record with its start and its tasks, and the state stays working', () => {
+  const record = recordOf(facts({ memo: waiting(NOW - 5000, ['b1']), background: [suite] }), NOW)
+  expect(record.state).toBe('working')
+  expect(record.backgroundOnly).toEqual({ since: NOW - 5000, tasks: ['Run the suite'] })
+  expect(Object.keys(record).slice(-2)).toEqual(['writtenAt', 'backgroundOnly'])
+})
+
+test('the field is left out while the turn runs, an agent runs, an own call runs, a permission prompt is open, or nothing runs', () => {
+  const m = waiting(NOW - 5000, ['b1'])
+  const without = (over: Partial<StatusFacts>) => 'backgroundOnly' in recordOf(facts({ memo: m, background: [suite], ...over }), NOW)
+  expect(without({})).toBe(true)
+  expect(without({ busy: true })).toBe(false)
+  expect(without({ agents: [runningAgent] })).toBe(false)
+  expect(without({ calls: [{ id: 'c', tool: 'Bash', label: 'npm test', startedAt: NOW }] })).toBe(false)
+  expect(without({ memo: { ...m, prompts: [{ loop: '', tool: 'Bash', count: 1 }] } })).toBe(false)
+  expect(without({ background: [] })).toBe(false)
+  // A finished agent does not count as running, and the memo must hold a wait.
+  expect(without({ agents: [{ ...runningAgent, status: 'completed' }] })).toBe(true)
+  expect('backgroundOnly' in recordOf(facts({ background: [suite] }), NOW)).toBe(false)
+})
+
+test('only background work in flight is background-only', () => {
+  expect(isBackgroundOnly(facts({ background: [suite] }))).toBe(true)
+  expect(isBackgroundOnly(facts())).toBe(false)
+  expect(isBackgroundOnly(facts({ background: [suite], busy: true }))).toBe(false)
+  expect(isBackgroundOnly(facts({ background: [suite], agents: [runningAgent] }))).toBe(false)
+  expect(isBackgroundOnly(facts({ background: [suite], calls: [{ id: 'c', tool: 'Bash', label: 'ls', startedAt: NOW }] }))).toBe(false)
+})
+
+test('a wait begins when only background work runs, and none begins otherwise', () => {
+  expect(backgroundWaitOf(facts({ background: [suite, task('b3', 'Watch the build', { type: 'monitor' })] }), NOW)).toEqual({ since: NOW, keys: ['b1', 'b3'] })
+  expect(backgroundWaitOf(facts(), NOW)).toBeNull()
+  expect(backgroundWaitOf(facts({ background: [suite], busy: true }), NOW)).toBeNull()
+})
+
+test('a wait keeps its start across a busy step while one of its tasks is still in flight, and begins again when none is', () => {
+  const m = waiting(NOW - 60_000, ['b1'])
+  const kept = { since: NOW - 60_000, keys: ['b1'] }
+  expect(backgroundWaitOf(facts({ memo: m, background: [suite], busy: true }), NOW)).toEqual(kept)
+  expect(backgroundWaitOf(facts({ memo: m, background: [suite] }), NOW)).toEqual(kept)
+  // A second task that joins partway keeps the wait as it was, ids and all.
+  expect(backgroundWaitOf(facts({ memo: m, background: [suite, task('b4', 'Build')] }), NOW)).toEqual(kept)
+  // Once the first task has ended, the next background-only wait begins afresh.
+  expect(backgroundWaitOf(facts({ memo: m, background: [task('b4', 'Build')] }), NOW)).toEqual({ since: NOW, keys: ['b4'] })
+  expect(backgroundWaitOf(facts({ memo: m, background: [task('b4', 'Build')], busy: true }), NOW)).toBeNull()
+  expect(backgroundWaitOf(facts({ memo: m }), NOW)).toBeNull()
+})
+
+test('a task without an id is keyed by its kind and description, so it cannot keep a wait alive for a different one', () => {
+  const first = task('', 'Run the suite')
+  const second = task('', 'Run the linter')
+  expect(taskKeyOf(suite)).toBe('b1')
+  expect(taskKeyOf(first)).not.toBe(taskKeyOf(second))
+  expect(taskKeyOf(first)).not.toBe(taskKeyOf({ ...first, type: 'monitor' }))
+  const m = waiting(NOW - 60_000, [taskKeyOf(first)])
+  expect(backgroundWaitOf(facts({ memo: m, background: [first] }), NOW)?.since).toBe(NOW - 60_000)
+  expect(backgroundWaitOf(facts({ memo: m, background: [second] }), NOW)).toEqual({ since: NOW, keys: [taskKeyOf(second)] })
+})
+
+test('the record names at most three tasks, the wait\'s own first, each cleaned and cut to 80 characters, and drops empty ones', () => {
+  const m = waiting(NOW - 5000, ['b5'])
+  const background = [task('b1', 'one'), task('b2', '\u001b[31mtwo\u001b[0m\tlines\nhere'), task('b3', '  '), task('b4', 'x'.repeat(200)), task('b5', 'the wait\'s own')]
+  const tasks = recordOf(facts({ memo: m, background }), NOW).backgroundOnly?.tasks
+  expect(tasks?.length).toBe(3)
+  expect(tasks?.[0]).toBe('the wait\'s own')
+  expect(tasks?.[1]).toBe('one')
+  expect(tasks?.[2]).toBe('two lines here')
+  const cut = recordOf(facts({ memo: waiting(NOW, ['b4']), background }), NOW).backgroundOnly?.tasks[0] ?? ''
+  expect(cut.length).toBe(TASK_CHARS)
+  expect(cut.endsWith('…')).toBe(true)
+})
+
+test('a task\'s command never reaches the record, even when it has no description', () => {
+  const record = recordOf(facts({ memo: waiting(NOW, ['b1']), background: [suite, task('b2', '')] }), NOW)
+  expect(record.backgroundOnly?.tasks).toEqual(['Run the suite'])
+  expect(JSON.stringify(record)).not.toContain('secret-command')
+})
+
+test('a description that looks like a secret is withheld, before or after cleaning', () => {
+  const background = [task('b1', `deploy with ghp_${'A'.repeat(36)}`), task('b2', `key sk-\u0007${'b'.repeat(30)}`), task('b3', 'fine')]
+  expect(recordOf(facts({ memo: waiting(NOW, ['b1']), background }), NOW).backgroundOnly?.tasks).toEqual([WITHHELD, WITHHELD, 'fine'])
+  expect(shownOrWithheld('plain \u0007text', 80)).toBe('plain text')
+  expect(shownOrWithheld(`sk-\u0007${'b'.repeat(30)}`, 80)).toBe(WITHHELD)
+})
+
+test('two records with the same wait compare the same, and a new wait compares different', () => {
+  const written = (since: number) => memo({ state: 'working', stateSince: NOW, backgroundWait: { since, keys: ['b1'] } })
+  const one = recordOf(facts({ memo: written(NOW), background: [suite] }), NOW)
+  expect(comparedTextOf(recordOf(facts({ memo: written(NOW), background: [suite] }), NOW + 60_000))).toBe(comparedTextOf(one))
+  expect(comparedTextOf(recordOf(facts({ memo: written(NOW + 1), background: [suite] }), NOW))).not.toBe(comparedTextOf(one))
+})
+
+test('a stored wait reads back, and a memo without one or with a malformed one reads with none and is kept', () => {
+  const good = waiting(NOW, ['b1', 'b2'])
+  expect(statusMemoIn(good, 'session-1')).toEqual(good)
+  expect(newMemo({ sessionId: 'session-1', ticket: null, path: null, cwd: '', generation: 1 }).backgroundWait).toBeNull()
+  const older: Partial<StatusMemo> = { ...memo({ state: 'idle' }) }
+  delete older.backgroundWait
+  expect(statusMemoIn(older, 'session-1')).toEqual(memo({ state: 'idle' }))
+  for (const bad of ['soon', { since: 'now', keys: ['b1'] }, { since: Number.NaN, keys: ['b1'] }, { since: NOW, keys: 'b1' }, { since: NOW, keys: [] }, { since: NOW, keys: [''] }, { since: NOW, keys: [3] }, { since: NOW }]) {
+    const read = statusMemoIn({ ...memo({ state: 'idle' }), backgroundWait: bad }, 'session-1')
+    expect(read).toEqual(memo({ state: 'idle' }))
+  }
 })

@@ -74,19 +74,28 @@ export function isCleanupSkill(skill: string): boolean {
   return skill === 'cleanup' || (typeof skill === 'string' && skill.endsWith(':cleanup'))
 }
 
+// How long a background task's description may be once cleaned, and how many
+// descriptions the record names.
+export const TASK_CHARS = 80
+export const TASKS_SHOWN = 3
+
+// Text another session will read: cleaned of control characters and cut to
+// `max` characters, or WITHHELD when it looks like it holds a secret. The
+// text is checked for a secret both before and after it is cleaned, because
+// a control character inside a token would otherwise hide its shape.
+export function shownOrWithheld(text: string, max: number): string {
+  if (secretIn(text) !== null || secretIn(printable(text, Infinity)) !== null) return WITHHELD
+  return printable(text, max)
+}
+
 // The line of a failed call's error that the cleanup record keeps: the last
-// line that is not blank, cleaned of control characters and cut to
-// ERROR_CHARS characters, or WITHHELD when it looks like it holds a secret.
-// An error with no line that is not blank gives the empty string. The line
-// is checked for a secret both before and after it is cleaned, because a
-// control character inside a token would otherwise hide its shape.
+// line that is not blank, as shownOrWithheld shows it with ERROR_CHARS
+// characters at most. An error with no line that is not blank gives the empty
+// string.
 export function errorLineOf(error: unknown): string {
   const lines = (typeof error === 'string' ? error : '').split(/\r?\n/)
   const last = [...lines].reverse().find(line => printable(line, Infinity) !== '') ?? ''
-  if (last === '') return ''
-  const shown = printable(last, ERROR_CHARS)
-  if (secretIn(last) !== null || secretIn(printable(last, Infinity)) !== null) return WITHHELD
-  return shown
+  return last === '' ? '' : shownOrWithheld(last, ERROR_CHARS)
 }
 
 // Whether a path is absolute, on a Unix-like system or with a Windows drive.
@@ -229,6 +238,47 @@ type RuledState = (typeof STATE_RULES)[number]['state']
 const RULES_MATCH_THE_STATE: [RuledState, BuildState] extends [BuildState, RuledState] ? true : never = true
 void RULES_MATCH_THE_STATE
 
+// What tells a background task apart from the others: its id, or, when the
+// engine reported none and builder stored the empty string, its kind and its
+// description with a character between them that neither holds. So tasks
+// without ids that differ cannot keep one wait alive.
+export function taskKeyOf(task: BackgroundTask): string {
+  return task.id !== '' ? task.id : `${task.type}\u0000${task.description}`
+}
+
+// Whether background work is the only thing running: the session's own turn
+// is not running, no agent and no tool call of its own is running, and at
+// least one background task is in flight.
+export function isBackgroundOnly(f: StatusFacts): boolean {
+  return !f.busy && !f.agents.some(isRunning) && f.calls.length === 0 && f.background.length > 0
+}
+
+// The background-only wait at `now`. The memo's wait is kept, unchanged,
+// while at least one of its tasks is still in flight, so a short turn of the
+// session's own, such as its answer to a nudge, does not restart it, and a
+// task that joins partway does not join its keys. Otherwise a wait begins now
+// with the tasks in flight when background work is the only thing running,
+// and there is none when it is not.
+export function backgroundWaitOf(f: StatusFacts, now: number): StatusMemo['backgroundWait'] {
+  const keys = f.background.map(taskKeyOf)
+  const wait = f.memo.backgroundWait
+  if (wait !== null && wait.keys.some(key => keys.includes(key))) return wait
+  return isBackgroundOnly(f) ? { since: now, keys } : null
+}
+
+// The descriptions the record names for a wait: the wait's own tasks first,
+// then the others, each shown as shownOrWithheld shows it, with the empty
+// ones dropped and at most TASKS_SHOWN kept. A task's command is never read,
+// since it can hold paths or secrets.
+function taskDescriptionsOf(f: StatusFacts, keys: readonly string[]): string[] {
+  const own = f.background.filter(task => keys.includes(taskKeyOf(task)))
+  const others = f.background.filter(task => !keys.includes(taskKeyOf(task)))
+  return [...own, ...others]
+    .map(task => shownOrWithheld(task.description, TASK_CHARS))
+    .filter(description => description !== '')
+    .slice(0, TASKS_SHOWN)
+}
+
 // The state that holds and why: the first rule that answers a reason. The
 // last rule always answers, so there is always one.
 export function stateOf(f: StatusFacts): { state: BuildState; reason: string } {
@@ -250,7 +300,8 @@ function verdictsAtHead(s: Snapshot): Verdicts | null {
 // The record to write at `writtenAt`. The state keeps the time it began when
 // it is the state last written, and otherwise begins now. The fields are
 // built in one fixed order, so two records that hold the same values print
-// the same text.
+// the same text. The background-only wait is the one the memo holds, which
+// the writer works out with backgroundWaitOf and stores before it calls this.
 export function recordOf(f: StatusFacts, writtenAt: number): BuildStatus {
   const { state, reason } = stateOf(f)
   const s = watchedOf(f)
@@ -271,6 +322,8 @@ export function recordOf(f: StatusFacts, writtenAt: number): BuildStatus {
     stateSince: f.memo.state === state ? f.memo.stateSince : writtenAt,
     writtenAt,
   }
+  const wait = f.memo.backgroundWait
+  if (state === 'working' && isBackgroundOnly(f) && wait !== null) record.backgroundOnly = { since: wait.since, tasks: taskDescriptionsOf(f, wait.keys) }
   if (f.memo.cleanup !== null) record.cleanup = { failedCalls: f.memo.cleanup.failedCalls, lastError: f.memo.cleanup.lastError }
   return record
 }
@@ -309,9 +362,23 @@ function cleanupIn(raw: unknown): StatusMemo['cleanup'] | undefined {
   return { failedCalls: c.failedCalls, lastError: c.lastError }
 }
 
+// The memo's background-only wait, or null when the stored value is missing
+// or not what the mod writes: a finite start and a list of keys that are
+// strings and not empty. Unlike the other fields, a value that cannot be read
+// does not reject the memo, so a memo an older build saved without it is
+// still read, with no wait.
+function backgroundWaitIn(raw: unknown): StatusMemo['backgroundWait'] {
+  const w = raw as { since?: unknown; keys?: unknown } | null | undefined
+  if (typeof w !== 'object' || w === null || !isFiniteTime(w.since) || !Array.isArray(w.keys) || w.keys.length === 0) return null
+  const keys = w.keys as unknown[]
+  return keys.every(key => typeof key === 'string' && key !== '') ? { since: w.since, keys: [...keys] as string[] } : null
+}
+
 // A stored memo, or null when it belongs to another session than
 // `sessionId`, as after a /clear whose end was cut off, or when any field is
 // not what the mod writes, so a value an older build saved reads as none.
+// The background-only wait is the one exception: backgroundWaitIn reads a
+// value it cannot read as no wait and keeps the memo.
 export function statusMemoIn(raw: unknown, sessionId: string): StatusMemo | null {
   if (typeof raw !== 'object' || raw === null) return null
   const m = raw as Record<string, unknown>
@@ -337,6 +404,7 @@ export function statusMemoIn(raw: unknown, sessionId: string): StatusMemo | null
     askedAt: m.askedAt as number | null,
     prompts,
     cleanup,
+    backgroundWait: backgroundWaitIn(m.backgroundWait),
     generation: m.generation,
   }
 }
@@ -365,6 +433,7 @@ export function newMemo(found: Pick<StatusMemo, 'sessionId' | 'ticket' | 'path' 
     askedAt: null,
     prompts: [],
     cleanup: null,
+    backgroundWait: null,
     generation: found.generation,
   }
 }
