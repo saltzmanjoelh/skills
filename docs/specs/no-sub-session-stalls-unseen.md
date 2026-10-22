@@ -87,17 +87,23 @@ of; a ticketed sub session that never writes a status file; and any command a
    watch it. A failure after the call went on adds nothing, because that
    call carried its ticket. Writing the line and the sentence never throws
    out of the fallback.
-6. **A ticket that never shows up.** When a pairing has a desktop session id
-   (`localId`) and no status file has carried its ticket for `GONE_MS` (five
-   minutes) since it was paired, foreman wakes the parent once with the
-   sentence `<who> has written no status file <n> minutes after it started,
-   so foreman cannot watch it.` The pairing records that it woke, in its
-   `acts`, in the same ledger write, so later reads do not wake again. A
-   pairing with no `localId`, from a proposal card that may never have
-   started, is left out. The wake skill's section for this sentence finds the
-   session, reads at most its last six events, and tells the person in one
-   line whether it seems not to run `/implement` or not to have builder
-   loaded.
+6. **A ticket that never shows up.** When an active pairing has a desktop
+   session id (`localId`) and still has no owner `GONE_MS` (five minutes)
+   after it was paired, and this read listed a status folder that exists,
+   foreman wakes the parent once. When no status file carries the ticket, the
+   sentence is `<who> has written no status file <n> minutes after it
+   started, so foreman cannot watch it.` When a file carries the ticket but
+   names another desktop session or none, so foreman cannot join it to the
+   pairing, the sentence is `<who>'s status file names another desktop
+   session or none, so foreman cannot watch it.` The pairing records that it
+   woke, in its `acts`, in the same ledger write, so later reads do not wake
+   again. A pairing with no `localId`, from a proposal card that may never
+   have started, is left out. The pairing takes the issue key from the start's
+   title, so the sentence names a key the parent can find. The wake skill's
+   section for these sentences finds the session, reads at most its last six
+   events, and tells the person in one line whether it seems not to run
+   `/implement`, not to have builder loaded, or to run outside the desktop
+   app.
 
 ### A working episode has a ceiling
 
@@ -190,6 +196,9 @@ of; a ticketed sub session that never writes a status file; and any command a
   next start after the reload passes.
 - A sub session that starts a second background task partway through a wait
   keeps the wait's `since` while any first-wait task is still in flight.
+- A background task that the engine reports without an id is told apart from
+  others by its kind and description, so tasks without ids cannot keep one
+  wait alive for ever.
 - A healthy long background task, such as a 20-minute test suite, is nudged
   twice and then reported to the parent. That is accepted: a report stops
   nothing, and telling the parent too often is harmless where staying silent
@@ -239,7 +248,9 @@ of; a ticketed sub session that never writes a status file; and any command a
 - Foreman tests: a hook that throws before the call went on logs a line and
   adds the sentence; one that throws after it adds nothing.
 - Foreman tests of `decide`: a pairing with a `localId` and no file wakes once
-  at five minutes and not again; one without a `localId` never wakes; a
+  at five minutes and not again; one whose ticket a file carries under
+  another desktop session or none wakes once with the second sentence; one
+  without a `localId`, or read while the folder is missing, never wakes; a
   `working` record with `backgroundOnly` nudges at `idleMinutes` from `since`,
   again a threshold later, then wakes with the task quoted; progress ends the
   stretch; a `working` record without the field never nudges.
