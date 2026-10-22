@@ -1,9 +1,9 @@
 // Small text rules shared by the pane and the drawings. This module imports
 // nothing from the rest of the mod, so every other module can import it.
 //
-// Both functions are copies of the ones in builder's hooks/text.ts, because a
-// mod cannot import another plugin's files. tests/art.test.ts holds them to
-// what builder's answer, so change them only together with builder's.
+// printable and timeOfDay are copies of the ones in builder's hooks/text.ts,
+// because a mod cannot import another plugin's files. tests/art.test.ts holds
+// them to what builder's answer, so change them only together with builder's.
 
 // Text a record or a tool supplied, made safe to print: escape sequences are
 // removed whole, other control characters and bidirectional overrides are
@@ -31,3 +31,6 @@ export function timeOfDay(at: number, now: number): string {
   const time = stamp.slice(11, 19)
   return stamp.slice(0, 10) === new Date(now).toISOString().slice(0, 10) ? time : `${stamp.slice(0, 10)} ${time}`
 }
+
+// Names joined as a sentence lists them: "A", "A and B", "A, B and C".
+export const listOf = (names: readonly string[]) => (names.length === 1 ? names[0]! : `${names.slice(0, -1).join(', ')} and ${names.at(-1)!}`)

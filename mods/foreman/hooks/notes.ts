@@ -19,6 +19,7 @@
 // shape, such as one the person typed into, reaches the model as before.
 
 import type { ForemanPairing } from '../types'
+import { listOf } from './text'
 import { LOCAL_ID } from './tickets'
 import { whoOf } from './wake'
 
@@ -45,7 +46,7 @@ export const NOTED = `From the foreman mod: this prompt holds only the desktop a
 export function checkLine(ids: readonly string[], minutes: number): string {
   const sorted = [...new Set(ids)].sort()
   const one = sorted.length === 1
-  const list = one ? sorted[0]! : `${sorted.slice(0, -1).join(', ')} and ${sorted.at(-1)!}`
+  const list = listOf(sorted)
   const them = one ? `the sub session ${list}, so nobody watches it` : `the sub sessions ${list}, so nobody watches them`
   return `From the foreman mod: foreman holds no record of ${them}. Instead of replying with a bare "Noted.", schedule one check of ${one ? 'it' : 'each'} for ${minutes} minute${minutes === 1 ? '' : 's'} from now, as the foreman:wake skill's section "Checking a sub session foreman does not watch" says, and reply briefly to the rest of this prompt.`
 }
@@ -207,6 +208,5 @@ export function keptNames(ids: readonly string[], pairings: readonly ForemanPair
 // log counts it on the one before.
 export function keptLine(names: readonly string[]): string {
   const owned = names.map(name => `${name}'s`)
-  const list = owned.length === 1 ? owned[0]! : `${owned.slice(0, -1).join(', ')} and ${owned.at(-1)!}`
-  return `Kept ${list} turn-end ${owned.length === 1 ? 'note' : 'notes'} from the parent's model.`
+  return `Kept ${listOf(owned)} turn-end ${owned.length === 1 ? 'note' : 'notes'} from the parent's model.`
 }
