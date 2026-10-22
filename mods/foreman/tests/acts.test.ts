@@ -979,23 +979,25 @@ test('in a parent, a start whose hook throws before the call went on goes on wit
   expect(await ui.newestLog()).toBe(noTicketLog('throw'))
 })
 
-test('a start whose hook throws before the call went on and whose answer is an error gets no sentence', async ($, on) => {
+test('a start whose hook throws before the call went on and whose answer is an error gets no sentence, and the log says the hook failed', async ($, on) => {
   let isFailing = false
   on('state.get', ($, e, next) => (isFailing && e.plugin === 'foreman' && e.key === 'parent' ? { deny: 'the state is gone' } : next(e)))
   const w = world(on)
   w.engine.startFails = true
+  const ui = await mountBoth($, on)
   await start($)
   await foreman($)
   isFailing = true
   const out = await startSession($, IMPLEMENT)
   isFailing = false
   expect(out.context).toBeUndefined()
+  expect(await ui.newestLog()).toBe(noTicketLog('throw', false))
 })
 
 // A failure after the call went on with an answer cannot be provoked, because
 // every step of the hook after the call is guarded, so this provokes the one
 // that can happen: the tool itself fails beneath the hook.
-test('a start whose tool fails after the call went on is not started again and gets no sentence and no log line', async ($, on) => {
+test('a start whose tool fails beneath the hook is not started again and gets no sentence and no log line', async ($, on) => {
   const w = world(on)
   const ui = await mountBoth($, on)
   await start($)
@@ -1010,7 +1012,8 @@ test('a start whose tool fails after the call went on is not started again and g
 test('the log line for a start without a ticket names how the hook failed', () => {
   expect(noTicketLog('throw')).toBe('Started a sub session without a ticket, because foreman\'s start_session hook threw an error before the call went on, so foreman does not watch it.')
   expect(noTicketLog('timeout')).toBe('Started a sub session without a ticket, because foreman\'s start_session hook ran out of time before the call went on, so foreman does not watch it.')
-  expect(noTicketLog('re-entry')).toBe('Started a sub session without a ticket, because the call reached foreman\'s start_session hook again from beneath it, so the hook did not run and foreman does not watch it.')
+  expect(noTicketLog('re-entry')).toBe('Started a sub session without a ticket, because the call reached foreman\'s start_session hook again from beneath it, which did not run, so foreman does not watch it.')
+  expect(noTicketLog('throw', false)).toBe('A start_session call went on without a ticket and started no sub session, because foreman\'s start_session hook threw an error before the call went on.')
 })
 
 test('a start in a parent pairs its ticket with the issue key of its title, and a "No issue: " start with none', async ($, on) => {

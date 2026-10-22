@@ -3,6 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import { recordIn } from '../hooks/record'
 import type { SubRow } from '../hooks/subs'
 import {
+  carriesTicket, fallbackOf, noTicketLog,
   briefFor, capped, FORK_REFUSAL, isOffRefused, joinOwners, localIdIn, MAX_PAIRINGS, newPairing, NO_TICKET_SENTENCE, OFF_REFUSAL, runsImplement, shownRows, ticketsIn,
   TICKETS_EMPTY, TITLE_REFUSAL, withOffRefusal, withUnwatched,
 } from '../hooks/tickets'
@@ -259,4 +260,25 @@ test('a new pairing takes the issue key it is given, and a record with no key le
   expect(none.tickets.pairings[0]!.issueKey).toBe('ABC-9')
   const keyed = joinOwners(withPairings(p), [row('a.json', { desktopSessionId: 'local_a', issueKey: 'ABC-10' })])
   expect(keyed.tickets.pairings[0]!.issueKey).toBe('ABC-10')
+})
+
+test('a call carries a ticket line only when its prompt holds one at the start of a line', () => {
+  expect(carriesTicket({ prompt: 'Run /implement ABC-123.\n\nforeman-ticket: ft-a' })).toBe(true)
+  expect(carriesTicket({ prompt: 'Run /implement ABC-123.' })).toBe(false)
+  expect(carriesTicket({ prompt: 'Mentions foreman-ticket: in a sentence.' })).toBe(false)
+  expect(carriesTicket({})).toBe(false)
+})
+
+// The fallback cannot be reached with a call that went on and answered, so
+// the decision it makes is checked here on its own.
+test('the start_session fallback adds nothing to a call that went on, or to one that carries its ticket', () => {
+  expect(fallbackOf(true, 'timeout', false, true)).toEqual({ log: null, sentence: false })
+  expect(fallbackOf(true, 'throw', false, false)).toEqual({ log: null, sentence: false })
+  expect(fallbackOf(false, 're-entry', true, true)).toEqual({ log: null, sentence: false })
+})
+
+test('the start_session fallback logs a call that went on without a ticket, and adds the sentence only when it started a sub session', () => {
+  expect(fallbackOf(false, 'throw', false, true)).toEqual({ log: noTicketLog('throw'), sentence: true })
+  expect(fallbackOf(false, 're-entry', false, true)).toEqual({ log: noTicketLog('re-entry'), sentence: true })
+  expect(fallbackOf(false, 'timeout', false, false)).toEqual({ log: noTicketLog('timeout', false), sentence: false })
 })

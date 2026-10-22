@@ -44,16 +44,37 @@ export const NO_TICKET_SENTENCE = 'This sub session has no ticket from foreman, 
 // every kind, so a kind the engine adds fails the type check until it has
 // words here.
 const NO_TICKET_WHY: Record<'throw' | 'timeout' | 're-entry', string> = {
-  'throw': 'foreman\'s start_session hook threw an error before the call went on, so',
-  'timeout': 'foreman\'s start_session hook ran out of time before the call went on, so',
-  're-entry': 'the call reached foreman\'s start_session hook again from beneath it, so the hook did not run and',
+  'throw': 'foreman\'s start_session hook threw an error before the call went on',
+  'timeout': 'foreman\'s start_session hook ran out of time before the call went on',
+  're-entry': 'the call reached foreman\'s start_session hook again from beneath it, which did not run',
 }
 
 // The log line for a start_session call that went on without a ticket,
 // because foreman's hook failed before it could add one, worded by how it
-// failed.
-export function noTicketLog(kind: keyof typeof NO_TICKET_WHY): string {
-  return `Started a sub session without a ticket, because ${NO_TICKET_WHY[kind]} foreman does not watch it.`
+// failed and by whether the call started a sub session.
+export function noTicketLog(kind: keyof typeof NO_TICKET_WHY, started = true): string {
+  return started
+    ? `Started a sub session without a ticket, because ${NO_TICKET_WHY[kind]}, so foreman does not watch it.`
+    : `A start_session call went on without a ticket and started no sub session, because ${NO_TICKET_WHY[kind]}.`
+}
+
+// What the start_session hook's fallback does once the hook failed: the log
+// line to write, or null, and whether the answer gets the sentence that says
+// foreman does not watch the sub session. A call that went on before the hook
+// failed carried its ticket, and a call that reached the hook again from
+// beneath it may carry the ticket the outer run added and pairs, so neither
+// gets anything. Any other call went on without a ticket, so the log says why,
+// and the sentence goes only on an answer that started a sub session.
+export function fallbackOf(called: boolean, kind: keyof typeof NO_TICKET_WHY, carries: boolean, started: boolean): { log: string | null; sentence: boolean } {
+  if (called || carries) return { log: null, sentence: false }
+  return { log: noTicketLog(kind, started), sentence: started }
+}
+
+// Whether a start_session call's brief already holds a ticket line at the
+// start of a line, as one that reached foreman's hook again from beneath it
+// may, after the outer run of the hook added it.
+export function carriesTicket(args: Record<string, unknown>): boolean {
+  return typeof args.prompt === 'string' && new RegExp(`^[ \\t]*${TICKET_LINE}`, 'm').test(args.prompt)
 }
 
 // The log line for the off refusal.

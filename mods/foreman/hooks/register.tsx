@@ -14,7 +14,7 @@ import { PARENT_OFF, parentIn, slotsOf, storeKey } from './parent'
 import { afterRead, busyCount, nameOf, nextReadDelay, READ_LATER_MS, rowsOf, type FileRead, type SubRow } from './subs'
 import { printable } from './text'
 import {
-  addWork, briefFor, hasWork, isOffRefused, joinOwners, localIdIn, newPairing, NO_TICKET_SENTENCE, noTicketLog, OFF_LOG, OFF_REFUSAL, OUTBOX_EMPTY, ownsTicket,
+  addWork, briefFor, carriesTicket, fallbackOf, hasWork, isOffRefused, joinOwners, localIdIn, newPairing, NO_TICKET_SENTENCE, OFF_LOG, OFF_REFUSAL, OUTBOX_EMPTY, ownsTicket,
   runsImplement, shownRows, ticketsIn, ticketsKey, TICKETS_EMPTY, withOffRefusal, withUnwatched,
 } from './tickets'
 import { wakeLine } from './wake'
@@ -844,6 +844,25 @@ async function becomeParent($: $) {
   await $.ui.open({ id: PANE, title: 'foreman' }).catch(() => undefined)
 }
 
+// What the start_session hook answers when it failed, as fallbackOf decides.
+// When the call had gone on, next hands back its settled answer rather than
+// starting the session again, as builder's own tool.call hook relies on.
+// Nothing here may throw, and on a re-entry every $ call rejects.
+async function startFallback<E extends Record<string, unknown>>(
+  $: $,
+  e: E,
+  next: ((e: E) => Promise<ToolCallResult>) & { readonly called: boolean; readonly error: { readonly kind: 'throw' | 'timeout' | 're-entry' } },
+): Promise<ToolCallResult> {
+  const out = await next(e)
+  try {
+    const { log, sentence } = fallbackOf(next.called, next.error.kind, carriesTicket(e), wentOn(out))
+    if (log !== null) await addLog($, log).catch(() => undefined)
+    return sentence && wentOn(out) ? withNoTicket(out) : out
+  } catch {
+    return out
+  }
+}
+
 export const register: Register = (on, options) => {
   currentOptions = options
   // At the start of a session, and of a resumed one, the store says whether
@@ -961,25 +980,7 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: START_TOOL }, async ($, e, next) => {
     if (!(await isOn($))) return offStart($, e, next)
     return startSession($, e, next)
-  }).catch(async ($, e, next) => {
-    // Once the call went on, a failure is the tool's own, and next hands back
-    // its settled answer rather than starting the session again, as
-    // builder's own tool.call hook relies on. That call carried its ticket.
-    if (next.called) return next(e)
-    // Before the call went on, whether the hook threw, ran out of time or did
-    // not run, it goes on as it came, without a ticket, so its answer says
-    // that foreman does not watch the sub session and the log says why.
-    // Nothing here may throw, and on a re-entry every $ call rejects.
-    const out = await next(e)
-    try {
-      if (!wentOn(out)) return out
-      const answer = withNoTicket(out)
-      await addLog($, noTicketLog(next.error.kind)).catch(() => undefined)
-      return answer
-    } catch {
-      return out
-    }
-  })
+  }).catch(startFallback)
 
   // The pane. Its presses open, nudge or release a sub session.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
