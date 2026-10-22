@@ -13,7 +13,7 @@ import { afterReport, endedOf, plannedOf, progressIn, reportAnswer, reportOf, st
 import { changePrompt, ciEventContext, resumePrompt, stateLines, stuckPrompt } from './prompts'
 import { commitRecordsOf, decidedItems, factIn, packageText, secretIn, trendOf, trendStopLine, verdictsLine, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
-import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, buildPathOf, comparedTextOf, configDirOf, firstPromptOf, generationIn, isCleanupSkill, newMemo, recordOf, statusMemoIn, ticketIn, watchedSnapshotOf, type StatusFacts } from './status'
+import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, firstPromptOf, generationIn, isCleanupSkill, newMemo, recordOf, statusMemoIn, ticketIn, watchedSnapshotOf, type StatusFacts } from './status'
 import { timeOfDay } from './text'
 
 type $ = EngineInterface
@@ -2774,18 +2774,38 @@ function statusChanged($: $, force = false) {
 // file is written, with no await between that read and the start of the
 // write, and once more inside the memo's update. Its own `statusGen` cannot
 // tell it that a newer copy has started.
+// The background-only wait is worked out once per record, at the record's
+// own time, and stored in the memo before the record is built and the file
+// written, when it differs from the one the memo holds. A wait that begins
+// inside a working episode changes neither the state nor its start, so the
+// update after the write would never save it, and its start would move at
+// every write. Storing it first also keeps a write that fails from moving it.
 async function writeStatus($: $, gen: number): Promise<void> {
   try {
     while (statusDirty && !statusClosed && gen === statusGen) {
       statusDirty = false
       const force = statusForced
       statusForced = false
-      const facts = await statusFacts($)
-      if (facts === null || facts.memo.generation !== gen || facts.memo.path === null) return
-      const record = recordOf(facts, await $.clock.now())
+      const found = await statusFacts($)
+      if (found === null || found.memo.generation !== gen || found.memo.path === null) return
+      const { sessionId, path } = found.memo
+      const now = await $.clock.now()
+      const wait = backgroundWaitOf(found, now)
+      const waitChanged = JSON.stringify(wait) !== JSON.stringify(found.memo.backgroundWait)
+      if (waitChanged) {
+        let stored = false
+        await update($, statusMemo, raw => {
+          const memo = statusMemoIn(raw, sessionId)
+          if (memo === null || memo.generation !== gen) return raw
+          stored = true
+          return { ...memo, backgroundWait: wait }
+        })
+        if (!stored) return
+      }
+      const facts = waitChanged ? { ...found, memo: { ...found.memo, backgroundWait: wait } } : found
+      const record = recordOf(facts, now)
       const text = comparedTextOf(record)
       if (!force && text === lastWrittenText) continue
-      const { sessionId, path } = facts.memo
       const current = statusMemoIn(await read($, statusMemo), sessionId)
       if (statusClosed || gen !== statusGen || current?.generation !== gen) return
       await withinTimeout($, trackedWrite($, path, JSON.stringify(record)), STATUS_WRITE_TIMEOUT_MS)
