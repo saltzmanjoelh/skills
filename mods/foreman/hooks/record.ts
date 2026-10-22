@@ -131,6 +131,28 @@ function cleanupIn(raw: unknown): RecordCleanup | undefined {
   return { failedCalls: failed, lastError: textOr(c.lastError, '') }
 }
 
+// A wait on background work alone: when it began, and the descriptions of
+// at most three of its tasks, which builder has already cleaned.
+export type RecordBackgroundOnly = NonNullable<BuildStatus['backgroundOnly']>
+
+// The most task descriptions kept from a background-only wait, as many as
+// builder writes.
+const TASKS_KEPT = 3
+
+// The background-only wait, or undefined unless it has a finite `since`.
+// Only the string tasks are kept, the first three. A `tasks` that is not a
+// list reads as no tasks rather than as no wait, because `since` alone is
+// what the ceiling counts from, and a wait foreman cannot name is still a
+// wait.
+export function backgroundOnlyIn(raw: unknown): RecordBackgroundOnly | undefined {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
+  const b = raw as Record<string, unknown>
+  const since = timeOr(b.since)
+  if (since === null) return undefined
+  const tasks = Array.isArray(b.tasks) ? b.tasks.filter((x): x is string => typeof x === 'string').slice(0, TASKS_KEPT) : []
+  return { since, tasks }
+}
+
 // The record a file's text holds, or null when it does not parse. It parses
 // only as a JSON object with a non-empty string `sessionId`, an `issueKey`
 // that is null or a non-empty string, and one of the six states, because
@@ -152,6 +174,7 @@ export function recordIn(text: string): SubRecord | null {
   if (!isState(r.state)) return null
   const desktopSessionId = filledOr(r.desktopSessionId, undefined)
   const cleanup = cleanupIn(r.cleanup)
+  const backgroundOnly = backgroundOnlyIn(r.backgroundOnly)
   return {
     sessionId: r.sessionId,
     ticket: textOr(r.ticket, null),
@@ -167,5 +190,6 @@ export function recordIn(text: string): SubRecord | null {
     stateSince: timeOr(r.stateSince),
     writtenAt: timeOr(r.writtenAt),
     ...(cleanup === undefined ? {} : { cleanup }),
+    ...(backgroundOnly === undefined ? {} : { backgroundOnly }),
   }
 }
