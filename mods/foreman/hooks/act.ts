@@ -118,7 +118,7 @@ const STATE_RULES: Record<BuildState, (s: Step) => void> = {
     // rule, counted from when that wait began.
     const wait = s.row.record.backgroundOnly
     if (wait !== undefined) {
-      idleRule(s, wait.since, wait.since, wait.tasks[0] ?? null)
+      idleRule(s, wait.since, { task: wait.tasks[0] ?? null })
       return
     }
     // A working episode inside an idle stretch keeps the stretch, unless the
@@ -173,28 +173,30 @@ const setActs = (s: Step, change: Partial<ForemanActs>) => {
 // Idle, and a working record that waits only on background work: a nudge
 // once the wait has lasted the threshold since `since`, a second one
 // threshold after the first, and the wake one threshold after that, counted
-// over a stretch without progress. `wait` is null for an idle record and the
-// background wait's `since` otherwise, and a stretch of another wait starts
-// afresh, so a stretch that already woke for one wait cannot silence the
-// next. Progress inside the same wait also starts the stretch afresh, counted
-// from that read, since a background wait's `since` does not move with it.
-// A background wait's nudge and wake say so, and the wake quotes `task`, its
-// first task, when there is one. A record with no desktop session wakes the
+// over a stretch without progress. `background` is null for an idle record
+// and holds the background wait's first task, or null, otherwise. The
+// stretch keeps which wait it counts, null for idleness and the background
+// wait's `since` otherwise, and a stretch of another wait starts afresh, so a
+// stretch that already woke for one wait cannot silence the next. Progress
+// inside the same wait also starts the stretch afresh, counted from that
+// read, since a background wait's `since` does not move with it. A
+// background wait's nudge and wake say so, and the wake quotes its first
+// task when there is one. A record with no desktop session wakes the
 // parent at two thresholds instead. A record whose pull request was closed
 // without merging has stopped on purpose, so the rule ends any stretch and
 // neither nudges nor wakes until the pull request opens again.
-function idleRule(s: Step, since: number, wait: number | null, task: string | null = null) {
+function idleRule(s: Step, since: number, background: { task: string | null } | null) {
   if (prStateOf(s.row.record.pr) === 'CLOSED') {
     setActs(s, { stretch: null })
     return
   }
   const progress = progressOf(s.row)
+  const wait = background === null ? null : since
   let stretch = s.p.acts.stretch
   if (stretch === null || stretch.wait !== wait) stretch = { progress, nudges: 0, lastNudgeAt: null, woke: false, wait }
   else if (stretch.progress !== progress) stretch = { progress, nudges: 0, lastNudgeAt: s.now, woke: false, wait }
   setActs(s, { stretch })
   if (stretch.woke) return
-  const isBackground = wait !== null
   const from = Math.max(since, stretch.lastNudgeAt ?? since)
   const to = desktopOf(s.p, s.row)
   const who = whoOf(s.row.record.issueKey, s.p.ticket)
@@ -205,7 +207,7 @@ function idleRule(s: Step, since: number, wait: number | null, task: string | nu
       s.due.push(due)
       return
     }
-    s.reasons.push(isBackground ? { kind: 'background', who, nudged: false, minutes, task } : { kind: 'idle', who, nudged: false, minutes })
+    s.reasons.push(background !== null ? { kind: 'background', who, nudged: false, minutes, task: background.task } : { kind: 'idle', who, nudged: false, minutes })
     setActs(s, { stretch: { ...stretch, woke: true } })
     return
   }
@@ -215,12 +217,12 @@ function idleRule(s: Step, since: number, wait: number | null, task: string | nu
     return
   }
   if (stretch.nudges < 2) {
-    s.effects.push(isBackground ? { kind: 'nudge', to, name: nameOf(s.row), about: 'background' } : { kind: 'nudge', to, name: nameOf(s.row) })
+    s.effects.push(background !== null ? { kind: 'nudge', to, name: nameOf(s.row), about: 'background' } : { kind: 'nudge', to, name: nameOf(s.row) })
     setActs(s, { stretch: { ...stretch, nudges: stretch.nudges + 1, lastNudgeAt: s.now } })
     s.due.push(s.now + s.limits.idleMs)
     return
   }
-  s.reasons.push(isBackground ? { kind: 'background', who, nudged: true, minutes, task } : { kind: 'idle', who, nudged: true, minutes })
+  s.reasons.push(background !== null ? { kind: 'background', who, nudged: true, minutes, task: background.task } : { kind: 'idle', who, nudged: true, minutes })
   setActs(s, { stretch: { ...stretch, woke: true } })
 }
 

@@ -38,17 +38,22 @@ export const OFF_REFUSAL = 'foreman: foreman is off in this session, so this sub
 // The sentence added to the answer of a start that went on without a ticket.
 export const NO_TICKET_SENTENCE = 'This sub session has no ticket from foreman, so foreman does not watch it.'
 
+// Why a start_session call went on without a ticket, for each way foreman's
+// hook can fail before the call went on: it threw, ran out of time, or did
+// not run because the call reached it again from beneath it. It is typed over
+// every kind, so a kind the engine adds fails the type check until it has
+// words here.
+const NO_TICKET_WHY: Record<'throw' | 'timeout' | 're-entry', string> = {
+  'throw': 'foreman\'s start_session hook threw an error before the call went on, so',
+  'timeout': 'foreman\'s start_session hook ran out of time before the call went on, so',
+  're-entry': 'the call reached foreman\'s start_session hook again from beneath it, so the hook did not run and',
+}
+
 // The log line for a start_session call that went on without a ticket,
 // because foreman's hook failed before it could add one, worded by how it
-// failed: it threw, ran out of time, or did not run because the call reached
-// it again from beneath it.
-export function noTicketLog(kind: 'throw' | 'timeout' | 're-entry'): string {
-  const why = kind === 'throw'
-    ? 'foreman\'s start_session hook threw an error before the call went on, so'
-    : kind === 'timeout'
-      ? 'foreman\'s start_session hook ran out of time before the call went on, so'
-      : 'the call reached foreman\'s start_session hook again from beneath it, so the hook did not run and'
-  return `Started a sub session without a ticket, because ${why} foreman does not watch it.`
+// failed.
+export function noTicketLog(kind: keyof typeof NO_TICKET_WHY): string {
+  return `Started a sub session without a ticket, because ${NO_TICKET_WHY[kind]} foreman does not watch it.`
 }
 
 // The log line for the off refusal.

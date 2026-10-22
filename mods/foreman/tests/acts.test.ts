@@ -1,9 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { REASONS } from '../hooks/desktop'
+import { BACKGROUND_NUDGE_TEXT, REASONS } from '../hooks/desktop'
 import { DATA_NOTE } from '../hooks/wake'
-import { BACKGROUND_NUDGE_TEXT } from '../hooks/desktop'
 import { FORK_REFUSAL, newPairing, NO_TICKET_SENTENCE, noTicketLog, OFF_REFUSAL, ticketsIn, ticketsKey, TICKETS_EMPTY, TITLE_LOG, TITLE_REFUSAL } from '../hooks/tickets'
 import { foreman, leftInState, MINUTE, mountBoth, record, SECOND, start, T0, world } from './world'
 
