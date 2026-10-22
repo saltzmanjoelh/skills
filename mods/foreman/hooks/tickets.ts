@@ -210,7 +210,7 @@ function actsIn(raw: unknown): ForemanActs {
     stretch: s !== null && typeof s.progress === 'string'
       ? {
         progress: s.progress, nudges: Math.max(Math.floor(numberOr(s.nudges, 0)), 0), lastNudgeAt: numberOr(s.lastNudgeAt, null), woke: s.woke === true,
-        wait: numberOr(s.wait, null),
+        countFrom: numberOr(s.countFrom, null), wait: numberOr(s.wait, null),
       }
       : null,
     notifiedFor: textOr(a.notifiedFor, null),

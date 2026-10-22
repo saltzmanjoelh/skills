@@ -188,11 +188,12 @@ test('an old ledger reads with no refusal given and no unwatched sub sessions', 
 test('old acts read with no unseen wake given and a stretch without a wait as an idle one', () => {
   const acts = ticketsIn({ pairings: [{ ticket: 'ft-a', acts: { stretch: { progress: 'p', nudges: 1, lastNudgeAt: 5, woke: false } } }] }).pairings[0]!.acts
   expect(acts.unseenWoke).toBe(false)
-  expect(acts.stretch).toEqual({ progress: 'p', nudges: 1, lastNudgeAt: 5, woke: false, wait: null })
+  expect(acts.stretch).toEqual({ progress: 'p', nudges: 1, lastNudgeAt: 5, countFrom: null, woke: false, wait: null })
   const stored = (raw: Record<string, unknown>) => ticketsIn({ pairings: [{ ticket: 'ft-a', acts: raw }] }).pairings[0]!.acts
   expect(stored({ unseenWoke: true }).unseenWoke).toBe(true)
   expect(stored({ unseenWoke: 'yes' }).unseenWoke).toBe(false)
   expect(stored({ stretch: { progress: 'p', nudges: 0, lastNudgeAt: null, woke: false, wait: 1500 } }).stretch?.wait).toBe(1500)
+  expect(stored({ stretch: { progress: 'p', nudges: 0, lastNudgeAt: null, countFrom: 1700, woke: false, wait: 1500 } }).stretch?.countFrom).toBe(1700)
   expect(stored({ stretch: { progress: 'p', nudges: 0, lastNudgeAt: null, woke: false, wait: 'then' } }).stretch?.wait).toBeNull()
   expect(newPairing('ft-a', null, 1).acts.unseenWoke).toBe(false)
 })

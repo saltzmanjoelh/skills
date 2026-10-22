@@ -193,11 +193,11 @@ function idleRule(s: Step, since: number, background: { task: string | null } | 
   const progress = progressOf(s.row)
   const wait = background === null ? null : since
   let stretch = s.p.acts.stretch
-  if (stretch === null || stretch.wait !== wait) stretch = { progress, nudges: 0, lastNudgeAt: null, woke: false, wait }
-  else if (stretch.progress !== progress) stretch = { progress, nudges: 0, lastNudgeAt: s.now, woke: false, wait }
+  if (stretch === null || stretch.wait !== wait) stretch = { progress, nudges: 0, lastNudgeAt: null, countFrom: null, woke: false, wait }
+  else if (stretch.progress !== progress) stretch = { progress, nudges: 0, lastNudgeAt: null, countFrom: s.now, woke: false, wait }
   setActs(s, { stretch })
   if (stretch.woke) return
-  const from = Math.max(since, stretch.lastNudgeAt ?? since)
+  const from = Math.max(since, stretch.countFrom ?? since, stretch.lastNudgeAt ?? since)
   const to = desktopOf(s.p, s.row)
   const who = whoOf(s.row.record.issueKey, s.p.ticket)
   const minutes = minutesOf(s.now - since)

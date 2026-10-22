@@ -590,6 +590,15 @@ async function startSession<E extends Record<string, unknown>>($: $, e: E, next:
   }
 }
 
+// Whether start_session's answer is a start that went on: neither refused
+// nor an error.
+const wentOn = (out: ToolCallResult): out is Extract<ToolCallResult, { result: unknown }> => out.deny === undefined && out.isError !== true
+
+// The desktop session id start_session's answer names, or null. Core answers
+// the text the model reads beside the tool's result; a hook beneath may
+// answer the result alone, whose text blocks hold the id then.
+const localIdOf = (out: Extract<ToolCallResult, { result: unknown }>) => localIdIn(typeof out.text === 'string' ? out.text : JSON.stringify(out.result ?? ''))
+
 // The tool.call hook on start_session while the role is off. A call whose
 // brief does not run /implement goes on untouched. The first one that does,
 // in this session, is refused, so the parent's model tells the person that
@@ -613,7 +622,7 @@ async function offStart<E extends Record<string, unknown>>($: $, e: E, next: (e:
     return { deny: OFF_REFUSAL }
   }
   const out = await next(e)
-  if (out.deny !== undefined || out.isError === true) return out
+  if (!wentOn(out)) return out
   let answer: ToolCallResult = out
   try {
     answer = withNoTicket(out)
@@ -621,7 +630,7 @@ async function offStart<E extends Record<string, unknown>>($: $, e: E, next: (e:
     // The answer goes back as it came.
   }
   try {
-    const localId = localIdIn(typeof out.text === 'string' ? out.text : JSON.stringify(out.result ?? ''))
+    const localId = localIdOf(out)
     if (localId !== null) await writeTickets($, t => withUnwatched(t, localId))
   } catch {
     // A sub session that is not listed gets today's Noted line for its notes.
@@ -651,10 +660,8 @@ async function afterStart($: $, key: string | null, title: unknown, ticket: stri
     later($, () => carryOut($))
     return { ...out, context: [...(out.context ?? []), heldSentence(key)] }
   }
-  if (out.deny !== undefined || out.isError === true) return out
-  // Core answers the text the model reads beside the tool's result; a hook
-  // beneath may answer the result alone, whose text blocks hold the id then.
-  const localId = localIdIn(typeof out.text === 'string' ? out.text : JSON.stringify(out.result ?? ''))
+  if (!wentOn(out)) return out
+  const localId = localIdOf(out)
   const at = await $.clock.now()
   await writeTickets($, t => {
     const paired = ticket === null ? t : { ...t, pairings: [...t.pairings, newPairing(ticket, localId, at, key)] }
@@ -961,7 +968,7 @@ export const register: Register = (on, options) => {
     // Nothing here may throw, and on a re-entry every $ call rejects.
     const out = await next(e)
     try {
-      if (out.deny !== undefined || out.isError === true) return out
+      if (!wentOn(out)) return out
       const answer = withNoTicket(out)
       await addLog($, noTicketLog(next.error.kind)).catch(() => undefined)
       return answer

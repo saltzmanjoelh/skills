@@ -482,6 +482,13 @@ test('progress during a background wait ends the stretch, and the count starts a
   ])
 })
 
+test('progress inside a background wait counts from that read and leaves lastNudgeAt for real nudges', () => {
+  const nudged = read(paired(), waiting(T0), T0 + 5 * MINUTE).tickets
+  expect(nudged.pairings[0]!.acts.stretch).toMatchObject({ nudges: 1, lastNudgeAt: T0 + 5 * MINUTE, countFrom: null })
+  const progressed = read(nudged, waiting(T0, ['run the tests'], { stage: 'verify' }), T0 + 7 * MINUTE).tickets
+  expect(progressed.pairings[0]!.acts.stretch).toMatchObject({ nudges: 0, lastNudgeAt: null, countFrom: T0 + 7 * MINUTE })
+})
+
 test('a background wait with a new since starts a fresh stretch', () => {
   const renewed = (now: number) => ((now - T0) / MINUTE < 7 ? waiting(T0) : waiting(T0 + 7 * MINUTE))
   expect(readEvery(paired(), renewed, T0 + 30 * MINUTE)).toEqual([
