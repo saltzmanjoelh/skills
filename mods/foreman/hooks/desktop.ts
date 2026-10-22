@@ -17,6 +17,9 @@ export const SEND_TOOL = 'send_message'
 
 // The nudge foreman sends an idle sub session.
 export const NUDGE_TEXT = 'what\'s next?'
+// The nudge foreman sends a sub session that waits only on background work,
+// which asks about that work rather than what is next.
+export const BACKGROUND_NUDGE_TEXT = 'could you check that your background work is still making progress, and stop it if it hangs?'
 // How many sessions to ask the list for. The list answers the most recently
 // active ones, twenty when not told otherwise, and a sub session that has been
 // quiet a while could fall outside twenty.
