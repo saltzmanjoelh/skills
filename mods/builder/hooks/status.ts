@@ -238,12 +238,41 @@ type RuledState = (typeof STATE_RULES)[number]['state']
 const RULES_MATCH_THE_STATE: [RuledState, BuildState] extends [BuildState, RuledState] ? true : never = true
 void RULES_MATCH_THE_STATE
 
+const isFiniteTime = (t: unknown): t is number => typeof t === 'number' && Number.isFinite(t)
+
 // What tells a background task apart from the others: its id, or, when the
 // engine reported none and builder stored the empty string, its kind and its
 // description with a character between them that neither holds. So tasks
 // without ids that differ cannot keep one wait alive.
 export function taskKeyOf(task: BackgroundTask): string {
   return task.id !== '' ? task.id : `${task.type}\u0000${task.description}`
+}
+
+// When builder first saw a task, or undefined when the task has no stamp or
+// its stamp is not a finite number, as a task an older build stored may hold.
+const seenAtOf = (task: BackgroundTask): number | undefined => (isFiniteTime(task.seenAt) ? task.seenAt : undefined)
+
+// The engine's list `fresh`, in the engine's order, with each task stamped
+// with the time builder first saw it: the stamp of the stored task under the
+// same key, or `now` when no stored task under that key has one. When two
+// stored tasks share a key, as two tasks without ids and with the same kind
+// and description do, the first one's stamp wins. Called with one list as
+// both `stored` and `fresh`, it stamps that list's unstamped tasks and keeps
+// the rest, which is how a list an older build stored is stamped.
+export function mergeBackground(stored: readonly BackgroundTask[], fresh: readonly BackgroundTask[], now: number): BackgroundTask[] {
+  const stamps = new Map<string, number>()
+  for (const task of stored) {
+    const seenAt = seenAtOf(task)
+    if (seenAt !== undefined && !stamps.has(taskKeyOf(task))) stamps.set(taskKeyOf(task), seenAt)
+  }
+  return fresh.map(task => ({ ...task, seenAt: stamps.get(taskKeyOf(task)) ?? now }))
+}
+
+// The tasks ordered by when builder first saw each, oldest first. A task with
+// no sound stamp counts as first seen now, so it sorts after every stamped
+// task. The sort is stable, so tasks seen at the same time keep their order.
+export function sortedByFirstSeen(tasks: readonly BackgroundTask[], now: number): BackgroundTask[] {
+  return [...tasks].sort((a, b) => (seenAtOf(a) ?? now) - (seenAtOf(b) ?? now))
 }
 
 // Whether background work is the only thing running: the session's own turn
@@ -266,17 +295,20 @@ export function backgroundWaitOf(f: StatusFacts, now: number): StatusMemo['backg
   return isBackgroundOnly(f) ? { since: now, keys } : null
 }
 
-// The descriptions the record names for a wait: the wait's own tasks first,
-// then the others, each shown as shownOrWithheld shows it, with the empty
-// ones dropped and at most TASKS_SHOWN kept. A task's command is never read,
-// since it can hold paths or secrets.
-function taskDescriptionsOf(f: StatusFacts, keys: readonly string[]): string[] {
-  const own = f.background.filter(task => keys.includes(taskKeyOf(task)))
-  const others = f.background.filter(task => !keys.includes(taskKeyOf(task)))
-  return [...own, ...others]
-    .map(task => shownOrWithheld(task.description, TASK_CHARS))
-    .filter(description => description !== '')
+// The descriptions the record names: every task in flight, ordered by when
+// builder first saw it, oldest first, each shown as shownOrWithheld shows it,
+// with the empty ones dropped and at most TASKS_SHOWN kept, together with
+// `taskSince`, the first-seen stamp of the task the first kept description
+// names, or undefined when none is kept or that task has no stamp yet. The
+// wait's own tasks still come first, because each of them was seen no later
+// than any task that joined after the wait began. A task's command is never
+// read, since it can hold paths or secrets.
+function taskDescriptionsOf(f: StatusFacts, now: number): { tasks: string[]; taskSince: number | undefined } {
+  const named = sortedByFirstSeen(f.background, now)
+    .map(task => ({ text: shownOrWithheld(task.description, TASK_CHARS), seenAt: seenAtOf(task) }))
+    .filter(entry => entry.text !== '')
     .slice(0, TASKS_SHOWN)
+  return { tasks: named.map(entry => entry.text), taskSince: named[0]?.seenAt }
 }
 
 // The state that holds and why: the first rule that answers a reason. The
@@ -323,7 +355,12 @@ export function recordOf(f: StatusFacts, writtenAt: number): BuildStatus {
     writtenAt,
   }
   const wait = f.memo.backgroundWait
-  if (state === 'working' && isBackgroundOnly(f) && wait !== null) record.backgroundOnly = { since: wait.since, tasks: taskDescriptionsOf(f, wait.keys) }
+  if (state === 'working' && isBackgroundOnly(f) && wait !== null) {
+    // The keys stay in one fixed order, and `taskSince` is written only when
+    // there is one, so a record with no named task has no such key.
+    const { tasks, taskSince } = taskDescriptionsOf(f, writtenAt)
+    record.backgroundOnly = { since: wait.since, tasks, ...(taskSince === undefined ? {} : { taskSince }) }
+  }
   if (f.memo.cleanup !== null) record.cleanup = { failedCalls: f.memo.cleanup.failedCalls, lastError: f.memo.cleanup.lastError }
   return record
 }
@@ -336,7 +373,6 @@ export function comparedTextOf(record: BuildStatus): string {
 }
 
 const STATES: readonly BuildState[] = STATE_RULES.map(rule => rule.state)
-const isFiniteTime = (t: unknown): t is number => typeof t === 'number' && Number.isFinite(t)
 const isCount = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0
 
 // The memo's open permission prompts, or null when the stored value is not a

@@ -77,8 +77,12 @@ export type AgentCard = {
 // One piece of the session's own background work, as the engine last reported
 // it at the end of the session's own turn or of one of its subagents: a shell
 // command, a monitor or a workflow. A background subagent is an agent and is
-// not kept here.
-export type BackgroundTask = { id: string; type: string; status: string; description: string; command?: string }
+// not kept here. `seenAt` is when builder first saw the task in the engine's
+// list, in milliseconds since the epoch. The time since it is how long the
+// session has waited on the task, not the task's real run time, which began
+// inside the turn that started it. A task an older build stored has none until
+// this build stamps it.
+export type BackgroundTask = { id: string; type: string; status: string; description: string; command?: string; seenAt?: number }
 
 // A tool call of the session's own while it runs, keyed by the call's
 // tool_use_id. `label` is what the line names it by.
@@ -294,11 +298,15 @@ export type BuildStatus = {
   // flight. `since` is when this background-only wait began. It is kept across
   // a short turn of the session's own as long as one of the tasks the wait
   // began with is still in flight, and a wait begins afresh once none is.
-  // `tasks` holds the descriptions of at most three tasks, the wait's own
-  // first, each cleaned and cut short, or the withheld text in place of one
-  // that looks like a secret. A task's command is never written. An older
-  // record has no such field.
-  backgroundOnly?: { since: number; tasks: string[] }
+  // `tasks` holds the descriptions of at most three tasks, ordered by the
+  // time builder first saw each task, oldest first, each cleaned and cut
+  // short, or the withheld text in place of one that looks like a secret. A
+  // task's command is never written. `taskSince` is the first-seen time of
+  // the task whose description `tasks[0]` holds, so the words and the time
+  // belong to the same task. It is left out when `tasks` is empty, and when
+  // that task has no first-seen time yet. `since` stays the start of the
+  // wait. An older record has no such field.
+  backgroundOnly?: { since: number; tasks: string[]; taskSince?: number }
 }
 
 // The permission prompts of one loop and one tool that are open: `loop` is

@@ -3,8 +3,8 @@ import { expect, test } from 'claude-code/testing'
 import { snapshotOf } from '../hooks/github'
 import {
   afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite,
-  backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, ERROR_CHARS, errorLineOf, firstPromptOf, generationIn, isBackgroundOnly, isCleanupSkill, issueOf, newMemo,
-  recordOf, shownOrWithheld, STATE_RULES, stateOf, statusMemoIn, TASK_CHARS, taskKeyOf, ticketIn, WITHHELD, type StatusFacts,
+  backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, ERROR_CHARS, errorLineOf, firstPromptOf, generationIn, isBackgroundOnly, isCleanupSkill, issueOf, mergeBackground, newMemo,
+  recordOf, shownOrWithheld, sortedByFirstSeen, STATE_RULES, stateOf, statusMemoIn, TASK_CHARS, taskKeyOf, ticketIn, WITHHELD, type StatusFacts,
 } from '../hooks/status'
 import type { AgentCard, BackgroundTask, StatusMemo } from '../types'
 
@@ -333,17 +333,94 @@ test('a task without an id is keyed by its kind and description, so it cannot ke
   expect(backgroundWaitOf(facts({ memo: m, background: [second] }), NOW)).toEqual({ since: NOW, keys: [taskKeyOf(second)] })
 })
 
-test('the record names at most three tasks, the wait\'s own first, each cleaned and cut to 80 characters, and drops empty ones', () => {
+test('a merged list keeps the stored stamp of a task in both lists, stamps a task new to the list with now, and drops a task that left', () => {
+  const stored = [task('b1', 'Run the suite', { seenAt: NOW - 60_000 }), task('b2', 'Build', { seenAt: NOW - 30_000 })]
+  const fresh = [task('b2', 'Build'), task('b3', 'Lint')]
+  expect(mergeBackground(stored, fresh, NOW)).toEqual([task('b2', 'Build', { seenAt: NOW - 30_000 }), task('b3', 'Lint', { seenAt: NOW })])
+  // Neither list is changed by the merge.
+  expect(stored[0]?.seenAt).toBe(NOW - 60_000)
+  expect('seenAt' in fresh[0]!).toBe(false)
+})
+
+test('a merged list matches tasks by id, and tasks without ids by kind and description, and two such duplicates share the first stamp', () => {
+  const stored = [task('', 'Run the suite', { seenAt: NOW - 60_000 }), task('', 'Run the suite', { seenAt: NOW - 50_000 }), task('', 'Run the suite', { type: 'monitor', seenAt: NOW - 40_000 })]
+  const fresh = [task('', 'Run the suite', { type: 'monitor' }), task('', 'Run the suite'), task('', 'Run the suite'), task('', 'Run the linter')]
+  expect(mergeBackground(stored, fresh, NOW).map(t => t.seenAt)).toEqual([NOW - 40_000, NOW - 60_000, NOW - 60_000, NOW])
+  // A task under another id is a new task, however alike its description.
+  expect(mergeBackground([task('b1', 'Run the suite', { seenAt: NOW - 60_000 })], [task('b9', 'Run the suite')], NOW)[0]?.seenAt).toBe(NOW)
+})
+
+test('a stored stamp that is not a finite number reads as missing, so the task is stamped again with now', () => {
+  const stored = [task('b1', 'one', { seenAt: Number.NaN }), task('b2', 'two', { seenAt: Number.POSITIVE_INFINITY }), task('b3', 'three', { seenAt: '5' as unknown as number })]
+  expect(mergeBackground(stored, stored, NOW).map(t => t.seenAt)).toEqual([NOW, NOW, NOW])
+  expect(mergeBackground(stored, [task('b1', 'one')], NOW)[0]?.seenAt).toBe(NOW)
+})
+
+test('merging a list with itself stamps its unstamped tasks and keeps the stamps it has, which is how a list an older build stored is stamped', () => {
+  const stored = [task('b1', 'one'), task('b2', 'two', { seenAt: NOW - 60_000 }), task('', 'three')]
+  expect(mergeBackground(stored, stored, NOW)).toEqual([task('b1', 'one', { seenAt: NOW }), task('b2', 'two', { seenAt: NOW - 60_000 }), task('', 'three', { seenAt: NOW })])
+})
+
+test('a merged list keeps the engine\'s order, whatever the stored order and the stamps say', () => {
+  const stored = [task('b3', 'three', { seenAt: NOW - 10_000 }), task('b1', 'one', { seenAt: NOW - 30_000 }), task('b2', 'two', { seenAt: NOW - 20_000 })]
+  const fresh = [task('b2', 'two'), task('b3', 'three'), task('b4', 'four'), task('b1', 'one')]
+  expect(mergeBackground(stored, fresh, NOW).map(t => t.id)).toEqual(['b2', 'b3', 'b4', 'b1'])
+})
+
+test('tasks sort by their first-seen stamp, oldest first, a task without a sound stamp counts as seen now, and the sort is stable', () => {
+  const tasks = [task('b1', 'one', { seenAt: NOW - 10_000 }), task('b2', 'two'), task('b3', 'three', { seenAt: NOW - 30_000 }), task('b4', 'four', { seenAt: NOW - 10_000 }), task('b5', 'five', { seenAt: NOW }), task('b6', 'six', { seenAt: Number.NaN })]
+  expect(sortedByFirstSeen(tasks, NOW).map(t => t.id)).toEqual(['b3', 'b1', 'b4', 'b2', 'b5', 'b6'])
+  // The list given is left as it was.
+  expect(tasks.map(t => t.id)).toEqual(['b1', 'b2', 'b3', 'b4', 'b5', 'b6'])
+  expect(sortedByFirstSeen([], NOW)).toEqual([])
+})
+
+test('the record names at most three tasks, oldest first, each cleaned and cut to 80 characters, and drops empty ones', () => {
+  // The wait began with b5, and the other tasks joined one after another, as
+  // their stamps say, though the engine lists them first.
   const m = waiting(NOW - 5000, ['b5'])
-  const background = [task('b1', 'one'), task('b2', '\u001b[31mtwo\u001b[0m\tlines\nhere'), task('b3', '  '), task('b4', 'x'.repeat(200)), task('b5', 'the wait\'s own')]
+  const background = [
+    task('b1', 'one', { seenAt: NOW - 4000 }), task('b2', '\u001b[31mtwo\u001b[0m\tlines\nhere', { seenAt: NOW - 3000 }), task('b3', '  ', { seenAt: NOW - 2000 }),
+    task('b4', 'x'.repeat(200), { seenAt: NOW - 1000 }), task('b5', 'the wait\'s own', { seenAt: NOW - 5000 }),
+  ]
   const tasks = recordOf(facts({ memo: m, background }), NOW).backgroundOnly?.tasks
   expect(tasks?.length).toBe(3)
   expect(tasks?.[0]).toBe('the wait\'s own')
   expect(tasks?.[1]).toBe('one')
   expect(tasks?.[2]).toBe('two lines here')
-  const cut = recordOf(facts({ memo: waiting(NOW, ['b4']), background }), NOW).backgroundOnly?.tasks[0] ?? ''
+  const cut = recordOf(facts({ memo: waiting(NOW, ['b4']), background: [task('b4', 'x'.repeat(200), { seenAt: NOW })] }), NOW).backgroundOnly?.tasks[0] ?? ''
   expect(cut.length).toBe(TASK_CHARS)
   expect(cut.endsWith('…')).toBe(true)
+})
+
+test('the record orders tasks by their first-seen stamp whatever the engine\'s order, and tasks seen at the same time keep the engine\'s order', () => {
+  const m = waiting(NOW - 5000, ['b1'])
+  const own = task('b1', 'Run the suite', { seenAt: NOW - 5000 })
+  const joined = task('b2', 'Build', { seenAt: NOW - 3000 })
+  const late = task('b3', 'Lint', { seenAt: NOW - 1000 })
+  expect(recordOf(facts({ memo: m, background: [late, joined, own] }), NOW).backgroundOnly?.tasks).toEqual(['Run the suite', 'Build', 'Lint'])
+  expect(recordOf(facts({ memo: m, background: [joined, own, late] }), NOW).backgroundOnly?.tasks).toEqual(['Run the suite', 'Build', 'Lint'])
+  // On a tie the engine's order holds, which lists the wait's own task, the
+  // one that started first, before a task that joined with the same stamp.
+  expect(recordOf(facts({ memo: m, background: [own, { ...joined, seenAt: NOW - 5000 }] }), NOW).backgroundOnly?.tasks).toEqual(['Run the suite', 'Build'])
+})
+
+test('the record\'s taskSince is the stamp of the task tasks[0] names, even when an older task with an empty description is skipped, and the field\'s keys are since, tasks and taskSince', () => {
+  const m = waiting(NOW - 9000, ['b1', 'b2'])
+  const background = [task('b2', 'Build', { seenAt: NOW - 5000 }), task('b1', '  ', { seenAt: NOW - 9000 }), task('b3', 'Lint', { seenAt: NOW - 1000 })]
+  const field = recordOf(facts({ memo: m, background }), NOW).backgroundOnly
+  expect(field).toEqual({ since: NOW - 9000, tasks: ['Build', 'Lint'], taskSince: NOW - 5000 })
+  expect(Object.keys(field ?? {})).toEqual(['since', 'tasks', 'taskSince'])
+})
+
+test('the record has no taskSince key when every description is empty, nor when the task it would name has no stamp yet', () => {
+  const m = waiting(NOW - 5000, ['b1'])
+  const empty = recordOf(facts({ memo: m, background: [task('b1', '', { seenAt: NOW - 5000 }), task('b2', '  ', { seenAt: NOW - 4000 })] }), NOW).backgroundOnly
+  expect(empty).toEqual({ since: NOW - 5000, tasks: [] })
+  expect(Object.keys(empty ?? {})).toEqual(['since', 'tasks'])
+  const unstamped = recordOf(facts({ memo: m, background: [task('b1', 'Run the suite')] }), NOW).backgroundOnly
+  expect(unstamped).toEqual({ since: NOW - 5000, tasks: ['Run the suite'] })
+  expect(Object.keys(unstamped ?? {})).toEqual(['since', 'tasks'])
 })
 
 test('a task\'s command never reaches the record, even when it has no description', () => {
