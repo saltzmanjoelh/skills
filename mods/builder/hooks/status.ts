@@ -295,15 +295,15 @@ export function backgroundWaitOf(f: StatusFacts, now: number): StatusMemo['backg
   return isBackgroundOnly(f) ? { since: now, keys } : null
 }
 
-// The descriptions the record names: every task in flight, ordered by when
-// builder first saw it, oldest first, each shown as shownOrWithheld shows it,
-// with the empty ones dropped and at most TASKS_SHOWN kept, together with
-// `taskSince`, the first-seen stamp of the task the first kept description
-// names, or undefined when none is kept or that task has no stamp yet. The
-// wait's own tasks still come first, because each of them was seen no later
-// than any task that joined after the wait began. A task's command is never
-// read, since it can hold paths or secrets.
-function taskDescriptionsOf(f: StatusFacts, now: number): { tasks: string[]; taskSince: number | undefined } {
+// The tasks the record names: `tasks`, the descriptions of every task in
+// flight, ordered by when builder first saw it, oldest first, each shown as
+// shownOrWithheld shows it, with the empty ones dropped and at most
+// TASKS_SHOWN kept, together with `taskSince`, the first-seen stamp of the
+// task the first kept description names, or undefined when none is kept or
+// that task has no stamp yet. The wait's own tasks still come first, because
+// each of them was seen no later than any task that joined after the wait
+// began. A task's command is never read, since it can hold paths or secrets.
+function namedTasksOf(f: StatusFacts, now: number): { tasks: string[]; taskSince: number | undefined } {
   const named = sortedByFirstSeen(f.background, now)
     .map(task => ({ text: shownOrWithheld(task.description, TASK_CHARS), seenAt: seenAtOf(task) }))
     .filter(entry => entry.text !== '')
@@ -358,7 +358,7 @@ export function recordOf(f: StatusFacts, writtenAt: number): BuildStatus {
   if (state === 'working' && isBackgroundOnly(f) && wait !== null) {
     // The keys stay in one fixed order, and `taskSince` is written only when
     // there is one, so a record with no named task has no such key.
-    const { tasks, taskSince } = taskDescriptionsOf(f, writtenAt)
+    const { tasks, taskSince } = namedTasksOf(f, writtenAt)
     record.backgroundOnly = { since: wait.since, tasks, ...(taskSince === undefined ? {} : { taskSince }) }
   }
   if (f.memo.cleanup !== null) record.cleanup = { failedCalls: f.memo.cleanup.failedCalls, lastError: f.memo.cleanup.lastError }

@@ -3990,9 +3990,65 @@ test('the line\'s button is a plain label while the task is under the ceiling, a
   const past = await band.find({ key: 'builder-line' })
   expect(past?.props.label).toBe('builder: no pull request yet · waiting on: Run the suite (5m 0s, past 5m)')
   expect(past?.text).toBe('builder: no pull request yet · waiting on: Run the suite (5m 0s, past 5m)')
+  // With no pull request watched the line ends with the part, so the button
+  // has two children and no text after the part.
   expect(past?.children).toEqual(['builder: no pull request yet · ', { type: 'Text', props: { color: 'yellow' }, children: ['waiting on: Run the suite (5m 0s, past 5m)'] }])
   const parts = await band.findAll({ type: 'Text' })
   expect(parts.map(part => [part.text, part.props.color])).toEqual([['waiting on: Run the suite (5m 0s, past 5m)', 'yellow']])
+})
+
+test('the line\'s button takes the text after the part as a third child when a pull request is watched, since the next step then follows the part', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  stops(on)
+  const { band } = await liveBand($, on)
+  await watch($)
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [shellTask] } as never)
+  await clock.settle()
+  await clock.advance(BACKGROUND_CEILING_MS)
+
+  const button = await band.find({ key: 'builder-line' })
+  const children = button?.children ?? []
+  expect(children).toHaveLength(3)
+  const [before, part, after] = children
+  expect(before).toBe('builder: #7 open · checks passed · ')
+  expect(part).toEqual({ type: 'Text', props: { color: 'yellow' }, children: ['waiting on: Run the suite (5m 0s, past 5m)'] })
+  // The line's running part names the task, so the next step after it is
+  // the look alone. When that look is due depends on how the mod paced its
+  // looks over the five minutes, which is not this test's subject, so only
+  // the shape of the words is read.
+  expect(String(after)).toMatch(/^ · next look (in \d+m|due now)$/)
+  expect(button?.props.label).toBe(`${String(before)}waiting on: Run the suite (5m 0s, past 5m)${String(after)}`)
+})
+
+test('a width that cuts the line inside the part leaves what remains of the part yellow, and one that cuts the part away leaves a plain label with nothing yellow', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  stops(on)
+  // Two bands over the same session, one at each width.
+  const { band: inside } = await liveBand($, on, { bodyColumns: 61 })
+  const away = await $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, bodyColumns: 20 } as never })
+  await startOnly($)
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [shellTask] } as never)
+  await clock.settle()
+  await clock.advance(BACKGROUND_CEILING_MS)
+
+  // The whole line is 'builder: no pull request yet · waiting on: Run the
+  // suite (5m 0s, past 5m)', 73 cells, so 61 cells cut it inside the part.
+  const cutInside = await inside.find({ key: 'builder-line' })
+  expect(cutInside?.props.label).toBe('builder: no pull request yet · waiting on: Run the suite (5m…')
+  expect(cutInside?.children).toEqual(['builder: no pull request yet · ', { type: 'Text', props: { color: 'yellow' }, children: ['waiting on: Run the suite (5m…'] }])
+  expect((await inside.findAll({ type: 'Text' })).map(part => [part.text, part.props.color])).toEqual([['waiting on: Run the suite (5m…', 'yellow']])
+
+  // Twenty cells cut the line before the part, so nothing is left to be yellow.
+  const cutAway = await away.find({ key: 'builder-line' })
+  expect(cutAway?.props.label).toBe('builder: no pull re…')
+  expect(cutAway?.children).toEqual([])
+  expect(await away.findAll({ type: 'Text' })).toEqual([])
 })
 
 test('the pane\'s background row is plain under the ceiling, and yellow with the suffix once the wait reaches it', async ($, on) => {

@@ -67,7 +67,7 @@ The shape of the change:
    and the spec asks for no poll change.
 5. **The pane rows.** `backgroundLine(task, now)` appends ` · <taskTime>`, and
    `agentsTree` draws a past-ceiling row in yellow.
-6. **The record.** `taskDescriptionsOf(f, now)` sorts every task in flight by
+6. **The record.** `namedTasksOf(f, now)` sorts every task in flight by
    stamp, maps each to its cleaned or withheld text with its stamp, drops
    empty text, keeps three, and returns `{ tasks, taskSince }` where
    `taskSince` is the stamp of the first kept task; `recordOf` writes
@@ -132,7 +132,7 @@ The gates run after steps 4, 6 and 7.
    and by kind plus description, duplicates share the first stamp, a
    non-finite stamp reads as missing, the engine's order is kept, and the
    sort is stable.
-2. **The record.** Rework `taskDescriptionsOf` and `recordOf`. Tests in
+2. **The record.** Rework `namedTasksOf` and `recordOf`. Tests in
    `status.test.ts`: `tasks` oldest first whatever the list order, the wait's
    own first on ties, `taskSince` equals the stamp of the task `tasks[0]`
    names even when an older task with an empty description is skipped, no

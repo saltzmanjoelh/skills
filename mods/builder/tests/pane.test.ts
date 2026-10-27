@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { agentSvg } from '../hooks/art'
 import { snapshotOf } from '../hooks/github'
-import { abovePromptLine, abovePromptSegments, agentCount, agentLines, agentRowOf, BACKGROUND_CEILING_MS, backgroundLines, bandTree, counselLines, isPastCeiling, messageLines, messagesReadOf, NAMED_AFTER_MS, nextStep, paneTree, secondRow, secondRowSegments, STALE_WARNING, taskTime, timeUntil, type Elements, type LineSegment, type View } from '../hooks/pane'
+import { abovePromptLine, abovePromptSegments, agentCount, agentLines, agentRowOf, BACKGROUND_CEILING_MS, backgroundLines, counselLines, isPastCeiling, messageLines, messagesReadOf, NAMED_AFTER_MS, nextStep, secondRow, secondRowSegments, STALE_WARNING, taskTime, timeUntil, type LineSegment, type View } from '../hooks/pane'
 import { resumePrompt, stuckPrompt } from '../hooks/prompts'
 import { clockTime, printable, timeOfDay } from '../hooks/text'
 import type { AgentCard, BackgroundTask, CounselQuestion, CounselVote, ForegroundCall, NextLook, Progress, Question } from '../types'
@@ -267,26 +267,6 @@ const monitor: BackgroundTask = { id: 'm', type: 'monitor', status: 'running', d
 // background part, marked past the ceiling when the case says so.
 const plain = (text: string): LineSegment => ({ text, isBackground: false, isPast: false })
 const background = (text: string, isPast = false): LineSegment => ({ text, isBackground: true, isPast })
-
-// Elements that keep what they are drawn with, so a case can read the tree a
-// band or pane builder returns without a surface: each element is its tag
-// and its props, with `children` among the props as the JSX factory passes
-// them, always as a list.
-type Drawn = { type: string; props: Record<string, unknown> & { children?: unknown[] } }
-function drawnElements(): Elements {
-  const element = (type: string) => (props: Record<string, unknown>): Drawn => ({ type, props })
-  return { Box: element('Box'), Text: element('Text'), Button: element('Button'), Link: element('Link') } as unknown as Elements
-}
-// Every element in a drawn tree, outermost first, through the lists the
-// factory nests.
-function elementsIn(node: unknown): Drawn[] {
-  if (Array.isArray(node)) return node.flatMap(elementsIn)
-  if (typeof node !== 'object' || node === null) return []
-  const drawn = node as Drawn
-  return [drawn, ...elementsIn(drawn.props.children ?? [])]
-}
-// The element with a key in a drawn tree.
-const keyedIn = (tree: unknown, key: string): Drawn => elementsIn(tree).find(element => element.props.key === key)!
 
 test('one running agent is one agent, never one agents, on the line and in the next step', () => {
   const v = view({ agents: [typed('a', 'builder:spec-reviewer', NOW)] })
@@ -607,57 +587,6 @@ test('the pane lists background tasks with their status and description, else th
     shell('z'),
   ]
   expect(backgroundLines(view({ background: tasks }))).toEqual(['running shell · run x · 1m 7s', 'running shell · npm test · 5m 0s, past 5m', 'running shell · run z · 0s'])
-})
-
-test('the pane draws a background row in yellow once its task is past the ceiling, and plain before that', () => {
-  const ui = drawnElements()
-  const presses = { fold: () => undefined, output: () => undefined }
-  const tasks = [seenAgo(shell('x'), BACKGROUND_CEILING_MS - 1), seenAgo(shell('y'), BACKGROUND_CEILING_MS)]
-  for (const v of [view({ background: tasks }), view({ pr: null, nextLook: null, background: tasks })]) {
-    const tree = paneTree(ui, v, presses)
-    const under = keyedIn(tree, 'background-0')
-    expect(under.props.children).toEqual(['running shell · run x · 4m 59s'])
-    expect(under.props.color).toBeUndefined()
-    const past = keyedIn(tree, 'background-1')
-    expect(past.props.children).toEqual(['running shell · run y · 5m 0s, past 5m'])
-    expect(past.props.color).toBe('yellow')
-  }
-})
-
-test('the band draws the line as a plain label until a task is past the ceiling, and then as children with the part in yellow', () => {
-  const ui = drawnElements()
-  const presses = { agents: () => undefined, line: () => undefined }
-  // What the line's button is drawn with, less the press handler.
-  const buttonIn = (tree: unknown) => {
-    const { key, plain: isPlain, dimColor, label, children } = keyedIn(tree, 'builder-line').props
-    return { key, isPlain, dimColor, label, children }
-  }
-  const under = view({ pr: null, nextLook: null, background: [seenAgo(shell('x'), BACKGROUND_CEILING_MS - 1)] })
-  expect(buttonIn(bandTree(ui, under, secondRowSegments(under, 120), 120, presses)))
-    .toEqual({ key: 'builder-line', isPlain: true, dimColor: true, label: 'builder: no pull request yet · waiting on: run x (4m 59s)', children: [] })
-  const past = view({ background: [seenAgo(shell('x'), BACKGROUND_CEILING_MS)] })
-  expect(buttonIn(bandTree(ui, past, secondRowSegments(past, 120), 120, presses))).toEqual({
-    key: 'builder-line',
-    isPlain: true,
-    dimColor: true,
-    label: 'builder: #7 open · checks passed · waiting on: run x (5m 0s, past 5m) · next look in 7m',
-    children: [
-      'builder: #7 open · checks passed · ',
-      { type: 'Text', props: { color: 'yellow', children: ['waiting on: run x (5m 0s, past 5m)'] } },
-      ' · next look in 7m',
-    ],
-  })
-  // With nothing after the part, the button has two children.
-  const last = view({ pr: null, nextLook: null, background: [seenAgo(shell('x'), BACKGROUND_CEILING_MS)] })
-  expect(buttonIn(bandTree(ui, last, secondRowSegments(last), undefined, presses)).children)
-    .toEqual(['builder: no pull request yet · ', { type: 'Text', props: { color: 'yellow', children: ['waiting on: run x (5m 0s, past 5m)'] } }])
-  // A cut that removes the part leaves a plain label, and so does a line
-  // given as a string, which carries no marks.
-  expect(buttonIn(bandTree(ui, last, secondRowSegments(last, 20), 20, presses))).toEqual({ key: 'builder-line', isPlain: true, dimColor: true, label: 'builder: no pull re…', children: [] })
-  expect(buttonIn(bandTree(ui, past, secondRow(past), undefined, presses)).children).toEqual([])
-  expect(buttonIn(bandTree(ui, past, secondRow(past), undefined, presses)).label).toBe(secondRow(past))
-  // With no line and no bar there is no band.
-  expect(bandTree(ui, view({ pr: null, nextLook: null }), null, 120, presses)).toBeNull()
 })
 
 const reported = (over: Partial<Progress> = {}): Progress =>

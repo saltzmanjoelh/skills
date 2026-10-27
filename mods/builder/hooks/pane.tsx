@@ -7,7 +7,7 @@ import { ciOf, failedCheckNames, roundInProgress, type Snapshot } from './github
 import { linkOf } from './links'
 import { barOf, modelLabel, stageLabel, type Bar } from './progress'
 import { isRunning, shownStatus, waitingOn } from './state'
-import { issueOf, seenAtOf, sortedByFirstSeen } from './status'
+import { issueOf, seenAtOf } from './status'
 import { clockTime, printable, timeOfDay } from './text'
 
 export const PANE = 'builder'
@@ -121,26 +121,40 @@ export function nextStep(v: View, isRunningShown = false): string {
   if (at === null) return 'not polling'
   const when = timeUntil(at, v.now)
   if (v.nextLook?.isNewHead === true) return when === null ? 'new head, handing over now' : `new head, handing over in ${when}`
-  const waiting: Record<WaitingOn, string> = {
+  const waiting: Record<NextReason, string> = {
     owner: 'waiting on your answer',
     agents: runningAgents(v),
+    background: `waiting on its background ${backgroundNoun(v.background)}`,
     ci: 'waiting on checks',
     fix: 'waiting on a fix',
     merge: 'waiting on the merge',
     nothing: 'nothing to hand over',
   }
   const look = when === null ? 'next look due now' : `next look in ${when}`
+  const reason = nextReason(v)
+  // When the line shows its running part, that part already names the agents
+  // and the background work, so the next step says only when the look is due.
+  if (isRunningShown && (reason === 'agents' || reason === 'background')) return look
+  return `${waiting[reason]} · ${look}`
+}
+
+// What the next step waits on: one of waitingOn's reasons, or the background
+// work in flight.
+type NextReason = WaitingOn | 'background'
+
+// The reason the next step names, the first of these that applies: the
+// owner's answer, then the running agents, both as waitingOn answers them;
+// then the background work in flight; then the pull request's state, as
+// waitingOn answers that. Background work is the session's own work, as
+// running agents are, so it comes after them and before the pull request's
+// states. It is worked out here rather than in waitingOn, because waitingOn
+// keys the poll interval, and a background task changes nothing about how
+// often the mod looks at the pull request.
+function nextReason(v: View): NextReason {
   const why = waitingOn(v.pr, v.agents, v.questions)
-  if (why === 'agents' && isRunningShown) return look
-  // Background work in flight is the session's own work, as running agents
-  // are, so it comes after them and before the pull request's states. The
-  // reason is worked out here rather than in waitingOn, because waitingOn
-  // keys the poll interval, and a background task changes nothing about how
-  // often the mod looks at the pull request.
-  if (why !== 'owner' && why !== 'agents' && v.background.length > 0) {
-    return isRunningShown ? look : `waiting on its background ${backgroundNoun(v.background)} · ${look}`
-  }
-  return `${waiting[why]} · ${look}`
+  if (why === 'owner' || why === 'agents') return why
+  if (v.background.length > 0) return 'background'
+  return why
 }
 
 // How long a foreground call runs before the line names it.
@@ -243,13 +257,26 @@ export function runningPart(v: View, names = Infinity): LineSegment[] {
     parts.push(`${agents.length} ${agents.length === 1 ? 'agent' : 'agents'}: ${shown.join(', ')}`)
   }
   const segments = parts.length === 0 ? [] : [plain(parts.join(SEPARATOR))]
-  const tasks = sortedByFirstSeen(v.background, v.now)
-  const oldest = tasks[0]
+  const oldest = oldestOf(v.background, v.now)
   if (oldest === undefined) return segments
   const lead = parts.length === 0 ? 'waiting on' : 'background'
-  const more = tasks.length > 1 ? ` and ${tasks.length - 1} more` : ''
+  const more = v.background.length > 1 ? ` and ${v.background.length - 1} more` : ''
   const part: LineSegment = { text: `${lead}: ${taskName(oldest)} (${taskTime(oldest, v.now)})${more}`, isBackground: true, isPast: isPastCeiling(oldest, v.now) }
   return segments.length === 0 ? [part] : [...segments, plain(SEPARATOR), part]
+}
+
+// The task builder saw first, or undefined when none is in flight: the one
+// with the earliest stamp, and the first listed of those that share it, which
+// is the task the record's sort in status.ts puts first. A task with no sound
+// stamp counts as first seen now, as it does there. The line only ever names
+// this one task, so it is found in one pass rather than by sorting the list,
+// which fitLine would do once for every number of agent names it tries.
+function oldestOf(tasks: readonly BackgroundTask[], now: number): BackgroundTask | undefined {
+  let oldest: BackgroundTask | undefined
+  for (const task of tasks) {
+    if (oldest === undefined || (seenAtOf(task) ?? now) < (seenAtOf(oldest) ?? now)) oldest = task
+  }
+  return oldest
 }
 
 // One line above the prompt, or null when there is nothing to say. With a pull
@@ -330,7 +357,7 @@ function fitLine(v: View, width: number | undefined, lineWith: (names: number) =
 }
 
 // How many cells the segments take.
-const lengthOf = (segments: readonly LineSegment[]): number => textOf(segments).length
+const lengthOf = (segments: readonly LineSegment[]): number => segments.reduce((cells, segment) => cells + segment.text.length, 0)
 
 // The segments cut to `chars` characters, in order, ending with `…`. A
 // segment the cut empties is dropped, and one the cut falls inside keeps what
@@ -438,9 +465,9 @@ export type BandPresses = { agents: () => void; line: () => void }
 // there is one, with the agent-count button on its own row below it, then the
 // second row as a button. Before builder is started there is no bar, as before
 // there was one. `line` is the second row, secondRowSegments(v, width), which
-// the caller has already worked out, or its text from a caller that has only
-// that. Null when there is neither a bar nor a second row.
-export function bandTree(ui: Elements, v: View, line: string | readonly LineSegment[] | null, width: number | undefined, presses: BandPresses) {
+// the caller has already worked out. Null when there is neither a bar nor a
+// second row.
+export function bandTree(ui: Elements, v: View, line: readonly LineSegment[] | null, width: number | undefined, presses: BandPresses) {
   const { Box, Button } = ui
   const bar = v.started ? barOf(v.progress, v.pr, v.watchSince) : null
   if (bar === null && line === null) return null
@@ -458,17 +485,15 @@ export function bandTree(ui: Elements, v: View, line: string | readonly LineSegm
 // line as children: the text before the part, the part as a yellow Text, the
 // colour of the pane's stale warning, and the text after it, less either text
 // when it is empty, so a surface that draws children shows the part in yellow
-// and one that draws none still shows the label. A line given as a string
-// carries no marks, so it draws the label alone.
-function lineButton(ui: Elements, line: string | readonly LineSegment[], onPress: () => void) {
+// and one that draws none still shows the label.
+function lineButton(ui: Elements, segments: readonly LineSegment[], onPress: () => void) {
   const { Button, Text } = ui
-  const segments = typeof line === 'string' ? [plain(line)] : line
   const label = textOf(segments)
   const at = segments.findIndex(segment => segment.isBackground && segment.isPast)
   if (at === -1) return <Button key="builder-line" plain dimColor label={label} onPress={onPress} />
   const part = <Text color="yellow">{segments[at]!.text}</Text>
   const children = [textOf(segments.slice(0, at)), part, textOf(segments.slice(at + 1))].filter(child => child !== '')
-  return <Button key="builder-line" plain dimColor label={label} onPress={onPress}>{...children}</Button>
+  return <Button key="builder-line" plain dimColor label={label} onPress={onPress}>{children}</Button>
 }
 
 // A snapshot an older build saved lacks the round count; until the next look
@@ -633,10 +658,7 @@ export function backgroundLines(v: View): string[] {
 // A background task's row, in yellow, the colour of the stale warning, once
 // the session has waited on it past the ceiling, and plain before that.
 function backgroundRow({ Text }: El, task: BackgroundTask, i: number, now: number) {
-  const row = backgroundLine(task, now)
-  return isPastCeiling(task, now)
-    ? <Text key={`background-${i}`} color="yellow">{row}</Text>
-    : <Text key={`background-${i}`}>{row}</Text>
+  return <Text key={`background-${i}`} color={isPastCeiling(task, now) ? 'yellow' : undefined}>{backgroundLine(task, now)}</Text>
 }
 
 // One agent's row: a drawing on a surface that draws images, else a line of
