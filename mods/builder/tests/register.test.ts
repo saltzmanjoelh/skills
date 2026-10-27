@@ -1569,12 +1569,15 @@ test('a session start with a watch already in place reads the pull request at on
 // the mod may write its own values, so the test answers the mod's reads of
 // these keys itself until the mod writes one, after which the kit's own
 // value, the one the mod wrote, is read. A test may register only one
-// state.get hook, so the next `reads` reads under `refused` are refused here,
-// by the same readRefusal that refusedReads uses, before any value is
-// answered.
+// state.get hook and one state.set hook, so the faults under `refused` are
+// raised here: the next `reads` reads are refused by the same readRefusal
+// that refusedReads uses, before any value is answered, and the next `writes`
+// writes are refused as refusedWrites refuses them, before the write is
+// recorded or reaches the kit, so the seeded value stays what is read.
 function olderBuildState(on: On, seeded: Record<string, unknown>, refused?: string) {
   const left = new Map(Object.entries(seeded))
   const { refusal, refuses } = readRefusal(refused)
+  const faults = Object.assign(refusal, { writes: 0 })
   // Every value the mod has written under each key, in order, for a test that
   // checks what a start over the saved state writes, or that it writes nothing.
   const written = new Map<string, unknown[]>()
@@ -1587,13 +1590,17 @@ function olderBuildState(on: On, seeded: Record<string, unknown>, refused?: stri
     return { value: { value: left.get(e.key), version: 0 } } as never
   })
   on('state.set', ($, e, next) => {
+    if (faults.writes > 0 && e.plugin === 'builder' && e.key === refused) {
+      faults.writes -= 1
+      return { deny: 'the state could not be written' } as never
+    }
     if (e.plugin === 'builder') {
       left.delete(e.key)
       written.set(e.key, [...(written.get(e.key) ?? []), e.value])
     }
     return next(e)
   })
-  return Object.assign(refusal, { writtenTo: (key: string) => written.get(key) ?? [] })
+  return Object.assign(faults, { writtenTo: (key: string) => written.get(key) ?? [] })
 }
 
 test('the line above the prompt draws nothing of its own over a snapshot an older build saved, and draws once a look replaces it', async ($, on) => {
@@ -3966,6 +3973,61 @@ test('the hooks loaded afresh over a list an older build stored stamp its tasks 
   expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (5s) and 1 more')
 })
 
+test('a read of the background list refused as the hooks start leaves the start completing and the stored list as it was, and the next turn end stamps it', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  stops(on)
+  // A list stored before tasks carried stamps, whose read at the start is
+  // refused. The refusal is armed after the band mounts, so the band's first
+  // draw is answered and the start's read is the one refused.
+  const saved = olderBuildState(on, { background: [shellTask] }, 'background')
+  const line = await abovePrompt($, on)
+  saved.reads = 1
+  await startOnly($)
+  await clock.settle()
+
+  expect(saved.reads).toBe(0)
+  expect(saved.writtenTo('background')).toEqual([])
+  expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (0s)')
+
+  // The next turn end replaces the list and stamps its task with that time.
+  await clock.advance(5_000)
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [shellTask] } as never)
+  await clock.settle()
+  expect(saved.writtenTo('background')).toEqual([[{ ...shellTask, seenAt: 5_000 }]])
+  await clock.advance(3_000)
+  expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (3s)')
+})
+
+test('a write of the background list refused as the hooks start leaves the start completing and the stored list unstamped, and the next turn end stamps it', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  stops(on)
+  // A list stored before tasks carried stamps, whose write of the stamped
+  // list at the start is refused.
+  const saved = olderBuildState(on, { background: [shellTask] }, 'background')
+  const line = await abovePrompt($, on)
+  saved.writes = 1
+  await startOnly($)
+  await clock.settle()
+
+  expect(saved.writes).toBe(0)
+  expect(saved.writtenTo('background')).toEqual([])
+  expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (0s)')
+
+  // The next turn end replaces the list and stamps its task with that time.
+  await clock.advance(5_000)
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [shellTask] } as never)
+  await clock.settle()
+  expect(saved.writtenTo('background')).toEqual([[{ ...shellTask, seenAt: 5_000 }]])
+  await clock.advance(3_000)
+  expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (3s)')
+})
+
 test('the line\'s button is a plain label while the task is under the ceiling, and takes the part as a yellow Text child once the wait reaches it', async ($, on) => {
   const clock = mock.clock(on)
   mock.store(on)
@@ -4285,14 +4347,17 @@ test('a task that a later subagent\'s list puts back after its notification remo
   expect(await line()).toBe('')
 })
 
-test('a notification row drawn before this module has written or read the list, as after a hot reload, still takes its task off', async ($, on) => {
+test('a notification row drawn before any read has filled in the ids the rows check, as after a hot reload, still takes its task off', async ($, on) => {
   const clock = mock.clock(on)
   mock.store(on)
   engine(on)
   fakeGitHub(on)
   stops(on)
   // The list a build before the reload saved, with its task already stamped,
-  // so the hooks' start leaves it alone and this module has not written it.
+  // so the hooks' start reads it and writes nothing. The ids the rows check
+  // are filled in only by a write of the list, by a row's read or by the live
+  // ticker's tick, and none of these has run, while the line's draws read
+  // the list without setting them.
   olderBuildState(on, { background: [{ ...shellTask, seenAt: 0 }] })
   rowHost(on)
   const line = await abovePrompt($, on)
@@ -4344,8 +4409,10 @@ test('after a hot reload, a notification row whose task is not listed fills in t
   engine(on)
   fakeGitHub(on)
   stops(on)
-  // An empty list an earlier build saved, so nothing runs and only the rows
-  // read it. A read refused below is how the test sees that one was made.
+  // An empty list an earlier build saved, so nothing runs. The hooks' start
+  // reads it and, with nothing to stamp, writes nothing, so no read has yet
+  // filled in the ids the rows check, and from here only the rows read it. A
+  // read refused below is how the test sees that one was made.
   const refusal = olderBuildState(on, { background: [] }, 'background')
   rowHost(on)
   await startOnly($)

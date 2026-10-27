@@ -2325,10 +2325,11 @@ function ensureLive($: $) {
 // without reading the store, which a draw must not do, whether its task could
 // still be listed. The live ticker redraws every user-message row each second
 // while anything runs, and most ended notifications are a subagent's, which the
-// list never holds, or a task already taken off. Three places set it:
-// replaceBackground and removeBackground from the list they wrote, through
-// wroteBackground, which keeps it in step as they write, removeBackground also
-// from its read while it is still unknown, and the live ticker from the store
+// list never holds, or a task already taken off. It is set in three ways. The
+// three writers of the list, replaceBackground, stampBackground and
+// removeBackground, set it from the list they wrote, through wroteBackground,
+// which keeps it in step as they write. removeBackground also sets it from its
+// read while it is still unknown. And the live ticker sets it from the store
 // at every tick whose read no write overtook, which puts right a set that
 // writes answered out of order left behind. Any new writer of the list must go
 // through wroteBackground too. Undefined until one of these has run since this

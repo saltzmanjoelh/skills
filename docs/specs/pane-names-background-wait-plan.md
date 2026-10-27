@@ -34,9 +34,16 @@ The shape of the change:
    reload, reads the list and, only when a task lacks a stamp, writes the
    merged list through `wroteBackground`. There is no third writer and no
    in-memory flag.
-2. **One sort, one time, one ceiling test.** `sortedByFirstSeen(tasks, now)`
-   is a stable sort by `seenAt ?? now`, used by the line for its oldest task
-   and by the record for `tasks`. In `mods/builder/hooks/pane.tsx`,
+2. **One sort, one time, one ceiling test.** `firstSeenOrNow(task, now)` in
+   `mods/builder/hooks/status.ts` is the one rule for when a task was first
+   seen: its stamp, or `now` when it has no sound stamp.
+   `sortedByFirstSeen(tasks, now)` is a stable sort by that rule, used by the
+   record for `tasks`. `oldestOf(tasks, now)` beside it finds the task that
+   sort would put first in one pass, without sorting, keeping the first listed
+   of the tasks that share the earliest time. The line uses `oldestOf` rather
+   than the sort, because it names only that one task and `fitLine` builds the
+   line once for every number of agent names it tries. In
+   `mods/builder/hooks/pane.tsx`,
    `BACKGROUND_CEILING_MS` is five minutes, with a comment naming it as
    builder's own copy of foreman's default idle threshold; `isPastCeiling(task,
    now)` and `taskTime(task, now)` give the ceiling test and the time with

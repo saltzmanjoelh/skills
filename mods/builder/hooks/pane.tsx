@@ -7,7 +7,7 @@ import { ciOf, failedCheckNames, roundInProgress, type Snapshot } from './github
 import { linkOf } from './links'
 import { barOf, modelLabel, stageLabel, type Bar } from './progress'
 import { isRunning, shownStatus, waitingOn } from './state'
-import { issueOf, seenAtOf } from './status'
+import { firstSeenOrNow, issueOf, oldestOf } from './status'
 import { clockTime, printable, timeOfDay } from './text'
 
 export const PANE = 'builder'
@@ -174,9 +174,10 @@ const CEILING_WORDS = `${BACKGROUND_CEILING_MS / 60_000}m`
 
 // How long the session has waited on a task: the time since builder first
 // saw it, never negative, so a stamp in the future prints as no time rather
-// than a negative one. A task with no sound stamp counts as first seen now.
+// than a negative one. A task with no sound stamp counts as first seen now,
+// as firstSeenOrNow in status.ts says.
 function waitedFor(task: BackgroundTask, now: number): number {
-  return Math.max(now - (seenAtOf(task) ?? now), 0)
+  return Math.max(now - firstSeenOrNow(task, now), 0)
 }
 
 // Whether the session has waited on a task for the ceiling or longer.
@@ -237,13 +238,13 @@ function merged(segments: readonly LineSegment[]): LineSegment[] {
 // What runs, as the line names it, as segments, empty when nothing does: the
 // session's own call that started first, once it has run NAMED_AFTER_MS; the
 // running agents' types, oldest first, at most `names` of them; and the
-// background work, as the oldest task in flight, the one builder saw first,
-// named by taskName with how long the session has waited on it. The
-// background part is the one segment marked as such, and it is marked past
-// when its task is past the ceiling. It reads `waiting on:` when it is the
-// only running part, and `background:` beside a call or agents, because the
-// session is then working beside the task rather than waiting on it, and it
-// ends with ` and <n> more` when several tasks run.
+// background work, as the oldest task in flight, the one builder saw first
+// as oldestOf in status.ts finds it, named by taskName with how long the
+// session has waited on it. The background part is the one segment marked as
+// such, and it is marked past when its task is past the ceiling. It reads
+// `waiting on:` when it is the only running part, and `background:` beside a
+// call or agents, because the session is then working beside the task rather
+// than waiting on it, and it ends with ` and <n> more` when several tasks run.
 export function runningPart(v: View, names = Infinity): LineSegment[] {
   const parts: string[] = []
   const slow = v.calls
@@ -263,20 +264,6 @@ export function runningPart(v: View, names = Infinity): LineSegment[] {
   const more = v.background.length > 1 ? ` and ${v.background.length - 1} more` : ''
   const part: LineSegment = { text: `${lead}: ${taskName(oldest)} (${taskTime(oldest, v.now)})${more}`, isBackground: true, isPast: isPastCeiling(oldest, v.now) }
   return segments.length === 0 ? [part] : [...segments, plain(SEPARATOR), part]
-}
-
-// The task builder saw first, or undefined when none is in flight: the one
-// with the earliest stamp, and the first listed of those that share it, which
-// is the task the record's sort in status.ts puts first. A task with no sound
-// stamp counts as first seen now, as it does there. The line only ever names
-// this one task, so it is found in one pass rather than by sorting the list,
-// which fitLine would do once for every number of agent names it tries.
-function oldestOf(tasks: readonly BackgroundTask[], now: number): BackgroundTask | undefined {
-  let oldest: BackgroundTask | undefined
-  for (const task of tasks) {
-    if (oldest === undefined || (seenAtOf(task) ?? now) < (seenAtOf(oldest) ?? now)) oldest = task
-  }
-  return oldest
 }
 
 // One line above the prompt, or null when there is nothing to say. With a pull
@@ -491,7 +478,7 @@ function lineButton(ui: Elements, segments: readonly LineSegment[], onPress: () 
   const label = textOf(segments)
   const at = segments.findIndex(segment => segment.isBackground && segment.isPast)
   if (at === -1) return <Button key="builder-line" plain dimColor label={label} onPress={onPress} />
-  const part = <Text color="yellow">{segments[at]!.text}</Text>
+  const part = <Text key="builder-line-part" color="yellow">{segments[at]!.text}</Text>
   const children = [textOf(segments.slice(0, at)), part, textOf(segments.slice(at + 1))].filter(child => child !== '')
   return <Button key="builder-line" plain dimColor label={label} onPress={onPress}>{children}</Button>
 }

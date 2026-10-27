@@ -268,11 +268,33 @@ export function mergeBackground(stored: readonly BackgroundTask[], fresh: readon
   return fresh.map(task => ({ ...task, seenAt: stamps.get(taskKeyOf(task)) ?? now }))
 }
 
-// The tasks ordered by when builder first saw each, oldest first. A task with
-// no sound stamp counts as first seen now, so it sorts after every stamped
-// task. The sort is stable, so tasks seen at the same time keep their order.
+// When builder first saw a task, for ordering the tasks and for timing the
+// wait on one: its stamp, or `now` when it has no sound stamp, so such a task
+// counts as first seen now and orders after every stamped task. This is the
+// one rule for a missing stamp. The sort below, the oldest-task lookup beside
+// it and the wait time the line and the pane print all read it.
+export const firstSeenOrNow = (task: BackgroundTask, now: number): number => seenAtOf(task) ?? now
+
+// The tasks ordered by when builder first saw each, oldest first, as
+// firstSeenOrNow says. The sort is stable, so tasks seen at the same time
+// keep their order.
 export function sortedByFirstSeen(tasks: readonly BackgroundTask[], now: number): BackgroundTask[] {
-  return [...tasks].sort((a, b) => (seenAtOf(a) ?? now) - (seenAtOf(b) ?? now))
+  return [...tasks].sort((a, b) => firstSeenOrNow(a, now) - firstSeenOrNow(b, now))
+}
+
+// The task sortedByFirstSeen would put first, or undefined when none is in
+// flight, found in one pass rather than by sorting the list. The line names
+// only this one task, and fitLine in pane.tsx builds the line once for every
+// number of agent names it tries, so a sort there would be repeated work. A
+// task replaces the one held only when it was seen strictly earlier, so of
+// the tasks that share the earliest time the first listed is kept, which is
+// where the stable sort puts it.
+export function oldestOf(tasks: readonly BackgroundTask[], now: number): BackgroundTask | undefined {
+  let oldest: BackgroundTask | undefined
+  for (const task of tasks) {
+    if (oldest === undefined || firstSeenOrNow(task, now) < firstSeenOrNow(oldest, now)) oldest = task
+  }
+  return oldest
 }
 
 // Whether background work is the only thing running: the session's own turn

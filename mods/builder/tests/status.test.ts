@@ -3,8 +3,8 @@ import { expect, test } from 'claude-code/testing'
 import { snapshotOf } from '../hooks/github'
 import {
   afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite,
-  backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, ERROR_CHARS, errorLineOf, firstPromptOf, generationIn, isBackgroundOnly, isCleanupSkill, issueOf, mergeBackground, newMemo,
-  recordOf, shownOrWithheld, sortedByFirstSeen, STATE_RULES, stateOf, statusMemoIn, TASK_CHARS, taskKeyOf, ticketIn, WITHHELD, type StatusFacts,
+  backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, ERROR_CHARS, errorLineOf, firstPromptOf, firstSeenOrNow, generationIn, isBackgroundOnly, isCleanupSkill, issueOf, mergeBackground, newMemo,
+  oldestOf, recordOf, shownOrWithheld, sortedByFirstSeen, STATE_RULES, stateOf, statusMemoIn, TASK_CHARS, taskKeyOf, ticketIn, WITHHELD, type StatusFacts,
 } from '../hooks/status'
 import type { AgentCard, BackgroundTask, StatusMemo } from '../types'
 
@@ -373,6 +373,23 @@ test('tasks sort by their first-seen stamp, oldest first, a task without a sound
   // The list given is left as it was.
   expect(tasks.map(t => t.id)).toEqual(['b1', 'b2', 'b3', 'b4', 'b5', 'b6'])
   expect(sortedByFirstSeen([], NOW)).toEqual([])
+})
+
+test('the oldest task is the one the sort puts first: the first listed of those that share the earliest stamp, with a task without a sound stamp counting as seen now', () => {
+  const tied = [task('b1', 'one', { seenAt: NOW - 10_000 }), task('b2', 'two', { seenAt: NOW - 30_000 }), task('b3', 'three', { seenAt: NOW - 30_000 })]
+  expect(oldestOf(tied, NOW)?.id).toBe('b2')
+  expect(oldestOf(tied, NOW)).toBe(sortedByFirstSeen(tied, NOW)[0])
+  // A task without a sound stamp counts as seen now, so a stamped task listed
+  // after it is older, and of tasks that all lack a stamp the first listed is.
+  const unstamped = [task('b4', 'four'), task('b5', 'five', { seenAt: Number.NaN }), task('b6', 'six', { seenAt: NOW - 1_000 })]
+  expect(oldestOf(unstamped, NOW)?.id).toBe('b6')
+  expect(oldestOf(unstamped, NOW)).toBe(sortedByFirstSeen(unstamped, NOW)[0])
+  expect(oldestOf(unstamped.slice(0, 2), NOW)?.id).toBe('b4')
+  expect(oldestOf(unstamped.slice(0, 2), NOW)).toBe(sortedByFirstSeen(unstamped.slice(0, 2), NOW)[0])
+  expect(firstSeenOrNow(unstamped[0]!, NOW)).toBe(NOW)
+  expect(firstSeenOrNow(unstamped[1]!, NOW)).toBe(NOW)
+  expect(firstSeenOrNow(unstamped[2]!, NOW)).toBe(NOW - 1_000)
+  expect(oldestOf([], NOW)).toBeUndefined()
 })
 
 test('the record names at most three tasks, oldest first, each cleaned and cut to 80 characters, and drops empty ones', () => {
