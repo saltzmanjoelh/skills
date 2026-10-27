@@ -9,7 +9,7 @@ import { BAR_SVG_HEIGHT, barSvg, fitBar, hasSvg, svgWidth, type Bar } from './ar
 import { linkOf } from './links'
 import { STAGES, stageLabel } from './stages'
 import {
-  busyCount, chipParts, chipText, fitChips, keyOf, moreWords, SEPARATOR, STATE_LOOK, staleWords, untilWords, type SubRow, type Tone,
+  busyCount, chipParts, chipText, fitChips, keyOf, moreWords, SEPARATOR, STATE_LOOK, staleWords, untilWords, waitingWords, type SubRow, type Tone,
 } from './subs'
 import { printable, timeOfDay } from './text'
 
@@ -149,12 +149,15 @@ function pullRequestWords(row: SubRow): string {
   return `#${pr.number} ${printable(pr.state, 20)} · checks ${printable(pr.checks, 20)}`
 }
 
-// The state in words with its reason, and how long the file has gone without
-// an update when it is stale.
+// The state in words with its reason, then the background task the row
+// waits on when its record names one and says since when, and then how long
+// the file has gone without an update when it is stale.
 export function stateWords(row: SubRow, now: number): string {
   const parts = [STATE_LOOK[row.record.state].words]
   const reason = printable(row.record.reason, 120)
   if (reason !== '') parts.push(reason)
+  const waiting = waitingWords(row, now)
+  if (waiting !== null) parts.push(waiting)
   if (row.isStale) parts.push(staleWords(row, now))
   return parts.join(SEPARATOR)
 }

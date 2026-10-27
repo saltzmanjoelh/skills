@@ -149,3 +149,22 @@ test('a background-only wait without a finite since reads as none, and one whose
   expect(recordIn(text({ backgroundOnly: { since: 1500 } }))?.backgroundOnly).toEqual({ since: 1500, tasks: [] })
   expect(recordIn(text({ backgroundOnly: { since: 1500, tasks: 'run the tests' } }))?.backgroundOnly).toEqual({ since: 1500, tasks: [] })
 })
+
+test('a background-only wait reads its taskSince when it is a finite number, and has no such key when it is missing or not one', () => {
+  const since = 1500
+  const tasks = ['run the tests']
+  expect(recordIn(text({ backgroundOnly: { since, tasks, taskSince: 1200 } }))?.backgroundOnly).toEqual({ since, tasks, taskSince: 1200 })
+  expect(recordIn(text({ backgroundOnly: { since, tasks, taskSince: 0 } }))?.backgroundOnly).toEqual({ since, tasks, taskSince: 0 })
+  // A wait with no first-seen time, as a record from an older builder has,
+  // reads as it did before the field existed, with no key for it at all
+  // rather than a key set to undefined, so the tests that compare a wait
+  // with toEqual keep their meaning.
+  const reads = [
+    recordIn(text({ backgroundOnly: { since, tasks } }))?.backgroundOnly,
+    ...['then', '1200', null, true, {}, [1200]].map(bad => recordIn(text({ backgroundOnly: { since, tasks, taskSince: bad } }))?.backgroundOnly),
+  ]
+  for (const read of reads) {
+    expect(read).toEqual({ since, tasks })
+    expect(read).not.toHaveProperty('taskSince')
+  }
+})

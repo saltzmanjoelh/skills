@@ -126,6 +126,19 @@ export function untilWords(ms: number): string | null {
 // says it.
 export const staleWords = (row: SubRow, now: number) => `no update for ${ageWords(now - row.mtimeMs)}`
 
+// The background task a working row waits on and for how long, as the row's
+// state words say it: `waiting on: <task> (<age>)`, with the task cleaned and
+// cut as the row's reason is, and the age counted from when builder first saw
+// the task. Null unless the record's background-only wait names a task that
+// is not empty once cleaned and says when builder first saw it, so a record
+// from an older builder, which has no first-seen time, adds no words.
+export function waitingWords(row: SubRow, now: number): string | null {
+  const wait = row.record.backgroundOnly
+  if (wait === undefined || wait.taskSince === undefined) return null
+  const task = printable(wait.tasks[0] ?? '', 120)
+  return task === '' ? null : `waiting on: ${task} (${ageWords(now - wait.taskSince)})`
+}
+
 // What a row with no issue yet shows where the key would go.
 export const NO_ISSUE = 'no issue yet'
 

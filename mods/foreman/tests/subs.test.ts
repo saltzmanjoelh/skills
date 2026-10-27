@@ -4,7 +4,7 @@ import type { ForemanFile } from '../types'
 import { STATES } from '../hooks/record'
 import {
   afterRead, ageWords, busyCount, byKeyThenFile, chipParts, chipText, fitChips, isStale, nextReadDelay, READ_LATER_MS, READ_SOON_MS, rowsOf,
-  STALE_MS, STATE_LOOK, untilWords,
+  STALE_MS, STATE_LOOK, untilWords, waitingWords,
 } from '../hooks/subs'
 
 const MIN = 60_000
@@ -118,6 +118,32 @@ test('a chip splits into its key and the rest, and the two joined by a space are
     const { key, rest } = chipParts(row, at)
     expect(chipText(row, at)).toBe(`${key} ${rest}`)
   }
+})
+
+test('the waiting words name the first task of a background-only wait with its age from taskSince, and are null without the field, a task or the stamp', () => {
+  const at = 10 * MIN
+  const taskSince = at - 7 * MIN
+  const [waiting, noStamp, noTasks, noField] = rowsOf([
+    kept('a.json', record('ABC-1', 'working', { backgroundOnly: { since: taskSince, tasks: ['run the tests', 'build'], taskSince } }), at),
+    kept('b.json', record('ABC-2', 'working', { backgroundOnly: { since: taskSince, tasks: ['run the tests'] } }), at),
+    kept('c.json', record('ABC-3', 'working', { backgroundOnly: { since: taskSince, tasks: [], taskSince } }), at),
+    kept('d.json', record('ABC-4', 'working'), at),
+  ], at)
+  expect(waitingWords(waiting!, at)).toBe('waiting on: run the tests (7m)')
+  expect(waitingWords(waiting!, at + 56 * MIN)).toBe('waiting on: run the tests (1h 3m)')
+  expect(waitingWords(noStamp!, at)).toBeNull()
+  expect(waitingWords(noTasks!, at)).toBeNull()
+  expect(waitingWords(noField!, at)).toBeNull()
+  // The task is cleaned and cut as the row's reason is, to 120 characters,
+  // and a task that is empty once cleaned names nothing.
+  const [marked, long, blank] = rowsOf([
+    kept('m.json', record('ABC-5', 'working', { backgroundOnly: { since: taskSince, tasks: ['run\u001b[31m the\ttests'], taskSince } }), at),
+    kept('l.json', record('ABC-6', 'working', { backgroundOnly: { since: taskSince, tasks: ['x'.repeat(130)], taskSince } }), at),
+    kept('e.json', record('ABC-7', 'working', { backgroundOnly: { since: taskSince, tasks: ['\u001b[31m'], taskSince } }), at),
+  ], at)
+  expect(waitingWords(marked!, at)).toBe('waiting on: run the tests (7m)')
+  expect(waitingWords(long!, at)).toBe(`waiting on: ${'x'.repeat(119)}… (7m)`)
+  expect(waitingWords(blank!, at)).toBeNull()
 })
 
 test('ages and waits are said in whole units', () => {

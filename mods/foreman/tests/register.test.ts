@@ -385,6 +385,30 @@ test('a file more than three minutes old is dimmed with its age and still busy, 
   expect(await ui.paneText()).toContain('working · building · no update for 3m')
 })
 
+test('a working row waiting on background work names the task and its age after the reason in the plain tone, and a stale one keeps its dimming with its age after them', async ($, on) => {
+  const w = world(on)
+  const backgroundOnly = { since: T0 - MINUTE, tasks: ['run the tests'], taskSince: T0 - 7 * MINUTE }
+  w.folder.put('a.json', record('ABC-1', 'working', { stage: 'build', reason: 'building', backgroundOnly }))
+  w.folder.put('b.json', record('ABC-2', 'working', { stage: 'build', reason: 'building', backgroundOnly }), T0 - 3 * MINUTE - SECOND)
+  // A record from an older builder, whose wait has no first-seen time.
+  w.folder.put('c.json', record('ABC-3', 'working', { stage: 'build', reason: 'building', backgroundOnly: { since: T0 - MINUTE, tasks: ['run the tests'] } }))
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  // A drawn Text keeps no key, so the two state rows are found by the words
+  // they share, in the pane's order.
+  const [fresh, stale, ...rest] = await ui.pane.findAll({ type: 'Text', text: 'waiting on: run the tests (7m)' })
+  expect(rest).toHaveLength(0)
+  expect(fresh?.text).toBe('working · building · waiting on: run the tests (7m)')
+  expect(fresh?.props?.dimColor).not.toBe(true)
+  expect(fresh?.props?.color).toBeUndefined()
+  expect(stale?.text).toBe('working · building · waiting on: run the tests (7m) · no update for 3m')
+  expect(stale?.props?.dimColor).toBe(true)
+  expect(await ui.pane.findAll({ type: 'Text', text: /^working · building$/ })).toHaveLength(1)
+  // The band's chips do not name the task.
+  expect(await ui.bandText()).toContain('ABC-1 build')
+})
+
 test('the next read comes 30 seconds after a read with a fresh working file, and not at 29', async ($, on) => {
   const w = world(on)
   w.folder.put('a.json', record('ABC-1', 'working'))

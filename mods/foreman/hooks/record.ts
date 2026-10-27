@@ -131,8 +131,10 @@ function cleanupIn(raw: unknown): RecordCleanup | undefined {
   return { failedCalls: failed, lastError: textOr(c.lastError, '') }
 }
 
-// A wait on background work alone: when it began, and the descriptions of
-// at most three of its tasks, which builder has already cleaned.
+// A wait on background work alone: when it began, the descriptions of at
+// most three of its tasks, oldest first, which builder has already cleaned,
+// and, when the record says, when builder first saw the task the first
+// description names.
 export type RecordBackgroundOnly = NonNullable<BuildStatus['backgroundOnly']>
 
 // The most task descriptions kept from a background-only wait, as many as
@@ -143,14 +145,17 @@ const TASKS_KEPT = 3
 // Only the string tasks are kept, the first three. A `tasks` that is not a
 // list reads as no tasks rather than as no wait, because `since` alone is
 // what the ceiling counts from, and a wait foreman cannot name is still a
-// wait.
+// wait. `taskSince` is kept only when it is a finite number, and is left out
+// of the result otherwise rather than set to undefined, so a record from an
+// older builder, which has no such field, reads exactly as it did.
 export function backgroundOnlyIn(raw: unknown): RecordBackgroundOnly | undefined {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
   const b = raw as Record<string, unknown>
   const since = timeOr(b.since)
   if (since === null) return undefined
   const tasks = Array.isArray(b.tasks) ? b.tasks.filter((x): x is string => typeof x === 'string').slice(0, TASKS_KEPT) : []
-  return { since, tasks }
+  const taskSince = timeOr(b.taskSince)
+  return { since, tasks, ...(taskSince === null ? {} : { taskSince }) }
 }
 
 // The record a file's text holds, or null when it does not parse. It parses
