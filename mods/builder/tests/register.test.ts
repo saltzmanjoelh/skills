@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { ElementQuery, Engine, FoundElement } from 'claude-code/testing'
 
-import { FACTS_LEAD, GITHUB_NAMES_LINE } from '../hooks/context'
+import { FACTS_LEAD, GITHUB_NAMES_LINE, SETTINGS_HINT } from '../hooks/context'
 import { RUNS_JQ, snapshotOf, type GhPullRequest } from '../hooks/github'
 import { NOTHING_WATCHED, STALE_WARNING } from '../hooks/pane'
 import { RELOAD_LINE, REREAD_CLOSING } from '../hooks/prompts'
@@ -11156,4 +11156,52 @@ test('after a restart nothing of a compaction survives, so the first prompt carr
   await clock.advance(10 * MINUTE)
   expect(changesOf(prompts).length).toBe(1)
   expect(changesOf(prompts)[0] ?? '').toStartWith('builder: pull request #7 changed.')
+})
+
+test('the line above the prompt ends with the context once a turn of the session\'s own that replied has measured it', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  sessionTurns(on)
+  const usage = usageAnswers(on)
+  const line = await abovePrompt($, on)
+  await watch($)
+  await clock.settle()
+  expect(await line()).toBe('builder: #7 open · checks passed · nothing to hand over · next look in 10m')
+
+  usage.context = contextOf(212_000)
+  await ownTurn($, 't1')
+  await clock.settle()
+  expect(await line()).toStartWith('builder: #7 open · checks passed · ')
+  expect(await line()).toEndWith(' · context 212K of 300K')
+})
+
+test('the pane shows the context with the settings hint as one dim line, and once the mod\'s own compaction has stood, the compaction line and no hint', async ($, on) => {
+  const { clock, usage, compact } = await reviewing($, on)
+  const pane = await paneOn($)
+  const drawn = async () => {
+    await pane.redraw()
+    return (await pane.find({ text: 'Context:' }))?.text ?? ''
+  }
+  expect(await drawn()).toContain('Context: not measured yet')
+  expect(await drawn()).not.toContain(SETTINGS_HINT)
+
+  usage.context = contextOf(212_000)
+  await ownTurn($, 't1')
+  await clock.settle()
+  expect(await drawn()).toContain('Context: 212K of 300K (default)')
+  expect(await drawn()).toContain(SETTINGS_HINT)
+  expect((await pane.find({ type: 'Text', text: SETTINGS_HINT }))?.props.dimColor).toBe(true)
+  expect(await drawn()).not.toContain('Compacted')
+
+  usage.context = contextOf(255_000)
+  await ownTurn($, 't2')
+  await clock.settle()
+  expect(compact.args.length).toBe(1)
+  await clock.advance(3 * MINUTE)
+  const after = await drawn()
+  expect(after).toContain('Context: 255K of 300K (default)')
+  expect(after).toContain('Compacted once, 3m ago (manual), 115K to 16K.')
+  expect(after).not.toContain(SETTINGS_HINT)
 })

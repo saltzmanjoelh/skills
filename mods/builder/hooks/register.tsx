@@ -1,13 +1,13 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Next, PromptOrigin, Register, ResolveInput, ToolCallInput, ToolCallResult } from 'claude-code'
 
-import type { AgentCard, BackgroundTask, BuilderRun, ContextMeasure, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, StatusMemo, Wake } from '../types'
+import type { AgentCard, BackgroundTask, BuilderRun, Compactions, ContextMeasure, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, StatusMemo, Wake } from '../types'
 import { isSvgSurface } from './art'
 import { checkoutSentence, worktreeWithBranch, type Checkout } from './checkout'
 // The context module's `told` is the compaction record after a reload was
 // announced; it is renamed here because `told` below is the snapshot last
 // handed to the session.
-import { afterCompaction, afterFailure, checkoutIn, compactionFacts, compactionsIn, isDue, measureOf, owing, told as afterReloadTold, withFacts, type UsageRead } from './context'
+import { afterCompaction, afterFailure, checkoutIn, compactionFacts, compactionsIn, isDue, measureIn, measureOf, owing, told as afterReloadTold, withFacts, type UsageRead } from './context'
 import { afterAskAgain, afterTally, askAgainAnswer, briefAnswer, briefFactsOf, briefRefusal, briefText, counselAnswer, decisionLine, destinationOf, endedDecisionLines, FOLLOW_UP_OPTIONS, followUpAnswer, followUpAskAgainAnswer, followUpsInput, followUpsRefusal, followUpStepOf, followUpVotesOf, keepCounsel, MAX_BRIEF_OPTIONS, MAX_FOLLOW_UPS, MIN_OPTIONS, neverStartedCandidatesOf, neverStartedOf, type PullRequestRef, reviewParagraph, stepOf, type UnreadableVote, votesOf } from './counsel'
 import { carriedRuns, changesBetween, DECISION_LABEL, isCiMonitorEvent, isSameState, PR_FIELDS, pullRequestStateIn, roundInProgress, RUNS_JQ, runsOf, snapshotIn, snapshotOf, verdictsOf, type GhPullRequest, type Snapshot, type Verdict, type WorkflowRun } from './github'
 import { ignoredLine, readIssueLink } from './links'
@@ -1179,15 +1179,34 @@ async function measureContext($: $): Promise<ContextMeasure | null> {
   }
 }
 
+// The measure the pane and the line draw: this session's stored one, or null
+// when none has been taken, the stored one is another session's, or it cannot
+// be read, so a refused read never keeps the band or the pane from drawing.
+async function storedMeasure($: $): Promise<ContextMeasure | null> {
+  try {
+    return measureIn(await read($, context), await $.session.id())
+  } catch {
+    return null
+  }
+}
+
+// This session's compaction record, or null when there is none, the stored
+// one is another session's, or it cannot be read. The readers that only look
+// at the record go through it, so a refused read answers the same way for
+// each: no compaction counted, no reload owed, nothing for the pane.
+async function storedCompactions($: $): Promise<Compactions | null> {
+  try {
+    return compactionsIn(await read($, compactions), await $.session.id())
+  } catch {
+    return null
+  }
+}
+
 // How many compactions of the main conversation have stood, as the record
 // says, or none when there is no record of this session's or it cannot be
 // read.
 async function compactionsCount($: $): Promise<number> {
-  try {
-    return compactionsIn(await read($, compactions), await $.session.id())?.count ?? 0
-  } catch {
-    return 0
-  }
+  return (await storedCompactions($))?.count ?? 0
 }
 
 // The facts the compaction summary keeps, read from the mod's state as
@@ -1292,11 +1311,7 @@ async function recordCheckout($: $, number: number, found: Checkout) {
 // without the line and the one after it carries it. Every prompt site reads
 // it before the checks that must sit right before its submit.
 async function reloadOwed($: $): Promise<number | null> {
-  try {
-    return compactionsIn(await read($, compactions), await $.session.id())?.owedAt ?? null
-  } catch {
-    return null
-  }
+  return (await storedCompactions($))?.owedAt ?? null
 }
 
 // Records that a prompt carrying the reload line for the compaction at
@@ -2756,6 +2771,8 @@ async function view($: $): Promise<View> {
     usageHold: holdIn(await read($, usageHold))?.until ?? null,
     stale: isStale(loadedIn(await read($, loaded))),
     issueLink: issueAddress,
+    context: await storedMeasure($),
+    compactions: await storedCompactions($),
   }
 }
 

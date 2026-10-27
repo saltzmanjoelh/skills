@@ -1,7 +1,8 @@
 import type { Elements as EngineElements } from 'claude-code'
 
-import type { AgentCard, BackgroundTask, CounselQuestion, CounselTally, ForegroundCall, NextLook, Progress, Question, WaitingOn, Wake } from '../types'
+import type { AgentCard, BackgroundTask, Compactions, ContextMeasure, CounselQuestion, CounselTally, ForegroundCall, NextLook, Progress, Question, WaitingOn, Wake } from '../types'
 import { AGENT_SVG_HEIGHT, agentSvg, BAR_SVG_HEIGHT, barSvg, fitBar, hasSvg, PLANNED_SVG_HEIGHT, plannedSvg, svgWidth, type AgentRow } from './art'
+import { contextWords, SETTINGS_HINT, thousands } from './context'
 import { abstainerReason, chosenOf, COUNSEL_KEPT, FOLLOW_UP_WORDS, followUpOutcomes, noOptionCount, shortName, turnoutOf } from './counsel'
 import { ciOf, failedCheckNames, roundInProgress, type Snapshot } from './github'
 import { linkOf } from './links'
@@ -50,6 +51,12 @@ export type View = {
   // The project's usable issue address, with `{key}` where the key goes, or
   // null when the project names none or names one that cannot be used.
   issueLink: string | null
+  // The context measured at the end of the session's last own turn that
+  // replied, read through measureIn, or null before the first measurement.
+  context: ContextMeasure | null
+  // The record of the main conversation's compactions, read through
+  // compactionsIn, or null while this session has none.
+  compactions: Compactions | null
 }
 
 type El = Pick<EngineElements['terminal'], 'Box' | 'Text'>
@@ -209,13 +216,26 @@ function withWarning(v: View, width: number | undefined, lineWith: (width: numbe
   return `${STALE_WARNING}${SEPARATOR}${rest.startsWith(PREFIX) ? rest.slice(PREFIX.length) : rest}`
 }
 
+// The context's segment at the end of every line above the prompt: the size
+// measured at the end of the session's last own turn that replied, and the
+// ceiling, or null while there is no measure with a size.
+function contextSegment(v: View): string | null {
+  const words = contextWords(v.context, false)
+  return words === null ? null : `${SEPARATOR}${words}`
+}
+
 // A line built by `lineWith`, which names at most the given number of running
-// agents, fitted to `width` cells when that is a number: agent names are
-// dropped from the end first, then the line is cut with `…`. Null when the
-// line is.
+// agents, with the context's segment at its end when there is one, fitted to
+// `width` cells when that is a number: the context goes first, then agent
+// names are dropped from the end, then the line is cut with `…`. Null when
+// the line is: a measure alone never makes a line.
 function fitLine(v: View, width: number | undefined, lineWith: (names: number) => string | null): string | null {
-  const full = lineWith(Infinity)
-  if (full === null || typeof width !== 'number' || !Number.isFinite(width) || full.length <= width) return full
+  const base = lineWith(Infinity)
+  if (base === null) return null
+  const segment = contextSegment(v)
+  const full = segment === null ? base : `${base}${segment}`
+  if (typeof width !== 'number' || !Number.isFinite(width) || full.length <= width) return full
+  if (base.length <= width) return base
   for (let names = v.agents.filter(isRunning).length - 1; names >= 0; names--) {
     const shorter = lineWith(names)!
     if (shorter.length <= width) return shorter
@@ -417,6 +437,55 @@ function counselTree({ Text }: El, list: readonly CounselQuestion[]) {
 export const NOTHING_WATCHED =
   'No pull request is watched. The session calls the watch tool after opening one, or run /builder watch <number>.'
 
+// How many compactions have stood, in words.
+function timesWords(count: number): string {
+  if (count === 1) return 'once'
+  if (count === 2) return 'twice'
+  return `${count} times`
+}
+
+// A text that ends in one mark: the mark it has, or a full stop.
+const ended = (text: string) => (/[.?!…]$/.test(text) ? text : `${text}.`)
+
+// The words of the line above the prompt begin with this lead. The pane's
+// line carries its own label, so it takes the lead off.
+const LINE_LEAD = 'context '
+
+// The pane's context lines, in order. First the context: its size and the
+// ceiling with where the ceiling came from, or that nothing is measured yet,
+// or, for a measure without a size, that the figures could not be read and
+// the ceiling that stands in. Then, once a compaction has stood, how many have,
+// how long ago the newest was, what started it in the engine's own word, and
+// its size before and after when the engine reported both. Then, when the
+// mod's own compact command last failed, when and why, and that it is tried
+// again. Last, while the ceiling is the default and no compaction has stood,
+// the settings hint, which contextTree draws dim. The trigger and the reason
+// came from outside the mod, so they are cleaned.
+export function contextLines(v: View): string[] {
+  const lines: string[] = []
+  const m = v.context
+  const words = contextWords(m, true)
+  if (m === null) lines.push('Context: not measured yet')
+  else if (words !== null) lines.push(`Context: ${words.slice(LINE_LEAD.length)}`)
+  else lines.push(`Context: could not be read; ceiling ${thousands(m.ceiling)} (${m.source})`)
+  const c = v.compactions
+  if (c !== null && c.count > 0 && c.last !== null) {
+    const { at, trigger, before, after } = c.last
+    const sizes = before !== null && after !== null ? `, ${thousands(before)} to ${thousands(after)}` : ''
+    lines.push(`Compacted ${timesWords(c.count)}, ${elapsed(v.now - at)} ago (${printable(trigger, 20)})${sizes}.`)
+  }
+  if (c !== null && c.failed !== null) {
+    lines.push(`The last compaction failed, ${elapsed(v.now - c.failed.at)} ago: ${ended(printable(c.failed.reason, 200))} It is tried again at the next turn end above the threshold.`)
+  }
+  if (m !== null && m.source === 'default' && (c?.count ?? 0) === 0) lines.push(SETTINGS_HINT)
+  return lines
+}
+
+// The context lines as the pane draws them, the settings hint dim.
+function contextTree({ Text }: El, v: View) {
+  return contextLines(v).map((line, i) => <Text key={`context-${i}`} dimColor={line === SETTINGS_HINT}>{line}</Text>)
+}
+
 // The agents as the pane lists them: running ones first, newest first within
 // each group.
 function agentsInOrder(cards: readonly AgentCard[]): AgentCard[] {
@@ -557,11 +626,11 @@ function staleTree({ Text }: El, v: View) {
 }
 
 // The pane, with a pull request watched or not: the stale warning when the
-// session is stale, then the work, then the pull
-// request's state when one is watched, then the agents, the background work,
-// the open questions, the counsel and, with a pull request, the next step and
-// the last look. With none watched, as during /spec, it still lists the
-// agents, the background work and the counsel.
+// session is stale, then the work, then the pull request's state when one is
+// watched, then the context lines, then the agents, the background work, the
+// open questions, the counsel and, with a pull request, the next step and the
+// last look. With none watched, as during /spec, it still shows the context
+// and lists the agents, the background work and the counsel.
 export function paneTree(ui: Elements, v: View, presses: PanePresses, columns?: number) {
   const { Box, Text } = ui
   const s = v.pr
@@ -571,6 +640,7 @@ export function paneTree(ui: Elements, v: View, presses: PanePresses, columns?: 
         {staleTree(ui, v)}
         {workTree(ui, v, columns)}
         <Text dimColor>{NOTHING_WATCHED}</Text>
+        {contextTree(ui, v)}
         <Text> </Text>
         {agentsTree(ui, v, columns, presses)}
         {counselTree(ui, v.counsel)}
@@ -593,6 +663,7 @@ export function paneTree(ui: Elements, v: View, presses: PanePresses, columns?: 
       <Text>{`Checks: ${ciOf(s.checks)}${failed.length > 0 ? ` (failed: ${failed.join(', ')})` : ''}`}</Text>
       <Text>{`Verdicts at head: ${verdicts}`}</Text>
       <Text>{`Round ${roundInProgress(s)} (${s.headsReviewed} reviewed) · ${s.pushesSinceVerdict} ${s.pushesSinceVerdict === 1 ? 'push' : 'pushes'} since the last changes-requested verdict`}</Text>
+      {contextTree(ui, v)}
       <Text> </Text>
       {agentsTree(ui, v, columns, presses)}
       {open.length > 0 && <Text> </Text>}

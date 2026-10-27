@@ -1,11 +1,12 @@
 import { expect, test } from 'claude-code/testing'
 
 import { agentSvg } from '../hooks/art'
+import { SETTINGS_HINT } from '../hooks/context'
 import { snapshotOf } from '../hooks/github'
-import { abovePromptLine, agentCount, agentLines, agentRowOf, backgroundLines, counselLines, messageLines, messagesReadOf, NAMED_AFTER_MS, nextStep, secondRow, STALE_WARNING, timeUntil, type View } from '../hooks/pane'
+import { abovePromptLine, agentCount, agentLines, agentRowOf, backgroundLines, contextLines, counselLines, messageLines, messagesReadOf, NAMED_AFTER_MS, nextStep, secondRow, STALE_WARNING, timeUntil, type View } from '../hooks/pane'
 import { RELOAD_LINE, resumePrompt, stuckPrompt } from '../hooks/prompts'
 import { clockTime, printable, timeOfDay } from '../hooks/text'
-import type { AgentCard, BackgroundTask, CounselQuestion, CounselVote, ForegroundCall, NextLook, Progress, Question } from '../types'
+import type { AgentCard, BackgroundTask, Compactions, ContextMeasure, CounselQuestion, CounselVote, ForegroundCall, NextLook, Progress, Question } from '../types'
 
 const C = 'c'.repeat(40)
 const NOW = 1_000_000
@@ -48,6 +49,8 @@ function view(over: Partial<View> = {}): View {
     usageHold: null,
     stale: false,
     issueLink: null,
+    context: null,
+    compactions: null,
     ...over,
   }
 }
@@ -574,4 +577,123 @@ test('a read of an agent\'s messages keeps only the lines the agent pane draws, 
   expect(messagesReadOf({ deny: 'no transcript was saved' })).toEqual({ reason: 'no transcript was saved' })
   expect(messagesReadOf('not a list')).toEqual({ reason: 'the engine answered something other than a list.' })
   expect(messagesReadOf(undefined)).toEqual({ reason: 'the engine answered something other than a list.' })
+})
+
+// The context cap (see docs/specs/implement-session-context-cap.md): the
+// segment at the end of the line above the prompt, and the pane's context
+// lines.
+
+// A measure of the context taken at NOW: 212,345 tokens against builder's
+// default ceiling unless the case says otherwise.
+const measure = (tokens: number | null = 212_345, ceiling = 300_000, source: ContextMeasure['source'] = 'default'): ContextMeasure =>
+  ({ tokens, ceiling, source, at: NOW, sessionId: 's' })
+const SEGMENT = ' · context 212K of 300K'
+
+test('every variant of the line ends with the context once a measure with a size exists, and is unchanged by a measure without one', () => {
+  const agents = [typed('a', 'builder:spec-reviewer', NOW)]
+  const none = { pr: null, nextLook: null }
+  const variants: Partial<View>[] = [
+    {},
+    { agents },
+    { agents, calls: [call('x', NOW - 20_000)] },
+    { usageHold: NOW + 15 * 60_000, nextLook: null },
+    { ...none, agents },
+    { ...none, usageHold: NOW + 15 * 60_000 },
+    { ...none, started: true },
+    { ...none, started: true, progress: reported(), agents },
+    { stale: true, agents },
+    { ...none, stale: true, started: true, progress: reported() },
+  ]
+  for (const over of variants) {
+    const plain = secondRow(view(over))
+    expect(plain).not.toBeNull()
+    expect(secondRow(view({ ...over, context: measure() }))).toBe(`${plain}${SEGMENT}`)
+    expect(secondRow(view({ ...over, context: measure(null) }))).toBe(plain)
+    expect(secondRow(view({ ...over, context: measure(null, 300_000, 'unreadable') }))).toBe(plain)
+  }
+  expect(abovePromptLine(view({ context: measure() }))).toBe(`builder: #7 open · checks passed · nothing to hand over · next look in 7m${SEGMENT}`)
+  expect(abovePromptLine(view({ ...none, agents, context: measure() }))).toBe(`builder: no pull request yet · 1 agent: spec-reviewer${SEGMENT}`)
+  expect(abovePromptLine(view({ ...none, agents, context: measure(212_345, 400_000, 'settings') }))).toBe('builder: no pull request yet · 1 agent: spec-reviewer · context 212K of 400K')
+  // A measure alone makes no line: with nothing watched and nothing running,
+  // before builder is started, there is still none, and a stale session's
+  // line is still the warning alone.
+  expect(abovePromptLine(view({ ...none, context: measure() }))).toBeNull()
+  expect(secondRow(view({ ...none, context: measure() }))).toBeNull()
+  expect(abovePromptLine(view({ ...none, stale: true, context: measure() }))).toBe(STALE_WARNING)
+})
+
+test('when the line must be cut, the context goes first, before any agent name is dropped', () => {
+  const agents = ['Explore', 'builder:spec-reviewer'].map((type, i) => typed(`a${i}`, type, NOW - 10 + i))
+  const v = view({ pr: null, nextLook: null, agents, context: measure() })
+  const plain = 'builder: no pull request yet · 2 agents: Explore, spec-reviewer'
+  expect(abovePromptLine(v)).toBe(`${plain}${SEGMENT}`)
+  expect(abovePromptLine(v, plain.length + SEGMENT.length)).toBe(`${plain}${SEGMENT}`)
+  expect(abovePromptLine(v, plain.length + SEGMENT.length - 1)).toBe(plain)
+  expect(abovePromptLine(v, plain.length)).toBe(plain)
+  expect(abovePromptLine(v, plain.length - 1)).toBe('builder: no pull request yet · 2 agents: Explore, …')
+  expect(abovePromptLine(v, 22)).toBe('builder: no pull requ…')
+  // With nothing to drop but the context, the line is cut only after the context has gone.
+  const watched = 'builder: #7 open · checks passed · nothing to hand over · next look in 7m'
+  expect(abovePromptLine(view({ context: measure() }), watched.length)).toBe(watched)
+  expect(abovePromptLine(view({ context: measure() }), 32)).toBe('builder: #7 open · checks passe…')
+  // The second row once builder is started is fitted the same way.
+  const started = view({ pr: null, nextLook: null, started: true, progress: reported(), agents, context: measure() })
+  expect(secondRow(started)).toBe(`builder: spec · 2 agents: Explore, spec-reviewer${SEGMENT}`)
+  expect(secondRow(started, 48)).toBe('builder: spec · 2 agents: Explore, spec-reviewer')
+  expect(secondRow(started, 42)).toBe('builder: spec · 2 agents: Explore, …')
+})
+
+// A compaction record of `count` compactions, the newest three minutes ago,
+// manual, from 115,205 to 15,893 tokens, unless the case says otherwise.
+const compacted = (count: number, over: Partial<Compactions> = {}): Compactions =>
+  ({ count, last: { at: NOW - 3 * 60_000, trigger: 'manual', before: 115_205, after: 15_893 }, failed: null, owedAt: null, sessionId: 's', ...over })
+const CONTEXT_SET = 'Context: 212K of 300K (settings)'
+
+test('the pane\'s context line reads the size, the ceiling and its source, or that nothing is measured yet, or that the figures could not be read and the ceiling it fell back to', () => {
+  expect(contextLines(view({ context: measure(212_345, 300_000, 'settings') }))).toEqual([CONTEXT_SET])
+  expect(contextLines(view({ context: measure(212_345, 500_000, 'environment') }))).toEqual(['Context: 212K of 500K (environment)'])
+  expect(contextLines(view())).toEqual(['Context: not measured yet'])
+  expect(contextLines(view({ context: measure(null, 300_000, 'unreadable') }))).toEqual(['Context: could not be read; ceiling 300K (unreadable)'])
+  // A window read without a size names the ceiling that was read.
+  expect(contextLines(view({ context: measure(null, 400_000, 'settings') }))).toEqual(['Context: could not be read; ceiling 400K (settings)'])
+})
+
+test('the pane counts the compactions that stood as once, twice or so many times, with how long ago the newest was, what started it, and its sizes when both are known', () => {
+  const settled = (count: number, over: Partial<Compactions> = {}) => view({ context: measure(212_345, 300_000, 'settings'), compactions: compacted(count, over) })
+  expect(contextLines(settled(1))).toEqual([CONTEXT_SET, 'Compacted once, 3m ago (manual), 115K to 16K.'])
+  expect(contextLines(settled(2))).toEqual([CONTEXT_SET, 'Compacted twice, 3m ago (manual), 115K to 16K.'])
+  expect(contextLines(settled(3))).toEqual([CONTEXT_SET, 'Compacted 3 times, 3m ago (manual), 115K to 16K.'])
+  expect(contextLines(settled(12, { last: { at: NOW - 65 * 60_000, trigger: 'auto', before: 280_000, after: 20_500 } }))).toEqual([CONTEXT_SET, 'Compacted 12 times, 1h5m ago (auto), 280K to 21K.'])
+  // The sizes are left out unless the engine reported both.
+  expect(contextLines(settled(1, { last: { at: NOW - 3 * 60_000, trigger: 'plugin', before: null, after: 15_893 } }))).toEqual([CONTEXT_SET, 'Compacted once, 3m ago (plugin).'])
+  expect(contextLines(settled(2, { last: { at: NOW - 3 * 60_000, trigger: 'plugin', before: 115_205, after: null } }))).toEqual([CONTEXT_SET, 'Compacted twice, 3m ago (plugin).'])
+  expect(contextLines(settled(3, { last: { at: NOW - 3 * 60_000, trigger: 'plugin', before: null, after: null } }))).toEqual([CONTEXT_SET, 'Compacted 3 times, 3m ago (plugin).'])
+  // No compaction line while none has stood, or when the record counts one but holds no newest.
+  expect(contextLines(settled(0, { last: null }))).toEqual([CONTEXT_SET])
+  expect(contextLines(settled(1, { last: null }))).toEqual([CONTEXT_SET])
+})
+
+test('the pane says when and why the mod\'s own compact command last failed, after the compaction line, with the reason cleaned and ended once', () => {
+  const failed = { at: NOW - 3 * 60_000, reason: 'the compact command returned without a compaction' }
+  const failure = 'The last compaction failed, 3m ago: the compact command returned without a compaction. It is tried again at the next turn end above the threshold.'
+  const settled = (count: number, over: Partial<Compactions> = {}) => view({ context: measure(212_345, 300_000, 'settings'), compactions: compacted(count, over) })
+  expect(contextLines(settled(0, { last: null, failed }))).toEqual([CONTEXT_SET, failure])
+  expect(contextLines(settled(1, { failed }))).toEqual([CONTEXT_SET, 'Compacted once, 3m ago (manual), 115K to 16K.', failure])
+  expect(contextLines(settled(0, { last: null, failed: { at: NOW - 45_000, reason: 'refused.\u001b[2J' } }))[1]).toBe('The last compaction failed, 45s ago: refused. It is tried again at the next turn end above the threshold.')
+  expect(contextLines(settled(0, { last: null, failed: null }))).toEqual([CONTEXT_SET])
+})
+
+test('the settings hint is one line of the pane while the ceiling is the default and no compaction has stood, and never on the line above the prompt', () => {
+  expect(contextLines(view({ context: measure() }))).toEqual(['Context: 212K of 300K (default)', SETTINGS_HINT])
+  expect(contextLines(view({ context: measure(), compactions: compacted(0, { last: null }) }))).toEqual(['Context: 212K of 300K (default)', SETTINGS_HINT])
+  expect(contextLines(view({ context: measure(212_345, 400_000, 'settings') }))).not.toContain(SETTINGS_HINT)
+  expect(contextLines(view({ context: measure(212_345, 500_000, 'environment') }))).not.toContain(SETTINGS_HINT)
+  expect(contextLines(view({ context: measure(null, 300_000, 'unreadable') }))).not.toContain(SETTINGS_HINT)
+  expect(contextLines(view())).not.toContain(SETTINGS_HINT)
+  expect(contextLines(view({ context: measure(), compactions: compacted(1) }))).toEqual(['Context: 212K of 300K (default)', 'Compacted once, 3m ago (manual), 115K to 16K.'])
+  // The hint stays while only a failure is recorded, since no compaction has stood.
+  const failed = { at: NOW - 3 * 60_000, reason: 'the compact command was refused' }
+  expect(contextLines(view({ context: measure(), compactions: compacted(0, { last: null, failed }) })).at(-1)).toBe(SETTINGS_HINT)
+  expect(abovePromptLine(view({ context: measure() }))).not.toContain('autoCompactWindow')
+  expect(secondRow(view({ pr: null, nextLook: null, started: true, context: measure() }))).not.toContain('autoCompactWindow')
 })
