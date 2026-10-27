@@ -7,7 +7,7 @@ import { ciOf, failedCheckNames, roundInProgress, type Snapshot } from './github
 import { linkOf } from './links'
 import { barOf, modelLabel, stageLabel, type Bar } from './progress'
 import { isRunning, shownStatus, waitingOn } from './state'
-import { issueOf } from './status'
+import { issueOf, seenAtOf, sortedByFirstSeen } from './status'
 import { clockTime, printable, timeOfDay } from './text'
 
 export const PANE = 'builder'
@@ -93,11 +93,13 @@ function holdWords(v: View): string | null {
   return v.usageHold === null ? null : `waiting on the usage limit until ${timeOfDay(v.usageHold, v.now)}`
 }
 
-// What runs, and then the hold when one is on, as one part of a line with no
-// pull request watched; null when neither is there.
-function runningOrHold(v: View, names: number): string | null {
-  const parts = [runningPart(v, names), holdWords(v)].filter(part => part !== null)
-  return parts.length === 0 ? null : parts.join(' · ')
+// What runs, and then the hold when one is on, as the segments of one part of
+// a line with no pull request watched; empty when neither is there.
+function runningOrHold(v: View, names: number): LineSegment[] {
+  const hold = holdWords(v)
+  const running = runningPart(v, names)
+  if (hold === null) return running
+  return running.length === 0 ? [plain(hold)] : merged([...running, plain(`${SEPARATOR}${hold}`)])
 }
 
 // How many agents run now, in words, for the next step and the agent-count
@@ -110,7 +112,8 @@ function runningAgents(v: View): string {
 // What the mod will do next and when, for the line above the prompt and the
 // pane alike: the first of these that applies, starting with a usage-limit
 // hold. When the line already shows its running part (`isRunningShown`), the
-// count of running agents is left out, so the agents are not named twice.
+// count of running agents and the background work are left out, so neither
+// is named twice.
 export function nextStep(v: View, isRunningShown = false): string {
   const hold = holdWords(v)
   if (hold !== null) return hold
@@ -129,17 +132,105 @@ export function nextStep(v: View, isRunningShown = false): string {
   const look = when === null ? 'next look due now' : `next look in ${when}`
   const why = waitingOn(v.pr, v.agents, v.questions)
   if (why === 'agents' && isRunningShown) return look
+  // Background work in flight is the session's own work, as running agents
+  // are, so it comes after them and before the pull request's states. The
+  // reason is worked out here rather than in waitingOn, because waitingOn
+  // keys the poll interval, and a background task changes nothing about how
+  // often the mod looks at the pull request.
+  if (why !== 'owner' && why !== 'agents' && v.background.length > 0) {
+    return isRunningShown ? look : `waiting on its background ${backgroundNoun(v.background)} · ${look}`
+  }
   return `${waiting[why]} · ${look}`
 }
 
 // How long a foreground call runs before the line names it.
 export const NAMED_AFTER_MS = 10_000
 
-// What runs, as the line names it, or null when nothing does: the session's
-// own call that started first, once it has run NAMED_AFTER_MS; the running
-// agents' types, oldest first, at most `names` of them; and the background
-// work, counted as commands when every task is a shell command.
-export function runningPart(v: View, names = Infinity): string | null {
+// How long the session may have waited on a background task before the line
+// and the pane mark it: five minutes. This is builder's own copy of the
+// number foreman uses by default for its idle threshold, because one mod
+// cannot read another's options. A project that sets foreman's `idleMinutes`
+// option to another number therefore sees builder's `past 5m` and foreman's
+// first nudge part company. The README's section on the band says so.
+export const BACKGROUND_CEILING_MS = 5 * 60_000
+
+// The ceiling as the suffix names it, `5m`, worked out from the constant so
+// that the two cannot disagree.
+const CEILING_WORDS = `${BACKGROUND_CEILING_MS / 60_000}m`
+
+// How long the session has waited on a task: the time since builder first
+// saw it, never negative, so a stamp in the future prints as no time rather
+// than a negative one. A task with no sound stamp counts as first seen now.
+function waitedFor(task: BackgroundTask, now: number): number {
+  return Math.max(now - (seenAtOf(task) ?? now), 0)
+}
+
+// Whether the session has waited on a task for the ceiling or longer.
+export function isPastCeiling(task: BackgroundTask, now: number): boolean {
+  return waitedFor(task, now) >= BACKGROUND_CEILING_MS
+}
+
+// How long the session has waited on a task, as the line and the pane print
+// it: in clockTime's form, like the slow foreground call beside it, with the
+// suffix `, past 5m` once the wait has reached the ceiling, so a surface or a
+// test that sees only text still tells the two states apart.
+export function taskTime(task: BackgroundTask, now: number): string {
+  const time = clockTime(waitedFor(task, now))
+  return isPastCeiling(task, now) ? `${time}, past ${CEILING_WORDS}` : time
+}
+
+// What a background task is named by, on the line and in the pane: its
+// description, or its command when the description is blank, printed without
+// control characters and cut short.
+function taskName(task: BackgroundTask): string {
+  return printable(task.description.trim() !== '' ? task.description : task.command ?? '')
+}
+
+// The noun the next step gives the background work: `command` when every
+// task is a shell command, else `task`, in the plural for several.
+function backgroundNoun(tasks: readonly BackgroundTask[]): string {
+  const noun = tasks.every(task => task.type === 'shell') ? 'command' : 'task'
+  return tasks.length === 1 ? noun : `${noun}s`
+}
+
+// One piece of the line above the prompt: its text, whether it is the
+// background part, and whether the task that part names is past the ceiling.
+// The line is built from these so that the band can draw the part in yellow
+// without searching the fitted string for it, and the string the line's other
+// readers get is the segments' texts joined, so the two cannot disagree.
+export type LineSegment = { text: string; isBackground: boolean; isPast: boolean }
+
+// A segment of ordinary text.
+const plain = (text: string): LineSegment => ({ text, isBackground: false, isPast: false })
+
+// The line the segments spell.
+const textOf = (segments: readonly LineSegment[]): string => segments.map(segment => segment.text).join('')
+
+// Segments laid end to end, with each run of plain segments merged into one
+// and empty segments dropped, so a line holds at most one plain segment
+// before the background part and one after it.
+function merged(segments: readonly LineSegment[]): LineSegment[] {
+  const out: LineSegment[] = []
+  for (const segment of segments) {
+    if (segment.text === '') continue
+    const last = out.at(-1)
+    if (last !== undefined && !last.isBackground && !segment.isBackground) out[out.length - 1] = plain(`${last.text}${segment.text}`)
+    else out.push(segment)
+  }
+  return out
+}
+
+// What runs, as the line names it, as segments, empty when nothing does: the
+// session's own call that started first, once it has run NAMED_AFTER_MS; the
+// running agents' types, oldest first, at most `names` of them; and the
+// background work, as the oldest task in flight, the one builder saw first,
+// named by taskName with how long the session has waited on it. The
+// background part is the one segment marked as such, and it is marked past
+// when its task is past the ceiling. It reads `waiting on:` when it is the
+// only running part, and `background:` beside a call or agents, because the
+// session is then working beside the task rather than waiting on it, and it
+// ends with ` and <n> more` when several tasks run.
+export function runningPart(v: View, names = Infinity): LineSegment[] {
   const parts: string[] = []
   const slow = v.calls
     .filter(call => v.now - call.startedAt >= NAMED_AFTER_MS)
@@ -151,12 +242,14 @@ export function runningPart(v: View, names = Infinity): string | null {
     const shown = types.length > names ? [...types.slice(0, names), '…'] : types
     parts.push(`${agents.length} ${agents.length === 1 ? 'agent' : 'agents'}: ${shown.join(', ')}`)
   }
-  const tasks = v.background.length
-  if (tasks > 0) {
-    const noun = v.background.every(task => task.type === 'shell') ? 'command' : 'task'
-    parts.push(`${tasks} background ${noun}${tasks === 1 ? '' : 's'}`)
-  }
-  return parts.length === 0 ? null : parts.join(' · ')
+  const segments = parts.length === 0 ? [] : [plain(parts.join(SEPARATOR))]
+  const tasks = sortedByFirstSeen(v.background, v.now)
+  const oldest = tasks[0]
+  if (oldest === undefined) return segments
+  const lead = parts.length === 0 ? 'waiting on' : 'background'
+  const more = tasks.length > 1 ? ` and ${tasks.length - 1} more` : ''
+  const part: LineSegment = { text: `${lead}: ${taskName(oldest)} (${taskTime(oldest, v.now)})${more}`, isBackground: true, isPast: isPastCeiling(oldest, v.now) }
+  return segments.length === 0 ? [part] : [...segments, plain(SEPARATOR), part]
 }
 
 // One line above the prompt, or null when there is nothing to say. With a pull
@@ -165,21 +258,30 @@ export function runningPart(v: View, names = Infinity): string | null {
 // the usage-limit hold, or no line when neither is there. The line fits
 // `width` cells when it is a number: agent names are dropped from the end
 // first, then the line is cut with `…`. A stale session's line leads with the
-// warning, as withWarning says.
+// warning, as withWarning says. The line is the texts of abovePromptSegments
+// joined, so the string and the segments agree by construction.
 export function abovePromptLine(v: View, width?: number): string | null {
+  const segments = abovePromptSegments(v, width)
+  return segments === null ? null : textOf(segments)
+}
+
+// The line above the prompt as segments, with its background part marked, for
+// the band to draw that part in yellow once its task is past the ceiling.
+export function abovePromptSegments(v: View, width?: number): LineSegment[] | null {
   return withWarning(v, width, room => lineAbove(v, room))
 }
 
 // The line above the prompt without the stale warning.
-function lineAbove(v: View, width: number | undefined): string | null {
+function lineAbove(v: View, width: number | undefined): LineSegment[] | null {
   return fitLine(v, width, names => {
     if (v.pr === null) {
       const shown = runningOrHold(v, names)
-      return shown === null ? null : `${PREFIX}no pull request yet · ${shown}`
+      return shown.length === 0 ? null : merged([plain(`${PREFIX}no pull request yet${SEPARATOR}`), ...shown])
     }
     const running = runningPart(v, names)
     const head = `${PREFIX}#${v.pr.number} ${v.pr.state.toLowerCase()} · checks ${ciOf(v.pr.checks)}`
-    return running === null ? `${head} · ${nextStep(v)}` : `${head} · ${running} · ${nextStep(v, true)}`
+    if (running.length === 0) return [plain(`${head}${SEPARATOR}${nextStep(v)}`)]
+    return merged([plain(`${head}${SEPARATOR}`), ...running, plain(`${SEPARATOR}${nextStep(v, true)}`)])
   })
 }
 
@@ -196,32 +298,55 @@ const PREFIX = 'builder: '
 
 // The line `lineWith` builds for a width, led by the stale warning when the
 // session is stale. The warning is never cut: the rest of the line follows it
-// without its `builder: ` prefix, fitted to the width the warning and its
-// separator leave, and the line is the warning alone when there is nothing
-// else to say or too little room for more than an ellipsis.
-function withWarning(v: View, width: number | undefined, lineWith: (width: number | undefined) => string | null): string | null {
+// without its `builder: ` prefix, which is taken off the first segment only,
+// fitted to the width the warning and its separator leave, and the line is
+// the warning alone when there is nothing else to say or too little room for
+// more than an ellipsis. The rest keeps its marks, so the warning and a part
+// past the ceiling draw together.
+function withWarning(v: View, width: number | undefined, lineWith: (width: number | undefined) => LineSegment[] | null): LineSegment[] | null {
   if (!v.stale) return lineWith(width)
   const isFitted = typeof width === 'number' && Number.isFinite(width)
   const room = isFitted ? width - STALE_WARNING.length - SEPARATOR.length : undefined
-  if (room !== undefined && room < 2) return STALE_WARNING
-  const rest = lineWith(room === undefined ? undefined : room + PREFIX.length)
-  if (rest === null) return STALE_WARNING
-  return `${STALE_WARNING}${SEPARATOR}${rest.startsWith(PREFIX) ? rest.slice(PREFIX.length) : rest}`
+  if (room !== undefined && room < 2) return [plain(STALE_WARNING)]
+  const [first, ...others] = lineWith(room === undefined ? undefined : room + PREFIX.length) ?? []
+  if (first === undefined) return [plain(STALE_WARNING)]
+  const unprefixed = first.text.startsWith(PREFIX) ? { ...first, text: first.text.slice(PREFIX.length) } : first
+  return merged([plain(`${STALE_WARNING}${SEPARATOR}`), unprefixed, ...others])
 }
 
 // A line built by `lineWith`, which names at most the given number of running
 // agents, fitted to `width` cells when that is a number: agent names are
 // dropped from the end first, then the line is cut with `…`. Null when the
 // line is.
-function fitLine(v: View, width: number | undefined, lineWith: (names: number) => string | null): string | null {
+function fitLine(v: View, width: number | undefined, lineWith: (names: number) => LineSegment[] | null): LineSegment[] | null {
   const full = lineWith(Infinity)
-  if (full === null || typeof width !== 'number' || !Number.isFinite(width) || full.length <= width) return full
+  if (full === null || typeof width !== 'number' || !Number.isFinite(width) || lengthOf(full) <= width) return full
   for (let names = v.agents.filter(isRunning).length - 1; names >= 0; names--) {
     const shorter = lineWith(names)!
-    if (shorter.length <= width) return shorter
+    if (lengthOf(shorter) <= width) return shorter
   }
   const shortest = lineWith(0)!
-  return shortest.length <= width ? shortest : `${shortest.slice(0, Math.max(width - 1, 0))}…`
+  return lengthOf(shortest) <= width ? shortest : cut(shortest, Math.max(width - 1, 0))
+}
+
+// How many cells the segments take.
+const lengthOf = (segments: readonly LineSegment[]): number => textOf(segments).length
+
+// The segments cut to `chars` characters, in order, ending with `…`. A
+// segment the cut empties is dropped, and one the cut falls inside keeps what
+// is left of its text and its marks, so a cut inside the background part
+// leaves the remainder marked and a cut before it leaves nothing marked. The
+// ellipsis joins the last segment kept, or stands alone when none is.
+function cut(segments: readonly LineSegment[], chars: number): LineSegment[] {
+  const kept: LineSegment[] = []
+  let left = chars
+  for (const segment of segments) {
+    if (left <= 0) break
+    kept.push(segment.text.length <= left ? segment : { ...segment, text: segment.text.slice(0, left) })
+    left -= segment.text.length
+  }
+  const last = kept.pop()
+  return last === undefined ? [plain('…')] : [...kept, { ...last, text: `${last.text}…` }]
 }
 
 // The words for the stage last reported, or `started` before any report.
@@ -236,11 +361,21 @@ function stageWords(progress: Progress | null): string {
 // `idle` when neither is there, fitted as the line is. Before builder is
 // started it is the line as it was before there was a bar: none while nothing
 // runs and no hold is on. A stale session's row leads with the warning, as the
-// line does.
+// line does. The row is the texts of secondRowSegments joined.
 export function secondRow(v: View, width?: number): string | null {
-  if (v.pr !== null || !v.started) return abovePromptLine(v, width)
+  const segments = secondRowSegments(v, width)
+  return segments === null ? null : textOf(segments)
+}
+
+// The band's second row as segments, with its background part marked, as
+// abovePromptSegments gives the line.
+export function secondRowSegments(v: View, width?: number): LineSegment[] | null {
+  if (v.pr !== null || !v.started) return abovePromptSegments(v, width)
   const stage = stageWords(v.progress)
-  return withWarning(v, width, room => fitLine(v, room, names => `${PREFIX}${stage} · ${runningOrHold(v, names) ?? 'idle'}`))
+  return withWarning(v, width, room => fitLine(v, room, names => {
+    const shown = runningOrHold(v, names)
+    return merged([plain(`${PREFIX}${stage}${SEPARATOR}`), ...(shown.length === 0 ? [plain('idle')] : shown)])
+  }))
 }
 
 // About how many CSS pixels wide one column of the band or the pane is on the
@@ -302,10 +437,10 @@ export type BandPresses = { agents: () => void; line: () => void }
 // The band above the prompt, as a column: the bar, once builder is started and
 // there is one, with the agent-count button on its own row below it, then the
 // second row as a button. Before builder is started there is no bar, as before
-// there was one. `line` is the second row, secondRow(v, width), which the
-// caller has already worked out. Null when there is neither a bar nor a
-// second row.
-export function bandTree(ui: Elements, v: View, line: string | null, width: number | undefined, presses: BandPresses) {
+// there was one. `line` is the second row, secondRowSegments(v, width), which
+// the caller has already worked out, or its text from a caller that has only
+// that. Null when there is neither a bar nor a second row.
+export function bandTree(ui: Elements, v: View, line: string | readonly LineSegment[] | null, width: number | undefined, presses: BandPresses) {
   const { Box, Button } = ui
   const bar = v.started ? barOf(v.progress, v.pr, v.watchSince) : null
   if (bar === null && line === null) return null
@@ -313,9 +448,27 @@ export function bandTree(ui: Elements, v: View, line: string | null, width: numb
     <Box flexDirection="column">
       {bar !== null && barRow(ui, bar, width, 'builder-bar', v.issueLink)}
       {bar !== null && <Button key="builder-agents" plain dimColor label={agentCount(v)} onPress={presses.agents} />}
-      {line !== null && <Button key="builder-line" plain dimColor label={line} onPress={presses.line} />}
+      {line !== null && lineButton(ui, line, presses.line)}
     </Box>
   )
+}
+
+// The line's button. Its label is the whole line, as it always was, and that
+// is all it has until a segment is past the ceiling. Then it also takes the
+// line as children: the text before the part, the part as a yellow Text, the
+// colour of the pane's stale warning, and the text after it, less either text
+// when it is empty, so a surface that draws children shows the part in yellow
+// and one that draws none still shows the label. A line given as a string
+// carries no marks, so it draws the label alone.
+function lineButton(ui: Elements, line: string | readonly LineSegment[], onPress: () => void) {
+  const { Button, Text } = ui
+  const segments = typeof line === 'string' ? [plain(line)] : line
+  const label = textOf(segments)
+  const at = segments.findIndex(segment => segment.isBackground && segment.isPast)
+  if (at === -1) return <Button key="builder-line" plain dimColor label={label} onPress={onPress} />
+  const part = <Text color="yellow">{segments[at]!.text}</Text>
+  const children = [textOf(segments.slice(0, at)), part, textOf(segments.slice(at + 1))].filter(child => child !== '')
+  return <Button key="builder-line" plain dimColor label={label} onPress={onPress}>{...children}</Button>
 }
 
 // A snapshot an older build saved lacks the round count; until the next look
@@ -464,15 +617,26 @@ export function agentLines(v: View): string[] {
   return agentsInOrder(v.agents).map(card => lineOfRow(agentRowOf(card, v.now)))
 }
 
-function backgroundLine(task: BackgroundTask): string {
-  const what = task.description.trim() !== '' ? task.description : task.command ?? ''
-  return `${printable(task.status, 20)} ${printable(task.type, 20)} · ${printable(what)}`
+// A background task's row as a line of text: its status and type, its
+// description or command, and how long the session has waited on it, with
+// the suffix past the ceiling, as taskTime prints it.
+function backgroundLine(task: BackgroundTask, now: number): string {
+  return `${printable(task.status, 20)} ${printable(task.type, 20)} · ${taskName(task)} · ${taskTime(task, now)}`
 }
 
 // One row per background task, with its status, type and description, or its
-// command when it has no description.
+// command when it has no description, and how long the session has waited on it.
 export function backgroundLines(v: View): string[] {
-  return v.background.map(backgroundLine)
+  return v.background.map(task => backgroundLine(task, v.now))
+}
+
+// A background task's row, in yellow, the colour of the stale warning, once
+// the session has waited on it past the ceiling, and plain before that.
+function backgroundRow({ Text }: El, task: BackgroundTask, i: number, now: number) {
+  const row = backgroundLine(task, now)
+  return isPastCeiling(task, now)
+    ? <Text key={`background-${i}`} color="yellow">{row}</Text>
+    : <Text key={`background-${i}`}>{row}</Text>
 }
 
 // One agent's row: a drawing on a surface that draws images, else a line of
@@ -536,7 +700,7 @@ function agentsTree(ui: Elements, v: View, columns: number | undefined, presses:
     ...(v.background.length === 0 ? [] : [
       <Text key="background-gap"> </Text>,
       <Text key="background-head" bold>Background</Text>,
-      ...v.background.map((task, i) => <Text key={`background-${i}`}>{backgroundLine(task)}</Text>),
+      ...v.background.map((task, i) => backgroundRow(ui, task, i, v.now)),
     ]),
   ]
 }

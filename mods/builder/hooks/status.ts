@@ -250,7 +250,7 @@ export function taskKeyOf(task: BackgroundTask): string {
 
 // When builder first saw a task, or undefined when the task has no stamp or
 // its stamp is not a finite number, as a task an older build stored may hold.
-const seenAtOf = (task: BackgroundTask): number | undefined => (isFiniteTime(task.seenAt) ? task.seenAt : undefined)
+export const seenAtOf = (task: BackgroundTask): number | undefined => (isFiniteTime(task.seenAt) ? task.seenAt : undefined)
 
 // The engine's list `fresh`, in the engine's order, with each task stamped
 // with the time builder first saw it: the stamp of the stored task under the
