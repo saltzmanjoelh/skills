@@ -1200,6 +1200,23 @@ interval do not survive a restart, so a resumed session starts with no
 hold and with the interval back at its first 45 minutes, and its stuck
 prompt counts from the watch.
 
+## After a compaction
+
+A compaction summary at the top of the context means the engine compacted
+the conversation, whether or not a prompt from the builder mod said so. The
+mod's first prompt after a compaction begins with a line saying the
+conversation was compacted; the person's own message after one carries no
+such line, so the summary itself is the signal. The engine attaches this
+skill again only in part after a compaction, so load the `implement` skill
+again with the Skill tool before anything else. Do not repeat step 1: the
+pane, Remote Control and the watch are still there. Read the pull request's
+state with `mcp__builder__watch`, and when the summary does not name the
+spec and plan paths, read them from the spec directory on the branch. Then
+enter the list above from the top as "Resuming" says, counting a round's
+first half as run at a head only when a verdict review at that head names
+the focused reviewers that ran. Before the pull request is open there is
+nothing to watch, so carry on the stage the summary names.
+
 ## Rules
 
 - **No stage is skipped, whatever the size.** A three-sentence spec and a
