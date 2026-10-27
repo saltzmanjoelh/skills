@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import { agentSvg } from '../hooks/art'
 import { snapshotOf } from '../hooks/github'
 import { abovePromptLine, agentCount, agentLines, agentRowOf, backgroundLines, counselLines, messageLines, messagesReadOf, NAMED_AFTER_MS, nextStep, secondRow, STALE_WARNING, timeUntil, type View } from '../hooks/pane'
-import { resumePrompt, stuckPrompt } from '../hooks/prompts'
+import { RELOAD_LINE, resumePrompt, stuckPrompt } from '../hooks/prompts'
 import { clockTime, printable, timeOfDay } from '../hooks/text'
 import type { AgentCard, BackgroundTask, CounselQuestion, CounselVote, ForegroundCall, NextLook, Progress, Question } from '../types'
 
@@ -385,6 +385,23 @@ test('the stuck prompt names the pull request and the whole minutes, and asks th
 test('the resume prompt says the usage limit has reset and names the stage, or no stage when none was reported', () => {
   expect(resumePrompt('build')).toBe('builder: the usage limit has reset; carry on /implement from the stage you were in (build).')
   expect(resumePrompt(null)).toBe('builder: the usage limit has reset; carry on /implement from the stage you were in.')
+})
+
+test('with the compacted flag set, the stuck prompt begins with the reload line and a blank line, and the rest is its usual text', () => {
+  expect(stuckPrompt(7, 45 * 60_000, false)).toBe(stuckPrompt(7, 45 * 60_000))
+  expect(stuckPrompt(7, 45 * 60_000, true)).toBe([
+    RELOAD_LINE,
+    '',
+    'builder: nothing has happened on pull request #7 for 45 minutes.',
+    'Check with gh whether what you are waiting on is real.',
+    'Then take the first step of the list in /implement that applies, or end the turn if the wait is real.',
+  ].join('\n'))
+})
+
+test('with the compacted flag set, the resume prompt begins with the reload line and a blank line, and the rest is its usual text', () => {
+  expect(resumePrompt('build', false)).toBe(resumePrompt('build'))
+  expect(resumePrompt('build', true)).toBe([RELOAD_LINE, '', 'builder: the usage limit has reset; carry on /implement from the stage you were in (build).'].join('\n'))
+  expect(resumePrompt(null, true)).toBe([RELOAD_LINE, '', 'builder: the usage limit has reset; carry on /implement from the stage you were in.'].join('\n'))
 })
 
 test('with no pull request watched, a hold shows in place of idle on the second row and on the line', () => {
