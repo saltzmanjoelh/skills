@@ -384,7 +384,9 @@ declare module 'claude-code' {
       // The session's background work as last reported. Replaced at each end
       // of the session's own turn, and at each subagent's end that reports a
       // list; a task leaves it early when the transcript draws its notification
-      // saying it completed, failed or was killed.
+      // saying it completed, failed or was killed. Each task carries the time
+      // builder first saw it, which survives a hot reload with the list; a
+      // task an older build stored without one is stamped when the hooks start.
       background: BackgroundTask[]
       // The session's own tool calls in progress, oldest first.
       calls: ForegroundCall[]

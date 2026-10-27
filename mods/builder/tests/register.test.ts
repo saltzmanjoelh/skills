@@ -3,7 +3,7 @@ import type { On } from 'claude-code'
 import type { ElementQuery, Engine, FoundElement } from 'claude-code/testing'
 
 import { RUNS_JQ, snapshotOf, type GhPullRequest } from '../hooks/github'
-import { NOTHING_WATCHED, STALE_WARNING } from '../hooks/pane'
+import { BACKGROUND_CEILING_MS, NOTHING_WATCHED, STALE_WARNING } from '../hooks/pane'
 import type { BuildStatus } from '../types'
 
 const A = 'a'.repeat(40)
@@ -1575,6 +1575,9 @@ test('a session start with a watch already in place reads the pull request at on
 function olderBuildState(on: On, seeded: Record<string, unknown>, refused?: string) {
   const left = new Map(Object.entries(seeded))
   const { refusal, refuses } = readRefusal(refused)
+  // Every value the mod has written under each key, in order, for a test that
+  // checks what a start over the saved state writes, or that it writes nothing.
+  const written = new Map<string, unknown[]>()
   on('state.get', ($, e, next) => {
     const denial = refuses(e)
     if (denial !== undefined) return denial
@@ -1584,10 +1587,13 @@ function olderBuildState(on: On, seeded: Record<string, unknown>, refused?: stri
     return { value: { value: left.get(e.key), version: 0 } } as never
   })
   on('state.set', ($, e, next) => {
-    if (e.plugin === 'builder') left.delete(e.key)
+    if (e.plugin === 'builder') {
+      left.delete(e.key)
+      written.set(e.key, [...(written.get(e.key) ?? []), e.value])
+    }
     return next(e)
   })
-  return refusal
+  return Object.assign(refusal, { writtenTo: (key: string) => written.get(key) ?? [] })
 }
 
 test('the line above the prompt draws nothing of its own over a snapshot an older build saved, and draws once a look replaces it', async ($, on) => {
@@ -3865,14 +3871,14 @@ test('the Stop hook\'s background work is named, a background subagent is not co
 
   await $.classic.Stop({ stop_hook_active: false, background_tasks: [shellTask, agentTask] } as never)
   await clock.settle()
-  expect(await line()).toBe('builder: no pull request yet · 1 background command')
+  expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (0s)')
 
   await $.classic.Stop({ stop_hook_active: false, background_tasks: [monitorTask, shellTask] } as never)
-  expect(await line()).toBe('builder: no pull request yet · 2 background tasks')
+  expect(await line()).toBe('builder: no pull request yet · waiting on: Watch the build (0s) and 1 more')
 
   // A subagent's own Stop says nothing about the session's work.
   await $.classic.Stop({ stop_hook_active: false, background_tasks: [], agent_id: 'agent-1' } as never)
-  expect(await line()).toBe('builder: no pull request yet · 2 background tasks')
+  expect(await line()).toBe('builder: no pull request yet · waiting on: Watch the build (0s) and 1 more')
 
   await $.classic.Stop({ stop_hook_active: false, background_tasks: [] } as never)
   expect(await line()).toBe('')
@@ -3900,13 +3906,13 @@ test('a subagent\'s end replaces the background work with the session-wide list 
 
   await $.classic.Stop({ stop_hook_active: false, background_tasks: [shellTask] } as never)
   await clock.settle()
-  expect(await line()).toBe('builder: no pull request yet · 1 background command')
+  expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (0s)')
 
   // An older engine sends no list, and a field that is not a list says nothing either.
   await subagentStop($, {})
-  expect(await line()).toBe('builder: no pull request yet · 1 background command')
+  expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (0s)')
   await subagentStop($, { background_tasks: 'not a list' })
-  expect(await line()).toBe('builder: no pull request yet · 1 background command')
+  expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (0s)')
 
   await subagentStop($, { background_tasks: [] })
   expect(await line()).toBe('')
@@ -3914,7 +3920,105 @@ test('a subagent\'s end replaces the background work with the session-wide list 
   // The list is filtered as the Stop's is, so a background subagent is not counted twice.
   await subagentStop($, { background_tasks: [monitorTask, shellTask, agentTask] })
   await clock.settle()
-  expect(await line()).toBe('builder: no pull request yet · 2 background tasks')
+  expect(await line()).toBe('builder: no pull request yet · waiting on: Watch the build (0s) and 1 more')
+})
+
+test('a turn end stamps each background task with the clock\'s time, and a later one keeps the stamps and stamps a new task at its own time', async ($, on) => {
+  const clock = mock.clock(on, { now: 60_000 })
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  stops(on)
+  const state = writtenState(on)
+  const line = await abovePrompt($, on)
+  await startOnly($)
+
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [shellTask] } as never)
+  await clock.settle()
+  expect(state.of('background', [])).toEqual([{ ...shellTask, seenAt: 60_000 }])
+
+  // The same task and a new one, seven seconds on.
+  await clock.advance(7_000)
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [monitorTask, shellTask] } as never)
+  await clock.settle()
+  expect(state.of('background', [])).toEqual([{ ...monitorTask, seenAt: 67_000 }, { ...shellTask, seenAt: 60_000 }])
+  expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (7s) and 1 more')
+})
+
+test('the hooks loaded afresh over a list an older build stored stamp its tasks with the time they start, and a reload over a stamped list writes nothing', async ($, on) => {
+  const clock = mock.clock(on, { now: 60_000 })
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  // A list stored before tasks carried stamps.
+  const saved = olderBuildState(on, { background: [shellTask, monitorTask] })
+  const line = await abovePrompt($, on)
+  await startOnly($)
+  await clock.settle()
+
+  expect(saved.writtenTo('background')).toEqual([[{ ...shellTask, seenAt: 60_000 }, { ...monitorTask, seenAt: 60_000 }]])
+  expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (0s) and 1 more')
+
+  // Every task is stamped now, so the next reload leaves the list alone.
+  await clock.advance(5_000)
+  await reloads($, clock)
+  expect(saved.writtenTo('background')).toHaveLength(1)
+  expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (5s) and 1 more')
+})
+
+test('the line\'s button is a plain label while the task is under the ceiling, and takes the part as a yellow Text child once the wait reaches it', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  stops(on)
+  const { band } = await liveBand($, on)
+  await startOnly($)
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [shellTask] } as never)
+  await clock.settle()
+
+  // The live ticker redraws the band every second while the task is listed.
+  await clock.advance(BACKGROUND_CEILING_MS - 1000)
+  const under = await band.find({ key: 'builder-line' })
+  expect(under?.props.label).toBe('builder: no pull request yet · waiting on: Run the suite (4m 59s)')
+  expect(under?.children).toEqual([])
+  expect(await band.findAll({ type: 'Text' })).toEqual([])
+
+  // The label, and the text the kit reads from the button, stay the whole
+  // line, so the children are the only change.
+  await clock.advance(1000)
+  const past = await band.find({ key: 'builder-line' })
+  expect(past?.props.label).toBe('builder: no pull request yet · waiting on: Run the suite (5m 0s, past 5m)')
+  expect(past?.text).toBe('builder: no pull request yet · waiting on: Run the suite (5m 0s, past 5m)')
+  expect(past?.children).toEqual(['builder: no pull request yet · ', { type: 'Text', props: { color: 'yellow' }, children: ['waiting on: Run the suite (5m 0s, past 5m)'] }])
+  const parts = await band.findAll({ type: 'Text' })
+  expect(parts.map(part => [part.text, part.props.color])).toEqual([['waiting on: Run the suite (5m 0s, past 5m)', 'yellow']])
+})
+
+test('the pane\'s background row is plain under the ceiling, and yellow with the suffix once the wait reaches it', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  stops(on)
+  const pane = await counselPane($)
+  await startOnly($)
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [shellTask] } as never)
+  await clock.settle()
+  // The row under the Background heading, found by its words, since the
+  // kit reports no key on a Text.
+  const firstRow = async () => {
+    await pane.redraw()
+    const row = await pane.find({ type: 'Text', text: /^running shell/ })
+    return { text: row?.text, color: row?.props.color }
+  }
+
+  await clock.advance(BACKGROUND_CEILING_MS - 1000)
+  expect((await firstRow()).text).toBe('running shell · Run the suite · 4m 59s')
+  expect((await firstRow()).color).toBeUndefined()
+
+  await clock.advance(1000)
+  expect(await firstRow()).toEqual({ text: 'running shell · Run the suite · 5m 0s, past 5m', color: 'yellow' })
 })
 
 // The origin the engine stamps on a background task's notification row.
@@ -3961,7 +4065,7 @@ for (const status of ['completed', 'failed', 'killed']) {
     await startOnly($)
     await $.classic.Stop({ stop_hook_active: false, background_tasks: [shellTask] } as never)
     await clock.settle()
-    expect(await line()).toBe('builder: no pull request yet · 1 background command')
+    expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (0s)')
     writes.count = 0
 
     // Mounting the row is its first draw.
@@ -4006,7 +4110,7 @@ for (const [what, props] of leftAlone) {
     await clock.settle()
 
     expect(await notice.find({ text: 'the task ended' })).toBeDefined()
-    expect(await line()).toBe('builder: no pull request yet · 1 background command')
+    expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (0s)')
     expect(writes.count).toBe(0)
   })
 }
@@ -4057,7 +4161,7 @@ for (const fault of ['get', 'set'] as const) {
     expect(await notice.find({ text: 'the task ended' })).toBeDefined()
     expect('reads' in refusal ? refusal.reads : refusal.writes).toBe(0)
     // Nothing was removed, so the line still names the command until the next turn end.
-    expect(await line()).toBe('builder: no pull request yet · 1 background command')
+    expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (0s)')
   })
 }
 
@@ -4118,7 +4222,7 @@ test('a task that a later subagent\'s list puts back after its notification remo
 
   await subagentStop($, { background_tasks: [shellTask] })
   await clock.settle()
-  expect(await line()).toBe('builder: no pull request yet · 1 background command')
+  expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (0s)')
   await notice.redraw()
   await clock.settle()
 
@@ -4131,13 +4235,14 @@ test('a notification row drawn before this module has written or read the list, 
   engine(on)
   fakeGitHub(on)
   stops(on)
-  // The list a build before the reload saved, which this module has not written.
-  olderBuildState(on, { background: [shellTask] })
+  // The list a build before the reload saved, with its task already stamped,
+  // so the hooks' start leaves it alone and this module has not written it.
+  olderBuildState(on, { background: [{ ...shellTask, seenAt: 0 }] })
   rowHost(on)
   const line = await abovePrompt($, on)
   await startOnly($)
   await clock.settle()
-  expect(await line()).toBe('builder: no pull request yet · 1 background command')
+  expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (0s)')
 
   const notice = await transcriptRow($, { origin: NOTIFIED, task: { id: shellTask.id, status: 'completed' } })
   await clock.settle()
@@ -4169,7 +4274,7 @@ test('a turn end that replaces the list while a removal waits on a late read is 
   await subagentStop($, { background_tasks: [monitorTask] })
   late.release()
   await clock.settle()
-  expect(await line()).toBe('builder: no pull request yet · 1 background task')
+  expect(await line()).toBe('builder: no pull request yet · waiting on: Watch the build (0s)')
 
   // The monitor's own row still takes it off.
   await transcriptRow($, { origin: NOTIFIED, task: { id: monitorTask.id, status: 'completed' } })
@@ -4224,7 +4329,7 @@ test('ids that a removal\'s late answer left behind after a subagent\'s end are 
   await subagentStop($, { background_tasks: [monitorTask] })
   late.release()
   await clock.settle()
-  expect(await line()).toBe('builder: no pull request yet · 1 background task')
+  expect(await line()).toBe('builder: no pull request yet · waiting on: Watch the build (0s)')
 
   await transcriptRow($, { origin: NOTIFIED, task: { id: monitorTask.id, status: 'completed' } })
   await clock.advance(2_000)
@@ -4290,7 +4395,7 @@ test('a tick whose read of the background list a turn end\'s write overtakes nei
   redraws.length = 0
   await clock.advance(1000)
   expect(redraws).toContain('ui.render')
-  expect(await line()).toBe('builder: no pull request yet · 1 background task')
+  expect(await line()).toBe('builder: no pull request yet · waiting on: Watch the build (1s)')
   await transcriptRow($, { origin: NOTIFIED, task: { id: monitorTask.id, status: 'completed' } })
   await clock.settle()
   expect(await line()).toBe('')
@@ -5140,11 +5245,11 @@ test('background work reported at a turn end keeps the line live, so an agent th
 
   await $.classic.Stop({ stop_hook_active: false, background_tasks: [shellTask] } as never)
   await clock.settle()
-  expect(await shown()).toBe('builder: no pull request yet · 1 background command')
+  expect(await shown()).toBe('builder: no pull request yet · waiting on: Run the suite (0s)')
   listed.push({ id: 'agent-1', type: 'Explore', description: 'Look', status: 'running' })
   await clock.advance(5000)
 
-  expect(await shown()).toBe('builder: no pull request yet · 1 agent: Explore · 1 background command')
+  expect(await shown()).toBe('builder: no pull request yet · 1 agent: Explore · background: Run the suite (5s)')
 })
 
 test('a subagent that finishes records how it ended, on a card of its own when the mod never saw it start', async ($, on) => {
@@ -10025,6 +10130,18 @@ test('a turn that leaves only a shell task in flight writes the background-only 
   expect(s.files.get(BUILD)).not.toContain('npm test')
 })
 
+test('a turn that leaves a background task in flight writes the task\'s first-seen stamp as taskSince, the same stamp the stored list carries', async ($, on) => {
+  const s = foremanSession(on)
+  const state = writtenState(on)
+  await firstPrompt($, s.clock)
+  await s.clock.advance(MINUTE / 2)
+  await ownTurnLeaving($, s.clock, 't1', [shellTask])
+
+  const [stored] = state.of<{ seenAt?: number }[]>('background', [])
+  expect(stored?.seenAt).toBe(S0 + MINUTE / 2)
+  expect(s.statusAt()?.backgroundOnly).toEqual({ since: S0 + MINUTE / 2, tasks: ['Run the suite'], taskSince: S0 + MINUTE / 2 })
+})
+
 test('a later turn that leaves the same task keeps the wait\'s start, one that leaves another task starts a new wait, and one that leaves nothing drops the field', async ($, on) => {
   const s = foremanSession(on)
   await firstPrompt($, s.clock)
@@ -10043,12 +10160,12 @@ test('a later turn that leaves the same task keeps the wait\'s start, one that l
   await $.classic.Stop({ stop_hook_active: false, background_tasks: [shellTask] } as never)
   await turnEnds($, 't2')
   await s.clock.settle()
-  expect(s.statusAt()?.backgroundOnly).toEqual({ since, tasks: ['Run the suite'] })
+  expect(s.statusAt()?.backgroundOnly).toEqual({ since, tasks: ['Run the suite'], taskSince: since })
 
   await s.clock.advance(MINUTE / 4)
   const later = await s.clock.now()
   await ownTurnLeaving($, s.clock, 't3', [monitorTask])
-  expect(s.statusAt()?.backgroundOnly).toEqual({ since: later, tasks: ['Watch the build'] })
+  expect(s.statusAt()?.backgroundOnly).toEqual({ since: later, tasks: ['Watch the build'], taskSince: later })
 
   await ownTurnLeaving($, s.clock, 't4', [])
   expect(s.statusAt()?.state).toBe('idle')

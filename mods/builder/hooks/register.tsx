@@ -8,12 +8,12 @@ import { afterAskAgain, afterTally, askAgainAnswer, briefAnswer, briefFactsOf, b
 import { carriedRuns, changesBetween, DECISION_LABEL, isCiMonitorEvent, isSameState, PR_FIELDS, pullRequestStateIn, roundInProgress, RUNS_JQ, runsOf, snapshotIn, snapshotOf, verdictsOf, type GhPullRequest, type Snapshot, type Verdict, type WorkflowRun } from './github'
 import { ignoredLine, readIssueLink } from './links'
 import { afterComparison, afterLoad, dueComparisons, isStale, LOADED_PATHS, loadBegunAs, loadBegunIn, loadedIn, type Found } from './loaded'
-import { AGENT_PANE, agentPaneTree, bandTree, isDrawable, messagesReadOf, NAMED_AFTER_MS, PANE, paneTree, secondRow, type Elements, type MessagesRead, type View } from './pane'
+import { AGENT_PANE, agentPaneTree, bandTree, isDrawable, messagesReadOf, NAMED_AFTER_MS, PANE, paneTree, secondRowSegments, type Elements, type MessagesRead, type View } from './pane'
 import { afterReport, endedOf, plannedOf, progressIn, reportAnswer, reportOf, stageLabel, STAGES, type ReportInput } from './progress'
 import { changePrompt, ciEventContext, resumePrompt, stateLines, stuckPrompt } from './prompts'
 import { commitRecordsOf, decidedItems, factIn, packageText, secretIn, trendOf, trendStopLine, verdictsLine, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
-import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, firstPromptOf, generationIn, isCleanupSkill, newMemo, recordOf, statusMemoIn, ticketIn, watchedSnapshotOf, type StatusFacts } from './status'
+import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, firstPromptOf, generationIn, isCleanupSkill, mergeBackground, newMemo, recordOf, seenAtOf, statusMemoIn, ticketIn, watchedSnapshotOf, type StatusFacts } from './status'
 import { timeOfDay } from './text'
 
 type $ = EngineInterface
@@ -28,6 +28,9 @@ const cwd = atom({ plugin: 'builder', key: 'cwd' } as const, null)
 const busy = atom({ plugin: 'builder', key: 'busy' } as const, false)
 const nextLook = atom({ plugin: 'builder', key: 'nextLook' } as const, null)
 const counsel = atom({ plugin: 'builder', key: 'counsel' } as const, [])
+// The background work in flight. Each task carries the time builder first saw
+// it, which survives a hot reload with the list, so the time the line and the
+// pane show for a task does not start again when the hooks reload.
 const background = atom({ plugin: 'builder', key: 'background' } as const, [])
 const calls = atom({ plugin: 'builder', key: 'calls' } as const, [])
 const started = atom({ plugin: 'builder', key: 'started' } as const, false)
@@ -2353,11 +2356,28 @@ function couldBeListed(id: string): boolean {
 // Replaces the background work with what a turn end reported, filtered by
 // backgroundOf, and keeps the line live while any of it is in flight. The
 // session's Stop and a subagent's SubagentStop both use it, so their filtering
-// cannot drift apart.
+// cannot drift apart. Each task is stamped with the time builder first saw it:
+// a task the stored list already holds keeps its stamp, and a task new to the
+// list is stamped with the time of this replacement, as mergeBackground says.
 async function replaceBackground($: $, raw: unknown) {
   const tasks = backgroundOf(raw)
-  wroteBackground(await update($, background, () => tasks))
+  const now = await $.clock.now()
+  wroteBackground(await update($, background, stored => mergeBackground(stored, tasks, now)))
   if (tasks.length > 0) ensureLive($)
+}
+
+// Stamps the stored background tasks that have no first-seen time with the
+// time the hooks start, because that is when this build first sees them. A
+// build before tasks carried stamps stored such a list, and a hot reload over
+// it brings it to this build without a turn end replacing it first. When
+// every task is stamped, as after a reload over a list this build wrote,
+// nothing is written. The write goes through wroteBackground, as every write
+// of the list must.
+async function stampBackground($: $) {
+  const now = await $.clock.now()
+  const tasks = await read($, background)
+  if (tasks.every(task => seenAtOf(task) !== undefined)) return
+  wroteBackground(await update($, background, list => mergeBackground(list, list, now)))
 }
 
 // The ids of a background list.
@@ -3255,6 +3275,10 @@ export const register: Register = on => {
     // A watch that survived a reload is read at once, so the pane does not
     // wait for the first poll to replace a snapshot an older build saved.
     void look($, 'session-start', 'observe').catch(() => null)
+    // A background list an older build saved has no first-seen stamps, so its
+    // tasks are stamped now. A refused read or write leaves the list as it
+    // was, and the next turn end replaces and stamps it anyway.
+    await stampBackground($).catch(() => undefined)
     return next(e)
   })
 
@@ -3589,7 +3613,7 @@ export const register: Register = on => {
     if (e.props.hasSurvey) return next(e)
     const v = await view($)
     const width = columnsOf(e.props.bodyColumns)
-    const line = secondRow(v, width)
+    const line = secondRowSegments(v, width)
     const presses = {
       agents: () => {
         void togglePane($).catch(() => undefined)
