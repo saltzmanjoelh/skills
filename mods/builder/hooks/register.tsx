@@ -1,9 +1,13 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Next, PromptOrigin, Register, ResolveInput, ToolCallInput, ToolCallResult } from 'claude-code'
 
-import type { AgentCard, BackgroundTask, BuilderRun, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, StatusMemo, Wake } from '../types'
+import type { AgentCard, BackgroundTask, BuilderRun, Compactions, ContextMeasure, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, StatusMemo, Wake } from '../types'
 import { isSvgSurface } from './art'
 import { checkoutSentence, worktreeWithBranch, type Checkout } from './checkout'
+// The context module's `told` is the compaction record after a reload was
+// announced; it is renamed here because `told` below is the snapshot last
+// handed to the session.
+import { afterCompaction, afterFailure, checkoutIn, compactionFacts, compactionsIn, isDue, measureIn, measureOf, owing, told as afterReloadTold, withFacts, type UsageRead } from './context'
 import { afterAskAgain, afterTally, askAgainAnswer, briefAnswer, briefFactsOf, briefRefusal, briefText, counselAnswer, decisionLine, destinationOf, endedDecisionLines, FOLLOW_UP_OPTIONS, followUpAnswer, followUpAskAgainAnswer, followUpsInput, followUpsRefusal, followUpStepOf, followUpVotesOf, keepCounsel, MAX_BRIEF_OPTIONS, MAX_FOLLOW_UPS, MIN_OPTIONS, neverStartedCandidatesOf, neverStartedOf, type PullRequestRef, reviewParagraph, stepOf, type UnreadableVote, votesOf } from './counsel'
 import { carriedRuns, changesBetween, DECISION_LABEL, isCiMonitorEvent, isSameState, PR_FIELDS, pullRequestStateIn, roundInProgress, RUNS_JQ, runsOf, snapshotIn, snapshotOf, verdictsOf, type GhPullRequest, type Snapshot, type Verdict, type WorkflowRun } from './github'
 import { ignoredLine, readIssueLink } from './links'
@@ -13,7 +17,7 @@ import { afterReport, endedOf, plannedOf, progressIn, reportAnswer, reportOf, st
 import { changePrompt, ciEventContext, resumePrompt, stateLines, stuckPrompt } from './prompts'
 import { commitRecordsOf, decidedItems, factIn, packageText, secretIn, trendOf, trendStopLine, verdictsLine, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
-import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, firstPromptOf, generationIn, isCleanupSkill, newMemo, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
+import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, newMemo, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
 import { timeOfDay } from './text'
 
 type $ = EngineInterface
@@ -45,6 +49,18 @@ const outputAgent = atom({ plugin: 'builder', key: 'outputAgent' } as const, nul
 const quietSince = atom({ plugin: 'builder', key: 'quietSince' } as const, null)
 const stuckEvery = atom({ plugin: 'builder', key: 'stuckEvery' } as const, STUCK_FIRST_MS)
 const usageHold = atom({ plugin: 'builder', key: 'usageHold' } as const, null)
+// The context cap (see hooks/context.ts): the context measured at the end of
+// the session's last own turn that replied, the record of the main
+// conversation's compactions, and the checkout the package and review tools
+// last resolved, keyed by the pull request's number. They survive a hot
+// reload, and each is stamped with the session id it was written under, so a
+// record an earlier conversation of the process left behind, before a
+// /clear, is read as absent. The checkout's atom is named for its record,
+// because the package and review tools name the checkout they resolve
+// `checkout` themselves.
+const context = atom({ plugin: 'builder', key: 'context' } as const, null)
+const compactions = atom({ plugin: 'builder', key: 'compactions' } as const, null)
+const checkoutRecord = atom({ plugin: 'builder', key: 'checkout' } as const, null)
 // The commits the mod was loaded from. It survives a hot reload, so the
 // session commit recorded at the session's first start is never rewritten,
 // and a restart starts without it.
@@ -445,11 +461,15 @@ async function look($: $, source: Wake['source'], mode: Mode): Promise<Snapshot 
 // one that stores: the look that overtook it may be one that only observes,
 // which keeps the same state in `newestRead`, and a delivering look would
 // otherwise hand that over while this look is about to tell it.
+//
+// `compacted` is given by the end of a turn that held a change, when the
+// mod's own compaction stood in that same dispatch, and goes to deliver,
+// which then puts the reload line on the prompt (see deliver).
 async function lookAt(
   $: $,
   source: Wake['source'],
   mode: Mode,
-  { actsOnRead = mode !== 'observe', ownRead }: { actsOnRead?: boolean; ownRead?: object } = {},
+  { actsOnRead = mode !== 'observe', ownRead, compacted = false }: { actsOnRead?: boolean; ownRead?: object; compacted?: boolean } = {},
 ): Promise<{ r: BuilderRun; s: Snapshot; seq: number; delivered: boolean } | null> {
   const leavesReadForHandover = ownRead === undefined
   // No look runs during a usage-limit hold, except the /builder poll the person
@@ -491,7 +511,7 @@ async function lookAt(
 
   await keepSeen($, r)
   if (mode === 'known') await tell($, r, s, seq)
-  const delivered = mode === 'deliver' ? await deliver($, r, s, seq) : false
+  const delivered = mode === 'deliver' ? await deliver($, r, s, seq, compacted) : false
   // Given the snapshot just read, so the comparison with the told head does
   // not rest on a state read that a still-running hook might see stale. A
   // look whose watch was replaced meanwhile schedules nothing: the new watch
@@ -687,8 +707,14 @@ function newestFor(r: BuilderRun, s: Snapshot, seq: number): { s: Snapshot; seq:
 // or closed, the prompt also lists the counsel's decisions still owed to the
 // pull request, because no review will list them now, and the keys it listed
 // are deleted once the prompt is accepted. A refused prompt deletes none, so
-// the next handover or the watch tool's answer lists them.
-async function deliver($: $, r: BuilderRun, s: Snapshot, seq: number): Promise<boolean> {
+// the next handover or the watch tool's answer lists them. The prompt begins
+// with the reload line when the main conversation was compacted since the
+// mod's last prompt: when `compacted` says the mod's own compaction stood in
+// the dispatch this handover runs in, the end of the turn that held the
+// change, or when the compaction record says a reload is owed. Both are
+// asked because the record's write came from the compaction hook's own
+// dispatch, and a read of it here may not see that write yet.
+async function deliver($: $, r: BuilderRun, s: Snapshot, seq: number, compacted: boolean): Promise<boolean> {
   // Claimed before any await, so the poll and the end of a turn cannot both
   // pass this point and hand the same change over twice.
   if (isDelivering) return false
@@ -743,6 +769,9 @@ async function deliver($: $, r: BuilderRun, s: Snapshot, seq: number): Promise<b
     // the session called the watch tool. They are listed only when the chosen
     // read is merged or closed.
     const owed = await owedSafely($, r)
+    // The owed reload is read here too, before the read is chosen again, so
+    // the submit still follows that choice with no await between.
+    const owedAt = await reloadOwed($)
     // The read is chosen again here, after the last await, and every guard is
     // checked again with no await before the submit, because a newer look can
     // store a newer read, the desktop app's CI event or the look after a
@@ -772,20 +801,22 @@ async function deliver($: $, r: BuilderRun, s: Snapshot, seq: number): Promise<b
       listed = owed
       decisions = endedDecisionLines(r, chosen.s.state, owed.map(d => d.line))
     }
-    const submitted = await $.prompt.submit({ text: changePrompt(chosen.s, changesBetween(last, chosen.s), decisions) })
+    const submitted = await $.prompt.submit({ text: changePrompt(chosen.s, changesBetween(last, chosen.s), decisions, compacted || owedAt !== null) })
     // Recorded only once the prompt is accepted, so a refused one is retried,
-    // and its decisions are listed again.
+    // and its decisions are listed again, as is the reload line.
     if (submitted.drop !== undefined) {
       stalledHead = chosen.s.head
       return false
     }
     // The told record is written first, with no await before it, and the
     // listed keys are deleted after it however that write ends, because the
-    // session has the decisions once the prompt is accepted.
+    // session has the decisions once the prompt is accepted. The session has
+    // the reload line then too, so the owed reload is cleared after them.
     try {
       await tell($, r, chosen.s, chosen.seq)
     } finally {
       await forgetListed($, listed)
+      await reloadTold($, owedAt)
     }
     return true
   } finally {
@@ -1064,6 +1095,7 @@ async function fireStuck($: $, gen: number) {
   const isWaiting = (await read($, busy))
     || (await read($, agents)).some(isRunning)
     || (await read($, questions)).some(q => !q.answered)
+  const owedAt = await reloadOwed($)
   // Checked with no await before the submit, as deliver does. A turn about a
   // real change is already coming when one is being handed over, one waits
   // for the turn to end, or a look has a read it has not told yet, so the
@@ -1077,7 +1109,7 @@ async function fireStuck($: $, gen: number) {
     isWaiting || turnRunning || isDelivering || isHeld || toldWrites > 0 ||
     untoldOwnReads.size > 0 || !isCurrentWatch(r)
   ) return markQuiet($)
-  const isAccepted = await submitClaimed($, stuckPrompt(r.number, now - since))
+  const isAccepted = await submitClaimed($, stuckPrompt(r.number, now - since, owedAt !== null), owedAt)
   // This timer has fired, so the stuck prompt is armed again even when the
   // doubled interval cannot be saved.
   try {
@@ -1092,10 +1124,15 @@ async function fireStuck($: $, gen: number) {
 // counts as refused. isDelivering is claimed before the first await and given
 // back however the submit ends, so a caller that checks isDelivering and then
 // calls this with no await between knows no other prompt is being submitted.
-async function submitClaimed($: $, text: string): Promise<boolean> {
+// `owedAt` is the owed reload the caller built the prompt from, cleared once
+// the engine accepts the prompt, so the reload line is on the next prompt
+// when this one is refused.
+async function submitClaimed($: $, text: string, owedAt: number | null): Promise<boolean> {
   isDelivering = true
   try {
-    return (await $.prompt.submit({ text })).drop === undefined
+    const isAccepted = (await $.prompt.submit({ text })).drop === undefined
+    if (isAccepted) await reloadTold($, owedAt)
+    return isAccepted
   } catch {
     return false
   } finally {
@@ -1111,6 +1148,193 @@ async function isImplementing($: $): Promise<boolean> {
   if (r === null && p === null) return false
   const s = await read($, pr)
   return endedOf(p, isDrawable(s) ? s : null, r?.since ?? null) === null
+}
+
+// How long the mod's own compact command may run before it is treated as
+// failed. The command returns only once the compaction has finished, which
+// took 8 to 11 seconds in the sessions measured, and while it runs busy and
+// turnRunning stay set, so without a bound a command that never returned
+// would hold every handover for the rest of the session. Five minutes is far
+// above the measured time; the real run decides the number.
+const COMPACT_TIMEOUT_MS = 5 * 60_000
+
+// Measures the context at the end of a turn that replied: the engine's usage
+// figures with the summary breakdown, which is estimated locally and sends
+// nothing, read as hooks/context.ts reads them and recorded for the pane and
+// the line. A usage call that throws gives a measure that says the figures
+// could not be read, with the default ceiling, so the pane says so and the
+// turn end compacts nothing. The measure is answered whether or not it could
+// be recorded, because the compaction decision needs no stored copy, and it
+// is null only when the clock or the session id could not be read, which
+// also compacts nothing.
+async function measureContext($: $): Promise<ContextMeasure | null> {
+  try {
+    let usage: UsageRead | null = null
+    try {
+      usage = await $.session.usage({ breakdown: 'summary' })
+    } catch {
+      // Read as unreadable, as said above.
+    }
+    const measure = measureOf(usage, await $.clock.now(), await $.session.id())
+    await update($, context, () => measure).catch(() => undefined)
+    return measure
+  } catch {
+    return null
+  }
+}
+
+// The measure the pane and the line draw: this session's stored one, or null
+// when none has been taken, the stored one is another session's, or it cannot
+// be read, so a refused read never keeps the band or the pane from drawing.
+async function storedMeasure($: $): Promise<ContextMeasure | null> {
+  try {
+    return measureIn(await read($, context), await $.session.id())
+  } catch {
+    return null
+  }
+}
+
+// This session's compaction record, or null when there is none, the stored
+// one is another session's, or it cannot be read. The readers that only look
+// at the record go through it, so a refused read answers the same way for
+// each: no compaction counted, no reload owed, nothing for the pane.
+async function storedCompactions($: $): Promise<Compactions | null> {
+  try {
+    return compactionsIn(await read($, compactions), await $.session.id())
+  } catch {
+    return null
+  }
+}
+
+// How many compactions of the main conversation have stood, as the record
+// says, or none when there is no record of this session's or it cannot be
+// read.
+async function compactionsCount($: $): Promise<number> {
+  return (await storedCompactions($))?.count ?? 0
+}
+
+// The facts the compaction summary keeps, read from the mod's state as
+// compactionFacts wants them. Every read has its own fallback, so a refused
+// read gives a missing fact rather than no facts at all. The decisions owed
+// to the pull request are read only while one is watched, through
+// owedSafely, which answers none when the store fails.
+async function compactionFactsOf($: $): Promise<string[]> {
+  const sessionId = await $.session.id()
+  const r = await read($, run).catch(() => null)
+  return compactionFacts({
+    progress: progressIn(await read($, progress).catch(() => null)),
+    run: r,
+    pr: snapshotIn(await read($, pr).catch(() => null)),
+    packaged: await read($, packaged).catch(() => null),
+    agents: await read($, agents).catch(() => []),
+    counsel: await read($, counsel).catch(() => []),
+    checkout: checkoutIn(await read($, checkoutRecord).catch(() => null), sessionId),
+    owed: r === null ? [] : await owedSafely($, r),
+  })
+}
+
+// The reason recorded for a compact command that failed: the error's last
+// line, kept as the status file keeps a failed call's, or a fixed sentence
+// when the error has no line.
+function compactFailureOf(error: unknown): string {
+  const line = errorLineOf(error instanceof Error ? error.message : String(error))
+  return line === '' ? 'the compact command failed' : line
+}
+
+// Runs the mod's own compact command at the end of a turn that replied, when
+// a compaction is due, and answers whether one stood. Nothing runs unless the
+// session is running /implement, so a session whose pull request merged or
+// closed compacts no more; unless the measure is due; while a prompt is
+// being submitted; when a turn has started since the turn whose end this is;
+// or when a compaction has stood since that end began, which a count moved
+// from `countBefore` shows, so two compactions never run back to back. The
+// reload is owed from before the command runs, so a prompt submitted while
+// it runs, such as the desktop app's CI event, already carries the reload
+// line. The command returns only once the compaction has finished, and the
+// mod's hook on the compaction event counts it, so a count that has moved
+// once the command returned means a compaction stood. Both counts are read
+// inside a write's own change, which `update` applies again over the stored
+// value when another write landed first, so the hook's write in its own
+// dispatch is seen whether or not a plain read in this dispatch would see
+// it. A command that rejects, one that runs past the bound, and one that
+// returns without a compaction are each recorded as a failure with its
+// reason, at the time it was noticed, and the reload owed before the command
+// is taken back, so the next prompt carries no line for a compaction that
+// never happened; the next turn end above the threshold tries again. Nothing
+// here throws, so the turn's end goes on as after any other turn.
+async function compactWhenDue($: $, measure: ContextMeasure | null, turnsStarted: number, countBefore: number): Promise<boolean> {
+  try {
+    if (!isDue(measure) || !(await isImplementing($))) return false
+    const sessionId = await $.session.id()
+    const startedAt = await $.clock.now()
+    const facts = await compactionFactsOf($).catch(() => [])
+    if (isDelivering || ownTurnsStarted !== turnsStarted) return false
+    let isUnmoved = false
+    await update($, compactions, raw => {
+      const record = compactionsIn(raw, sessionId)
+      isUnmoved = (record?.count ?? 0) === countBefore
+      return isUnmoved ? owing(record, startedAt, sessionId) : raw
+    })
+    if (!isUnmoved) return false
+    let reason: string
+    try {
+      await withinTimeout($, $.command.run({ command: 'compact', args: withFacts(undefined, facts) }), COMPACT_TIMEOUT_MS)
+      reason = 'the compact command returned without a compaction'
+    } catch (error) {
+      reason = compactFailureOf(error)
+    }
+    const noticedAt = await $.clock.now()
+    let stood = false
+    await update($, compactions, raw => {
+      const record = compactionsIn(raw, sessionId)
+      stood = (record?.count ?? 0) > countBefore
+      return stood ? raw : afterReloadTold(afterFailure(record, reason, noticedAt, sessionId), startedAt)
+    })
+    return stood
+  } catch {
+    return false
+  }
+}
+
+// Records the checkout a tool resolved for pull request `number`, for the
+// compaction summary to name. A refused write is swallowed, because the
+// tool's own answer matters more than the record, and the summary then names
+// the session's folder instead.
+async function recordCheckout($: $, number: number, found: Checkout) {
+  try {
+    const at = await $.clock.now()
+    const sessionId = await $.session.id()
+    await update($, checkoutRecord, () => ({ number, dir: found.dir, branch: found.branch, at, sessionId }))
+  } catch {
+    // Swallowed, as said above.
+  }
+}
+
+// The time of the compaction a reload is owed for, or null when none is
+// owed, or when the record cannot be read, in which case the next prompt goes
+// without the line and the one after it carries it. Every prompt site reads
+// it before the checks that must sit right before its submit.
+async function reloadOwed($: $): Promise<number | null> {
+  return (await storedCompactions($))?.owedAt ?? null
+}
+
+// Records that a prompt carrying the reload line for the compaction at
+// `owedAt` was accepted, which clears the owed reload only while it is still
+// that one, so a compaction that landed between building the prompt and its
+// acceptance keeps the line for the next prompt (see afterReloadTold). With
+// nothing owed there is nothing to record. A refused write is swallowed: the line
+// then shows once more on the next prompt, which is the lesser harm.
+async function reloadTold($: $, owedAt: number | null) {
+  if (owedAt === null) return
+  try {
+    const sessionId = await $.session.id()
+    await update($, compactions, raw => {
+      const record = compactionsIn(raw, sessionId)
+      return record === null ? raw : afterReloadTold(record, owedAt)
+    })
+  } catch {
+    // Swallowed, as said above.
+  }
 }
 
 // Decides, for the session's own turn that an error ended at `endedAt`,
@@ -1375,6 +1599,7 @@ async function resumeAfterClear($: $, cleared: number) {
   if ((await read($, run)) !== null) await look($, 'resume', 'observe').catch(() => null)
   const stage = progressIn(await read($, progress))?.stage
   if (!(await isImplementing($)) || (await read($, busy))) return
+  const owedAt = await reloadOwed($)
   // The checks and the claim follow each other with no await between, so the
   // resume prompt goes out only if, at that moment, no person's prompt has
   // come and no hold has started since the clear (either moves the hold's
@@ -1385,7 +1610,7 @@ async function resumeAfterClear($: $, cleared: number) {
   if (cleared !== holdGen || turnRunning || isDelivering) return
   const prompted = personPrompts
   const turnsStarted = ownTurnsStarted
-  const isAccepted = await submitClaimed($, resumePrompt(stage === undefined ? null : stageLabel(stage)))
+  const isAccepted = await submitClaimed($, resumePrompt(stage === undefined ? null : stageLabel(stage), owedAt !== null), owedAt)
   if (!isAccepted) await startHold($, (await $.clock.now()) + RESUME_FALLBACK_MS, prompted, turnsStarted)
 }
 
@@ -1740,6 +1965,7 @@ async function servePackage($: $, input: PackageInput): Promise<string> {
   // Every git command and the project's documents use the folder found here,
   // and a refusal names it, so a wrong folder is never compared in silence.
   const checkout = await checkoutOf($, r.cwd, live.headRefName)
+  await recordCheckout($, r.number, checkout)
   const checkoutDir = checkout.dir
   const local = (await git($, checkoutDir, ['rev-parse', 'HEAD']))?.trim()
   if (local !== live.headRefOid) {
@@ -1836,6 +2062,7 @@ async function serveReview($: $, input: ReviewInput): Promise<string> {
   // found as the package tool finds it. The post itself works from any
   // checkout, so it keeps the session's folder.
   const checkout = await checkoutOf($, r.cwd, live.headRefName)
+  await recordCheckout($, r.number, checkout)
   const dir = await packageDir($, checkout.dir, input.head)
   if (dir === null) return 'Could not find the checkout\'s git folder to stage the review body.'
   // Read only for a post that will go out, after the checks that can refuse it.
@@ -2628,6 +2855,8 @@ async function view($: $): Promise<View> {
     usageHold: holdIn(await read($, usageHold))?.until ?? null,
     stale: isStale(loadedIn(await read($, loaded))),
     issueLink: issueAddress,
+    context: await storedMeasure($),
+    compactions: await storedCompactions($),
   }
 }
 
@@ -3480,10 +3709,15 @@ export const register: Register = on => {
     // from the moment it goes on with that read, stored or overtaken, until
     // this handler is done with it, however it ends (see untoldOwnReads).
     return tellingOwnRead(async ownRead => {
+      // The owed reload is read before the look, and the event's context
+      // begins with the reload line when one is owed, because the event's
+      // turn can be the first after a compaction, including one the mod's
+      // own command is running at this moment.
+      const owedAt = await reloadOwed($)
       const seen = await lookAt($, 'ci-monitor', 'observe', { actsOnRead: true, ownRead })
       if (seen === null) return next(e)
       const { r, s, seq } = seen
-      const passed = await next({ ...e, context: [...(e.context ?? []), ciEventContext(s)] })
+      const passed = await next({ ...e, context: [...(e.context ?? []), ciEventContext(s, owedAt !== null)] })
       // Recorded as told only once the prompt goes on to start its turn, under
       // the watch it was read under, and only if nothing else recorded a
       // different state for that watch meanwhile. `tell` also refuses the read
@@ -3492,6 +3726,8 @@ export const register: Register = on => {
       // also holds back when an older read was recorded meanwhile, and the
       // next poll then hands the difference over.
       if (passed.drop !== undefined) return passed
+      // The session has the reload line once the prompt goes on.
+      await reloadTold($, owedAt)
       if (!(await stillWatching($, r))) return passed
       // A switch before the look is caught here too, by comparing the watch
       // read before the look with the watch the look read under. The
@@ -3542,15 +3778,42 @@ export const register: Register = on => {
       const turnsStarted = ownTurnsStarted
       const isReplied = e.reason === 'answer' || e.reason === 'refusal'
       if (isReplied) repliedTurn = ownTurnsStarted
-      // Busy and turnRunning are cleared before the check of isHeld, the held
-      // handover, below. A handover that records a held change reads busy
-      // again afterwards, and deliver's last check before its submit reads
-      // turnRunning; both rely on this order: either that check sees the held
-      // change, or the handover sees the turn ended.
-      turnRunning = false
-      // The turn's end closes the session's own permission prompts.
-      void changeMemo($, memo => afterLoopEnd(memo, '')).catch(() => undefined)
-      await update($, busy, () => false)
+      // A turn that replied is passed on to the engine first, then measured,
+      // and then, when the context is at or above the threshold, compacted
+      // through the mod's own compact command, before anything else happens
+      // at its end. The engine hears the turn's end first because the command
+      // was measured to work only after it. The flags busy and turnRunning
+      // stay set until the command returns, which is only once the compaction
+      // has finished, so every handover waits as it waits for a running turn: the
+      // poll holds its change, the stuck prompt and the resume prompt wait,
+      // and the next turn starts on the compacted conversation. The command
+      // is bounded (see COMPACT_TIMEOUT_MS) because a command that never
+      // returned would otherwise hold every handover for the rest of the
+      // session. A turn an error ended or an aborted one is neither measured
+      // nor compacted, because a usage-limit hold is one such error and the
+      // summary itself needs a model call, and its end keeps the order the
+      // hold's tests pin, with the engine told last. The flags are cleared
+      // only when no turn has started during the wait, so a turn the engine
+      // started meanwhile keeps its own.
+      let passed: Awaited<ReturnType<typeof next>> | null = null
+      let compacted = false
+      if (isReplied) {
+        const countBefore = await compactionsCount($)
+        passed = await next(e)
+        const measure = await measureContext($)
+        compacted = ownTurnsStarted === turnsStarted && await compactWhenDue($, measure, turnsStarted, countBefore)
+      }
+      if (ownTurnsStarted === turnsStarted) {
+        // Busy and turnRunning are cleared before the check of isHeld, the
+        // held handover, below. A handover that records a held change reads
+        // busy again afterwards, and deliver's last check before its submit
+        // reads turnRunning; both rely on this order: either that check sees
+        // the held change, or the handover sees the turn ended.
+        turnRunning = false
+        // The turn's end closes the session's own permission prompts.
+        void changeMemo($, memo => afterLoopEnd(memo, '')).catch(() => undefined)
+        await update($, busy, () => false)
+      }
       refreshLater($)
       void ensureArmed($)
       // Every turn end compares the mod's files, hold or not, so a session
@@ -3566,23 +3829,25 @@ export const register: Register = on => {
       if (e.reason === 'error' && (await errorTurnHolds($, turnsStarted))) return next(e)
       if (isReplied) await repliedTurnClearsHold($, turnsStarted)
       void markQuiet($).catch(() => undefined)
-      // A change found during the turn is delivered now, not at the next poll.
-      // When that hands the change over with a prompt, nothing more is needed.
-      // When it does not (gh could not read the pull request, the prompt was
-      // refused, the read matched what the session was already told, a newer
-      // read was already told, or another handover was in progress), the
-      // looks afterwards run as they do after any turn.
+      // A change found during the turn, or during the compaction at its end,
+      // is delivered now, not at the next poll, and its prompt carries the
+      // reload line when the compaction stood. When that hands the change
+      // over with a prompt, nothing more is needed. When it does not (gh
+      // could not read the pull request, the prompt was refused, the read
+      // matched what the session was already told, a newer read was already
+      // told, or another handover was in progress), the looks afterwards run
+      // as they do after any turn.
       if (isHeld) {
         isHeld = false
-        void lookAt($, 'turn-end', 'deliver')
+        void lookAt($, 'turn-end', 'deliver', { compacted })
           .then(seen => {
             if (seen?.delivered !== true) armTurnEndLooks($)
           })
           .catch(() => armTurnEndLooks($))
-        return next(e)
+        return passed ?? next(e)
       }
       armTurnEndLooks($)
-      return next(e)
+      return passed ?? next(e)
     }
     // A subagent's card records how it ended. An agent the mod has no card
     // for (it started before the hooks were loaded) gets a placeholder card.
@@ -3603,6 +3868,40 @@ export const register: Register = on => {
     refreshLater($)
     return next(e)
   })
+
+  // Every compaction of the main conversation, whoever started it (the mod
+  // through its own command, the engine at its threshold or ahead of time,
+  // or the person with /compact), has the mod's facts added to its
+  // instructions, after the engine's own or the person's, because the summary
+  // is all the session carries on from, and without them it loses the pull
+  // request, the round, and what each running agent was asked. A compaction
+  // that carries an agent id is a subagent's or a fork's own, whose
+  // transcript holds none of this, and is passed on untouched. Once the
+  // compaction stands, the record of it is written: every trigger owes the
+  // next prompt the reload line, and every trigger but `precompute` is
+  // counted and recorded, because a `precompute` only prepares a summary for
+  // a compaction still to come, so counting it would show a compaction that
+  // has not happened yet, while the line is still owed because that summary
+  // will stand at the next turn. The facts are built with a fallback and the
+  // record's write is swallowed, so a refused read or write never stops the
+  // compaction, and the registered catch passes the event on when something
+  // else throws: the engine's next inside it is replay-safe once the hook has
+  // called it, so the catch never compacts twice.
+  on('session.compact', async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
+    const facts = await compactionFactsOf($).catch(() => [])
+    const compacted = await (facts.length === 0 ? next(e) : next({ ...e, instructions: withFacts(e.instructions, facts) }))
+    if (compacted.skip !== undefined) return compacted
+    try {
+      const sessionId = await $.session.id()
+      const now = await $.clock.now()
+      await update($, compactions, raw => afterCompaction(compactionsIn(raw, sessionId), e.trigger, compacted, now, sessionId))
+    } catch {
+      // The compaction stands whether or not it could be recorded.
+    }
+    refreshLater($)
+    return compacted
+  }).catch(($, e, next) => next(e))
 
   // A permission prompt is open from here until the same loop's call of the
   // same tool returns, or that loop's turn ends. The loop is the session's

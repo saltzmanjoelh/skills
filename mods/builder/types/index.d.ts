@@ -202,6 +202,61 @@ export type Packaged = { head: string; at: number }
 // A usage-limit hold: when it resumes, in milliseconds since the epoch.
 export type UsageHold = { until: number }
 
+// The context measured at the end of one of the session's own turns, written
+// by the turn-end hook. `tokens` is the size the engine reported, the last
+// response's input tokens or, right after a compaction, the breakdown's own
+// total, or null when neither could be read. `ceiling` is the window the mod
+// compacts against, and `source` says where it came from: the person's user
+// settings, the environment, the mod's own default when the engine reported
+// the model's window or another window it did not name as the person's, or
+// `unreadable` when the usage figures could not be read, in which case the
+// ceiling is the default. `at` is when it was measured. It survives a hot
+// reload of the mod. It is stamped with the session id it was written under,
+// and a reader treats a record stamped with another session id as absent,
+// because a cleared session keeps the process alive under a new session id.
+// Read through measureIn in hooks/context.ts.
+export type ContextMeasure = {
+  tokens: number | null
+  ceiling: number
+  source: 'settings' | 'environment' | 'default' | 'unreadable'
+  at: number
+  sessionId: string
+}
+
+// What the mod knows about the main conversation's compactions, written by
+// the compaction hook when a compaction stands and by the turn-end hook when
+// its own compact command fails. `count` is how many compactions have stood,
+// whoever started them. `last` is the newest one: when, the engine's word for
+// what started it, and its size before and after, each null when the engine
+// did not report it. `failed` is the newest failed attempt of the mod's own,
+// with its reason, or null when none failed since the last compaction stood.
+// `owedAt` is the time of the newest compaction, or of one the engine prepared
+// ahead of time, that no prompt of the mod's has yet announced to the session,
+// or null when none is owed. It survives a hot reload of the mod. It is
+// stamped with the session id it was written under, and a reader treats a
+// record stamped with another session id as absent, because a cleared session
+// keeps the process alive under a new session id. Read through compactionsIn
+// in hooks/context.ts.
+export type Compactions = {
+  count: number
+  last: { at: number; trigger: string; before: number | null; after: number | null } | null
+  failed: { at: number; reason: string } | null
+  owedAt: number | null
+  sessionId: string
+}
+
+// The checkout the package and review tools last resolved for a pull request:
+// the folder they worked in, the pull request's head branch, and when, keyed
+// by the pull request's number so that a record from an earlier watch of
+// another pull request is never read as this one's. hooks/checkout.ts names
+// its own `Checkout` for the resolution itself, which also says how the folder
+// was chosen; this record keeps only what the compaction summary names. It
+// survives a hot reload of the mod. It is stamped with the session id it was
+// written under, and a reader treats a record stamped with another session id
+// as absent, because a cleared session keeps the process alive under a new
+// session id. Read through checkoutIn in hooks/context.ts.
+export type CheckoutRecord = { number: number; dir: string; branch: string; at: number; sessionId: string }
+
 // One commit the mod's own files were read at, from the git checkout the mod
 // was loaded from. `differs` says whether the last comparison found the files
 // it stands for different at the checkout's HEAD. A null commit means one of
@@ -428,6 +483,27 @@ declare module 'claude-code' {
       // The usage-limit hold that is on, or null when none is. A value in
       // another shape reads as no hold.
       usageHold: UsageHold | null
+      // The context measured at the end of the session's last own turn that
+      // replied, written by the turn-end hook, or null before the first
+      // measurement. It survives a hot reload of the mod, and a record stamped
+      // with another session id is read as absent, because a cleared session
+      // keeps the process alive under a new session id. Read through
+      // measureIn in hooks/context.ts.
+      context: ContextMeasure | null
+      // What the mod knows about the main conversation's compactions, written
+      // by the compaction hook and by the turn-end hook's own compact command,
+      // or null before the first. It survives a hot reload of the mod, and a
+      // record stamped with another session id is read as absent, because a
+      // cleared session keeps the process alive under a new session id. Read
+      // through compactionsIn in hooks/context.ts.
+      compactions: Compactions | null
+      // The checkout the package and review tools last resolved, with the
+      // number of the pull request they resolved it for, or null before the
+      // first. It survives a hot reload of the mod, and a record stamped with
+      // another session id is read as absent, because a cleared session keeps
+      // the process alive under a new session id. Read through checkoutIn in
+      // hooks/context.ts.
+      checkout: CheckoutRecord | null
       // The commits the mod was loaded from, or null before the first load
       // recorded them. It survives a hot reload, so the session commit is
       // never rewritten in the session; a restart starts without it.
