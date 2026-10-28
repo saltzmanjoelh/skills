@@ -4,9 +4,11 @@ Date: 2026-10-28. Spec: `docs/specs/cheaper-review-rounds.md`.
 
 Three planners wrote plans blind to each other: the simplest change, the most
 robust change and the most extensible change. A judge scored them against
-the spec. The simplest plan won. It adds no file, no tool input and no
+the spec. The simplest plan won. It adds no file and no
 module, and the only new stored state is two optional fields on a value the
-package tool rebuilds from git and GitHub on every call. The other two plans
+package tool rebuilds from git and GitHub on every call. A review later
+showed that the package tool needs one optional input, `after_check`, for
+the round that follows a check with a blocking finding. The other two plans
 lost on size and on a few readings of the spec, but each had ideas worth
 keeping, which are grafted below.
 
@@ -87,10 +89,15 @@ approves with both verdicts, the reviewed head is the verdict head, exactly
 one commit follows the verdict head, and the first line of its message is
 `Fix this round's cheap follow-ups`. The answer then says the head is up for
 the check and names only the adversarial reviewer. It also names the focused
-reviewers that a normal round at this head would run, by the sorting rule, so
-that when the check leaves a safety finding or a finding that breaks working
-behaviour, the skill runs the first half with that list on the same package
-without a new tool input.
+reviewers that a normal round at this head would run, by the sorting rule.
+When the check leaves a safety finding or a finding that breaks working
+behaviour, the skill calls the package tool again with the optional input
+`after_check: true`. The tool then packages and stores the head as a normal
+later round, with that list of focused reviewers and no check, and the skill
+runs the first half with the reviewers the answer names. The input is needed
+because a second call without it would work the shape out from the same
+commits and store the check again, so the pane and a summary after a
+compaction would plan only the adversarial reviewer.
 
 ### What is stored, and the pane
 
@@ -148,14 +155,6 @@ harmless, because reviewers read it only when `package.md` names it.
   extensible plan). It needs private helpers exported and builds seams for a
   per-reviewer start point and for separating the base's changes, both of
   which the spec's Non-goals exclude.
-- **A `normal_round` input on the package tool** (the robust plan). The
-  check answer can name the normal round's reviewers instead, so no new
-  input is needed, and the session's memory of a failed check would still be
-  lost on a resume, which the spec accepts. A review found the input was
-  needed after all, as `after_check`, because a second package call at the
-  same head works the shape out from the same commits and would store the
-  check again, so the pane would plan only the adversarial reviewer for the
-  normal round that follows a check with a blocking finding.
 - **Falling back to a first package when the verdict head is the current
   head** (the robust plan). The spec defines a first package as one with no
   verdict head, and the fallback would cost a full round whenever a head is
