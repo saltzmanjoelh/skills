@@ -1976,9 +1976,9 @@ type PackageShape =
 // which keeps the commits after the verdict head in one line. When git fails
 // or its output is cut off, the answer is a refusal that names the step that
 // failed, so the package is refused rather than written from a partial diff
-// and the person can tell which git command to look at. `afterCheck` says the check after approval at
-// this head left a blocking finding, so a head up for the check is packaged
-// for a normal round instead.
+// and the person can tell which git command to look at. `afterCheck` says the
+// check after approval at this head left a blocking finding, so a head up for
+// the check is packaged for a normal round instead.
 async function packageShapeOf($: $, dir: string, base: string, head: string, earlier: readonly EarlierRound[], records: readonly CommitRecord[], afterCheck: boolean): Promise<PackageShape | { refused: string }> {
   const first = (fallback?: string): PackageShape => ({ kind: 'first', reviewers: FOCUSED_REVIEWERS, ...(fallback === undefined ? {} : { fallback }) })
   const verdictHead = verdictHeadOf(earlier, head)

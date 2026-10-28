@@ -110,9 +110,11 @@ function readingLines(facts: PackageFacts): string[] {
 }
 
 // The earlier verdict reviews. A first package repeats each in full, newest
-// last. A later package repeats the newest in full and each older one as one
-// line with its head and its two verdicts, because the reviewers of the newest
-// one already checked the older ones.
+// last. A later package repeats the newest review at the verdict head in full
+// and every other one as one line with its head and its two verdicts, because
+// the reviewers of that review already checked the older ones. A review at the
+// head itself, which a head packaged again can have, is one of the one-line
+// ones, because `diff.patch` starts at the verdict head, not at it.
 function earlierLines(facts: PackageFacts): string[] {
   const full = (round: EarlierRound) => ['', `### At ${round.sha.slice(0, 8)}`, '', round.body.trim()]
   if (facts.since === undefined) {
@@ -123,7 +125,11 @@ function earlierLines(facts: PackageFacts): string[] {
       ...facts.earlier.flatMap(full),
     ]
   }
-  const older = facts.earlier.slice(0, -1).map(round => {
+  const since = facts.since
+  let index = facts.earlier.length - 1
+  while (index > 0 && facts.earlier[index]!.sha !== since) index--
+  const newest = facts.earlier[index]!
+  const older = facts.earlier.filter((_, i) => i !== index).map(round => {
     const verdicts = verdictsOf({ body: round.body, commit: { oid: round.sha } })
     const said = verdicts === null ? 'verdicts unreadable' : `spec=${verdicts.spec}, adversarial=${verdicts.adversarial}`
     return `- At ${round.sha.slice(0, 8)}: ${said}`
@@ -131,9 +137,9 @@ function earlierLines(facts: PackageFacts): string[] {
   return [
     '## Earlier rounds',
     '',
-    'Each older verdict review in one line, then the newest in full. Check that what the newest asked for was done, and do not raise a settled point again.',
+    'Each other verdict review in one line, then the newest one at the head `diff.patch` starts from in full. Check that what it asked for was done, and do not raise a settled point again.',
     ...(older.length > 0 ? ['', ...older] : []),
-    ...full(facts.earlier.at(-1)!),
+    ...full(newest),
   ]
 }
 
@@ -549,12 +555,12 @@ const INSTRUCTION_FOLDERS: readonly string[] = ['.claude', '.claude-plugin']
 const INSTRUCTION_FILES: readonly string[] = ['claude.md', 'claude.local.md', 'agents.md', 'skill.md']
 
 // The kind of one path relative to the repository's root. A file Claude Code
-// loads as instructions, in any case, is anything else. A test file has a folder named
-// exactly `test` or `tests`, or a file name holding `.test.`, `.spec.` or
-// `_test.`. Documentation is Markdown under `specDir` or under docs/, or the
-// README.md at the root. Every other path, an empty one included, is anything
-// else, so a path the rule cannot sort costs a reviewer run, never a skipped
-// reviewer.
+// loads as instructions, in any case, is anything else. A test file has a
+// folder named exactly `test` or `tests`, or a file name holding `.test.`,
+// `.spec.` or `_test.`. Documentation is Markdown under `specDir` or under
+// docs/, or the README.md at the root. Every other path, an empty one
+// included, is anything else, so a path the rule cannot sort costs a reviewer
+// run, never a skipped reviewer.
 export function pathKind(path: string, specDir: string): FileKind {
   const parts = path.split('/')
   const name = parts.at(-1) ?? ''
