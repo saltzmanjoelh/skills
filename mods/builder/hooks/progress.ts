@@ -187,6 +187,14 @@ function namedReviewers(packaged: Packaged): readonly string[] {
   return isSound ? (named as string[]) : FOCUSED_REVIEWERS
 }
 
+// Every reviewer the round at a stored package runs: only the adversarial
+// reviewer at a head up for the check after approval, and otherwise the
+// focused reviewers the package named and then the two verdict reviewers.
+export function roundReviewersOf(packaged: Packaged): readonly string[] {
+  if (packaged.check === true) return [ADVERSARIAL_REVIEWER]
+  return [...namedReviewers(packaged), ...VERDICT_REVIEWERS]
+}
+
 // What the planned agents are worked out from: the watched pull request (null
 // when none is watched), the newest package call, the agents and the counsel
 // questions, as the mod's state holds them.

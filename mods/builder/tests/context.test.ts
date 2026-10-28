@@ -319,6 +319,19 @@ test('a checkout record for another pull request, and a package at another head,
   expect(compactionFacts({ ...nothing, pr, packaged: { head: C } as never })).toContain('No review round has been packaged at this head.')
 })
 
+test('the reviewers line counts only the reviewers the package named and says the rest were not needed at this head', () => {
+  const pr = pullRequest()
+  const packagedAt = NOW - 60_000
+  const agents = [card('builder:maintainability-reviewer', 'completed', packagedAt + 1_000)]
+  const named = compactionFacts({ ...nothing, pr, agents, packaged: { head: C, at: packagedAt, reviewers: ['builder:maintainability-reviewer'], check: false } })
+  expect(named).toContain(`Reviewers at head ${C.slice(0, 8)}: ran maintainability-reviewer; running none; not started spec-reviewer, adversarial-reviewer; not needed at this head security-reviewer, performance-reviewer, data-reviewer.`)
+  const check = compactionFacts({ ...nothing, pr, packaged: { head: C, at: packagedAt, reviewers: ['builder:maintainability-reviewer'], check: true } })
+  expect(check).toContain(`Reviewers at head ${C.slice(0, 8)}: ran none; running none; not started adversarial-reviewer; not needed at this head spec-reviewer, security-reviewer, maintainability-reviewer, performance-reviewer, data-reviewer.`)
+  // A list the pane would not trust counts all six, as an older build's value does.
+  const unsound = compactionFacts({ ...nothing, pr, packaged: { head: C, at: packagedAt, reviewers: ['builder:unknown'] } })
+  expect(unsound).toContain(`Reviewers at head ${C.slice(0, 8)}: ran none; running none; not started spec-reviewer, adversarial-reviewer, security-reviewer, maintainability-reviewer, performance-reviewer, data-reviewer.`)
+})
+
 test('a stage without a note, an untitled report and a question that ends in a full stop are worded without a stray mark', () => {
   const facts = compactionFacts({ ...nothing, progress: { ...progress, title: '', note: '' }, counsel: [question({ question: 'Which poll.' })] })
   expect(facts).toContain('Issue: untitled. Stage: review rounds.')

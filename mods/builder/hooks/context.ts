@@ -18,7 +18,7 @@ import type { SessionCompactTrigger } from 'claude-code'
 import type { AgentCard, BuilderRun, CheckoutRecord, Compactions, ContextMeasure, CounselQuestion, Packaged, Progress } from '../types'
 import { shortName } from './counsel'
 import type { Snapshot } from './github'
-import { NOTE_CHARS, stageLabel, TITLE_CHARS } from './progress'
+import { NOTE_CHARS, roundReviewersOf, stageLabel, TITLE_CHARS } from './progress'
 import { stateLines } from './prompts'
 import { isRunning, REVIEWERS } from './state'
 import { printable } from './text'
@@ -302,21 +302,28 @@ function worktreeLine(run: BuilderRun | null, pr: Snapshot | null, checkout: Che
 // head, worked out from the reviewer cards started at or after the package
 // call, when the package is at the watched pull request's head; else that no
 // round is packaged at this head. A package an older build stored without a
-// time is not a round either.
+// time is not a round either. Only the reviewers the round runs are counted,
+// as the pane plans them, and the rest are listed as not needed at this head,
+// so a summary never asks the session to launch a reviewer the package left
+// out.
 function reviewersLine(pr: Snapshot | null, packaged: Packaged | null, agents: readonly AgentCard[]): string {
   const isSound = packaged !== null && typeof packaged.head === 'string' && isFiniteNumber(packaged.at)
   if (pr === null || !isSound || packaged.head !== pr.head) return 'No review round has been packaged at this head.'
+  const inRound = roundReviewersOf(packaged)
   const ran: string[] = []
   const running: string[] = []
   const notStarted: string[] = []
+  const notNeeded: string[] = []
   for (const type of REVIEWERS) {
     const since = agents.filter(card => card.type === type && card.startedAt >= packaged.at)
     const name = shortName(type)
-    if (since.length === 0) notStarted.push(name)
+    if (!inRound.includes(type)) notNeeded.push(name)
+    else if (since.length === 0) notStarted.push(name)
     else if (since.some(isRunning)) running.push(name)
     else ran.push(name)
   }
-  return `Reviewers at head ${pr.head.slice(0, 8)}: ran ${listed(ran)}; running ${listed(running)}; not started ${listed(notStarted)}.`
+  const skipped = notNeeded.length === 0 ? '' : `; not needed at this head ${listed(notNeeded)}`
+  return `Reviewers at head ${pr.head.slice(0, 8)}: ran ${listed(ran)}; running ${listed(running)}; not started ${listed(notStarted)}${skipped}.`
 }
 
 // A question is open while the round it waits on has no tally.
