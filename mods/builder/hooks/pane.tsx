@@ -570,7 +570,7 @@ export function backgroundLines(v: View): string[] {
 function backgroundRow({ Text }: El, task: BackgroundTask, key: string, v: View) {
   const startedAt = startOf(task, v.backgroundStarts, v.now)
   const line = backgroundLine(task, startedAt, v.now)
-  return isProbablyHung(startedAt, v.now) ? <Text key={key} color="yellow">{line}</Text> : <Text key={key}>{line}</Text>
+  return <Text key={key} color={isProbablyHung(startedAt, v.now) ? 'yellow' : undefined}>{line}</Text>
 }
 
 // One agent's row: a drawing on a surface that draws images, else a line of

@@ -5,7 +5,7 @@ import {
   afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite,
   backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, ERROR_CHARS, errorLineOf, firstPromptOf, generationIn, HUNG_AFTER_MS, hungAtOf, isBackgroundOnly, isCleanupSkill,
   isProbablyHung, issueOf, newMemo, oldestTaskOf, recordOf, shownOrWithheld, startOf, startsBackgrounded, startsPruned, startsSeen, startsWithout, STATE_RULES, stateOf,
-  statusMemoIn, TASK_CHARS, taskKeyOf, ticketIn, WITHHELD, type StatusFacts,
+  statusMemoIn, TASK_CHARS, taskKeyOf, taskKeyOfId, ticketIn, WITHHELD, type StatusFacts,
 } from '../hooks/status'
 import type { AgentCard, BackgroundTask, StatusMemo } from '../types'
 
@@ -328,6 +328,7 @@ test('a task without an id is keyed by its kind and description, so it cannot ke
   const first = task('', 'Run the suite')
   const second = task('', 'Run the linter')
   expect(taskKeyOf(suite)).toBe('b1')
+  expect(taskKeyOf(suite)).toBe(taskKeyOfId(suite.id))
   expect(taskKeyOf(first)).not.toBe(taskKeyOf(second))
   expect(taskKeyOf(first)).not.toBe(taskKeyOf({ ...first, type: 'monitor' }))
   const m = waiting(NOW - 60_000, [taskKeyOf(first)])

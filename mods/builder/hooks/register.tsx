@@ -13,7 +13,7 @@ import { afterReport, endedOf, plannedOf, progressIn, reportAnswer, reportOf, st
 import { changePrompt, ciEventContext, resumePrompt, stateLines, stuckPrompt } from './prompts'
 import { commitRecordsOf, decidedItems, factIn, packageText, secretIn, trendOf, trendStopLine, verdictsLine, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
-import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, firstPromptOf, generationIn, isCleanupSkill, newMemo, recordOf, startsBackgrounded, startsPruned, startsSeen, startsWithout, statusMemoIn, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
+import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, firstPromptOf, generationIn, isCleanupSkill, newMemo, recordOf, startsBackgrounded, startsPruned, startsSeen, startsWithout, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
 import { timeOfDay } from './text'
 
 type $ = EngineInterface
@@ -2418,10 +2418,11 @@ function idsOf(tasks: readonly BackgroundTask[]): Set<string> {
 // its row. The read fills the ids in only when none are known yet, as after a
 // hot reload, and the check comes after the read is answered, so a set that a
 // turn end wrote in the meantime is kept. Once the task is off the list, its
-// start goes too, under its id, which is the key taskKeyOf gives a task that
-// has one. The start goes after the list, so the task is never listed without
-// it; when its write is refused, the start stays until the session's own turn
-// end drops it with every other start whose task is no longer listed.
+// start goes too, under the key taskKeyOfId gives its id, which is the key
+// taskKeyOf gives a task that has one. The start goes after the list, so the
+// task is never listed without it; when its write is refused, the start stays
+// until the session's own turn end drops it with every other start whose task
+// is no longer listed.
 async function removeBackground($: $, id: string) {
   const tasks = await read($, background)
   if (!tasks.some(task => task.id === id)) {
@@ -2429,7 +2430,7 @@ async function removeBackground($: $, id: string) {
     return
   }
   wroteBackground(await update($, background, list => list.filter(task => task.id !== id)))
-  await changeStarts($, starts => startsWithout(starts, id))
+  await changeStarts($, starts => startsWithout(starts, taskKeyOfId(id)))
 }
 
 async function liveTick($: $) {
@@ -2536,7 +2537,7 @@ async function foreground($: $, e: { tool: string; tool_use_id?: string }, call:
     const ran = await call()
     const taskId = backgroundTaskIdOf(ran)
     if (typeof taskId === 'string' && taskId !== '') {
-      await changeStarts($, starts => startsBackgrounded(starts, taskId, record.startedAt)).catch(() => undefined)
+      await changeStarts($, starts => startsBackgrounded(starts, taskKeyOfId(taskId), record.startedAt)).catch(() => undefined)
     }
     return ran
   } finally {

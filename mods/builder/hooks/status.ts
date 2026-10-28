@@ -248,7 +248,15 @@ void RULES_MATCH_THE_STATE
 // description with a character between them that neither holds. So tasks
 // without ids that differ cannot keep one wait alive.
 export function taskKeyOf(task: BackgroundTask): string {
-  return task.id !== '' ? task.id : `${task.type}\u0000${task.description}`
+  return task.id !== '' ? taskKeyOfId(task.id) : `${task.type}\u0000${task.description}`
+}
+
+// The key taskKeyOf gives a task that has an id. The hooks that write or drop
+// a start time knowing only the task's id, before the task is listed or once a
+// completion notice names it, build their key here, so that they and
+// taskKeyOf cannot drift apart.
+export function taskKeyOfId(id: string): string {
+  return id
 }
 
 // How long a background task runs, from its start, before builder counts it
