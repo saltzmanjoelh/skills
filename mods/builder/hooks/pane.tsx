@@ -168,7 +168,9 @@ export function nextStep(v: View, isRunningShown = false): string {
   }
   const look = when === null ? 'next look due now' : `next look in ${when}`
   const why = waitingOn(v.pr, v.agents, v.questions)
-  if (isRunningShown && (why === 'agents' || (why === 'nothing' && isBackgroundRunning))) return look
+  // Whether the wait is on work the running part or hung warning already names.
+  const isNamedOnLine = why === 'agents' || (why === 'nothing' && isBackgroundRunning)
+  if (isRunningShown && isNamedOnLine) return look
   return `${waiting[why]} · ${look}`
 }
 

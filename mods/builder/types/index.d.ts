@@ -391,9 +391,10 @@ declare module 'claude-code' {
       // keyed as taskKeyOf in hooks/status.ts keys a task. A Bash call of the
       // session's own that went to the background holds the time the call
       // started; any other task holds the time a turn end first listed it. A
-      // start is kept while its task is listed, so a subagent's end that drops
-      // the task keeps it, and it goes only at the session's own turn end or a
-      // completion notice that takes its task off the list.
+      // start is dropped only when the session's own turn end reports a list
+      // without its task, or when a completion notice takes the task off the
+      // list. A subagent's end never drops one, even when its list leaves the
+      // task out.
       backgroundStarts: Record<string, number>
       // The session's own tool calls in progress, oldest first.
       calls: ForegroundCall[]
