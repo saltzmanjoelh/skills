@@ -1,9 +1,12 @@
 // The rules of the status file builder writes for the foreman: which session
 // writes one, where it goes, which of the six states holds and why, the
 // record itself, and how each event changes the memo the record is worked
-// out from. Nothing here touches the engine; hooks/register.tsx reads the
-// state, calls these and writes the file. Every function is pure, so the
-// tests can check each rule without the engine.
+// out from. It also holds the rules for the start times of background tasks
+// and the rule that marks one as probably hung, which the line above the
+// prompt and the pane share with the record. Nothing here touches the
+// engine; hooks/register.tsx reads the state, calls these and writes the
+// file. Every function is pure, so the tests can check each rule without the
+// engine.
 
 import type { SessionMessage } from 'claude-code'
 
