@@ -2006,10 +2006,19 @@ async function sortedKindsOf($: $, dir: string, base: string, nameStatus: string
     instructionListingsOf($, dir, trees),
   ])
   if (markdownImportFound(imports, trees) || listings.some(instructionFileIsLink)) return changedKinds(nameStatus, specDir, () => true)
-  const read = listings.map(raw => raw ?? '')
-  const marketplaces = await Promise.all(read.flatMap((raw, at) => marketplacePathsOf(raw).map(async path => marketplaceRootsOf(await git($, dir, ['show', `${trees[at]}:${path}`]), path))))
+  // A failed listing counts as a link above, so every listing here was read,
+  // and there is one listing for each tree, in the same order.
+  const listed = listings as string[]
+  const manifests: { tree: string, path: string }[] = []
+  for (const [at, raw] of listed.entries()) {
+    for (const path of marketplacePathsOf(raw)) manifests.push({ tree: trees[at]!, path })
+  }
+  const marketplaces = await Promise.all(manifests.map(async ({ tree, path }) => {
+    const text = await git($, dir, ['show', `${tree}:${path}`])
+    return marketplaceRootsOf(text, path)
+  }))
   if (marketplaces.some(roots => roots === null)) return changedKinds(nameStatus, specDir, () => true)
-  const roots = [...read.flatMap(pluginRootsOf), ...marketplaces.flatMap(found => found ?? [])]
+  const roots = [...listed.flatMap(pluginRootsOf), ...marketplaces.flatMap(found => found ?? [])]
   return changedKinds(nameStatus, specDir, path => roots.some(root => underRoot(path, root)))
 }
 
