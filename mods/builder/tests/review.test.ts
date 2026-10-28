@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { verdictsOf } from '../hooks/github'
-import { CHEAP_FIX_SUBJECT, changedKinds, commitRecordsOf, DECIDED_HEADINGS, DECIDED_ITEM_CHARS, decidedItems, decidedSection, DEFAULT_SPEC_DIR, factIn, INSTRUCTION_PATHSPECS, instructionFileImportsMarkdown, instructionFileIsLink, isFullSha, isUpForCheck, markdownImportFound, packageText, pathKind, recordItems, reviewedHeadOf, secretIn, specDirOf, STREAK_STOP, trendOf, trendSection, trendStopLine, verdictHeadOf, verdictsLine } from '../hooks/review'
+import { CHEAP_FIX_SUBJECT, changedKinds, commitRecordsOf, DECIDED_HEADINGS, DECIDED_ITEM_CHARS, decidedItems, decidedSection, DEFAULT_SPEC_DIR, factIn, INSTRUCTION_PATHSPECS, instructionFileImportsMarkdown, instructionFileIsLink, isFullSha, isUpForCheck, MARKDOWN_IMPORT_PATTERN, markdownImportFound, packageText, pathKind, recordItems, reviewedHeadOf, secretIn, specDirOf, STREAK_STOP, trendOf, trendSection, trendStopLine, verdictHeadOf, verdictsLine } from '../hooks/review'
 
 const facts = {
   repo: 'o/r',
@@ -586,6 +586,19 @@ test('an instruction file on either tree that git grep finds with a Markdown imp
   const raw = 'M\0docs/guide.md\0M\0tests/a.test.ts\0'
   expect(changedKinds(raw, spec)).toEqual(['documentation', 'test'])
   expect(changedKinds(raw, spec, true)).toEqual(['other', 'test'])
+})
+
+test('the import pattern matches the paths Claude Code reads as imports, a space escaped with a backslash included, and not an email address', () => {
+  // The pattern is a POSIX extended expression for git grep; JavaScript reads
+  // the same expression once its space class is written as \s.
+  const pattern = new RegExp(MARKDOWN_IMPORT_PATTERN.replaceAll('[:space:]', '\\s'), 'i')
+  expect(pattern.test('See @docs/guide.md here')).toBe(true)
+  expect(pattern.test('@docs/guide.md')).toBe(true)
+  expect(pattern.test('See @docs/my\\ notes.md here')).toBe(true)
+  expect(pattern.test('@docs/Guide.MD#part')).toBe(true)
+  expect(pattern.test('mail me@example.md')).toBe(false)
+  expect(pattern.test('ask @someone first')).toBe(false)
+  expect(pattern.test('See @docs/my notes.md here')).toBe(false)
 })
 
 test('the search for Markdown imports finds one when it fails, is cut off, or names an instruction file, and none when it exits 1', () => {

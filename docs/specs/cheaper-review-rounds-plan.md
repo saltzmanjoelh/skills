@@ -85,7 +85,9 @@ same answer the session got.
   import of a Markdown file, found with `git grep -i` over both trees, no
   file counts as documentation, because Claude Code loads an imported file as
   instructions, reads its path relative to the importing file, and an
-  imported file can import others that the tool does not follow. The search
+  imported file can import others that the tool does not follow. An import
+  path is read as Claude Code reads it, so a space escaped with a backslash
+  is part of the path. The search
   reads only the instruction files, through case-insensitive glob
   pathspecs, so its cost does not grow with the repository. A search that
   fails counts as an import.

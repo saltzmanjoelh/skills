@@ -586,8 +586,11 @@ export function pathKind(path: string, specDir: string): FileKind {
 
 // The pattern `git grep -i -E` looks for to find a Markdown import: an `@`
 // at the start of a line or after white space, then a path ending in `.md`.
-// An email address has no white space before its `@`, so it is not one.
-export const MARKDOWN_IMPORT_PATTERN = '(^|[[:space:]])@[^[:space:]]+\\.md'
+// The path is read as Claude Code reads it: characters other than white space
+// and backslashes, where a backslash followed by a space stands for a space,
+// as in `@docs/my\ notes.md`. An email address has no white space before
+// its `@`, so it is not one.
+export const MARKDOWN_IMPORT_PATTERN = '(^|[[:space:]])@([^[:space:]\\\\]|\\\\ )+\\.md'
 
 // Whether `git grep -l` over `trees` found MARKDOWN_IMPORT_PATTERN in a file
 // Claude Code loads as instructions. Each line of its output is a tree, a
