@@ -121,21 +121,32 @@ export function nextStep(v: View, isRunningShown = false): string {
   if (at === null) return 'not polling'
   const when = timeUntil(at, v.now)
   if (v.nextLook?.isNewHead === true) return when === null ? 'new head, handing over now' : `new head, handing over in ${when}`
-  const waiting: Record<NextReason, string> = {
-    owner: 'waiting on your answer',
-    agents: runningAgents(v),
-    background: `waiting on its background ${backgroundNoun(v.background)}`,
-    ci: 'waiting on checks',
-    fix: 'waiting on a fix',
-    merge: 'waiting on the merge',
-    nothing: 'nothing to hand over',
-  }
   const look = when === null ? 'next look due now' : `next look in ${when}`
   const reason = nextReason(v)
   // When the line shows its running part, that part already names the agents
   // and the background work, so the next step says only when the look is due.
   if (isRunningShown && (reason === 'agents' || reason === 'background')) return look
-  return `${waiting[reason]} · ${look}`
+  return `${waitingWords(v, reason)} · ${look}`
+}
+
+// What the next step says it waits on, for the one reason nextStep chose.
+// Only that reason's words are built, so the scans over the agents and the
+// background tasks behind two of them run only when the step names them:
+// nextStep runs once per live tick and once per fitLine iteration, and most
+// of those calls name another reason or throw the words away. The `never`
+// default keeps the switch exhaustive, so a reason without words fails the
+// type check, as the record of every reason's words that stood here did.
+function waitingWords(v: View, reason: NextReason): string {
+  switch (reason) {
+    case 'owner': return 'waiting on your answer'
+    case 'agents': return runningAgents(v)
+    case 'background': return `waiting on its background ${backgroundNoun(v.background)}`
+    case 'ci': return 'waiting on checks'
+    case 'fix': return 'waiting on a fix'
+    case 'merge': return 'waiting on the merge'
+    case 'nothing': return 'nothing to hand over'
+    default: return reason satisfies never
+  }
 }
 
 // What the next step waits on: one of waitingOn's reasons, or the background
@@ -245,6 +256,10 @@ function merged(segments: readonly LineSegment[]): LineSegment[] {
 // `waiting on:` when it is the only running part, and `background:` beside a
 // call or agents, because the session is then working beside the task rather
 // than waiting on it, and it ends with ` and <n> more` when several tasks run.
+// The segments come back already merged: the call and the agents are one
+// plain segment, which carries the separator before the part when both are
+// there, so at most one plain segment stands before the part and a caller may
+// hand the segments on without running merged over them.
 export function runningPart(v: View, names = Infinity): LineSegment[] {
   const parts: string[] = []
   const slow = v.calls
@@ -257,13 +272,13 @@ export function runningPart(v: View, names = Infinity): LineSegment[] {
     const shown = types.length > names ? [...types.slice(0, names), '…'] : types
     parts.push(`${agents.length} ${agents.length === 1 ? 'agent' : 'agents'}: ${shown.join(', ')}`)
   }
-  const segments = parts.length === 0 ? [] : [plain(parts.join(SEPARATOR))]
+  const joined = parts.join(SEPARATOR)
   const oldest = oldestOf(v.background, v.now)
-  if (oldest === undefined) return segments
+  if (oldest === undefined) return parts.length === 0 ? [] : [plain(joined)]
   const lead = parts.length === 0 ? 'waiting on' : 'background'
   const more = v.background.length > 1 ? ` and ${v.background.length - 1} more` : ''
   const part: LineSegment = { text: `${lead}: ${taskName(oldest)} (${taskTime(oldest, v.now)})${more}`, isBackground: true, isPast: isPastCeiling(oldest, v.now) }
-  return segments.length === 0 ? [part] : [...segments, plain(SEPARATOR), part]
+  return parts.length === 0 ? [part] : [plain(`${joined}${SEPARATOR}`), part]
 }
 
 // One line above the prompt, or null when there is nothing to say. With a pull

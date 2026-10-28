@@ -1595,7 +1595,12 @@ function olderBuildState(on: On, seeded: Record<string, unknown>, refused?: stri
     if (denial !== undefined) return denial
     if (e.plugin === 'builder') {
       left.delete(e.key)
-      written.set(e.key, [...(written.get(e.key) ?? []), e.value])
+      let values = written.get(e.key)
+      if (values === undefined) {
+        values = []
+        written.set(e.key, values)
+      }
+      values.push(e.value)
     }
     return next(e)
   })
@@ -3981,60 +3986,37 @@ test('the hooks loaded afresh over a list an older build stored stamp its tasks 
   expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (5s) and 1 more')
 })
 
-test('a read of the background list refused as the hooks start leaves the start completing and the stored list as it was, and the next turn end stamps it', async ($, on) => {
-  const clock = mock.clock(on)
-  mock.store(on)
-  engine(on)
-  fakeGitHub(on)
-  stops(on)
-  // A list stored before tasks carried stamps, whose read at the start is
-  // refused. The refusal is armed after the band mounts, so the band's first
-  // draw is answered and the start's read is the one refused.
-  const saved = olderBuildState(on, { background: [shellTask] }, 'background')
-  const line = await abovePrompt($, on)
-  saved.reads = 1
-  await startOnly($)
-  await clock.settle()
+for (const fault of ['get', 'set'] as const) {
+  test(`a ${fault === 'get' ? 'read' : 'write'} of the background list refused as the hooks start leaves the start completing and the stored list unstamped, and the next turn end stamps it`, async ($, on) => {
+    const clock = mock.clock(on)
+    mock.store(on)
+    engine(on)
+    fakeGitHub(on)
+    stops(on)
+    // A list stored before tasks carried stamps, whose read at the start, or
+    // whose write of the stamped list at the start, is refused. The refusal
+    // is armed after the band mounts, so the band's first draw, which reads
+    // the list, is answered and the start's read or write is the one refused.
+    const saved = olderBuildState(on, { background: [shellTask] }, 'background')
+    const line = await abovePrompt($, on)
+    if (fault === 'get') saved.reads = 1
+    else saved.writes = 1
+    await startOnly($)
+    await clock.settle()
 
-  expect(saved.reads).toBe(0)
-  expect(saved.writtenTo('background')).toEqual([])
-  expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (0s)')
+    expect(fault === 'get' ? saved.reads : saved.writes).toBe(0)
+    expect(saved.writtenTo('background')).toEqual([])
+    expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (0s)')
 
-  // The next turn end replaces the list and stamps its task with that time.
-  await clock.advance(5_000)
-  await $.classic.Stop({ stop_hook_active: false, background_tasks: [shellTask] } as never)
-  await clock.settle()
-  expect(saved.writtenTo('background')).toEqual([[{ ...shellTask, seenAt: 5_000 }]])
-  await clock.advance(3_000)
-  expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (3s)')
-})
-
-test('a write of the background list refused as the hooks start leaves the start completing and the stored list unstamped, and the next turn end stamps it', async ($, on) => {
-  const clock = mock.clock(on)
-  mock.store(on)
-  engine(on)
-  fakeGitHub(on)
-  stops(on)
-  // A list stored before tasks carried stamps, whose write of the stamped
-  // list at the start is refused.
-  const saved = olderBuildState(on, { background: [shellTask] }, 'background')
-  const line = await abovePrompt($, on)
-  saved.writes = 1
-  await startOnly($)
-  await clock.settle()
-
-  expect(saved.writes).toBe(0)
-  expect(saved.writtenTo('background')).toEqual([])
-  expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (0s)')
-
-  // The next turn end replaces the list and stamps its task with that time.
-  await clock.advance(5_000)
-  await $.classic.Stop({ stop_hook_active: false, background_tasks: [shellTask] } as never)
-  await clock.settle()
-  expect(saved.writtenTo('background')).toEqual([[{ ...shellTask, seenAt: 5_000 }]])
-  await clock.advance(3_000)
-  expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (3s)')
-})
+    // The next turn end replaces the list and stamps its task with that time.
+    await clock.advance(5_000)
+    await $.classic.Stop({ stop_hook_active: false, background_tasks: [shellTask] } as never)
+    await clock.settle()
+    expect(saved.writtenTo('background')).toEqual([[{ ...shellTask, seenAt: 5_000 }]])
+    await clock.advance(3_000)
+    expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (3s)')
+  })
+}
 
 test('the line\'s button is a plain label while the task is under the ceiling, and takes the part as a yellow Text child once the wait reaches it', async ($, on) => {
   const clock = mock.clock(on)
