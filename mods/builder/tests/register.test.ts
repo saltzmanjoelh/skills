@@ -93,7 +93,9 @@ function fakeGitHub(on: On) {
   // while the reads of the head and the fetch before them still succeed.
   // `baseClaude` is what `git show origin/main:CLAUDE.md`
   // prints, the base branch's CLAUDE.md, and that read exits 128 when it is
-  // null. `nameStatus` is what `git diff --name-status -z` prints for the
+  // null. `grep` is what `git grep -l` prints for the instruction files that
+  // hold a Markdown import, and the search exits 1, finding none, when it is
+  // empty; `grepFail` makes it exit with an error. `nameStatus` is what `git diff --name-status -z` prints for the
   // files changed since the reviewed head, and `nameStatusFail` and
   // `sinceDiffFail` make that read and the read of the change since the
   // verdict head exit with an error.
@@ -115,7 +117,7 @@ function fakeGitHub(on: On) {
     onQuietDiff: null as (() => void) | null, afterQuietDiff: null as (() => void) | null, headHolds: {} as Record<string, Promise<void>>,
     states: {} as Record<number, string>, stateRead: null as null | 'exit' | 'throw' | 'cut' | 'text',
     messages: [{ sha: A, message: 'Build it' }] as { sha: string; message: string }[], messagesFail: false,
-    ancestorExit: 0, ancestorFail: null as null | 'throw' | 'cut', merges: '', mergesFail: null as null | 'exit' | 'throw' | 'cut', baseClaude: null as string | null, nameStatus: '', nameStatusFail: false, sinceDiffFail: false,
+    ancestorExit: 0, ancestorFail: null as null | 'throw' | 'cut', merges: '', mergesFail: null as null | 'exit' | 'throw' | 'cut', baseClaude: null as string | null, grep: '', grepFail: false, nameStatus: '', nameStatusFail: false, sinceDiffFail: false,
   }
   on('process.run', async ($, e) => {
     const argv = e.argv.join(' ')
@@ -173,6 +175,7 @@ function fakeGitHub(on: On) {
     }
     if (argv.startsWith('git rev-list --merges ')) return out(world.merges)
     if (argv.startsWith('git show origin/')) return world.baseClaude === null ? exit(128) : out(world.baseClaude)
+    if (argv.startsWith('git grep ')) return world.grepFail ? exit(128) : world.grep === '' ? exit(1) : out(world.grep)
     if (argv.startsWith('git diff --name-status ')) return world.nameStatusFail ? exit(128) : out(world.nameStatus)
     if (argv.startsWith('git diff --unified=15 ')) return world.sinceDiffFail ? exit(128) : out('diff --git a/since.ts b/since.ts\n')
     if (argv.startsWith('git diff') && world.cutDiff) {
@@ -1083,7 +1086,7 @@ test('the spec directory comes from the base branch\'s CLAUDE.md, not the branch
   expect(world.calls).toContain('git show origin/main:CLAUDE.md')
 })
 
-test('when the base branch\'s CLAUDE.md imports a documentation file, a change to documentation alone names every focused reviewer', async ($, on) => {
+test('when an instruction file on the branch or the base imports Markdown, or the search fails, a change to documentation alone names every focused reviewer', async ($, on) => {
   mock.clock(on)
   mock.store(on)
   engine(on)
@@ -1094,9 +1097,16 @@ test('when the base branch\'s CLAUDE.md imports a documentation file, a change t
   world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
   world.nameStatus = 'M\0docs/guide.md\0'
 
-  world.baseClaude = '# Project\n'
   expect((await packageAnswer($)).split('\n').at(-1)).toBe(ONLY_MAINTAINABILITY)
-  world.baseClaude = '# Project\n\nFollow @docs/rules.md.\n'
+  expect(world.calls.some(call => call.startsWith('git grep ') && call.includes(' HEAD origin/main'))).toBe(true)
+  world.grep = 'HEAD:docs/notes.md\n'
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(ONLY_MAINTAINABILITY)
+  world.grep = 'HEAD:CLAUDE.md\n'
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  world.grep = 'origin/main:.claude/rules/x.md\n'
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  world.grep = ''
+  world.grepFail = true
   expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
 })
 

@@ -556,6 +556,15 @@ export type FileKind = 'test' | 'documentation' | 'other'
 const INSTRUCTION_FOLDERS: readonly string[] = ['.claude', '.claude-plugin']
 const INSTRUCTION_FILES: readonly string[] = ['claude.md', 'claude.local.md', 'agents.md', 'skill.md']
 
+// Whether a path relative to the repository's root lies in a folder Claude
+// Code loads instructions from or is named as an instruction file, in any
+// case.
+function isInstructionPath(path: string): boolean {
+  const parts = path.split('/')
+  const name = parts.at(-1) ?? ''
+  return parts.slice(0, -1).some(folder => INSTRUCTION_FOLDERS.includes(folder.toLowerCase())) || INSTRUCTION_FILES.includes(name.toLowerCase())
+}
+
 // The kind of one path relative to the repository's root. A file Claude Code
 // loads as instructions, in any case, is anything else. A test file has a
 // folder named exactly `test` or `tests`, or a file name holding `.test.`,
@@ -567,8 +576,7 @@ export function pathKind(path: string, specDir: string): FileKind {
   const parts = path.split('/')
   const name = parts.at(-1) ?? ''
   const folders = parts.slice(0, -1)
-  if (name === '') return 'other'
-  if (folders.some(folder => INSTRUCTION_FOLDERS.includes(folder.toLowerCase())) || INSTRUCTION_FILES.includes(name.toLowerCase())) return 'other'
+  if (name === '' || isInstructionPath(path)) return 'other'
   if (folders.some(folder => folder === 'test' || folder === 'tests')) return 'test'
   if (['.test.', '.spec.', '_test.'].some(mark => name.includes(mark))) return 'test'
   if (path === 'README.md') return 'documentation'
@@ -576,20 +584,24 @@ export function pathKind(path: string, specDir: string): FileKind {
   return 'other'
 }
 
-// Whether a CLAUDE.md imports, with Claude Code's `@path` syntax, a file that
-// `pathKind` would sort as documentation. Claude Code loads an imported file
-// as instructions, and an imported file can import others in turn, which the
-// tool cannot follow without reading each one, so then no documentation can be
-// sorted for certain. An `@` counts only at the start of a line or after
-// white space, so an email address is not an import. Reading too much as an
-// import only costs reviewer runs.
-export function claudeImportsDocumentation(claude: string | null, specDir: string): boolean {
-  if (claude === null) return false
-  for (const match of claude.matchAll(/(?:^|\s)@([^\s`'"()<>\[\]]+)/g)) {
-    const path = match[1]!.replace(/^(\.\/)+/, '').replace(/[.,;:!?]+$/, '')
-    if (path !== '' && pathKind(path, specDir) === 'documentation') return true
-  }
-  return false
+// The pattern `git grep -i -E` looks for to find a Markdown import: an `@`
+// at the start of a line or after white space, then a path ending in `.md`.
+// An email address has no white space before its `@`, so it is not one.
+export const MARKDOWN_IMPORT_PATTERN = '(^|[[:space:]])@[^[:space:]]+\\.md'
+
+// Whether `git grep -l` over `trees` found MARKDOWN_IMPORT_PATTERN in a file
+// Claude Code loads as instructions. Each line of its output is a tree, a
+// colon and a path. Claude Code loads an imported file as instructions, from
+// any instruction file and with its path read relative to that file, and an
+// imported file can import others in turn. The tool does not follow those
+// paths, so when any instruction file on either tree imports Markdown, no
+// documentation can be sorted for certain. Reading too much as an import only
+// costs reviewer runs.
+export function instructionFileImportsMarkdown(raw: string, trees: readonly string[]): boolean {
+  return raw.split('\n').some(line => {
+    const tree = trees.find(name => line.startsWith(`${name}:`))
+    return tree !== undefined && isInstructionPath(line.slice(tree.length + 1))
+  })
 }
 
 // The kinds of the files in the output of

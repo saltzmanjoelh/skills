@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { verdictsOf } from '../hooks/github'
-import { CHEAP_FIX_SUBJECT, changedKinds, claudeImportsDocumentation, commitRecordsOf, DECIDED_HEADINGS, DECIDED_ITEM_CHARS, decidedItems, decidedSection, DEFAULT_SPEC_DIR, factIn, isFullSha, isUpForCheck, packageText, pathKind, recordItems, reviewedHeadOf, secretIn, specDirOf, STREAK_STOP, trendOf, trendSection, trendStopLine, verdictHeadOf, verdictsLine } from '../hooks/review'
+import { CHEAP_FIX_SUBJECT, changedKinds, commitRecordsOf, DECIDED_HEADINGS, DECIDED_ITEM_CHARS, decidedItems, decidedSection, DEFAULT_SPEC_DIR, factIn, instructionFileImportsMarkdown, isFullSha, isUpForCheck, packageText, pathKind, recordItems, reviewedHeadOf, secretIn, specDirOf, STREAK_STOP, trendOf, trendSection, trendStopLine, verdictHeadOf, verdictsLine } from '../hooks/review'
 
 const facts = {
   repo: 'o/r',
@@ -574,16 +574,15 @@ test('the changed files are read from git diff --name-status -z output, and a re
   expect(changedKinds('', spec)).toEqual([])
 })
 
-test('when the base branch\'s CLAUDE.md imports a file the rule would sort as documentation, documentation counts as anything else', () => {
+test('an instruction file on either tree that git grep finds with a Markdown import makes documentation count as anything else', () => {
+  const trees = ['HEAD', 'origin/main']
+  expect(instructionFileImportsMarkdown('HEAD:CLAUDE.md\n', trees)).toBe(true)
+  expect(instructionFileImportsMarkdown('origin/main:.claude/rules/x.md\n', trees)).toBe(true)
+  expect(instructionFileImportsMarkdown('HEAD:packages/app/Claude.md\n', trees)).toBe(true)
+  // A match outside the instruction files is not an import Claude Code reads.
+  expect(instructionFileImportsMarkdown('HEAD:docs/guide.md\nHEAD:src/a.test.ts\n', trees)).toBe(false)
+  expect(instructionFileImportsMarkdown('', trees)).toBe(false)
   const spec = DEFAULT_SPEC_DIR
-  expect(claudeImportsDocumentation('# Project\n\nSee @docs/rules.md for the rules.\n', spec)).toBe(true)
-  expect(claudeImportsDocumentation('@./docs/specs/x.md\n', spec)).toBe(true)
-  expect(claudeImportsDocumentation('Read @README.md first.\n', spec)).toBe(true)
-  // An import of a file that is not documentation, a mention, or an email
-  // address leaves documentation as it is.
-  expect(claudeImportsDocumentation('@src/rules.ts and @types/node, mail me at a@docs/x.md\n', spec)).toBe(false)
-  expect(claudeImportsDocumentation('# Project\n', spec)).toBe(false)
-  expect(claudeImportsDocumentation(null, spec)).toBe(false)
   const raw = 'M\0docs/guide.md\0M\0tests/a.test.ts\0'
   expect(changedKinds(raw, spec)).toEqual(['documentation', 'test'])
   expect(changedKinds(raw, spec, true)).toEqual(['other', 'test'])

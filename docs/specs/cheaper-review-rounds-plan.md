@@ -81,10 +81,12 @@ same answer the session got.
   ignores case another spelling may be the same file. Such files count as
   anything else wherever they are, because Claude Code loads them as
   instructions.
-- When the base branch's `CLAUDE.md` imports, with an `@path` line, a file
-  that would be documentation, no file counts as documentation, because
-  Claude Code loads an imported file as instructions and an imported file can
-  import others that the tool does not read.
+- When any instruction file at the head or on the base holds an `@path`
+  import of a Markdown file, found with `git grep -i` over both trees, no
+  file counts as documentation, because Claude Code loads an imported file as
+  instructions, reads its path relative to the importing file, and an
+  imported file can import others that the tool does not follow. A search
+  that fails counts as an import.
 - The spec directory is read with `factIn` from
   `git show origin/<base>:CLAUDE.md`. A failed read, a missing or empty fact,
   an absolute path, a `..` folder, or a value that comes down to the root
