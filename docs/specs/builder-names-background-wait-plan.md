@@ -93,11 +93,12 @@ words change:
   warning today, and its fitting and its rule that the warning is never cut
   stay as they are.
 - `nextStep` says `waiting on its <backgroundWords(v.background)>` when
-  `waitingOn` answers `nothing` and a background task is in flight. When
-  `isRunningShown` is true it leaves those words out, as it does for running
-  agents. `lineAbove` passes true in both of its branches, and the flag's
-  comment now says that it means the line already names what runs, in its
-  running part or in its hung warning.
+  `waitingOn` answers `nothing` and a background task is in flight. When its
+  flag is true it leaves those words out, as it does for running agents.
+  `lineAbove` passes true in both of its branches, so the flag, which was
+  called `isRunningShown`, is renamed `isOnLine`: it now means the step is
+  drawn on the line, which names what runs in its running part or in its
+  hung warning.
 - `secondRow` does not say `idle` while a background task is in flight, so a
   hung task that is the only work gives the warning followed by
   `<stage>` alone.

@@ -147,10 +147,11 @@ function runTime(startedAt: number, now: number): string {
 // pane alike: the first of these that applies, starting with a usage-limit
 // hold. With nothing else to wait on, background work in flight is named as
 // what the session waits on, in place of `nothing to hand over`. When the
-// line already names what runs (`isRunningShown`), in its running part or in
-// its hung warning, the count of running agents and the background work are
-// left out, so neither is named twice.
-export function nextStep(v: View, isRunningShown = false): string {
+// step is drawn on the line above the prompt (`isOnLine`), the count of
+// running agents and the background work are left out, because the line
+// already names them in its running part or in its hung warning, so neither
+// is named twice.
+export function nextStep(v: View, isOnLine = false): string {
   const hold = holdWords(v)
   if (hold !== null) return hold
   const at = dueAt(v.nextLook)
@@ -168,9 +169,11 @@ export function nextStep(v: View, isRunningShown = false): string {
   }
   const look = when === null ? 'next look due now' : `next look in ${when}`
   const why = waitingOn(v.pr, v.agents, v.questions)
-  // Whether the wait is on work the running part or hung warning already names.
+  // Whether the wait is on work that the line above the prompt names in its
+  // running part or its hung warning, and so need not name again when it
+  // draws this step.
   const isNamedOnLine = why === 'agents' || (why === 'nothing' && isBackgroundRunning)
-  if (isRunningShown && isNamedOnLine) return look
+  if (isOnLine && isNamedOnLine) return look
   return `${waiting[why]} · ${look}`
 }
 
@@ -222,9 +225,10 @@ export function abovePromptLine(v: View, width?: number): string | null {
 }
 
 // The line above the prompt without its warnings. The next step is always
-// told that the line names what runs, because whatever the running part does
-// not name, the hung warning does: running agents are always in the running
-// part, and background work is in it or in the warning.
+// told that it is drawn on the line, even when the running part is null,
+// because whatever the running part does not name, the hung warning does:
+// running agents are always in the running part, and background work is in
+// it or in the warning.
 function lineAbove(v: View, width: number | undefined): string | null {
   return fitLine(v, width, names => {
     if (v.pr === null) {
