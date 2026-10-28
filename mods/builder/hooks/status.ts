@@ -261,9 +261,12 @@ export function hungAtOf(startedAt: number): number {
 }
 
 // Whether a task that started at `startedAt` counts as probably hung at
-// `now`: once it has run HUNG_AFTER_MS or longer. The line, the pane and the
-// status record all ask this one rule, so given the same moment they mark the
-// same task.
+// `now`: once it has run HUNG_AFTER_MS or longer. The line and the pane both
+// ask this rule, so given the same moment they mark the same task. The status
+// record does not ask it: recordOf writes `hungAt` from hungAtOf, the moment
+// this rule turns true, and foreman's row repeats the `now >= hungAt`
+// comparison in its own isProbablyHung, so a change to the comparison has to
+// be made in both mods.
 export function isProbablyHung(startedAt: number, now: number): boolean {
   return now >= hungAtOf(startedAt)
 }

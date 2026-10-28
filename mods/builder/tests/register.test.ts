@@ -4528,6 +4528,48 @@ test('a refused write of the start times still writes the list, and the live tic
   expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (29s)')
 })
 
+// A list that an older build saved without start times, whose filling in at
+// the session's start is refused. A test may register only one state.set
+// hook, so this test cannot use olderBuildState and refusedWrites together.
+// Its state.get hook answers the saved list as olderBuildState does, and its
+// state.set hook refuses the first write of the start times, as refusedWrites
+// does, and otherwise lets the mod's own value be read, as olderBuildState
+// does.
+test('a refused write of the start times at the session\'s start still starts the session, and the live ticker fills the start in within a second', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  stops(on)
+  const left = new Map<string, unknown>([['background', [shellTask]]])
+  on('state.get', ($, e, next) => {
+    if (e.plugin !== 'builder' || !left.has(e.key)) return next(e)
+    return { value: { value: left.get(e.key), version: 0 } } as never
+  })
+  const refusal = { writes: 1, refusals: 0 }
+  on('state.set', ($, e, next) => {
+    if (refusal.writes > 0 && e.plugin === 'builder' && e.key === 'backgroundStarts') {
+      refusal.writes -= 1
+      refusal.refusals += 1
+      return { deny: 'the state could not be written' } as never
+    }
+    if (e.plugin === 'builder') left.delete(e.key)
+    return next(e)
+  })
+  const line = await abovePrompt($, on)
+  await startOnly($)
+  expect(refusal.refusals).toBe(1)
+  // The task is on the line, and it counts from now because it has no start.
+  expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (0s)')
+
+  // The first tick of the live ticker came a second after the session's
+  // start and filled the start in, so the task's time now rises. Had the
+  // refusal cut the session's start short, no ticker would run and the task
+  // would read 0 seconds for good.
+  await clock.advance(30_000)
+  expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (29s)')
+})
+
 test('on the pane, a background task that has run 15 minutes is drawn in yellow, and one that started since has no colour', async ($, on) => {
   const clock = mock.clock(on)
   mock.store(on)
