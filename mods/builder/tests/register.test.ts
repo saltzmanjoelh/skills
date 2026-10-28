@@ -1613,6 +1613,13 @@ function olderBuildState(on: On, seeded: Record<string, unknown>, refused?: stri
     get writes() { return writes.refusal.writes },
     set writes(count: number) { writes.refusal.writes = count },
     writtenTo: (key: string) => written.get(key) ?? [],
+    // Puts `value` under `key` as a write that another copy of the module
+    // landed after the start, as a copy from before a hot reload lands the
+    // turn end it had in flight: the reads from here answer it, at version 0
+    // still, so the mod's next write of the key is not refused. It is for a
+    // key the mod has not written since the start, whose kit value stands at
+    // version 0.
+    landed: (key: string, value: unknown) => { left.set(key, value) },
   }
 }
 
@@ -3986,8 +3993,35 @@ test('the hooks loaded afresh over a list an older build stored stamp its tasks 
   expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (5s) and 1 more')
 })
 
+test('an unstamped list that a copy of the module from before a hot reload writes after the start, as its turn end in flight does, is stamped by the live ticker at its next tick, and the line\'s time rises from then', async ($, on) => {
+  const clock = mock.clock(on, { now: 60_000 })
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  // The list this build stamped before the reload. The start reads it and
+  // writes nothing, and its task keeps the live ticker ticking.
+  const saved = olderBuildState(on, { background: [{ ...shellTask, seenAt: 50_000 }] })
+  const line = await abovePrompt($, on)
+  await startOnly($)
+  await clock.settle()
+  expect(saved.writtenTo('background')).toEqual([])
+  expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (10s)')
+
+  // The turn end that a copy from a build before tasks carried stamps had in
+  // flight lands its list, without stamps, over the stamped one.
+  saved.landed('background', [shellTask, monitorTask])
+  await clock.advance(1_000)
+
+  expect(saved.writtenTo('background')).toEqual([[{ ...shellTask, seenAt: 61_000 }, { ...monitorTask, seenAt: 61_000 }]])
+  expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (0s) and 1 more')
+  // The later ticks find every task stamped and write nothing.
+  await clock.advance(3_000)
+  expect(saved.writtenTo('background')).toHaveLength(1)
+  expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (3s) and 1 more')
+})
+
 for (const fault of ['get', 'set'] as const) {
-  test(`a ${fault === 'get' ? 'read' : 'write'} of the background list refused as the hooks start leaves the start completing and the stored list unstamped, and the next turn end stamps it`, async ($, on) => {
+  test(`a ${fault === 'get' ? 'read' : 'write'} of the background list refused as the hooks start leaves the start completing and the stored list unstamped, and the live ticker stamps it at its next tick`, async ($, on) => {
     const clock = mock.clock(on)
     mock.store(on)
     engine(on)
@@ -4008,12 +4042,17 @@ for (const fault of ['get', 'set'] as const) {
     expect(saved.writtenTo('background')).toEqual([])
     expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (0s)')
 
-    // The next turn end replaces the list and stamps its task with that time.
-    await clock.advance(5_000)
+    // The live ticker, which the start set going, finds the task unstamped at
+    // its first tick and stamps it with that time.
+    await clock.advance(1_000)
+    expect(saved.writtenTo('background')).toEqual([[{ ...shellTask, seenAt: 1_000 }]])
+    await clock.advance(3_000)
+    expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (3s)')
+
+    // The next turn end keeps the ticker's stamp.
     await $.classic.Stop({ stop_hook_active: false, background_tasks: [shellTask] } as never)
     await clock.settle()
-    expect(saved.writtenTo('background')).toEqual([[{ ...shellTask, seenAt: 5_000 }]])
-    await clock.advance(3_000)
+    expect(saved.writtenTo('background')).toEqual([[{ ...shellTask, seenAt: 1_000 }], [{ ...shellTask, seenAt: 1_000 }]])
     expect(await line()).toBe('builder: no pull request yet · waiting on: Run the suite (3s)')
   })
 }

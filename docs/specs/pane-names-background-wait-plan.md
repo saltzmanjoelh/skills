@@ -106,10 +106,23 @@ The shape of the change:
   churn with a re-export to keep, for no gain.
 - **A `liveTick` self-heal with an `isStamping` flag** (the most-robust plan),
   to re-stamp tasks an older build's in-flight `replaceBackground` might
-  write after a hot reload. The reload drops the old module's in-flight
-  calls, the next `Stop` re-stamps through the merge anyway, and the self-heal
-  would add a third writer and in-memory state inside a tick whose own
-  comment forbids an `await` between its check and its decisions.
+  write after a hot reload. The judge first rejected the whole self-heal on
+  the premise that a hot reload drops the old module's in-flight calls, so
+  that the next `Stop` would re-stamp the list through the merge anyway.
+  That premise was wrong. A copy of the module from before a hot reload keeps
+  running the work it had in flight, as the module's own comments on the
+  status writer record, so an old copy's turn end can land its unstamped list
+  after the new copy's start has stamped the list, and a session that only
+  waits sees no turn end that would stamp it again: the line and the pane
+  then show no time, the ceiling never fires, and the record carries no
+  `taskSince`. A review of the change found this, and the self-heal was
+  therefore added, without the flag or any other in-memory state: the live
+  ticker, which already reads the list every second and already knows when
+  no write overtook its read, calls `stampBackground` after its decisions
+  whenever the list it read holds a task without a sound stamp, so no `await`
+  comes between the tick's check and its decisions, and `stampBackground`
+  stays the one function that stamps outside `replaceBackground`. What stays
+  rejected is the flag.
 - **Falling back to the task's type when both description and command are
   empty** (the most-robust plan). The spec names description then command
   only, as the pane rows do today.

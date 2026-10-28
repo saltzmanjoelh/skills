@@ -129,24 +129,22 @@ export function nextStep(v: View, isRunningShown = false): string {
   return `${waitingWords(v, reason)} · ${look}`
 }
 
+// What the next step says it waits on, by reason, as one function per reason,
+// so that only the chosen reason's words are built. The record's type keeps
+// it exhaustive: a reason without words fails the type check.
+const WAITING_WORDS: Record<NextReason, (v: View) => string> = {
+  owner: () => 'waiting on your answer',
+  agents: runningAgents,
+  background: v => `waiting on its background ${backgroundNoun(v.background)}`,
+  ci: () => 'waiting on checks',
+  fix: () => 'waiting on a fix',
+  merge: () => 'waiting on the merge',
+  nothing: () => 'nothing to hand over',
+}
+
 // What the next step says it waits on, for the one reason nextStep chose.
-// Only that reason's words are built, so the scans over the agents and the
-// background tasks behind two of them run only when the step names them:
-// nextStep runs once per live tick and once per fitLine iteration, and most
-// of those calls name another reason or throw the words away. The `never`
-// default keeps the switch exhaustive, so a reason without words fails the
-// type check, as the record of every reason's words that stood here did.
 function waitingWords(v: View, reason: NextReason): string {
-  switch (reason) {
-    case 'owner': return 'waiting on your answer'
-    case 'agents': return runningAgents(v)
-    case 'background': return `waiting on its background ${backgroundNoun(v.background)}`
-    case 'ci': return 'waiting on checks'
-    case 'fix': return 'waiting on a fix'
-    case 'merge': return 'waiting on the merge'
-    case 'nothing': return 'nothing to hand over'
-    default: return reason satisfies never
-  }
+  return WAITING_WORDS[reason](v)
 }
 
 // What the next step waits on: one of waitingOn's reasons, or the background

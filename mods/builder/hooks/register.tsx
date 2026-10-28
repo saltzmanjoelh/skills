@@ -2368,12 +2368,17 @@ async function replaceBackground($: $, raw: unknown) {
 }
 
 // Stamps the stored background tasks that have no first-seen time with the
-// time the hooks start, because that is when this build first sees them. A
-// build before tasks carried stamps stored such a list, and a hot reload over
-// it brings it to this build without a turn end replacing it first. When
+// time now, because that is when this build first sees them. It is called at
+// the hooks' start and from the live ticker. At the start, because a build
+// before tasks carried stamps stored such a list, and a hot reload over it
+// brings it to this build without a turn end replacing it first. From the
+// ticker, because a copy of the module from before a hot reload keeps running
+// the turn end it had in flight, so a copy from a build before stamps can
+// land its unstamped list after this copy's start has stamped the list, and a
+// session that only waits sees no turn end that would stamp it again. When
 // every task is stamped, as after a reload over a list this build wrote,
-// nothing is written. The write goes through wroteBackground, as every write
-// of the list must.
+// nothing is written, so a call over such a list costs one read. The write
+// goes through wroteBackground, as every write of the list must.
 async function stampBackground($: $) {
   const now = await $.clock.now()
   const tasks = await read($, background)
@@ -2429,6 +2434,14 @@ async function liveTick($: $) {
     idleRead = 'none'
     if (isListTick) startListRead($)
     $.ui.invalidate('ui.render')
+    // A listed task without a sound stamp is stamped now, as stampBackground
+    // says, because a copy of the module from before a hot reload can land an
+    // unstamped list after this copy's start stamped the list, and until a
+    // stamp is written the task's time reads as nothing and never rises. The
+    // call comes after the decisions above, so that no await parts them from
+    // the check, and it is made only when the list this tick read holds such
+    // a task, so a tick over a stamped list costs no second read.
+    if (tasks.some(task => seenAtOf(task) === undefined)) await stampBackground($)
     return
   }
   if (idleRead === 'done') {
@@ -3278,7 +3291,7 @@ export const register: Register = on => {
     void look($, 'session-start', 'observe').catch(() => null)
     // A background list an older build saved has no first-seen stamps, so its
     // tasks are stamped now. A refused read or write leaves the list as it
-    // was, and the next turn end replaces and stamps it anyway.
+    // was, and the live ticker, set going above, stamps it at its next tick.
     await stampBackground($).catch(() => undefined)
     return next(e)
   })
