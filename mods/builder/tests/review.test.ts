@@ -536,6 +536,12 @@ test('a path is a test file by a test or tests folder or a test-like file name, 
   expect(pathKind('.claude/rules/no-project-names.md', spec)).toBe('other')
   expect(pathKind('mods/builder/.claude-plugin/plugin.json', spec)).toBe('other')
   expect(pathKind('.claude/tests/x.test.ts', spec)).toBe('other')
+  // On a filesystem that ignores case, such a name in another case may be the
+  // same file, so the rule cannot sort it for certain.
+  expect(pathKind('docs/claude.md', spec)).toBe('other')
+  expect(pathKind('docs/specs/Skill.md', spec)).toBe('other')
+  expect(pathKind('docs/.Claude/rules/x.md', spec)).toBe('other')
+  expect(pathKind('tests/Claude.md', spec)).toBe('other')
   expect(pathKind('hooks/review.ts', spec)).toBe('other')
   expect(pathKind('', spec)).toBe('other')
 })

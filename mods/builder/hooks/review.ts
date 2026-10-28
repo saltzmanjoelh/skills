@@ -541,13 +541,15 @@ export function specDirOf(claude: string | null): string {
 // test file, documentation, or anything else.
 export type FileKind = 'test' | 'documentation' | 'other'
 
-// The folders and file names Claude Code loads as instructions. A file among
-// them is anything else wherever it lies, because to Claude Code it is code.
+// The folders and file names Claude Code loads as instructions, in lower case.
+// A file among them is anything else wherever it lies, because to Claude Code
+// it is code. Names are compared without regard to case, because on a
+// filesystem that ignores case another spelling may be the same file.
 const INSTRUCTION_FOLDERS: readonly string[] = ['.claude', '.claude-plugin']
-const INSTRUCTION_FILES: readonly string[] = ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', 'SKILL.md']
+const INSTRUCTION_FILES: readonly string[] = ['claude.md', 'claude.local.md', 'agents.md', 'skill.md']
 
 // The kind of one path relative to the repository's root. A file Claude Code
-// loads as instructions is anything else. A test file has a folder named
+// loads as instructions, in any case, is anything else. A test file has a folder named
 // exactly `test` or `tests`, or a file name holding `.test.`, `.spec.` or
 // `_test.`. Documentation is Markdown under `specDir` or under docs/, or the
 // README.md at the root. Every other path, an empty one included, is anything
@@ -558,7 +560,7 @@ export function pathKind(path: string, specDir: string): FileKind {
   const name = parts.at(-1) ?? ''
   const folders = parts.slice(0, -1)
   if (name === '') return 'other'
-  if (folders.some(folder => INSTRUCTION_FOLDERS.includes(folder)) || INSTRUCTION_FILES.includes(name)) return 'other'
+  if (folders.some(folder => INSTRUCTION_FOLDERS.includes(folder.toLowerCase())) || INSTRUCTION_FILES.includes(name.toLowerCase())) return 'other'
   if (folders.some(folder => folder === 'test' || folder === 'tests')) return 'test'
   if (['.test.', '.spec.', '_test.'].some(mark => name.includes(mark))) return 'test'
   if (path === 'README.md') return 'documentation'
