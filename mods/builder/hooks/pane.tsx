@@ -7,7 +7,7 @@ import { ciOf, failedCheckNames, roundInProgress, type Snapshot } from './github
 import { linkOf } from './links'
 import { barOf, modelLabel, stageLabel, type Bar } from './progress'
 import { isRunning, shownStatus, waitingOn } from './state'
-import { issueOf } from './status'
+import { HUNG_AFTER_MS, isProbablyHung, issueOf, oldestTaskOf, startOf } from './status'
 import { clockTime, printable, timeOfDay } from './text'
 
 export const PANE = 'builder'
@@ -29,6 +29,9 @@ export type View = {
   // The session's background work as the last turn end or subagent end
   // reported it, less any task whose notification the transcript has drawn.
   background: BackgroundTask[]
+  // When each background task started, keyed as taskKeyOf in hooks/status.ts
+  // keys a task. A task with no start here counts from `now`.
+  backgroundStarts: Record<string, number>
   // The session's own tool calls in progress.
   calls: ForegroundCall[]
   // Whether builder was started this session (open_pane or /builder).
@@ -107,10 +110,46 @@ function runningAgents(v: View): string {
   return running === 1 ? '1 agent running' : `${running} agents running`
 }
 
+// Background work in words, for the line and the next step alike, so the two
+// count it the same way: `background command` or `background commands` when
+// every task is a shell command, and `background task` or `background tasks`
+// otherwise.
+function backgroundWords(tasks: readonly BackgroundTask[]): string {
+  const noun = tasks.every(task => task.type === 'shell') ? 'command' : 'task'
+  return `background ${noun}${tasks.length === 1 ? '' : 's'}`
+}
+
+// What a background task is shown by before it is cleaned: its description
+// when that is not blank, else its command, else nothing.
+function taskText(task: BackgroundTask): string {
+  return task.description.trim() !== '' ? task.description : task.command ?? ''
+}
+
+// How long a background task's label may be on the line, so that the hung
+// warning, which is never cut, stays a bounded length.
+const LINE_LABEL_CHARS = 40
+
+// A background task's label as the line names it: the text its row in the
+// pane shows, cleaned and cut to `max` characters, or `a background task`
+// when that leaves nothing.
+function taskLabel(task: BackgroundTask, max: number): string {
+  return printable(taskText(task), max) || 'a background task'
+}
+
+// How long a background task that started at `startedAt` has run at `now`,
+// as the line writes every duration, and never below zero, so a clock that
+// reads earlier than the start shows 0s.
+function runTime(startedAt: number, now: number): string {
+  return clockTime(Math.max(now - startedAt, 0))
+}
+
 // What the mod will do next and when, for the line above the prompt and the
 // pane alike: the first of these that applies, starting with a usage-limit
-// hold. When the line already shows its running part (`isRunningShown`), the
-// count of running agents is left out, so the agents are not named twice.
+// hold. With nothing else to wait on, background work in flight is named as
+// what the session waits on, in place of `nothing to hand over`. When the
+// line already names what runs (`isRunningShown`), in its running part or in
+// its hung warning, the count of running agents and the background work are
+// left out, so neither is named twice.
 export function nextStep(v: View, isRunningShown = false): string {
   const hold = holdWords(v)
   if (hold !== null) return hold
@@ -118,17 +157,18 @@ export function nextStep(v: View, isRunningShown = false): string {
   if (at === null) return 'not polling'
   const when = timeUntil(at, v.now)
   if (v.nextLook?.isNewHead === true) return when === null ? 'new head, handing over now' : `new head, handing over in ${when}`
+  const isBackgroundRunning = v.background.length > 0
   const waiting: Record<WaitingOn, string> = {
     owner: 'waiting on your answer',
     agents: runningAgents(v),
     ci: 'waiting on checks',
     fix: 'waiting on a fix',
     merge: 'waiting on the merge',
-    nothing: 'nothing to hand over',
+    nothing: isBackgroundRunning ? `waiting on its ${backgroundWords(v.background)}` : 'nothing to hand over',
   }
   const look = when === null ? 'next look due now' : `next look in ${when}`
   const why = waitingOn(v.pr, v.agents, v.questions)
-  if (why === 'agents' && isRunningShown) return look
+  if (isRunningShown && (why === 'agents' || (why === 'nothing' && isBackgroundRunning))) return look
   return `${waiting[why]} · ${look}`
 }
 
@@ -138,7 +178,10 @@ export const NAMED_AFTER_MS = 10_000
 // What runs, as the line names it, or null when nothing does: the session's
 // own call that started first, once it has run NAMED_AFTER_MS; the running
 // agents' types, oldest first, at most `names` of them; and the background
-// work, counted as commands when every task is a shell command.
+// work, as the oldest task's label and how long it has run, then how many
+// other tasks run. Once the oldest task is probably hung, the hung warning
+// names it, so the background part only counts the other tasks, as commands
+// or tasks by backgroundWords, and is left out when there are none.
 export function runningPart(v: View, names = Infinity): string | null {
   const parts: string[] = []
   const slow = v.calls
@@ -151,10 +194,15 @@ export function runningPart(v: View, names = Infinity): string | null {
     const shown = types.length > names ? [...types.slice(0, names), '…'] : types
     parts.push(`${agents.length} ${agents.length === 1 ? 'agent' : 'agents'}: ${shown.join(', ')}`)
   }
-  const tasks = v.background.length
-  if (tasks > 0) {
-    const noun = v.background.every(task => task.type === 'shell') ? 'command' : 'task'
-    parts.push(`${tasks} background ${noun}${tasks === 1 ? '' : 's'}`)
+  const oldest = oldestTaskOf(v.background, v.backgroundStarts, v.now)
+  if (oldest !== null) {
+    const others = v.background.filter(task => task !== oldest.task)
+    if (!isProbablyHung(oldest.startedAt, v.now)) {
+      const more = others.length === 0 ? '' : ` and ${others.length} more`
+      parts.push(`waiting on: ${taskLabel(oldest.task, LINE_LABEL_CHARS)} (${runTime(oldest.startedAt, v.now)})${more}`)
+    } else if (others.length > 0) {
+      parts.push(`${others.length} more ${backgroundWords(others)}`)
+    }
   }
   return parts.length === 0 ? null : parts.join(' · ')
 }
@@ -164,13 +212,17 @@ export function runningPart(v: View, names = Infinity): string | null {
 // and what the mod will do next and when. With none watched: what runs and
 // the usage-limit hold, or no line when neither is there. The line fits
 // `width` cells when it is a number: agent names are dropped from the end
-// first, then the line is cut with `…`. A stale session's line leads with the
-// warning, as withWarning says.
+// first, then the line is cut with `…`. A stale session's line, and one whose
+// oldest background task is probably hung, leads with its warnings, as
+// withWarning says.
 export function abovePromptLine(v: View, width?: number): string | null {
   return withWarning(v, width, room => lineAbove(v, room))
 }
 
-// The line above the prompt without the stale warning.
+// The line above the prompt without its warnings. The next step is always
+// told that the line names what runs, because whatever the running part does
+// not name, the hung warning does: running agents are always in the running
+// part, and background work is in it or in the warning.
 function lineAbove(v: View, width: number | undefined): string | null {
   return fitLine(v, width, names => {
     if (v.pr === null) {
@@ -179,7 +231,8 @@ function lineAbove(v: View, width: number | undefined): string | null {
     }
     const running = runningPart(v, names)
     const head = `${PREFIX}#${v.pr.number} ${v.pr.state.toLowerCase()} · checks ${ciOf(v.pr.checks)}`
-    return running === null ? `${head} · ${nextStep(v)}` : `${head} · ${running} · ${nextStep(v, true)}`
+    const step = nextStep(v, true)
+    return running === null ? `${head} · ${step}` : `${head} · ${running} · ${step}`
   })
 }
 
@@ -194,19 +247,40 @@ const SEPARATOR = ' · '
 // line take the prefix from this constant rather than writing it themselves.
 const PREFIX = 'builder: '
 
-// The line `lineWith` builds for a width, led by the stale warning when the
-// session is stale. The warning is never cut: the rest of the line follows it
-// without its `builder: ` prefix, fitted to the width the warning and its
-// separator leave, and the line is the warning alone when there is nothing
-// else to say or too little room for more than an ellipsis.
+// What the line says once the oldest background task is probably hung, or
+// null while none is: the task's label and how long it has run, against the
+// limit in whole minutes.
+function hungWarning(v: View): string | null {
+  const oldest = oldestTaskOf(v.background, v.backgroundStarts, v.now)
+  if (oldest === null || !isProbablyHung(oldest.startedAt, v.now)) return null
+  const label = taskLabel(oldest.task, LINE_LABEL_CHARS)
+  return `${PREFIX}${label} has run ${runTime(oldest.startedAt, v.now)}, over ${HUNG_AFTER_MS / 60_000} minutes; it may be hung`
+}
+
+// The warnings that lead the line, or null when there are none: the stale
+// warning, the hung warning, or both, the stale warning first and the hung
+// warning after it without its `builder: ` prefix, since the stale warning
+// already names builder.
+function warningOf(v: View): string | null {
+  const hung = hungWarning(v)
+  if (!v.stale) return hung
+  return hung === null ? STALE_WARNING : `${STALE_WARNING}${SEPARATOR}${hung.slice(PREFIX.length)}`
+}
+
+// The line `lineWith` builds for a width, led by the warnings warningOf gives
+// when there are any. The warnings are never cut: the rest of the line follows
+// them without its `builder: ` prefix, fitted to the width the warnings and
+// their separator leave, and the line is the warnings alone when there is
+// nothing else to say or too little room for more than an ellipsis.
 function withWarning(v: View, width: number | undefined, lineWith: (width: number | undefined) => string | null): string | null {
-  if (!v.stale) return lineWith(width)
+  const warning = warningOf(v)
+  if (warning === null) return lineWith(width)
   const isFitted = typeof width === 'number' && Number.isFinite(width)
-  const room = isFitted ? width - STALE_WARNING.length - SEPARATOR.length : undefined
-  if (room !== undefined && room < 2) return STALE_WARNING
+  const room = isFitted ? width - warning.length - SEPARATOR.length : undefined
+  if (room !== undefined && room < 2) return warning
   const rest = lineWith(room === undefined ? undefined : room + PREFIX.length)
-  if (rest === null) return STALE_WARNING
-  return `${STALE_WARNING}${SEPARATOR}${rest.startsWith(PREFIX) ? rest.slice(PREFIX.length) : rest}`
+  if (rest === null) return warning
+  return `${warning}${SEPARATOR}${rest.startsWith(PREFIX) ? rest.slice(PREFIX.length) : rest}`
 }
 
 // A line built by `lineWith`, which names at most the given number of running
@@ -233,14 +307,19 @@ function stageWords(progress: Progress | null): string {
 // The band's second row. With a pull request watched it is the line above,
 // whether builder was started or not. Once builder is started with none watched,
 // it names the stage (or `started`), what runs and the usage-limit hold, or
-// `idle` when neither is there, fitted as the line is. Before builder is
-// started it is the line as it was before there was a bar: none while nothing
-// runs and no hold is on. A stale session's row leads with the warning, as the
-// line does.
+// `idle` when neither is there and no background task is in flight, fitted as
+// the line is. A probably hung task that is the only work is named by the
+// hung warning, so the row is then the stage alone after the warning. Before
+// builder is started it is the line as it was before there was a bar: none
+// while nothing runs and no hold is on. A stale session's row leads with the
+// warning, as the line does.
 export function secondRow(v: View, width?: number): string | null {
   if (v.pr !== null || !v.started) return abovePromptLine(v, width)
   const stage = stageWords(v.progress)
-  return withWarning(v, width, room => fitLine(v, room, names => `${PREFIX}${stage} · ${runningOrHold(v, names) ?? 'idle'}`))
+  return withWarning(v, width, room => fitLine(v, room, names => {
+    const shown = runningOrHold(v, names) ?? (v.background.length > 0 ? null : 'idle')
+    return shown === null ? `${PREFIX}${stage}` : `${PREFIX}${stage} · ${shown}`
+  }))
 }
 
 // About how many CSS pixels wide one column of the band or the pane is on the
@@ -464,15 +543,25 @@ export function agentLines(v: View): string[] {
   return agentsInOrder(v.agents).map(card => lineOfRow(agentRowOf(card, v.now)))
 }
 
-function backgroundLine(task: BackgroundTask): string {
-  const what = task.description.trim() !== '' ? task.description : task.command ?? ''
-  return `${printable(task.status, 20)} ${printable(task.type, 20)} · ${printable(what)}`
+// A background task's row as a line of text: its status, its type and its
+// description, or its command when it has no description, then how long it
+// has run since `startedAt`.
+function backgroundLine(task: BackgroundTask, startedAt: number, now: number): string {
+  return `${printable(task.status, 20)} ${printable(task.type, 20)} · ${printable(taskText(task))} (${runTime(startedAt, now)})`
 }
 
 // One row per background task, with its status, type and description, or its
-// command when it has no description.
+// command when it has no description, and how long it has run.
 export function backgroundLines(v: View): string[] {
-  return v.background.map(backgroundLine)
+  return v.background.map(task => backgroundLine(task, startOf(task, v.backgroundStarts, v.now), v.now))
+}
+
+// A background task's row in the pane, drawn in yellow once the task is
+// probably hung, as the pane draws its stale warning.
+function backgroundRow({ Text }: El, task: BackgroundTask, key: string, v: View) {
+  const startedAt = startOf(task, v.backgroundStarts, v.now)
+  const line = backgroundLine(task, startedAt, v.now)
+  return isProbablyHung(startedAt, v.now) ? <Text key={key} color="yellow">{line}</Text> : <Text key={key}>{line}</Text>
 }
 
 // One agent's row: a drawing on a surface that draws images, else a line of
@@ -536,7 +625,7 @@ function agentsTree(ui: Elements, v: View, columns: number | undefined, presses:
     ...(v.background.length === 0 ? [] : [
       <Text key="background-gap"> </Text>,
       <Text key="background-head" bold>Background</Text>,
-      ...v.background.map((task, i) => <Text key={`background-${i}`}>{backgroundLine(task)}</Text>),
+      ...v.background.map((task, i) => backgroundRow(ui, task, `background-${i}`, v)),
     ]),
   ]
 }
