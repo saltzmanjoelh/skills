@@ -4,7 +4,7 @@ import { snapshotOf } from '../hooks/github'
 import {
   afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite,
   backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, ERROR_CHARS, errorLineOf, firstPromptOf, generationIn, HUNG_AFTER_MS, hungAtOf, isBackgroundOnly, isCleanupSkill,
-  isProbablyHung, issueOf, newMemo, oldestTaskOf, recordOf, shownOrWithheld, startOf, startsBackgrounded, startsPruned, startsSeen, startsWithout, STATE_RULES, stateOf,
+  isProbablyHung, issueOf, newMemo, oldestTaskOf, recordOf, shownOrWithheld, startOf, startsBackgrounded, startsIn, startsPruned, startsSeen, startsWithout, STATE_RULES, stateOf,
   statusMemoIn, TASK_CHARS, taskKeyOf, taskKeyOfId, ticketIn, WITHHELD, type StatusFacts,
 } from '../hooks/status'
 import type { AgentCard, BackgroundTask, StatusMemo } from '../types'
@@ -395,14 +395,22 @@ test('a task counts as probably hung once it has run fifteen minutes from its st
   expect(isProbablyHung(NOW, NOW - 60_000)).toBe(false)
 })
 
-test('a task\'s start is the one recorded under its key, and now when none is recorded or the recorded value is not a finite number', () => {
-  const starts = { b1: NOW - 5000, b2: Number.NaN, b3: 'soon' as unknown as number, b4: Number.POSITIVE_INFINITY }
+test('the stored start times are read leniently: a value that is not an object, or is a list, holds none, a start that is not a finite number is left out, and a sound value comes back as the same object', () => {
+  const sound = { b1: NOW - 5000, b2: NOW - 2000 }
+  expect(startsIn(sound)).toBe(sound)
+  expect(startsIn({})).toEqual({})
+  expect(startsIn({ b1: NOW - 5000, b2: Number.NaN, b3: 'soon', b4: Number.POSITIVE_INFINITY, b5: null })).toEqual({ b1: NOW - 5000 })
+  for (const bad of [null, undefined, 'soon', 3, [NOW - 5000]]) expect(startsIn(bad)).toEqual({})
+})
+
+test('a task\'s start is the one recorded under its key, and now when none is recorded or the stored value was not a finite number', () => {
+  const starts = startsIn({ b1: NOW - 5000, b2: Number.NaN, b3: 'soon', b4: Number.POSITIVE_INFINITY })
   expect(startOf(suite, starts, NOW)).toBe(NOW - 5000)
   for (const id of ['b2', 'b3', 'b4', 'b9']) expect(startOf(task(id, 'x'), starts, NOW)).toBe(NOW)
   // Only the object's own keys count, so a key that every object inherits reads as none.
   for (const id of ['toString', 'constructor', '__proto__', 'hasOwnProperty']) expect(startOf(task(id, 'x'), {}, NOW)).toBe(NOW)
   // A stored value that is not an object holds no start, rather than stopping the read.
-  expect(startOf(suite, null as unknown as Record<string, number>, NOW)).toBe(NOW)
+  expect(startOf(suite, startsIn(null), NOW)).toBe(NOW)
 })
 
 test('the oldest task is the one with the earliest start, two equal starts keep the engine\'s order, and an empty list has none', () => {
@@ -423,8 +431,8 @@ test('a first sighting adds a start of now, a task that has one keeps it, and a 
   expect(starts).toEqual({ b1: NOW - 60_000 })
   expect(startsSeen(seen, [suite, task('b2', 'two')], NOW + 5000)).toBe(seen)
   expect(startsSeen(seen, [], NOW + 5000)).toBe(seen)
-  // A start that is not a finite number is replaced, as a missing one is.
-  expect(startsSeen({ b1: Number.NaN }, [suite], NOW)).toEqual({ b1: NOW })
+  // A stored start that was not a finite number is replaced, as a missing one is.
+  expect(startsSeen(startsIn({ b1: Number.NaN }), [suite], NOW)).toEqual({ b1: NOW })
 })
 
 test('a prune drops only the starts of tasks that are no longer listed, and gives back the same object when every start is still listed', () => {
@@ -442,8 +450,8 @@ test('a backgrounded call\'s start is kept only when it is earlier than the one 
   expect(startsBackgrounded(starts, 'b1', NOW)).toBe(starts)
   expect(startsBackgrounded(starts, 'b1', NOW - 30_000)).toBe(starts)
   expect(starts).toEqual({ b1: NOW - 30_000 })
-  // A stored value that is not a finite number is replaced, and a time that is not one is never stored.
-  expect(startsBackgrounded({ b1: Number.NaN }, 'b1', NOW)).toEqual({ b1: NOW })
+  // A stored value that was not a finite number is replaced, and a time that is not one is never stored.
+  expect(startsBackgrounded(startsIn({ b1: Number.NaN }), 'b1', NOW)).toEqual({ b1: NOW })
   expect(startsBackgrounded(starts, 'b2', Number.NaN)).toBe(starts)
 })
 

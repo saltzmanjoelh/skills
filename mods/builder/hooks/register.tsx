@@ -13,7 +13,7 @@ import { afterReport, endedOf, plannedOf, progressIn, reportAnswer, reportOf, st
 import { changePrompt, ciEventContext, resumePrompt, stateLines, stuckPrompt } from './prompts'
 import { commitRecordsOf, decidedItems, factIn, packageText, secretIn, trendOf, trendStopLine, verdictsLine, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
-import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, firstPromptOf, generationIn, isCleanupSkill, newMemo, recordOf, startsBackgrounded, startsPruned, startsSeen, startsWithout, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
+import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, firstPromptOf, generationIn, isCleanupSkill, newMemo, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
 import { timeOfDay } from './text'
 
 type $ = EngineInterface
@@ -2361,11 +2361,12 @@ function couldBeListed(id: string): boolean {
 // hands back the value it was given, and every write of a builder value asks
 // for the status file to be worked out again. The change is made again inside
 // `update`, on the value stored by then, so a write that landed between the
-// read and the update is kept.
+// read and the update is kept. Both reads go through startsIn, so a rule only
+// ever sees start times that are finite numbers.
 async function changeStarts($: $, change: (starts: Starts) => Starts) {
-  const stored = await read($, backgroundStarts)
+  const stored = startsIn(await read($, backgroundStarts))
   if (change(stored) === stored) return
-  await update($, backgroundStarts, change)
+  await update($, backgroundStarts, raw => change(startsIn(raw)))
 }
 
 // Gives each task the background list holds that has no start the time this
@@ -2446,7 +2447,7 @@ async function liveTick($: $) {
   // The start times and the moment are read with the list, before the check
   // below, because no await may come after it. They tell the tick whether a
   // listed task has no start.
-  const starts = await read($, backgroundStarts)
+  const starts = startsIn(await read($, backgroundStarts))
   const now = await $.clock.now()
   const isAnythingRunning = tasks.length > 0
     || (await read($, agents)).some(isRunning)
@@ -2617,7 +2618,7 @@ async function view($: $): Promise<View> {
     nextLook: await read($, nextLook),
     counsel: counselQuestions,
     background: await read($, background),
-    backgroundStarts: await read($, backgroundStarts),
+    backgroundStarts: startsIn(await read($, backgroundStarts)),
     calls: await read($, calls),
     started: (await read($, started)) === true,
     progress: progressIn(await read($, progress)),
@@ -2957,7 +2958,7 @@ async function statusFacts($: $): Promise<StatusFacts | null> {
     busy: (await read($, busy)) === true,
     agents: await read($, agents),
     background: await read($, background),
-    backgroundStarts: await read($, backgroundStarts),
+    backgroundStarts: startsIn(await read($, backgroundStarts)),
     calls: await read($, calls),
     questions: await read($, questions),
     nextLook: await read($, nextLook),

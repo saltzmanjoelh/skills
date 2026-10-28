@@ -286,31 +286,34 @@ export function isProbablyHung(startedAt: number, now: number): boolean {
 // as taskKeyOf keys a task, as builder's backgroundStarts atom holds them.
 export type Starts = Readonly<Record<string, number>>
 
-// The start `starts` holds for `key`, or undefined when it holds none or
-// holds something other than a finite number. Only the object's own keys
-// count, so a key such as `__proto__` or `toString` never reads what every
-// object inherits, and a stored value that is not an object holds no start.
-function startAt(starts: Starts, key: string): number | undefined {
-  if (typeof starts !== 'object' || starts === null || !Object.hasOwn(starts, key)) return undefined
-  const at = starts[key]
-  return isFiniteTime(at) ? at : undefined
+// The start times as builder's state holds them, read without trusting them,
+// as every value builder reads from its state is: a value that is not an
+// object, or is a list, holds no start, and an entry whose start is not a
+// finite number is left out. The same object comes back when every entry is
+// a finite number, so a caller can still tell that a rule changed nothing.
+export function startsIn(raw: unknown): Starts {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return {}
+  const entries = Object.entries(raw)
+  const kept = entries.filter(([, at]) => isFiniteTime(at))
+  return kept.length === entries.length ? raw as Starts : Object.fromEntries(kept)
 }
 
-// The keys and starts `starts` holds, own keys only, and none when the stored
-// value is not an object.
-function entriesOf(starts: Starts): [string, number][] {
-  return typeof starts === 'object' && starts !== null ? Object.entries(starts) : []
+// The start `starts` holds for `key`, or undefined when it holds none. Only
+// the object's own keys count, so a key such as `__proto__` or `toString`
+// never reads what every object inherits.
+function startAt(starts: Starts, key: string): number | undefined {
+  return Object.hasOwn(starts, key) ? starts[key] : undefined
 }
 
 // `starts` with `key` set to `at`. The copy is built from its entries rather
 // than by assignment, so a key such as `__proto__` becomes an own key like any
 // other instead of changing the copy's prototype.
 function withStart(starts: Starts, key: string, at: number): Starts {
-  return Object.fromEntries([...entriesOf(starts), [key, at]])
+  return Object.fromEntries([...Object.entries(starts), [key, at]])
 }
 
 // When a task started: the start `starts` holds under the task's key, or
-// `now` when it holds none or holds something other than a finite number.
+// `now` when it holds none.
 export function startOf(task: BackgroundTask, starts: Starts, now: number): number {
   return startAt(starts, taskKeyOf(task)) ?? now
 }
@@ -345,7 +348,7 @@ export function startsSeen(starts: Starts, tasks: readonly BackgroundTask[], now
 // dropped. The same object comes back when every start is still listed.
 export function startsPruned(starts: Starts, tasks: readonly BackgroundTask[]): Starts {
   const listed = new Set(tasks.map(taskKeyOf))
-  const entries = entriesOf(starts)
+  const entries = Object.entries(starts)
   const kept = entries.filter(([key]) => listed.has(key))
   return kept.length === entries.length ? starts : Object.fromEntries(kept)
 }
@@ -364,7 +367,7 @@ export function startsBackgrounded(starts: Starts, key: string, at: number): Sta
 // The starts without the one stored under `key`. The same object comes back
 // when there is none.
 export function startsWithout(starts: Starts, key: string): Starts {
-  const entries = entriesOf(starts)
+  const entries = Object.entries(starts)
   const kept = entries.filter(([stored]) => stored !== key)
   return kept.length === entries.length ? starts : Object.fromEntries(kept)
 }
