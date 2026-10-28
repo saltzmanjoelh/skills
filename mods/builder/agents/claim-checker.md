@@ -44,6 +44,11 @@ Every finding of a review round has a `Scope:` line, and you check every
 one, marked for checking or not. Read the spec that `package.md` names, and
 read the base branch's version of a file with
 `git show origin/<base>:<path>`, the base being the one `package.md` names.
+When `package.md` names `full.patch`, the package is a later one, and
+`diff.patch` holds only the change since the head `package.md` names; check
+a finding's scope against `full.patch`, the whole pull request against the
+base, so that code an earlier head added still counts as the pull
+request's.
 
 - `in the spec` stands only when the passage it names exists and asks for
   the feature the finding is about. A defect in code that the pull request

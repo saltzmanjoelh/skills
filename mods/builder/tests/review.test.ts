@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { verdictsOf } from '../hooks/github'
-import { commitRecordsOf, DECIDED_HEADINGS, DECIDED_ITEM_CHARS, decidedItems, decidedSection, factIn, packageText, recordItems, secretIn, STREAK_STOP, trendOf, trendSection, trendStopLine, verdictsLine } from '../hooks/review'
+import { CHEAP_FIX_SUBJECT, changedKinds, commitRecordsOf, DECIDED_HEADINGS, DECIDED_ITEM_CHARS, decidedItems, decidedSection, DEFAULT_SPEC_DIR, factIn, INSTRUCTION_PATHSPECS, instructionFileImportsMarkdown, instructionFileIsLink, isFullSha, isUpForCheck, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pathKind, pluginRootsOf, recordItems, reviewedHeadOf, secretIn, specDirOf, STREAK_STOP, trendOf, trendSection, trendStopLine, underRoot, verdictHeadOf, verdictsLine } from '../hooks/review'
 
 const facts = {
   repo: 'o/r',
@@ -504,4 +504,290 @@ test('the stop line says later safety findings and findings that break working b
   expect(stop).toContain('stays in scope and blocking whatever the answer')
   expect(stop).toContain("governs only the area's other later findings")
   expect(stop).not.toContain('\n')
+})
+
+// The later package and the rule that picks the focused reviewers.
+
+const review = (c: string, spec: string, adversarial: string) => ({ sha: sha(c), body: `VERDICTS ${sha(c).slice(0, 8)} spec=${spec} adversarial=${adversarial}\n\nNotes at ${c}.` })
+
+test('a path is a test file by a test or tests folder or a test-like file name, documentation by its place, and anything else otherwise', () => {
+  const spec = DEFAULT_SPEC_DIR
+  expect(pathKind('tests/review.test.ts', spec)).toBe('test')
+  expect(pathKind('mods/builder/test/helpers.ts', spec)).toBe('test')
+  expect(pathKind('src/a.spec.tsx', spec)).toBe('test')
+  expect(pathKind('pkg/a_test.go', spec)).toBe('test')
+  // A folder only counts when its whole name is test or tests.
+  expect(pathKind('src/testing/helpers.ts', spec)).toBe('other')
+  expect(pathKind('src/latest.ts', spec)).toBe('other')
+  expect(pathKind('docs/specs/thing.md', spec)).toBe('documentation')
+  expect(pathKind('docs/guide.md', spec)).toBe('documentation')
+  expect(pathKind('README.md', spec)).toBe('documentation')
+  // Only the README at the root is documentation, and only Markdown under docs/.
+  expect(pathKind('mods/builder/README.md', spec)).toBe('other')
+  expect(pathKind('docs/diagram.svg', spec)).toBe('other')
+  // Files Claude Code loads as instructions are anything else wherever they are.
+  expect(pathKind('skills/implement/SKILL.md', spec)).toBe('other')
+  expect(pathKind('mods/builder/agents/spec-reviewer.md', spec)).toBe('other')
+  expect(pathKind('docs/SKILL.md', spec)).toBe('other')
+  expect(pathKind('docs/specs/CLAUDE.md', spec)).toBe('other')
+  expect(pathKind('docs/CLAUDE.local.md', spec)).toBe('other')
+  expect(pathKind('docs/AGENTS.md', spec)).toBe('other')
+  expect(pathKind('docs/.claude/rules/x.md', spec)).toBe('other')
+  expect(pathKind('.claude/rules/no-project-names.md', spec)).toBe('other')
+  expect(pathKind('mods/builder/.claude-plugin/plugin.json', spec)).toBe('other')
+  expect(pathKind('.claude/tests/x.test.ts', spec)).toBe('other')
+  // On a filesystem that ignores case, such a name in another case may be the
+  // same file, so the rule cannot sort it for certain.
+  expect(pathKind('docs/claude.md', spec)).toBe('other')
+  expect(pathKind('docs/specs/Skill.md', spec)).toBe('other')
+  expect(pathKind('docs/.Claude/rules/x.md', spec)).toBe('other')
+  expect(pathKind('tests/Claude.md', spec)).toBe('other')
+  expect(pathKind('hooks/review.ts', spec)).toBe('other')
+  expect(pathKind('', spec)).toBe('other')
+})
+
+test('a custom spec directory makes Markdown under it documentation', () => {
+  expect(pathKind('design/specs/thing.md', 'design/specs/')).toBe('documentation')
+  expect(pathKind('design/specs/thing.md', DEFAULT_SPEC_DIR)).toBe('other')
+  // A folder that only starts with the spec directory's name is not under it.
+  expect(pathKind('design/specs-old/thing.md', 'design/specs/')).toBe('other')
+})
+
+test('the spec directory is read from CLAUDE.md, and a missing, empty or unsafe value gives the default', () => {
+  expect(DEFAULT_SPEC_DIR).toBe('docs/specs/')
+  expect(specDirOf('Spec directory: `design/specs/`\n')).toBe('design/specs/')
+  expect(specDirOf('Spec directory: ./design/specs\n')).toBe('design/specs/')
+  expect(specDirOf(null)).toBe(DEFAULT_SPEC_DIR)
+  expect(specDirOf('# Project\n')).toBe(DEFAULT_SPEC_DIR)
+  for (const unsafe of ['/etc/specs', '../specs', 'docs/../../x', '.', './', '/']) {
+    expect(specDirOf(`Spec directory: ${unsafe}\n`)).toBe(DEFAULT_SPEC_DIR)
+  }
+})
+
+test('the changed files are read from git diff --name-status -z output, and a rename counts as tests or documentation only when both paths agree', () => {
+  const spec = DEFAULT_SPEC_DIR
+  expect(changedKinds('M\0tests/a.test.ts\0A\0docs/specs/x.md\0D\0README.md\0T\0src/a.ts\0', spec)).toEqual(['test', 'documentation', 'documentation', 'other'])
+  expect(changedKinds('R100\0tests/a.test.ts\0tests/b.test.ts\0', spec)).toEqual(['test'])
+  expect(changedKinds('R090\0tests/a.test.ts\0src/a.ts\0', spec)).toEqual(['other'])
+  expect(changedKinds('C075\0docs/a.md\0docs/specs/b.md\0', spec)).toEqual(['documentation'])
+  expect(changedKinds('R100\0docs/a.md\0tests/a.test.ts\0', spec)).toEqual(['other'])
+  expect(changedKinds('', spec)).toEqual([])
+})
+
+test('an instruction file on either tree that git grep finds with a Markdown import makes documentation count as anything else', () => {
+  const trees = ['HEAD', 'origin/main']
+  expect(instructionFileImportsMarkdown('HEAD:CLAUDE.md\n', trees)).toBe(true)
+  expect(instructionFileImportsMarkdown('origin/main:.claude/rules/x.md\n', trees)).toBe(true)
+  expect(instructionFileImportsMarkdown('HEAD:packages/app/Claude.md\n', trees)).toBe(true)
+  // A match outside the instruction files is not an import Claude Code reads.
+  expect(instructionFileImportsMarkdown('HEAD:docs/guide.md\nHEAD:src/a.test.ts\n', trees)).toBe(false)
+  expect(instructionFileImportsMarkdown('', trees)).toBe(false)
+  const spec = DEFAULT_SPEC_DIR
+  const raw = 'M\0docs/guide.md\0M\0tests/a.test.ts\0'
+  expect(changedKinds(raw, spec)).toEqual(['documentation', 'test'])
+  expect(changedKinds(raw, spec, () => true)).toEqual(['other', 'test'])
+  expect(changedKinds('M\0docs/a.md\0M\0docs/b.md\0', spec, path => path === 'docs/b.md')).toEqual(['documentation', 'other'])
+})
+
+test('the import pattern matches the paths Claude Code reads as imports, a space escaped with a backslash included, and not an email address', () => {
+  // The pattern is a POSIX extended expression for git grep; JavaScript reads
+  // the same expression once its space class is written as \s.
+  const pattern = new RegExp(MARKDOWN_IMPORT_PATTERN.replaceAll('[:space:]', '\\s'), 'i')
+  expect(pattern.test('See @docs/guide.md here')).toBe(true)
+  expect(pattern.test('@docs/guide.md')).toBe(true)
+  expect(pattern.test('See @docs/my\\ notes.md here')).toBe(true)
+  expect(pattern.test('@docs/Guide.MD#part')).toBe(true)
+  expect(pattern.test('mail me@example.md')).toBe(false)
+  expect(pattern.test('ask @someone first')).toBe(false)
+  expect(pattern.test('See @docs/my notes.md here')).toBe(false)
+})
+
+test('the search for Markdown imports finds one when it fails, is cut off, or names an instruction file, and none when it exits 1', () => {
+  const trees = ['HEAD', 'origin/main']
+  expect(markdownImportFound(null, trees)).toBe(true)
+  expect(markdownImportFound({ exitCode: 128, stdout: '' }, trees)).toBe(true)
+  expect(markdownImportFound({ exitCode: 1, stdout: '' }, trees)).toBe(false)
+  expect(markdownImportFound({ exitCode: 0, stdout: 'HEAD:CLAUDE.md\n' }, trees)).toBe(true)
+  expect(markdownImportFound({ exitCode: 0, stdout: 'HEAD:docs/guide.md\n' }, trees)).toBe(false)
+})
+
+test('a listing of the instruction files that holds a symbolic link, or could not be read, makes documentation count as anything else', () => {
+  const zero = '0'.repeat(40)
+  const link = `:000000 120000 ${zero} ${'c'.repeat(40)} A\0AGENTS.md\0`
+  const file = `:000000 100644 ${zero} ${'d'.repeat(40)} A\0CLAUDE.md\0`
+  expect(instructionFileIsLink(null)).toBe(true)
+  expect(instructionFileIsLink(link)).toBe(true)
+  expect(instructionFileIsLink(file + link)).toBe(true)
+  expect(instructionFileIsLink(file)).toBe(false)
+  expect(instructionFileIsLink('')).toBe(false)
+})
+
+test('a plugin root is the folder above a .claude-plugin folder that holds plugin.json, in any case, and the root itself has the empty name', () => {
+  const zero = '0'.repeat(40)
+  const entry = (mode: string, path: string) => `:000000 ${mode} ${zero} ${'d'.repeat(40)} A\0${path}\0`
+  const raw = entry('100644', 'docs/example-plugin/.claude-plugin/plugin.json') + entry('100644', 'Tools/.Claude-Plugin/Plugin.JSON') + entry('100644', '.claude-plugin/marketplace.json') + entry('100644', 'CLAUDE.md')
+  expect(pluginRootsOf(raw)).toEqual(['docs/example-plugin', 'Tools'])
+  expect(pluginRootsOf(entry('100644', '.claude-plugin/plugin.json'))).toEqual([''])
+  expect(marketplacePathsOf(raw)).toEqual(['.claude-plugin/marketplace.json'])
+  expect(marketplacePathsOf(entry('100644', 'docs/x/.claude-plugin/Marketplace.json'))).toEqual(['docs/x/.claude-plugin/Marketplace.json'])
+  expect(underRoot('docs/example-plugin/commands/deploy.md', 'docs/example-plugin')).toBe(true)
+  expect(underRoot('docs/example-plugin-notes.md', 'docs/example-plugin')).toBe(false)
+  expect(underRoot('docs/guide.md', '')).toBe(true)
+})
+
+test('a marketplace names the folders of its local plugins, relative to the folder above its .claude-plugin folder, and an unreadable one names none for certain', () => {
+  const market = (plugins: unknown, extra: object = {}) => JSON.stringify({ name: 'm', ...extra, plugins })
+  const at = '.claude-plugin/marketplace.json'
+  expect(marketplaceRootsOf(market([{ name: 'a', source: './mods/a' }, { name: 'b', source: { source: 'github', repo: 'o/r' } }]), at)).toEqual(['mods/a'])
+  expect(marketplaceRootsOf(market([{ name: 'a', source: './' }]), at)).toEqual([''])
+  expect(marketplaceRootsOf(market([{ name: 'a', source: './a' }]), 'docs/x/.claude-plugin/marketplace.json')).toEqual(['docs/x/a'])
+  expect(marketplaceRootsOf(market([{ name: 'a', source: 'docs/plugin/' }]), at)).toEqual(['docs/plugin'])
+  expect(marketplaceRootsOf(null, at)).toBeNull()
+  expect(marketplaceRootsOf('not json', at)).toBeNull()
+  expect(marketplaceRootsOf(market('nope'), at)).toBeNull()
+  expect(marketplaceRootsOf(market([{ name: 'a', source: '../a' }]), at)).toBeNull()
+  expect(marketplaceRootsOf(market([{ name: 'a', source: '/abs' }]), at)).toBeNull()
+  expect(marketplaceRootsOf(market([{ name: 'a', source: 'a' }], { metadata: { pluginRoot: './plugins' } }), at)).toBeNull()
+})
+
+test('the instruction pathspecs name every instruction file and folder, in any case and at any depth', () => {
+  expect(INSTRUCTION_PATHSPECS).toEqual([
+    ':(glob,icase)**/claude.md',
+    ':(glob,icase)**/claude.local.md',
+    ':(glob,icase)**/agents.md',
+    ':(glob,icase)**/skill.md',
+    ':(glob,icase)**/.claude',
+    ':(glob,icase)**/.claude/**',
+    ':(glob,icase)**/.claude-plugin',
+    ':(glob,icase)**/.claude-plugin/**',
+  ])
+})
+
+test('an unknown status or output that does not parse counts as anything else', () => {
+  const spec = DEFAULT_SPEC_DIR
+  expect(changedKinds('U\0tests/a.test.ts\0', spec)).toContain('other')
+  expect(changedKinds('X\0tests/a.test.ts\0', spec)).toContain('other')
+  expect(changedKinds('M\0', spec)).toContain('other')
+  expect(changedKinds('R100\0tests/a.test.ts\0', spec)).toContain('other')
+  expect(changedKinds('tests/a.test.ts\0', spec)).toContain('other')
+})
+
+test('the verdict head is the newest verdict review not at the head, and none when there is no other', () => {
+  const head = sha('c')
+  expect(verdictHeadOf([], head)).toBe(null)
+  expect(verdictHeadOf([review('a', 'APPROVE', 'APPROVE')], head)).toBe(sha('a'))
+  expect(verdictHeadOf([review('a', 'APPROVE', 'APPROVE'), review('b', 'REQUEST_CHANGES', 'APPROVE')], head)).toBe(sha('b'))
+  expect(verdictHeadOf([review('a', 'APPROVE', 'APPROVE'), review('c', 'APPROVE', 'APPROVE')], head)).toBe(sha('a'))
+  expect(verdictHeadOf([review('c', 'APPROVE', 'APPROVE')], head)).toBe(null)
+})
+
+test('a full sha is 40 lowercase hexadecimal characters', () => {
+  expect(isFullSha(sha('a'))).toBe(true)
+  expect(isFullSha('A'.repeat(40))).toBe(false)
+  expect(isFullSha(sha('a').slice(0, 39))).toBe(false)
+  expect(isFullSha(`${sha('a').slice(0, 39)}g`)).toBe(false)
+  expect(isFullSha('--all'.padEnd(40, 'a'))).toBe(false)
+})
+
+test('the reviewed head is the newest commit a Reviewed: line after the verdict head names, else the verdict head, and missing when a value names no branch commit', () => {
+  const commits = [commit('a', 'Build'), commit('b', 'Spec'), commit('d', 'Fix\n\nReviewed: bbbbbbbb'), commit('e', 'More')]
+  expect(reviewedHeadOf(sha('b'), commits)).toBe(sha('b'))
+  expect(reviewedHeadOf(sha('a'), commits)).toBe(sha('b'))
+  const later = [...commits, commit('f', 'Fix again\n\nReviewed: eeeeeeee')]
+  expect(reviewedHeadOf(sha('a'), later)).toBe(sha('e'))
+  // A named commit that is not after the verdict head is ignored.
+  expect(reviewedHeadOf(sha('e'), [...later, commit('1', 'Fix\n\nReviewed: aaaaaaaa')])).toBe(sha('e'))
+  expect(reviewedHeadOf(sha('a'), [...commits, commit('f', 'Fix\n\nReviewed: 99999999')])).toBe(null)
+  expect(reviewedHeadOf(sha('a'), [...commits, commit('f', 'Fix\n\nReviewed:')])).toBe(null)
+  expect(reviewedHeadOf(sha('9'), commits)).toBe(null)
+})
+
+test('a head is up for the check only when the verdict head approved both verdicts, is the reviewed head, and the one commit since is the cheap-fix commit', () => {
+  const commits = [commit('a', 'Build'), commit('b', `${CHEAP_FIX_SUBJECT}\n\nFixed:\n- A name.`)]
+  const approved = [review('a', 'APPROVE', 'APPROVE')]
+  expect(isUpForCheck(sha('a'), sha('a'), commits, approved)).toBe(true)
+  expect(isUpForCheck(sha('a'), sha('a'), commits, [review('a', 'REQUEST_CHANGES', 'APPROVE')])).toBe(false)
+  expect(isUpForCheck(sha('a'), sha('a'), commits, [review('a', 'APPROVE', 'REQUEST_CHANGES')])).toBe(false)
+  // The newest review at the verdict head decides.
+  expect(isUpForCheck(sha('a'), sha('a'), commits, [review('a', 'APPROVE', 'APPROVE'), review('a', 'REQUEST_CHANGES', 'APPROVE')])).toBe(false)
+  expect(isUpForCheck(sha('a'), null, commits, approved)).toBe(false)
+  expect(isUpForCheck(sha('a'), sha('b'), commits, approved)).toBe(false)
+  expect(isUpForCheck(sha('a'), sha('a'), [...commits, commit('d', 'Another')], approved)).toBe(false)
+  expect(isUpForCheck(sha('a'), sha('a'), [commit('a', 'Build'), commit('b', 'Fix the blocking findings')], approved)).toBe(false)
+  expect(isUpForCheck(sha('a'), sha('a'), [commit('a', 'Build')], approved)).toBe(false)
+})
+
+test('a later package names the head it starts from, points at both patches, repeats the newest review in full and the older ones in one line each', () => {
+  const text = packageText({ issue: 'x' }, {
+    ...facts,
+    round: 3,
+    earlier: [review('a', 'REQUEST_CHANGES', 'APPROVE'), review('b', 'APPROVE', 'REQUEST_CHANGES')],
+    since: sha('b'),
+  })
+  expect(text).toContain(`\`diff.patch\` beside this file is the change from ${sha('b')}`)
+  expect(text).toContain('15 lines of context')
+  expect(text).toContain('`full.patch`')
+  expect(text).toContain('Read `diff.patch` first, and `full.patch` or any source file only when a hunk needs it.')
+  expect(text).toContain('- At aaaaaaaa: spec=REQUEST_CHANGES, adversarial=APPROVE')
+  expect(text).not.toContain('Notes at a.')
+  expect(text).toContain('### At bbbbbbbb')
+  expect(text).toContain('Notes at b.')
+  expect(text).not.toContain('Read `diff.patch` beside this file first')
+})
+
+test('a later package built at a head that already has its own verdict review repeats the verdict head\'s review in full and the head\'s own in one line', () => {
+  const text = packageText({ issue: 'x' }, {
+    ...facts,
+    round: 3,
+    earlier: [review('a', 'REQUEST_CHANGES', 'APPROVE'), review('b', 'APPROVE', 'APPROVE'), review('c', 'APPROVE', 'APPROVE')],
+    since: sha('b'),
+  })
+  expect(text).toContain('### At bbbbbbbb')
+  expect(text).toContain('Notes at b.')
+  expect(text.split('\n')).toContain('- At cccccccc: spec=APPROVE, adversarial=APPROVE')
+  expect(text).not.toContain('### At cccccccc')
+  expect(text).not.toContain('Notes at c.')
+})
+
+test('a later package whose verdict head has no review among the earlier ones repeats the newest review in full', () => {
+  const text = packageText({ issue: 'x' }, {
+    ...facts,
+    round: 3,
+    earlier: [review('a', 'REQUEST_CHANGES', 'APPROVE'), review('b', 'APPROVE', 'APPROVE')],
+    since: sha('c'),
+  })
+  expect(text).toContain('### At bbbbbbbb')
+  expect(text.split('\n')).toContain('- At aaaaaaaa: spec=REQUEST_CHANGES, adversarial=APPROVE')
+  expect(text).not.toContain('### At aaaaaaaa')
+})
+
+test('a later package gives an older review whose verdicts do not parse one line that says its verdicts are unreadable', () => {
+  const unreadable = { sha: sha('c'), body: 'Notes with no verdicts line at c.' }
+  const text = packageText({ issue: 'x' }, {
+    ...facts,
+    round: 4,
+    earlier: [review('a', 'REQUEST_CHANGES', 'APPROVE'), unreadable, review('b', 'APPROVE', 'REQUEST_CHANGES')],
+    since: sha('b'),
+  })
+  expect(text).toContain('- At aaaaaaaa: spec=REQUEST_CHANGES, adversarial=APPROVE')
+  expect(text.split('\n')).toContain('- At cccccccc: verdicts unreadable')
+  expect(text).not.toContain('Notes with no verdicts line at c.')
+  expect(text).toContain('### At bbbbbbbb')
+})
+
+test('a first package repeats every review in full and names no full patch, and a fallback says why', () => {
+  const earlier = [review('a', 'REQUEST_CHANGES', 'APPROVE'), review('b', 'APPROVE', 'APPROVE')]
+  const first = packageText({ issue: 'x' }, { ...facts, earlier })
+  expect(first).toContain('Notes at a.')
+  expect(first).toContain('Notes at b.')
+  expect(first).not.toContain('full.patch')
+  const fallback = packageText({ issue: 'x' }, { ...facts, earlier, fallback: 'a merge commit follows the verdict head' })
+  expect(fallback).toContain('This is a first package because a merge commit follows the verdict head.')
+  expect(fallback).toContain('Notes at a.')
+})
+
+test('a later package up for the check after approval says so', () => {
+  const text = packageText({ issue: 'x' }, { ...facts, earlier: [review('a', 'APPROVE', 'APPROVE')], since: sha('a'), check: true })
+  expect(text).toContain('This head is up for the check after approval')
+  expect(packageText({ issue: 'x' }, { ...facts, earlier: [review('a', 'APPROVE', 'APPROVE')], since: sha('a') })).not.toContain('check after approval')
 })

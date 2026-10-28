@@ -256,7 +256,11 @@ waits on is real; if the wait is real, the session ends the turn.
    own diff; a head that only merged the base in counts them as run if
    they ran at the head before it. A head that a review was carried over
    to, with the verdicts of the approved head before it (see the second
-   half's point 6), counts them as run too.
+   half's point 6), counts them as run too. The first half launches only
+   the focused reviewers that the package tool's answer names, and the
+   ones it does not name count as run at this head. A head that the answer
+   says is up for the check after approval runs the check instead (see
+   **The check after approval** below).
 7. **No verdict review at this head.** Run the review round's second half
    and post the review, whether or not checks are still running. A review
    carried over to this head from the approved head before it is this
@@ -574,14 +578,24 @@ focused reviewers have not run at this head** says which heads those are).
 1. Call `mcp__builder__package` with the issue in a few lines, the spec and
    plan paths, and the test summary line. It answers with the package
    folder and the full head. When its first line reports a streak of 3, do
-   what **A streak of 3** says instead of going on.
-2. In one message, launch `builder:security-reviewer`,
+   what **A streak of 3** says instead of going on. When the answer says
+   `Up for the check after approval: launch only
+   builder:adversarial-reviewer.`, do what **The check after approval**
+   says instead of going on. A later package's answer also gives
+   `Since: <full sha of the verdict head>` and
+   `Whole pull request: <path to full.patch>`, and a first package that
+   fell back gives `First package because <reason>.`; the reviewers read
+   the same from `package.md`, so none of these lines changes the prompts.
+2. In one message, launch the focused reviewers that the answer's
+   `Focused reviewers to launch: <comma-separated agent names>` line
+   names, or all four when the answer has no such line, as an older mod's
+   does: `builder:security-reviewer`,
    `builder:maintainability-reviewer`, `builder:performance-reviewer` and
-   `builder:data-reviewer`, each with "Review package: <folder>. Head:
+   `builder:data-reviewer`. Give each "Review package: <folder>. Head:
    <full sha>." Never with `isolation: worktree`: they read this worktree,
    and the mod refuses them any tool that changes it. Each agent's report
-   arrives as its own message once it finishes; wait for all four before
-   going on.
+   arrives as its own message once it finishes; wait for all of them
+   before going on.
 3. Merge findings that describe the same problem into one, naming every
    reviewer that raised it, and drop the repeats as the rule for repeats
    says. Number every finding left and give them all, with the package
@@ -717,7 +731,9 @@ focused reviewers have not run at this head** says which heads those are).
      verdicts are carried over from the approved head, in the form point
      6 gives.
    - **Both approve and any changed line is not inert:** push, and the new
-     head goes through a normal round.
+     head's first half sends it to the package tool, which decides whether
+     it is up for the check after approval (see **The check after
+     approval**) or goes through a normal round.
 
    The fixes the counsel decided on are part of point 4's commit, so their
    lines are judged by the same rule as the cheap ones.
@@ -792,7 +808,10 @@ focused reviewers have not run at this head** says which heads those are).
    is.
    - A review carried over to a new head opens with "Both verdicts are
      carried over from <full sha>, which both verdict reviewers read.",
-     lists each commit and file since that head, and repeats the
+     or, after the check after approval, with "Both verdicts are carried
+     over from <full sha>, which both verdict reviewers read; the
+     adversarial reviewer read the change since then and found nothing
+     that blocks.", lists each commit and file since that head, and repeats the
      **Follow-ups** section of the review before it. If the tool refuses
      it because the head moved again, or the turn ends before it is
      posted, the new head goes through a normal round, and the round's
@@ -802,6 +821,52 @@ focused reviewers have not run at this head** says which heads those are).
      request.
 7. After a push, go on as **When a turn ends** says. Otherwise start the
    list again from **Merged** in the same turn.
+
+**The check after approval.** The package tool says a head is up for the
+check after approval when both verdicts approved the verdict head, the
+focused reviewers last ran there, and the only commit since is point 4's
+`Fix this round's cheap follow-ups` commit. Its answer then says, in place
+of the focused reviewers' line,
+`Up for the check after approval: launch only builder:adversarial-reviewer.`
+followed by
+`If the check leaves a blocking finding, run the first half with: <names>.`
+At such a head:
+
+1. Launch `builder:adversarial-reviewer` alone with "Review package:
+   <folder>. Head: <full sha>. This is the check after approval." It reads
+   only the change since the approved head.
+2. Drop the repeats as the rule for repeats says, and give every finding
+   left to one `builder:claim-checker`, as the first half's point 3 does.
+3. If a finding survives that is a safety finding or breaks working
+   behaviour, the head goes through a normal round, as any later head
+   does. Call `mcp__builder__package` again with the same inputs and
+   `after_check: true`, so the package and the pane's plan are for a
+   normal round rather than for the check, then run the first half from
+   its point 2 on that package, launching the focused reviewers that its
+   answer's `Focused reviewers to launch:` line names, and fix the
+   check's surviving blocking findings at its point 4 together with
+   theirs. Without `after_check`, the tool would store the head as up for
+   the check again, because it works that out from the same commits.
+4. Otherwise post a review at the new head with `mcp__builder__post_review`
+   that carries both verdicts over from the verdict head, whatever the
+   reviewer's `VERDICT:` line says. It opens with "Both verdicts are
+   carried over from <full sha>, which both verdict reviewers read; the
+   adversarial reviewer read the change since then and found nothing that
+   blocks.", lists the commit and files since that head, and repeats the
+   **Follow-ups** section of the review before it, adding the decisions
+   point 5 makes.
+5. Every other surviving finding goes to the counsel before that review
+   is posted, as a follow-up outside the spec,
+   `{ text, outside_spec: true }`, so the counsel may only file it or drop
+   it (see "Follow-ups questions" under **Questions**). Nothing the check raises is fixed in
+   this pull request, so the carried-over head is final and the merge goes
+   ahead from there.
+
+If the tool refuses that review because the head moved, or the turn ends
+before it is posted, the head is checked again on the next turn; the record
+of the approved head stays in its review. When every line point 4's commit
+changed is inert, the verdicts are carried over without the check, as the
+second half's point 5 says.
 
 ### Updating the linked checkout
 
@@ -1129,8 +1194,9 @@ each call. Call `mcp__builder__counsel` with the question, the background,
 the paths and the session's lean as usual, and with `follow_ups` in place of
 `options`: a list of the follow-ups, each in one or two sentences saying
 what it is and what a person would see if it is never fixed. A follow-up
-outside the spec is passed as `{ text, outside_spec: true }`, and every
-other one as its text. The mod gives every follow-up three options, fix it
+outside the spec is passed as `{ text, outside_spec: true }`, and so is
+every finding of **The check after approval** that its point 5 puts to the
+counsel; every other one is passed as its text. The mod gives every follow-up three options, fix it
 in this pull request (1), file it as an issue (2), or drop it (3), except
 that a follow-up outside the spec is offered only file and drop; a vote to
 fix one is not counted, and the tally asks that member again. This call

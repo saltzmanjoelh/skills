@@ -13,9 +13,9 @@ import { carriedRuns, changesBetween, DECISION_LABEL, isCiMonitorEvent, isSameSt
 import { ignoredLine, readIssueLink } from './links'
 import { afterComparison, afterLoad, dueComparisons, isStale, LOADED_PATHS, loadBegunAs, loadBegunIn, loadedIn, type Found } from './loaded'
 import { AGENT_PANE, agentPaneTree, bandTree, isDrawable, messagesReadOf, NAMED_AFTER_MS, PANE, paneTree, secondRow, type Elements, type MessagesRead, type View } from './pane'
-import { afterReport, endedOf, plannedOf, progressIn, reportAnswer, reportOf, stageLabel, STAGES, type ReportInput } from './progress'
+import { ADVERSARIAL_REVIEWER, afterReport, endedOf, FOCUSED_REVIEWERS, focusedReviewersFor, plannedOf, progressIn, reportAnswer, reportOf, stageLabel, STAGES, type ReportInput } from './progress'
 import { changePrompt, ciEventContext, resumePrompt, stateLines, stuckPrompt } from './prompts'
-import { commitRecordsOf, decidedItems, factIn, packageText, secretIn, trendOf, trendStopLine, verdictsLine, type PackageInput } from './review'
+import { changedKinds, commitRecordsOf, decidedItems, factIn, INSTRUCTION_PATHSPECS, instructionFileIsLink, isFullSha, isUpForCheck, LATER_CONTEXT_LINES, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pluginRootsOf, reviewedHeadOf, secretIn, specDirOf, trendOf, trendStopLine, underRoot, verdictHeadOf, verdictsLine, type CommitRecord, type EarlierRound, type FileKind, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
 import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, newMemo, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
 import { timeOfDay } from './text'
@@ -1957,6 +1957,119 @@ async function livePullRequest($: $, r: BuilderRun): Promise<PrForReview | null>
   }
 }
 
+// What a package holds beyond the diff against the base. A first package
+// writes only that diff, and its `fallback` says why a pull request that has a
+// verdict head still gets one. A later package has `since`, the verdict head,
+// and `sinceDiff`, the change from it to the head, and writes full.patch
+// beside it; its `check` says the head is up for the check after approval.
+// `reviewers` are the focused reviewers a normal round at this head runs.
+type PackageShape =
+  | { kind: 'first'; fallback?: string; reviewers: readonly string[] }
+  | { kind: 'later'; since: string; sinceDiff: string; check: boolean; reviewers: readonly string[] }
+
+// The empty tree's id in each object format git supports, to list a whole
+// tree with `git diff-tree`.
+const EMPTY_TREES: Record<string, string> = {
+  sha1: '4b825dc642cb6eb9a060e54bf8d69288fbee4904',
+  sha256: '6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321',
+}
+
+// The instruction files on each of `trees`, as `git diff-tree -r -z` from the
+// empty tree prints them with their modes, one listing per tree. `git ls-tree`
+// would be plainer but takes no case-insensitive glob pathspecs. A listing
+// that git could not produce is null, and so is every listing when the
+// repository's object format is unknown.
+async function instructionListingsOf($: $, dir: string, trees: readonly string[]): Promise<(string | null)[]> {
+  const format = (await git($, dir, ['rev-parse', '--show-object-format']))?.trim()
+  const empty = format === undefined ? undefined : EMPTY_TREES[format]
+  if (empty === undefined) return trees.map(() => null)
+  return Promise.all(trees.map(tree => git($, dir, ['diff-tree', '-r', '-z', '--no-renames', empty, tree, '--', ...INSTRUCTION_PATHSPECS])))
+}
+
+// The kinds of the changed files, from the output of
+// `git diff --name-status -z -M`. Documentation alone needs more reading,
+// because Claude Code may load a Markdown file as instructions without its
+// path showing it, so the reads below run only when the files hold
+// documentation and nothing other than tests. They cover the head and the
+// base, so what the branch adds counts as much as what is already on the
+// base. No file counts as documentation when an instruction file imports
+// Markdown or is a symbolic link, when a marketplace's plugin folders cannot
+// be known, or when any of these reads fails. A file inside a plugin's folder
+// counts as anything else. The reads open only the instruction files, though
+// git still walks every folder of both trees to match their pathspecs.
+async function sortedKindsOf($: $, dir: string, base: string, nameStatus: string, specDir: string): Promise<FileKind[]> {
+  const plain = changedKinds(nameStatus, specDir)
+  if (!plain.includes('documentation') || plain.includes('other')) return plain
+  const trees = ['HEAD', `origin/${base}`]
+  const [imports, listings] = await Promise.all([
+    gitRun($, dir, ['grep', '-l', '-I', '-i', '-E', MARKDOWN_IMPORT_PATTERN, ...trees, '--', ...INSTRUCTION_PATHSPECS]),
+    instructionListingsOf($, dir, trees),
+  ])
+  if (markdownImportFound(imports, trees) || listings.some(instructionFileIsLink)) return changedKinds(nameStatus, specDir, () => true)
+  // A failed listing counts as a link above, so every listing here was read,
+  // and there is one listing for each tree, in the same order.
+  const listed = listings as string[]
+  const manifests: { tree: string, path: string }[] = []
+  for (const [at, raw] of listed.entries()) {
+    for (const path of marketplacePathsOf(raw)) manifests.push({ tree: trees[at]!, path })
+  }
+  const marketplaces = await Promise.all(manifests.map(async ({ tree, path }) => {
+    const text = await git($, dir, ['show', `${tree}:${path}`])
+    return marketplaceRootsOf(text, path)
+  }))
+  if (marketplaces.some(roots => roots === null)) return changedKinds(nameStatus, specDir, () => true)
+  const roots = [...listed.flatMap(pluginRootsOf), ...marketplaces.flatMap(found => found ?? [])]
+  return changedKinds(nameStatus, specDir, path => roots.some(root => underRoot(path, root)))
+}
+
+// The shape of the package at the checkout's head, from the earlier verdict
+// reviews and the branch's commits, oldest first. A pull request with no
+// verdict head gets a first package. One whose verdict head is not a full sha,
+// is not an ancestor of the head, or has a merge commit after it, gets a first
+// package that says why, because a diff from it would be wrong or would show
+// another branch's changes as the pull request's. A merge of any branch counts,
+// which keeps the commits after the verdict head in one line. When git fails
+// or its output is cut off, the answer is a refusal that names the step that
+// failed, so the package is refused rather than written from a partial diff
+// and the person can tell which git command to look at. `afterCheck` says the
+// check after approval at this head left a blocking finding, so a head up for
+// the check is packaged for a normal round instead.
+async function packageShapeOf($: $, dir: string, base: string, head: string, earlier: readonly EarlierRound[], records: readonly CommitRecord[], afterCheck: boolean): Promise<PackageShape | { refused: string }> {
+  const first = (fallback?: string): PackageShape => ({ kind: 'first', reviewers: FOCUSED_REVIEWERS, ...(fallback === undefined ? {} : { fallback }) })
+  const verdictHead = verdictHeadOf(earlier, head)
+  if (verdictHead === null) return first()
+  if (!isFullSha(verdictHead)) return first('the verdict head\'s sha from GitHub is not a full commit sha')
+  const ancestry = await gitRun($, dir, ['merge-base', '--is-ancestor', verdictHead, 'HEAD'])
+  if (ancestry === null) return { refused: 'git could not check whether the verdict head is an ancestor of the head (it could not run, or its output was over 4 MiB and cut off)' }
+  if (ancestry.exitCode !== 0) return first(`the verdict head ${verdictHead} is not an ancestor of the head, as after a force-push`)
+  const merges = await git($, dir, ['rev-list', '--merges', `${verdictHead}..HEAD`])
+  if (merges === null) return { refused: 'git could not list the merge commits since the verdict head (it failed, or its output was over 4 MiB and cut off)' }
+  if (merges.trim() !== '') return first('a merge commit follows the verdict head, so a diff from it would show the merged changes as the pull request\'s')
+  // The changed files are read from the reviewed head, where the focused
+  // reviewers last ran. When it is missing, all four run and no list is read.
+  const reviewedHead = reviewedHeadOf(verdictHead, records)
+  const [sinceDiff, nameStatus, baseClaude] = await Promise.all([
+    git($, dir, ['diff', `--unified=${LATER_CONTEXT_LINES}`, '--no-ext-diff', verdictHead, 'HEAD']),
+    reviewedHead === null ? '' : git($, dir, ['diff', '--name-status', '-z', '-M', '--no-ext-diff', reviewedHead, 'HEAD']),
+    reviewedHead === null ? null : git($, dir, ['show', `origin/${base}:CLAUDE.md`]),
+  ])
+  if (sinceDiff === null) return { refused: 'git could not produce the change since the verdict head (it failed, or its output was over 4 MiB and cut off)' }
+  if (nameStatus === null) return { refused: 'git could not list the files changed since the reviewed head (it failed, or its output was over 4 MiB and cut off)' }
+  const kinds = reviewedHead === null ? null : await sortedKindsOf($, dir, base, nameStatus, specDirOf(baseClaude))
+  const check = !afterCheck && isUpForCheck(verdictHead, reviewedHead, records, earlier)
+  return { kind: 'later', since: verdictHead, sinceDiff, check, reviewers: focusedReviewersFor(kinds) }
+}
+
+// The answer's lines that say which reviewers to launch: the focused ones, or
+// at a head up for the check after approval only the adversarial reviewer,
+// with the focused ones a normal round would run if the check leaves a
+// blocking finding.
+function reviewerLines(shape: PackageShape): string[] {
+  const named = shape.reviewers.join(', ')
+  if (shape.kind === 'first' || !shape.check) return [`Focused reviewers to launch: ${named}`]
+  return [`Up for the check after approval: launch only ${ADVERSARIAL_REVIEWER}.`, `If the check leaves a blocking finding, run the first half with: ${named}.`]
+}
+
 async function servePackage($: $, input: PackageInput): Promise<string> {
   const r = await read($, run)
   if (r === null) return 'No pull request is watched; call the watch tool first.'
@@ -1996,6 +2109,8 @@ async function servePackage($: $, input: PackageInput): Promise<string> {
     .filter(review => review.author?.login === r.login && verdictsOf(review) !== null)
     .map(review => ({ sha: review.commit?.oid ?? '', body: review.body ?? '' }))
   const records = commitRecordsOf(messages)
+  const shape = await packageShapeOf($, checkoutDir, live.baseRefName, live.headRefOid, earlier, records, input.after_check === true)
+  if ('refused' in shape) return `${shape.refused}, so no package was written.`
   const trend = trendOf(records)
   const text = packageText(input, {
     repo: r.repo,
@@ -2009,13 +2124,22 @@ async function servePackage($: $, input: PackageInput): Promise<string> {
     earlier,
     decided: decidedItems(records, earlier),
     trend,
+    ...(shape.kind === 'later' ? { since: shape.since, check: shape.check } : {}),
+    ...(shape.kind === 'first' && shape.fallback !== undefined ? { fallback: shape.fallback } : {}),
   })
+  // package.md is written last, so a package.md that names full.patch never
+  // stands beside a full.patch from an earlier call.
+  if (shape.kind === 'first') {
+    await $.fs.write(`${dir}/diff.patch`, diff)
+  } else {
+    await $.fs.write(`${dir}/diff.patch`, shape.sinceDiff)
+    await $.fs.write(`${dir}/full.patch`, diff)
+  }
   await $.fs.write(`${dir}/package.md`, text)
-  await $.fs.write(`${dir}/diff.patch`, diff)
-  // Recorded only once both files are written, so the pane plans the focused
-  // reviewers only for a package they can read.
+  // Recorded only once every file is written, so the pane plans the reviewers
+  // the answer names only for a package they can read.
   const packagedAt = await $.clock.now()
-  await update($, packaged, () => ({ head: live.headRefOid, at: packagedAt }))
+  await update($, packaged, () => ({ head: live.headRefOid, at: packagedAt, reviewers: [...shape.reviewers], check: shape.kind === 'later' && shape.check }))
   $.ui.invalidate('ui.render')
   // A streak that stops the rounds comes first, so the session reads it
   // before it launches any reviewer on the package.
@@ -2027,6 +2151,9 @@ async function servePackage($: $, input: PackageInput): Promise<string> {
     `${dir}/package.md`,
     `${dir}/diff.patch`,
     'Give every reviewer the folder and the full head sha.',
+    ...(shape.kind === 'later' ? [`Since: ${shape.since}`, `Whole pull request: ${dir}/full.patch`] : []),
+    ...(shape.kind === 'first' && shape.fallback !== undefined ? [`First package because ${shape.fallback}.`] : []),
+    ...reviewerLines(shape),
   ].join('\n')
 }
 
@@ -3430,7 +3557,7 @@ export const register: Register = on => {
     })
     await $.tool.register({
       name: 'package',
-      description: 'Build the review package for the watched pull request at its current head: package.md (the issue, spec and plan paths, changed files, earlier rounds, the findings already decided, read from the Dropped: and Outside the spec: lists of the fix commits and earlier reviews, and the areas fixed so far, read from the fix commits\' Reviewed:, Area:, Tidied:, Retag: and Trend: lines, where a Tidied: fix counts toward no streak) and diff.patch. Answers with the folder to hand every reviewer. When an area was fixed at 3 reviewed heads in a row, the answer\'s first line says the rounds stop, whatever the findings behind the streak were, and the session puts the area to the counsel before launching any reviewer. The checkout used is the worktree that has the pull request\'s head branch checked out, or the session\'s folder when no worktree has it, and it must be at the pull request\'s head.',
+      description: 'Build the review package for the watched pull request at its current head: package.md (the issue, spec and plan paths, changed files, earlier rounds, the findings already decided, read from the Dropped: and Outside the spec: lists of the fix commits and earlier reviews, and the areas fixed so far, read from the fix commits\' Reviewed:, Area:, Tidied:, Retag: and Trend: lines, where a Tidied: fix counts toward no streak) and diff.patch. A first package, for a pull request with no verdict review by the session\'s login before this head, has the whole pull request against the base as diff.patch and every earlier review in full. A later package has the change from the verdict head, the newest head before this one with a verdict review by the session\'s login, to this head as diff.patch with 15 lines of context, the whole pull request as full.patch, and only the newest earlier review in full; its answer gives the verdict head on a Since: line and full.patch on a Whole pull request: line. When the verdict head is not an ancestor of the head or a merge commit follows it, the package is a first package and its answer says why on a First package because line. Answers with the folder to hand every reviewer, and names the focused reviewers to launch on its last line: all four, or only the maintainability reviewer when every file changed since the reviewed head is a test or documentation. At a head whose only commit since a head both verdicts approved is the cheap-fix commit, it says instead that the head is up for the check after approval, that only the adversarial reviewer runs, and which focused reviewers to run if the check leaves a blocking finding; called again with after_check true at that head, it packages the head for a normal later round and names those focused reviewers instead. When an area was fixed at 3 reviewed heads in a row, the answer\'s first line says the rounds stop, whatever the findings behind the streak were, and the session puts the area to the counsel before launching any reviewer. The checkout used is the worktree that has the pull request\'s head branch checked out, or the session\'s folder when no worktree has it, and it must be at the pull request\'s head.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -3438,6 +3565,7 @@ export const register: Register = on => {
           spec: { type: 'string', description: 'Path of the spec, if there is one.' },
           plan: { type: 'string', description: 'Path of the plan, if there is one.' },
           tests: { type: 'string', description: 'The test run\'s summary line.' },
+          after_check: { type: 'boolean', description: 'true when the check after approval at this head left a blocking finding, so the head goes through a normal round.' },
         },
         required: ['issue'],
       },

@@ -197,7 +197,11 @@ export type Progress = { title: string; stage: StageId; furthest: StageId; note:
 
 // The newest package call: the pull request's head it packaged for review and
 // when, from which the pane works out the reviewers still to be launched.
-export type Packaged = { head: string; at: number }
+// `reviewers` holds the focused reviewers the package tool's answer named, and
+// `check` says the head is up for the check after approval, when only the
+// adversarial reviewer runs. A value an older build stored has neither, and
+// the pane then plans all four focused reviewers.
+export type Packaged = { head: string; at: number; reviewers?: string[]; check?: boolean }
 
 // A usage-limit hold: when it resumes, in milliseconds since the epoch.
 export type UsageHold = { until: number }

@@ -7,6 +7,7 @@
 import type { AgentCard, CounselQuestion, Packaged, Progress, StageId as StoredStageId } from '../types'
 import { COUNSEL_MEMBERS } from './counsel'
 import type { Snapshot } from './github'
+import type { FileKind } from './review'
 import { isRunning } from './state'
 import { printable } from './text'
 
@@ -152,18 +153,52 @@ function barLabel(progress: Progress | null, ended: string | null): string {
   return progress.note === '' ? stage : `${stage} · ${progress.note}`
 }
 
+// The two reviewers named on their own: the one a later round runs when only
+// tests and documentation changed, and the one the check after approval runs.
+export const MAINTAINABILITY_REVIEWER = 'builder:maintainability-reviewer'
+export const ADVERSARIAL_REVIEWER = 'builder:adversarial-reviewer'
+
 // The reviewers a review round launches first, after the package call, and
-// the two whose verdicts decide, launched once the first four have finished.
-// Together they are the six reviewers of REVIEWERS in hooks/state.ts. The
-// order here is the order the pane lists planned agents in.
+// the two whose verdicts decide. The verdict pair follows whichever focused
+// reviewers the package named, once they have finished, and at a head up for
+// the check after approval only the adversarial reviewer runs. Together they
+// are the six reviewers of REVIEWERS in hooks/state.ts. The order here is the
+// order the pane lists planned agents in.
 export const FOCUSED_REVIEWERS: readonly string[] = [
   'builder:security-reviewer',
-  'builder:maintainability-reviewer',
+  MAINTAINABILITY_REVIEWER,
   'builder:performance-reviewer',
   'builder:data-reviewer',
 ]
-export const VERDICT_REVIEWERS: readonly string[] = ['builder:spec-reviewer', 'builder:adversarial-reviewer']
+export const VERDICT_REVIEWERS: readonly string[] = ['builder:spec-reviewer', ADVERSARIAL_REVIEWER]
 const PLANNED_ORDER = [...FOCUSED_REVIEWERS, ...VERDICT_REVIEWERS]
+
+// The focused reviewers a package names, from the kinds of the files changed
+// since the reviewed head, or null when that head is missing. All four run
+// when the head is missing or any file is neither a test nor documentation;
+// otherwise, an empty list of changes included, only the maintainability
+// reviewer runs.
+export function focusedReviewersFor(kinds: readonly FileKind[] | null): readonly string[] {
+  if (kinds === null || kinds.includes('other')) return FOCUSED_REVIEWERS
+  return [MAINTAINABILITY_REVIEWER]
+}
+
+// The focused reviewers a stored package named, when it holds a list that is
+// not empty and names only focused reviewers; otherwise all four, which is
+// how a value an older build stored, without the list, reads.
+function namedReviewers(packaged: Packaged): readonly string[] {
+  const named: unknown = packaged.reviewers
+  const isSound = Array.isArray(named) && named.length > 0 && named.every(type => typeof type === 'string' && FOCUSED_REVIEWERS.includes(type))
+  return isSound ? (named as string[]) : FOCUSED_REVIEWERS
+}
+
+// Every reviewer the round at a stored package runs: only the adversarial
+// reviewer at a head up for the check after approval, and otherwise the
+// focused reviewers the package named and then the two verdict reviewers.
+export function roundReviewersOf(packaged: Packaged): readonly string[] {
+  if (packaged.check === true) return [ADVERSARIAL_REVIEWER]
+  return [...namedReviewers(packaged), ...VERDICT_REVIEWERS]
+}
 
 // What the planned agents are worked out from: the watched pull request (null
 // when none is watched), the newest package call, the agents and the counsel
@@ -183,8 +218,10 @@ const isFiniteTime = (t: unknown): t is number => typeof t === 'number' && Numbe
 // cause goes.
 //
 // - After a package call at the watched head, while the pull request is open,
-//   the four focused reviewers are planned. Once all four have started since
-//   that call and none of them runs, the two verdict reviewers are planned.
+//   the focused reviewers the package named are planned, all four when it
+//   named none. Once all of them have started since that call and none of
+//   them runs, the two verdict reviewers are planned. A package up for the
+//   check after approval plans only the adversarial reviewer.
 // - A counsel question with no tally for the round it waits on plans the
 //   members it last told the session to launch: those asked again when there
 //   are any, else all seven.
@@ -201,10 +238,15 @@ export function plannedOf(input: PlannedInput): string[] {
   const { pr, packaged } = input
   const isPackageSound = typeof packaged === 'object' && packaged !== null && typeof packaged.head === 'string' && isFiniteTime(packaged.at)
   if (pr !== null && pr.state === 'OPEN' && isPackageSound && packaged.head === pr.head) {
-    plan(FOCUSED_REVIEWERS, packaged.at)
-    const focusedSince = FOCUSED_REVIEWERS.map(type => startedSince(type, packaged.at))
-    const focusedHaveFinished = focusedSince.every(cards => cards.length > 0 && !cards.some(isRunning))
-    if (focusedHaveFinished) plan(VERDICT_REVIEWERS, packaged.at)
+    if (packaged.check === true) {
+      plan([ADVERSARIAL_REVIEWER], packaged.at)
+    } else {
+      const focused = namedReviewers(packaged)
+      plan(focused, packaged.at)
+      const focusedSince = focused.map(type => startedSince(type, packaged.at))
+      const focusedHaveFinished = focusedSince.every(cards => cards.length > 0 && !cards.some(isRunning))
+      if (focusedHaveFinished) plan(VERDICT_REVIEWERS, packaged.at)
+    }
   }
 
   for (const q of input.counsel) {

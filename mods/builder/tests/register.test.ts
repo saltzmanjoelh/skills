@@ -6,6 +6,7 @@ import { FACTS_LEAD, GITHUB_NAMES_LINE, SETTINGS_HINT } from '../hooks/context'
 import { RUNS_JQ, snapshotOf, type GhPullRequest } from '../hooks/github'
 import { NOTHING_WATCHED, STALE_WARNING } from '../hooks/pane'
 import { RELOAD_LINE, REREAD_CLOSING } from '../hooks/prompts'
+import { INSTRUCTION_PATHSPECS } from '../hooks/review'
 import type { BuildStatus, Compactions } from '../types'
 
 const A = 'a'.repeat(40)
@@ -85,6 +86,25 @@ function fakeGitHub(on: On) {
   // `messages` are the branch's commits, oldest first, with their full
   // messages, as `git log --format=%H%x1f%B%x1e` prints them, and
   // `messagesFail` makes that read exit with an error.
+  // `ancestorExit` is the exit code of `git merge-base --is-ancestor`, and
+  // `merges` what `git rev-list --merges` prints, the merge commits since the
+  // verdict head. `ancestorFail` makes the ancestry check throw or answer
+  // with its output cut off, and `mergesFail` makes the listing of merge
+  // commits exit with an error, throw, or answer with its output cut off,
+  // while the reads of the head and the fetch before them still succeed.
+  // `baseClaude` is what `git show origin/main:CLAUDE.md`
+  // prints, the base branch's CLAUDE.md, and that read exits 128 when it is
+  // null. `grep` is what `git grep -l` prints for the instruction files that
+  // hold a Markdown import, and the search exits 1, finding none, when it is
+  // empty; `grepFail` makes it exit with an error. `objectFormat` is what
+  // `git rev-parse --show-object-format` prints. `links` is what
+  // `git diff-tree -r -z` prints for the instruction files on each tree, and
+  // `linksFail` makes that listing exit with an error. `marketplace` is what
+  // `git show <tree>:<path>` prints for a marketplace.json, which exits 128
+  // when it is null. `nameStatus` is what `git diff --name-status -z` prints for the
+  // files changed since the reviewed head, and `nameStatusFail` and
+  // `sinceDiffFail` make that read and the read of the change since the
+  // verdict head exit with an error.
   // `states` gives the state that `gh pr view <n> --repo o/r --json state`
   // answers for pull request n; a number not listed answers the state of
   // `pr`. `stateRead`, when set, makes every such read exit with an error,
@@ -103,6 +123,7 @@ function fakeGitHub(on: On) {
     onQuietDiff: null as (() => void) | null, afterQuietDiff: null as (() => void) | null, headHolds: {} as Record<string, Promise<void>>,
     states: {} as Record<number, string>, stateRead: null as null | 'exit' | 'throw' | 'cut' | 'text',
     messages: [{ sha: A, message: 'Build it' }] as { sha: string; message: string }[], messagesFail: false,
+    ancestorExit: 0, ancestorFail: null as null | 'throw' | 'cut', merges: '', mergesFail: null as null | 'exit' | 'throw' | 'cut', baseClaude: null as string | null, grep: '', grepFail: false, objectFormat: 'sha1', links: '', linksFail: false, marketplace: null as string | null, nameStatus: '', nameStatusFail: false, sinceDiffFail: false,
   }
   on('process.run', async ($, e) => {
     const argv = e.argv.join(' ')
@@ -146,6 +167,26 @@ function fakeGitHub(on: On) {
       return exit(finds ? 1 : 0)
     }
     if (argv.startsWith('git diff --stat')) return out(' a.ts | 2 +-\n 1 file changed\n')
+    if (argv.startsWith('git merge-base --is-ancestor ') && world.ancestorFail === 'throw') throw new Error('the process could not be started')
+    if (argv.startsWith('git merge-base --is-ancestor ') && world.ancestorFail === 'cut') {
+      return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: true, isStderrTruncated: false } }
+    }
+    if (argv.startsWith('git merge-base --is-ancestor ')) return exit(world.ancestorExit)
+    if (argv.startsWith('git rev-list --merges ') && world.mergesFail === 'throw') throw new Error('the process could not be started')
+    if (argv.startsWith('git rev-list --merges ') && world.mergesFail === 'exit') {
+      return { value: { exitCode: 128, stdout: world.merges, stderr: 'fatal', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+    if (argv.startsWith('git rev-list --merges ') && world.mergesFail === 'cut') {
+      return { value: { exitCode: 0, stdout: world.merges, stderr: '', isStdoutTruncated: true, isStderrTruncated: false } }
+    }
+    if (argv.startsWith('git rev-list --merges ')) return out(world.merges)
+    if (argv.startsWith('git show ') && argv.endsWith('marketplace.json')) return world.marketplace === null ? exit(128) : out(world.marketplace)
+    if (argv.startsWith('git show origin/')) return world.baseClaude === null ? exit(128) : out(world.baseClaude)
+    if (argv.startsWith('git grep ')) return world.grepFail ? exit(128) : world.grep === '' ? exit(1) : out(world.grep)
+    if (argv === 'git rev-parse --show-object-format') return out(`${world.objectFormat}\n`)
+    if (argv.startsWith('git diff-tree ')) return world.linksFail ? exit(128) : out(world.links)
+    if (argv.startsWith('git diff --name-status ')) return world.nameStatusFail ? exit(128) : out(world.nameStatus)
+    if (argv.startsWith('git diff --unified=15 ')) return world.sinceDiffFail ? exit(128) : out('diff --git a/since.ts b/since.ts\n')
     if (argv.startsWith('git diff') && world.cutDiff) {
       return { value: { exitCode: 0, stdout: 'diff --git a/a.ts', stderr: '', isStdoutTruncated: true, isStderrTruncated: false } }
     }
@@ -870,7 +911,10 @@ test('the package tool writes the package and the diff for the head, with the ro
   expect(text).toContain('### At aaaaaaaa')
   expect(text).toContain('- Architecture document: docs/arch.md')
   expect(text).toContain('- Gotchas document: none in this project')
-  expect(files.get('/repo/.git/builder/cccccccc/diff.patch')).toContain('diff --git a/a.ts b/a.ts')
+  // The review at A makes this a later package: diff.patch is the change since
+  // A, and the whole pull request is beside it.
+  expect(files.get('/repo/.git/builder/cccccccc/diff.patch')).toContain('diff --git a/since.ts b/since.ts')
+  expect(files.get('/repo/.git/builder/cccccccc/full.patch')).toContain('diff --git a/a.ts b/a.ts')
 })
 
 test('the package tool lists the decided findings and the areas, and its first line stops the rounds at a streak of three', async ($, on) => {
@@ -947,6 +991,437 @@ test('the package tool writes no package when git fetch throws', async ($, on) =
 
   expect(String(ran.result)).toContain('git could not fetch the base')
   expect(files.has('/repo/.git/builder/cccccccc/package.md')).toBe(false)
+})
+
+const FOUR_FOCUSED = 'Focused reviewers to launch: builder:security-reviewer, builder:maintainability-reviewer, builder:performance-reviewer, builder:data-reviewer'
+const ONLY_MAINTAINABILITY = 'Focused reviewers to launch: builder:maintainability-reviewer'
+const PACKAGE_DIR = '/repo/.git/builder/cccccccc'
+
+// The answer of a package call, without the mod's prefix.
+async function packageAnswer($: Engine): Promise<string> {
+  const ran = await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
+  return String(ran.result).replace(/^builder: /, '')
+}
+
+test('a first package is the whole pull request with every review in full, writes no full patch, and names all four focused reviewers', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  await watch($)
+
+  const answer = await packageAnswer($)
+
+  expect(answer.split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  expect(answer).not.toContain('Since:')
+  expect(answer).not.toContain('First package because')
+  expect(files.get(`${PACKAGE_DIR}/diff.patch`)).toBe('diff --git a/a.ts b/a.ts\n')
+  expect(files.has(`${PACKAGE_DIR}/full.patch`)).toBe(false)
+  expect(world.calls.some(call => call.startsWith('git merge-base') || call.startsWith('git diff --unified=15'))).toBe(false)
+})
+
+test('a later package diffs from the verdict head with wider context, writes the whole pull request beside it, and repeats only the newest review in full', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  await watch($)
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: D, message: 'Fix the first round' }, { sha: C, message: 'Fix the second round' }]
+  world.nameStatus = 'M\0hooks/a.ts\0'
+  world.pr = openPullRequest({
+    commits: [{ oid: A }, { oid: D }, { oid: C }],
+    reviews: [
+      { ...verdictReview(A, 'REQUEST_CHANGES', 'APPROVE'), body: 'VERDICTS aaaaaaaa spec=REQUEST_CHANGES adversarial=APPROVE\n\nThe first notes.\n\nDropped:\n- The first dropped item.' },
+      { ...verdictReview(D, 'APPROVE', 'REQUEST_CHANGES'), body: 'VERDICTS dddddddd spec=APPROVE adversarial=REQUEST_CHANGES\n\nThe second notes.\n\nOutside the spec:\n- The second outside item.' },
+    ],
+  })
+
+  const answer = await packageAnswer($)
+  const text = files.get(`${PACKAGE_DIR}/package.md`) ?? ''
+
+  expect(world.calls).toContain(`git merge-base --is-ancestor ${D} HEAD`)
+  expect(world.calls).toContain(`git rev-list --merges ${D}..HEAD`)
+  expect(world.calls).toContain(`git diff --unified=15 --no-ext-diff ${D} HEAD`)
+  expect(world.calls).toContain(`git diff --name-status -z -M --no-ext-diff ${D} HEAD`)
+  expect(files.get(`${PACKAGE_DIR}/diff.patch`)).toBe('diff --git a/since.ts b/since.ts\n')
+  expect(files.get(`${PACKAGE_DIR}/full.patch`)).toBe('diff --git a/a.ts b/a.ts\n')
+  expect(text).toContain(`\`diff.patch\` beside this file is the change from ${D}`)
+  expect(text).toContain('- At aaaaaaaa: spec=REQUEST_CHANGES, adversarial=APPROVE')
+  expect(text).not.toContain('The first notes.')
+  expect(text).toContain('The second notes.')
+  expect(text).toContain('- D1 (review at aaaaaaaa): The first dropped item.')
+  expect(text).toContain('- D2 (review at dddddddd): The second outside item.')
+  expect(answer).toContain(`\nSince: ${D}\nWhole pull request: ${PACKAGE_DIR}/full.patch\n`)
+  expect(answer.split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  // package.md is written last, once both patches are there to read.
+  const written = files.writes.log.filter(path => path.startsWith(PACKAGE_DIR))
+  expect(written.at(-1)).toBe(`${PACKAGE_DIR}/package.md`)
+})
+
+test('a later package whose changes since the reviewed head are only tests and documentation names only the maintainability reviewer', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  fakeFiles(on)
+  await watch($)
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: 'Tighten a test' }]
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
+  world.nameStatus = 'M\0tests/a.test.ts\0A\0docs/specs/a.md\0M\0README.md\0'
+
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(ONLY_MAINTAINABILITY)
+
+  world.nameStatus = 'M\0tests/a.test.ts\0M\0skills/implement/SKILL.md\0'
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
+})
+
+test('the spec directory comes from the base branch\'s CLAUDE.md, not the branch\'s', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  await watch($)
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: 'Write the spec down' }]
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
+  world.nameStatus = 'M\0design/specs/a.md\0'
+  files.set('/repo/CLAUDE.md', 'Spec directory: elsewhere/\n')
+
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  world.baseClaude = 'Spec directory: design/specs/\n'
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(ONLY_MAINTAINABILITY)
+  expect(world.calls).toContain('git show origin/main:CLAUDE.md')
+})
+
+test('when an instruction file on the branch or the base imports Markdown or is a symbolic link, or a plugin holds the file, or a search fails, a change to documentation alone names every focused reviewer', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  fakeFiles(on)
+  await watch($)
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: 'Reword the guide' }]
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
+  world.nameStatus = 'M\0docs/guide.md\0'
+
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(ONLY_MAINTAINABILITY)
+  expect(world.calls.some(call => call.startsWith('git grep ') && call.endsWith(` HEAD origin/main -- ${INSTRUCTION_PATHSPECS.join(' ')}`))).toBe(true)
+  for (const tree of ['HEAD', 'origin/main']) {
+    expect(world.calls).toContain(`git diff-tree -r -z --no-renames 4b825dc642cb6eb9a060e54bf8d69288fbee4904 ${tree} -- ${INSTRUCTION_PATHSPECS.join(' ')}`)
+  }
+  world.grep = 'HEAD:docs/notes.md\n'
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(ONLY_MAINTAINABILITY)
+  world.grep = 'HEAD:CLAUDE.md\n'
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  world.grep = 'origin/main:.claude/rules/x.md\n'
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  world.grep = ''
+  world.grepFail = true
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  world.grepFail = false
+  world.links = `:000000 100644 ${'0'.repeat(40)} ${'d'.repeat(40)} A\0CLAUDE.md\0`
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(ONLY_MAINTAINABILITY)
+  world.links = `:000000 120000 ${'0'.repeat(40)} ${'c'.repeat(40)} A\0AGENTS.md\0`
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  world.links = ''
+  world.linksFail = true
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  world.linksFail = false
+  world.objectFormat = 'sha512'
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  world.objectFormat = 'sha1'
+  const entry = (path: string) => `:000000 100644 ${'0'.repeat(40)} ${'d'.repeat(40)} A\0${path}\0`
+  // A plugin whose folder holds the changed file loads it as instructions.
+  world.links = entry('docs/.claude-plugin/plugin.json')
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  world.links = entry('tools/.claude-plugin/plugin.json')
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(ONLY_MAINTAINABILITY)
+  world.links = entry('.claude-plugin/marketplace.json')
+  world.marketplace = JSON.stringify({ name: 'm', plugins: [{ name: 'a', source: './mods/a' }] })
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(ONLY_MAINTAINABILITY)
+  expect(world.calls).toContain('git show HEAD:.claude-plugin/marketplace.json')
+  world.marketplace = JSON.stringify({ name: 'm', plugins: [{ name: 'a', source: './docs' }] })
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  world.marketplace = null
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
+})
+
+test('when a file other than a test or documentation changed, the package runs neither the search for imports nor the listing of instruction files', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  fakeFiles(on)
+  await watch($)
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: 'Change the code' }]
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
+  world.nameStatus = 'M\0docs/guide.md\0M\0src/a.ts\0'
+
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  expect(world.calls.some(call => call.startsWith('git grep ') || call.startsWith('git diff-tree ') || call.startsWith('git rev-parse --show-object-format'))).toBe(false)
+  world.nameStatus = 'M\0tests/a.test.ts\0'
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(ONLY_MAINTAINABILITY)
+  expect(world.calls.some(call => call.startsWith('git grep '))).toBe(false)
+})
+
+test('a merge since the verdict head, or a verdict head that is not an ancestor of the head, gives a first package that says why', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  await watch($)
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: 'Merge main' }]
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
+  world.nameStatus = 'M\0tests/a.test.ts\0'
+
+  world.merges = `${C}\n`
+  const merged = await packageAnswer($)
+  expect(merged).toContain('First package because a merge commit follows the verdict head')
+  expect(merged).not.toContain('Since:')
+  expect(merged.split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  expect(files.get(`${PACKAGE_DIR}/package.md`)).toContain('This is a first package because a merge commit follows the verdict head')
+  expect(files.get(`${PACKAGE_DIR}/diff.patch`)).toBe('diff --git a/a.ts b/a.ts\n')
+  expect(files.has(`${PACKAGE_DIR}/full.patch`)).toBe(false)
+
+  world.merges = ''
+  for (const code of [1, 128]) {
+    world.ancestorExit = code
+    const answer = await packageAnswer($)
+    expect(answer).toContain(`First package because the verdict head ${A} is not an ancestor of the head`)
+    expect(answer.split('\n').at(-1)).toBe(FOUR_FOCUSED)
+    expect(files.get(`${PACKAGE_DIR}/package.md`)).toContain('not an ancestor of the head')
+  }
+})
+
+test('a verdict head whose sha from GitHub is not a full sha is never passed to git, and gives a first package', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  fakeFiles(on)
+  await watch($)
+  const odd = `${A.slice(0, 39)}G`
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [{ ...verdictReview(A, 'REQUEST_CHANGES', 'APPROVE'), commit: { oid: odd } }] })
+
+  const answer = await packageAnswer($)
+
+  expect(answer).toContain('First package because')
+  expect(world.calls.some(call => call.includes(odd))).toBe(false)
+})
+
+test('a Reviewed: value that names no commit on the branch makes the reviewed head missing, so a later package names all four', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  fakeFiles(on)
+  await watch($)
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: 'Fix the round\n\nReviewed: 99999999' }]
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
+  world.nameStatus = 'M\0tests/a.test.ts\0'
+
+  const answer = await packageAnswer($)
+
+  expect(answer).toContain(`Since: ${A}`)
+  expect(answer.split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  expect(world.calls.some(call => call.startsWith('git diff --name-status'))).toBe(false)
+})
+
+test('the reviewed head that a Reviewed: line names is where the changed files are read from', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  fakeFiles(on)
+  await watch($)
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: D, message: 'Build more' }, { sha: C, message: `Fix the round\n\nReviewed: ${D.slice(0, 8)}` }]
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: D }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
+
+  await packageAnswer($)
+
+  expect(world.calls).toContain(`git diff --unified=15 --no-ext-diff ${A} HEAD`)
+  expect(world.calls).toContain(`git diff --name-status -z -M --no-ext-diff ${D} HEAD`)
+})
+
+const SINCE_DIFF_REFUSAL = 'git could not produce the change since the verdict head (it failed, or its output was over 4 MiB and cut off), so no package was written.'
+const NAME_STATUS_REFUSAL = 'git could not list the files changed since the reviewed head (it failed, or its output was over 4 MiB and cut off), so no package was written.'
+
+for (const [what, fail, refusal] of [
+  ['the change since the verdict head', (world: ReturnType<typeof fakeGitHub>) => { world.sinceDiffFail = true }, SINCE_DIFF_REFUSAL],
+  ['the list of files changed since the reviewed head', (world: ReturnType<typeof fakeGitHub>) => { world.nameStatusFail = true }, NAME_STATUS_REFUSAL],
+] as const) {
+  test(`when git fails to give only ${what}, the package is refused and the refusal names that step alone`, async ($, on) => {
+    mock.clock(on)
+    mock.store(on)
+    engine(on)
+    const world = fakeGitHub(on)
+    const files = fakeFiles(on)
+    await watch($)
+    world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: 'Fix the round' }]
+    world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
+    fail(world)
+
+    expect(await packageAnswer($)).toBe(refusal)
+    expect(files.has(`${PACKAGE_DIR}/package.md`)).toBe(false)
+    expect(files.has(`${PACKAGE_DIR}/diff.patch`)).toBe(false)
+  })
+}
+
+for (const [how, fail] of [
+  ['throws', (world: ReturnType<typeof fakeGitHub>) => { world.ancestorFail = 'throw' }],
+  ['answers with its output cut off', (world: ReturnType<typeof fakeGitHub>) => { world.ancestorFail = 'cut' }],
+] as const) {
+  test(`when the check that the verdict head is an ancestor of the head ${how}, the package is refused and the refusal names the ancestry check`, async ($, on) => {
+    mock.clock(on)
+    mock.store(on)
+    engine(on)
+    const world = fakeGitHub(on)
+    const files = fakeFiles(on)
+    await watch($)
+    world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: 'Fix the round' }]
+    world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
+    fail(world)
+
+    const answer = await packageAnswer($)
+
+    expect(answer).toBe('git could not check whether the verdict head is an ancestor of the head (it could not run, or its output was over 4 MiB and cut off), so no package was written.')
+    expect(world.calls.some(call => call.startsWith('git fetch'))).toBe(true)
+    expect(world.calls.some(call => call.startsWith('git rev-list --merges'))).toBe(false)
+    expect(files.has(`${PACKAGE_DIR}/package.md`)).toBe(false)
+    expect(files.has(`${PACKAGE_DIR}/diff.patch`)).toBe(false)
+  })
+}
+
+for (const [how, fail] of [
+  ['exits with an error', (world: ReturnType<typeof fakeGitHub>) => { world.mergesFail = 'exit' }],
+  ['throws', (world: ReturnType<typeof fakeGitHub>) => { world.mergesFail = 'throw' }],
+  ['answers with its output cut off', (world: ReturnType<typeof fakeGitHub>) => { world.mergesFail = 'cut' }],
+] as const) {
+  test(`when the listing of merge commits since the verdict head ${how}, the package is refused and the refusal names that listing`, async ($, on) => {
+    mock.clock(on)
+    mock.store(on)
+    engine(on)
+    const world = fakeGitHub(on)
+    const files = fakeFiles(on)
+    await watch($)
+    world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: 'Fix the round' }]
+    world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
+    fail(world)
+
+    const answer = await packageAnswer($)
+
+    expect(answer).toBe('git could not list the merge commits since the verdict head (it failed, or its output was over 4 MiB and cut off), so no package was written.')
+    expect(world.calls).toContain(`git merge-base --is-ancestor ${A} HEAD`)
+    expect(world.calls.some(call => call.startsWith('git diff --unified=15'))).toBe(false)
+    expect(files.has(`${PACKAGE_DIR}/package.md`)).toBe(false)
+    expect(files.has(`${PACKAGE_DIR}/diff.patch`)).toBe(false)
+  })
+}
+
+test('a head whose only commit since an approval with both verdicts is the cheap-fix commit is up for the check, and the answer names only the adversarial reviewer', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  await watch($)
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: "Fix this round's cheap follow-ups\n\nFixed:\n- A name." }]
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'APPROVE', 'APPROVE')] })
+  world.nameStatus = 'M\0tests/a.test.ts\0'
+
+  const answer = await packageAnswer($)
+
+  expect(answer.split('\n').slice(-2)).toEqual([
+    'Up for the check after approval: launch only builder:adversarial-reviewer.',
+    'If the check leaves a blocking finding, run the first half with: builder:maintainability-reviewer.',
+  ])
+  expect(answer).not.toContain('Focused reviewers to launch')
+  expect(answer).toContain(`Since: ${A}`)
+  expect(files.get(`${PACKAGE_DIR}/package.md`)).toContain('This head is up for the check after approval')
+
+  world.nameStatus = 'M\0hooks/a.ts\0'
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe('If the check leaves a blocking finding, run the first half with: builder:security-reviewer, builder:maintainability-reviewer, builder:performance-reviewer, builder:data-reviewer.')
+
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'APPROVE', 'REQUEST_CHANGES')] })
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
+})
+
+test('with after_check, a head up for the check is packaged as a normal later round, and the pane plans that round\'s reviewers', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  const pane = await paneOn($)
+  await watch($)
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: "Fix this round's cheap follow-ups" }]
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'APPROVE', 'APPROVE')] })
+  world.nameStatus = 'M\0hooks/a.ts\0'
+  await packageAnswer($)
+  expect(await plannedIn(pane)).toEqual(['adversarial-reviewer'])
+
+  const afterCheck = async (nameStatus: string) => {
+    world.nameStatus = nameStatus
+    const ran = await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.', after_check: true })
+    return String(ran.result).replace(/^builder: /, '')
+  }
+
+  const answer = await afterCheck('M\0hooks/a.ts\0')
+  expect(answer.split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  expect(answer).not.toContain('Up for the check')
+  expect(answer).not.toContain('If the check leaves a blocking finding')
+  expect(answer).toContain(`Since: ${A}`)
+  expect(files.get(`${PACKAGE_DIR}/package.md`)).not.toContain('up for the check after approval')
+  // The stored package is a normal round, so the pane plans its focused
+  // reviewers rather than the adversarial reviewer alone.
+  expect(await plannedIn(pane)).toEqual(['security-reviewer', 'maintainability-reviewer', 'performance-reviewer', 'data-reviewer'])
+
+  expect((await afterCheck('M\0tests/a.test.ts\0')).split('\n').at(-1)).toBe(ONLY_MAINTAINABILITY)
+  expect(await plannedIn(pane)).toEqual(['maintainability-reviewer'])
+
+  // Without the input, the same head is up for the check again.
+  world.nameStatus = 'M\0hooks/a.ts\0'
+  expect((await packageAnswer($)).split('\n').at(-2)).toBe('Up for the check after approval: launch only builder:adversarial-reviewer.')
+  expect(await plannedIn(pane)).toEqual(['adversarial-reviewer'])
+})
+
+test('after_check changes nothing at a head that is not up for the check', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  fakeFiles(on)
+  await watch($)
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: 'Tighten a test' }]
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
+  world.nameStatus = 'M\0tests/a.test.ts\0'
+  const plain = await packageAnswer($)
+  const ran = await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.', after_check: true })
+  expect(String(ran.result).replace(/^builder: /, '')).toBe(plain)
+})
+
+test('the pane plans only the reviewers the package named, and only the adversarial reviewer at a head up for the check', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  fakeFiles(on)
+  const pane = await paneOn($)
+  await watch($)
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: 'Tighten a test' }]
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
+  world.nameStatus = 'M\0tests/a.test.ts\0'
+
+  await packageAnswer($)
+  expect(await plannedIn(pane)).toEqual(['maintainability-reviewer'])
+
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: "Fix this round's cheap follow-ups" }]
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'APPROVE', 'APPROVE')] })
+  await packageAnswer($)
+  expect(await plannedIn(pane)).toEqual(['adversarial-reviewer'])
 })
 
 test('the review tool posts one comment review at the reviewed head, with the verdicts line first', async ($, on) => {

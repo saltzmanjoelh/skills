@@ -3,7 +3,7 @@
 // question and the votes, so the tests can check every rule without the engine.
 
 import type { AgentCard, CounselQuestion, CounselTally, CounselVote, Snapshot } from '../types'
-import { secretIn } from './review'
+import { CHEAP_FIX_SUBJECT, secretIn } from './review'
 import { OWNERS_ADVOCATE, REVIEWERS } from './state'
 import { normalText, sameText } from './text'
 
@@ -974,7 +974,7 @@ export function followUpAnswer(q: CounselQuestion, t: CounselTally): string {
   }
   lines.push(
     'Write each one into the round\'s **Follow-ups** section with the counsel\'s decision, its count and its reason:',
-    '- A follow-up decided fix is fixed in the commit "Fix this round\'s cheap follow-ups", with the cheap ones, and goes in that commit\'s Fixed: list.',
+    `- A follow-up decided fix is fixed in the commit "${CHEAP_FIX_SUBJECT}", with the cheap ones, and goes in that commit's Fixed: list.`,
     '- A follow-up decided file goes in the review\'s To file: list, with one sentence on what a person would see.',
     '- A follow-up decided drop goes in the review\'s Dropped: list. So does one the counsel did not decide, with its tally, the members without a vote and the words "the counsel did not decide".',
     ...(outcomes.some(o => o.outsideSpec) ? ['- A follow-up outside the spec is written with the words (outside the spec) beside it, so its scope stays in the record.'] : []),

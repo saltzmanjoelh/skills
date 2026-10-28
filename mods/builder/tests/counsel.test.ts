@@ -6,6 +6,7 @@ import {
   keepCounsel, MAX_FOLLOW_UPS, MAX_OPTIONS, neededOf, neverStartedCandidatesOf, neverStartedOf, noOptionCount, QUOTE_CHARS, quoteVote, READABLE_FOLLOW_UP_VOTE, READABLE_VOTE, readVote, reviewParagraph, stepOf, tally, turnoutOf,
   votesOf, type WatchedState, WITHHELD_REASON, WITHHELD_VOTE,
 } from '../hooks/counsel'
+import { CHEAP_FIX_SUBJECT } from '../hooks/review'
 import type { AgentCard, CounselQuestion, CounselVote } from '../types'
 
 const LEAN = 'LEAN-MARKER the session leans to a 90-second poll'
@@ -908,6 +909,14 @@ test('the follow-ups answer gives each decision, its count of seven and the reas
   expect(answer).toContain('Follow-up 1, "The pane cuts long agent names.": the counsel decided to file it as an issue, 4 of 7. Its reason: reason of adversarial on 1.')
   expect(answer).toContain('Follow-up 2, "The poll logs every look twice.": the counsel decided to fix it in this pull request, 4 of 7. Its reason: reason of spec on 2.')
   expect(answer).toContain('Follow-up 3, "A retry message has a typo.": the counsel decided to drop it, 7 of 7.')
+})
+
+test('the follow-ups answer names the cheap-fix commit by the subject the package tool looks for', () => {
+  const q = followUpsQuestion({ followUps: ['The pane cuts long agent names.'] })
+  const input = MEMBERS.map((_, i) => ({ member: fullName(MEMBERS[i]!), follow_ups: [{ number: 1, vote: 'fix', reason: 'cheap' }] }))
+  const step = followUpStepOf(q, followUpRead(q, input).followUps)
+  if (!('tally' in step)) throw new Error('the round was not counted')
+  expect(followUpAnswer(afterTally(q, step.tally), step.tally)).toContain(`fixed in the commit "${CHEAP_FIX_SUBJECT}"`)
 })
 
 test('a decided follow-up whose choosing members all gave an empty reason says that no member that chose it gave a reason', () => {
