@@ -36,9 +36,17 @@ export type RecordVerdicts = NonNullable<RecordPullRequest['verdicts']>
 // the last error line, which is empty until a call fails.
 export type RecordCleanup = NonNullable<BuildStatus['cleanup']>
 
+// The oldest background task a sub session has in flight, as builder writes
+// it: its description, which builder has already cleaned and may have
+// withheld, when builder recorded it as started, and when it counts as
+// probably hung. The hung time is null when the record's is not a finite
+// number, which drops only the mark.
+export type RecordOldestBackground = Omit<NonNullable<BuildStatus['oldestBackground']>, 'hungAt'> & { hungAt: number | null }
+
 // A record as foreman reads it. The ticket, the folder and the two times may
-// be null where builder always writes them, and `version` is not read.
-export type SubRecord = Omit<BuildStatus, 'version' | 'ticket' | 'cwd' | 'stateSince' | 'writtenAt' | 'pr'> & {
+// be null where builder always writes them, the oldest background task's hung
+// time may be null too, and `version` is not read.
+export type SubRecord = Omit<BuildStatus, 'version' | 'ticket' | 'cwd' | 'stateSince' | 'writtenAt' | 'pr' | 'oldestBackground'> & {
   // The ticket the parent gave the sub session, or null when it has none.
   ticket: string | null
   // The folder the sub session works in, or null when the record has none.
@@ -48,6 +56,9 @@ export type SubRecord = Omit<BuildStatus, 'version' | 'ticket' | 'cwd' | 'stateS
   // since the epoch, or null when the record does not say.
   stateSince: number | null
   writtenAt: number | null
+  // The oldest background task in flight, with a hung time that may be null,
+  // or absent when the record names none.
+  oldestBackground?: RecordOldestBackground
 }
 
 const isState = (raw: unknown): raw is BuildState => typeof raw === 'string' && (STATES as readonly string[]).includes(raw)
@@ -153,6 +164,20 @@ export function backgroundOnlyIn(raw: unknown): RecordBackgroundOnly | undefined
   return { since, tasks }
 }
 
+// The oldest background task, or undefined when the value is missing, is not
+// an object, is a list, or has a start that is not a finite number, because
+// foreman cannot say how long a task has run without its start. A hung time
+// that is not a finite number reads as null, so the row names the task
+// without marking it, and a description that is not a string reads as the
+// empty string. Any other field, such as a command, is not read.
+export function oldestBackgroundIn(raw: unknown): RecordOldestBackground | undefined {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
+  const o = raw as Record<string, unknown>
+  const startedAt = timeOr(o.startedAt)
+  if (startedAt === null) return undefined
+  return { description: textOr(o.description, ''), startedAt, hungAt: timeOr(o.hungAt) }
+}
+
 // The record a file's text holds, or null when it does not parse. It parses
 // only as a JSON object with a non-empty string `sessionId`, an `issueKey`
 // that is null or a non-empty string, and one of the six states, because
@@ -175,6 +200,7 @@ export function recordIn(text: string): SubRecord | null {
   const desktopSessionId = filledOr(r.desktopSessionId, undefined)
   const cleanup = cleanupIn(r.cleanup)
   const backgroundOnly = backgroundOnlyIn(r.backgroundOnly)
+  const oldestBackground = oldestBackgroundIn(r.oldestBackground)
   return {
     sessionId: r.sessionId,
     ticket: textOr(r.ticket, null),
@@ -191,5 +217,6 @@ export function recordIn(text: string): SubRecord | null {
     writtenAt: timeOr(r.writtenAt),
     ...(cleanup === undefined ? {} : { cleanup }),
     ...(backgroundOnly === undefined ? {} : { backgroundOnly }),
+    ...(oldestBackground === undefined ? {} : { oldestBackground }),
   }
 }

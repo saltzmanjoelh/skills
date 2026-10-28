@@ -385,6 +385,79 @@ test('a file more than three minutes old is dimmed with its age and still busy, 
   expect(await ui.paneText()).toContain('working · building · no update for 3m')
 })
 
+// The oldest background task as builder writes it, started `ago` before T0,
+// with builder's 15 minutes to its hung time.
+const oldestBackground = (description: string, ago: number) => ({ description, startedAt: T0 - ago, hungAt: T0 - ago + 15 * MINUTE })
+
+test('a row waiting on background work names its oldest task with a rising time, and its state line turns to the warning colour at the hung time', async ($, on) => {
+  const w = world(on)
+  w.folder.put('a.json', record('ABC-1', 'working', { reason: '1 background task running.', oldestBackground: oldestBackground('full UI test run', 14 * MINUTE) }))
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  // The surface keeps no key on a Text, so the state line is found by its
+  // words, drawn again as of now.
+  const stateLine = async () => {
+    await ui.pane.redraw()
+    return await ui.pane.find({ type: 'Text', text: /^working · / })
+  }
+
+  const fresh = await stateLine()
+  expect(fresh?.text).toBe('working · 1 background task running. · waiting on: full UI test run (14m 0s)')
+  expect(fresh?.props.color).toBeUndefined()
+  expect(fresh?.props.dimColor).not.toBe(true)
+
+  // One millisecond before the hung time, the time has risen and there is no mark.
+  await w.clock.advance(MINUTE - 1)
+  const before = await stateLine()
+  expect(before?.text).toBe('working · 1 background task running. · waiting on: full UI test run (14m 59s)')
+  expect(before?.props.color).toBeUndefined()
+
+  await w.clock.advance(1)
+  const hung = await stateLine()
+  expect(hung?.text).toBe('working · 1 background task running. · waiting on: full UI test run (15m 0s), it may be hung')
+  expect(hung?.props.color).toBe('warning')
+  // The band's chip does not change: it keeps its words and takes no colour.
+  expect(await ui.bandText()).toContain('ABC-1 working')
+  const chip = await ui.band.find({ type: 'Text', text: /^ABC-1 working$/ })
+  expect(chip).toBeDefined()
+  expect(chip?.props.color).toBeUndefined()
+  expect(chip?.props.dimColor).not.toBe(true)
+})
+
+test('a probably hung row that is stale stays dimmed, one that needs you stays red, and a record without the task draws as before', async ($, on) => {
+  const w = world(on)
+  w.folder.put('a.json', record('ABC-1', 'working', { reason: 'building', oldestBackground: oldestBackground('full UI test run', 20 * MINUTE) }), T0 - 4 * MINUTE)
+  w.folder.put('b.json', record('ABC-2', 'needs-you', { reason: 'the counsel could not decide', oldestBackground: oldestBackground('', 20 * MINUTE) }))
+  w.folder.put('c.json', record('ABC-3', 'working', { reason: 'building' }))
+  w.folder.put('d.json', record('ABC-4', 'idle', { reason: 'nothing to hand over' }))
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await ui.pane.redraw()
+  // The surface keeps no key on a Text, so each state line is found by its
+  // words.
+  const line = (words: RegExp) => ui.pane.find({ type: 'Text', text: words })
+
+  const stale = await line(/^working · building · waiting on/)
+  expect(stale?.text).toBe('working · building · waiting on: full UI test run (20m 0s), it may be hung · no update for 4m')
+  expect(stale?.props.dimColor).toBe(true)
+  expect(stale?.props.color).toBeUndefined()
+
+  const needsYou = await line(/^needs you · /)
+  expect(needsYou?.text).toBe('needs you · the counsel could not decide · waiting on: a background task (20m 0s), it may be hung')
+  expect(needsYou?.props.color).toBe('error')
+
+  const working = await line(/^working · building$/)
+  expect(working?.text).toBe('working · building')
+  expect(working?.props.color).toBeUndefined()
+  expect(working?.props.dimColor).not.toBe(true)
+
+  const idle = await line(/^idle · /)
+  expect(idle?.text).toBe('idle · nothing to hand over')
+  expect(idle?.props.color).toBe('warning')
+})
+
 test('the next read comes 30 seconds after a read with a fresh working file, and not at 29', async ($, on) => {
   const w = world(on)
   w.folder.put('a.json', record('ABC-1', 'working'))

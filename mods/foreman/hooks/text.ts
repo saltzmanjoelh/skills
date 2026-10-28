@@ -1,9 +1,10 @@
 // Small text rules shared by the pane and the drawings. This module imports
 // nothing from the rest of the mod, so every other module can import it.
 //
-// printable and timeOfDay are copies of the ones in builder's hooks/text.ts,
-// because a mod cannot import another plugin's files. tests/art.test.ts holds
-// them to what builder's answer, so change them only together with builder's.
+// printable, clockTime and timeOfDay are copies of the ones in builder's
+// hooks/text.ts, because a mod cannot import another plugin's files.
+// tests/art.test.ts holds them to what builder's answer, so change them only
+// together with builder's.
 
 // Text a record or a tool supplied, made safe to print: escape sequences are
 // removed whole, other control characters and bidirectional overrides are
@@ -21,6 +22,17 @@ export function printable(text: string, max = 80): string {
     .replace(/ {2,}/g, ' ')
     .trim()
   return plain.length > max ? `${plain.slice(0, max - 1)}…` : plain
+}
+
+// How long something has run, as builder writes a duration on its line:
+// 45s, 1m 7s, 1h 2m. A row says with it how long a sub session's oldest
+// background task has run.
+export function clockTime(ms: number): string {
+  const seconds = Math.floor(ms / 1000)
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`
 }
 
 // A moment as the log writes it: the UTC time as HH:MM:SS, with the UTC date
