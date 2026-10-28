@@ -596,12 +596,47 @@ export const MARKDOWN_IMPORT_PATTERN = '(^|[[:space:]])@[^[:space:]]+\\.md'
 // imported file can import others in turn. The tool does not follow those
 // paths, so when any instruction file on either tree imports Markdown, no
 // documentation can be sorted for certain. Reading too much as an import only
-// costs reviewer runs.
+// costs reviewer runs. The search itself is limited by INSTRUCTION_PATHSPECS,
+// and this check stays as the final filter.
 export function instructionFileImportsMarkdown(raw: string, trees: readonly string[]): boolean {
   return raw.split('\n').some(line => {
     const tree = trees.find(name => line.startsWith(`${name}:`))
     return tree !== undefined && isInstructionPath(line.slice(tree.length + 1))
   })
+}
+
+// The pathspecs that limit a git command to the files Claude Code loads as
+// instructions, in any case and at any depth, the root included: the
+// instruction files, and the instruction folders with everything in them. A
+// folder's own name is listed too, so a link that stands in for the folder is
+// found.
+export const INSTRUCTION_PATHSPECS: readonly string[] = [
+  ...INSTRUCTION_FILES.map(name => `:(glob,icase)**/${name}`),
+  ...INSTRUCTION_FOLDERS.flatMap(folder => [`:(glob,icase)**/${folder}`, `:(glob,icase)**/${folder}/**`]),
+]
+
+// Whether the search for Markdown imports, `git grep -l` over `trees`, found
+// one in an instruction file. A search that could not run or was cut off,
+// shown as null, counts as an import, and so does any exit other than 0 or 1,
+// because the tool cannot then sort documentation for certain. An exit of 1
+// means git found nothing.
+export function markdownImportFound(search: { exitCode: number; stdout: string } | null, trees: readonly string[]): boolean {
+  if (search === null) return true
+  if (search.exitCode === 1) return false
+  if (search.exitCode !== 0) return true
+  return instructionFileImportsMarkdown(search.stdout, trees)
+}
+
+// Whether a listing of the instruction files on one tree, the output of
+// `git diff-tree -r -z` from the empty tree limited by INSTRUCTION_PATHSPECS,
+// holds a symbolic link. Each record is a field that starts with a colon and
+// gives the old and new modes, then the path. Git stores a link as its target's
+// path, so a change to the target shows up under the target's own name, and
+// Claude Code, which follows the link, loads the target as instructions. A
+// listing that could not be read, shown as null, counts as holding a link.
+export function instructionFileIsLink(raw: string | null): boolean {
+  if (raw === null) return true
+  return raw.split('\0').some(field => field.startsWith(':') && field.split(' ')[1] === '120000')
 }
 
 // The kinds of the files in the output of

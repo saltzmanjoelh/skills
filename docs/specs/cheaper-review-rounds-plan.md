@@ -85,8 +85,15 @@ same answer the session got.
   import of a Markdown file, found with `git grep -i` over both trees, no
   file counts as documentation, because Claude Code loads an imported file as
   instructions, reads its path relative to the importing file, and an
-  imported file can import others that the tool does not follow. A search
-  that fails counts as an import.
+  imported file can import others that the tool does not follow. The search
+  reads only the instruction files, through case-insensitive glob
+  pathspecs, so its cost does not grow with the repository. A search that
+  fails counts as an import.
+- When any instruction file at the head or on the base is a symbolic link,
+  found with `git diff-tree` from the empty tree over the same pathspecs, no
+  file counts as documentation either, because git records a change to the
+  link's target under the target's own path while Claude Code loads the
+  target as instructions. A listing that fails counts as a link.
 - The spec directory is read with `factIn` from
   `git show origin/<base>:CLAUDE.md`. A failed read, a missing or empty fact,
   an absolute path, a `..` folder, or a value that comes down to the root

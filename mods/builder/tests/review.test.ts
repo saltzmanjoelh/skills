@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { verdictsOf } from '../hooks/github'
-import { CHEAP_FIX_SUBJECT, changedKinds, commitRecordsOf, DECIDED_HEADINGS, DECIDED_ITEM_CHARS, decidedItems, decidedSection, DEFAULT_SPEC_DIR, factIn, instructionFileImportsMarkdown, isFullSha, isUpForCheck, packageText, pathKind, recordItems, reviewedHeadOf, secretIn, specDirOf, STREAK_STOP, trendOf, trendSection, trendStopLine, verdictHeadOf, verdictsLine } from '../hooks/review'
+import { CHEAP_FIX_SUBJECT, changedKinds, commitRecordsOf, DECIDED_HEADINGS, DECIDED_ITEM_CHARS, decidedItems, decidedSection, DEFAULT_SPEC_DIR, factIn, INSTRUCTION_PATHSPECS, instructionFileImportsMarkdown, instructionFileIsLink, isFullSha, isUpForCheck, markdownImportFound, packageText, pathKind, recordItems, reviewedHeadOf, secretIn, specDirOf, STREAK_STOP, trendOf, trendSection, trendStopLine, verdictHeadOf, verdictsLine } from '../hooks/review'
 
 const facts = {
   repo: 'o/r',
@@ -586,6 +586,39 @@ test('an instruction file on either tree that git grep finds with a Markdown imp
   const raw = 'M\0docs/guide.md\0M\0tests/a.test.ts\0'
   expect(changedKinds(raw, spec)).toEqual(['documentation', 'test'])
   expect(changedKinds(raw, spec, true)).toEqual(['other', 'test'])
+})
+
+test('the search for Markdown imports finds one when it fails, is cut off, or names an instruction file, and none when it exits 1', () => {
+  const trees = ['HEAD', 'origin/main']
+  expect(markdownImportFound(null, trees)).toBe(true)
+  expect(markdownImportFound({ exitCode: 128, stdout: '' }, trees)).toBe(true)
+  expect(markdownImportFound({ exitCode: 1, stdout: '' }, trees)).toBe(false)
+  expect(markdownImportFound({ exitCode: 0, stdout: 'HEAD:CLAUDE.md\n' }, trees)).toBe(true)
+  expect(markdownImportFound({ exitCode: 0, stdout: 'HEAD:docs/guide.md\n' }, trees)).toBe(false)
+})
+
+test('a listing of the instruction files that holds a symbolic link, or could not be read, makes documentation count as anything else', () => {
+  const zero = '0'.repeat(40)
+  const link = `:000000 120000 ${zero} ${'c'.repeat(40)} A\0AGENTS.md\0`
+  const file = `:000000 100644 ${zero} ${'d'.repeat(40)} A\0CLAUDE.md\0`
+  expect(instructionFileIsLink(null)).toBe(true)
+  expect(instructionFileIsLink(link)).toBe(true)
+  expect(instructionFileIsLink(file + link)).toBe(true)
+  expect(instructionFileIsLink(file)).toBe(false)
+  expect(instructionFileIsLink('')).toBe(false)
+})
+
+test('the instruction pathspecs name every instruction file and folder, in any case and at any depth', () => {
+  expect(INSTRUCTION_PATHSPECS).toEqual([
+    ':(glob,icase)**/claude.md',
+    ':(glob,icase)**/claude.local.md',
+    ':(glob,icase)**/agents.md',
+    ':(glob,icase)**/skill.md',
+    ':(glob,icase)**/.claude',
+    ':(glob,icase)**/.claude/**',
+    ':(glob,icase)**/.claude-plugin',
+    ':(glob,icase)**/.claude-plugin/**',
+  ])
 })
 
 test('an unknown status or output that does not parse counts as anything else', () => {

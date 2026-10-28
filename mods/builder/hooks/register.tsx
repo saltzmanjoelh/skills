@@ -15,7 +15,7 @@ import { afterComparison, afterLoad, dueComparisons, isStale, LOADED_PATHS, load
 import { AGENT_PANE, agentPaneTree, bandTree, isDrawable, messagesReadOf, NAMED_AFTER_MS, PANE, paneTree, secondRow, type Elements, type MessagesRead, type View } from './pane'
 import { ADVERSARIAL_REVIEWER, afterReport, endedOf, FOCUSED_REVIEWERS, focusedReviewersFor, plannedOf, progressIn, reportAnswer, reportOf, stageLabel, STAGES, type ReportInput } from './progress'
 import { changePrompt, ciEventContext, resumePrompt, stateLines, stuckPrompt } from './prompts'
-import { changedKinds, commitRecordsOf, decidedItems, factIn, instructionFileImportsMarkdown, isFullSha, isUpForCheck, LATER_CONTEXT_LINES, MARKDOWN_IMPORT_PATTERN, packageText, reviewedHeadOf, secretIn, specDirOf, trendOf, trendStopLine, verdictHeadOf, verdictsLine, type CommitRecord, type EarlierRound, type PackageInput } from './review'
+import { changedKinds, commitRecordsOf, decidedItems, factIn, INSTRUCTION_PATHSPECS, instructionFileIsLink, isFullSha, isUpForCheck, LATER_CONTEXT_LINES, MARKDOWN_IMPORT_PATTERN, markdownImportFound, packageText, reviewedHeadOf, secretIn, specDirOf, trendOf, trendStopLine, verdictHeadOf, verdictsLine, type CommitRecord, type EarlierRound, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
 import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, newMemo, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
 import { timeOfDay } from './text'
@@ -1967,6 +1967,25 @@ type PackageShape =
   | { kind: 'first'; fallback?: string; reviewers: readonly string[] }
   | { kind: 'later'; since: string; sinceDiff: string; check: boolean; reviewers: readonly string[] }
 
+// The empty tree's id in each object format git supports, to list a whole
+// tree with `git diff-tree`.
+const EMPTY_TREES: Record<string, string> = {
+  sha1: '4b825dc642cb6eb9a060e54bf8d69288fbee4904',
+  sha256: '6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321',
+}
+
+// The instruction files on each of `trees`, as `git diff-tree -r -z` from the
+// empty tree prints them with their modes, one listing per tree. `git ls-tree`
+// would be plainer but takes no case-insensitive glob pathspecs. A listing
+// that git could not produce is null, and so is every listing when the
+// repository's object format is unknown.
+async function instructionListingsOf($: $, dir: string, trees: readonly string[]): Promise<(string | null)[]> {
+  const format = (await git($, dir, ['rev-parse', '--show-object-format']))?.trim()
+  const empty = format === undefined ? undefined : EMPTY_TREES[format]
+  if (empty === undefined) return trees.map(() => null)
+  return Promise.all(trees.map(tree => git($, dir, ['diff-tree', '-r', '-z', '--no-renames', empty, tree, '--', ...INSTRUCTION_PATHSPECS])))
+}
+
 // The shape of the package at the checkout's head, from the earlier verdict
 // reviews and the branch's commits, oldest first. A pull request with no
 // verdict head gets a first package. One whose verdict head is not a full sha,
@@ -1993,19 +2012,21 @@ async function packageShapeOf($: $, dir: string, base: string, head: string, ear
   // The changed files are read from the reviewed head, where the focused
   // reviewers last ran. When it is missing, all four run and no list is read.
   const reviewedHead = reviewedHeadOf(verdictHead, records)
-  // The search for Markdown imports covers the head and the base, so an import
-  // the branch adds counts as much as one already on the base. It exits 1 when
-  // it finds none; any other failure counts as an import.
+  // The search for Markdown imports and the listing of instruction files that
+  // are symbolic links cover the head and the base, so what the branch adds
+  // counts as much as what is already on the base. Both read only the
+  // instruction files, so their cost does not grow with the repository.
   const trees = ['HEAD', `origin/${base}`]
-  const [sinceDiff, nameStatus, baseClaude, imports] = await Promise.all([
+  const [sinceDiff, nameStatus, baseClaude, imports, links] = await Promise.all([
     git($, dir, ['diff', `--unified=${LATER_CONTEXT_LINES}`, '--no-ext-diff', verdictHead, 'HEAD']),
     reviewedHead === null ? '' : git($, dir, ['diff', '--name-status', '-z', '-M', '--no-ext-diff', reviewedHead, 'HEAD']),
     reviewedHead === null ? null : git($, dir, ['show', `origin/${base}:CLAUDE.md`]),
-    reviewedHead === null ? null : gitRun($, dir, ['grep', '-l', '-I', '-i', '-E', MARKDOWN_IMPORT_PATTERN, ...trees]),
+    reviewedHead === null ? null : gitRun($, dir, ['grep', '-l', '-I', '-i', '-E', MARKDOWN_IMPORT_PATTERN, ...trees, '--', ...INSTRUCTION_PATHSPECS]),
+    reviewedHead === null ? [] : instructionListingsOf($, dir, trees),
   ])
   if (sinceDiff === null) return { refused: 'git could not produce the change since the verdict head (it failed, or its output was over 4 MiB and cut off)' }
   if (nameStatus === null) return { refused: 'git could not list the files changed since the reviewed head (it failed, or its output was over 4 MiB and cut off)' }
-  const docsAreInstructions = imports === null || (imports.exitCode !== 1 && (imports.exitCode !== 0 || instructionFileImportsMarkdown(imports.stdout, trees)))
+  const docsAreInstructions = markdownImportFound(imports, trees) || links.some(instructionFileIsLink)
   const kinds = reviewedHead === null ? null : changedKinds(nameStatus, specDirOf(baseClaude), docsAreInstructions)
   const check = !afterCheck && isUpForCheck(verdictHead, reviewedHead, records, earlier)
   return { kind: 'later', since: verdictHead, sinceDiff, check, reviewers: focusedReviewersFor(kinds) }

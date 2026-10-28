@@ -6,6 +6,7 @@ import { FACTS_LEAD, GITHUB_NAMES_LINE, SETTINGS_HINT } from '../hooks/context'
 import { RUNS_JQ, snapshotOf, type GhPullRequest } from '../hooks/github'
 import { NOTHING_WATCHED, STALE_WARNING } from '../hooks/pane'
 import { RELOAD_LINE, REREAD_CLOSING } from '../hooks/prompts'
+import { INSTRUCTION_PATHSPECS } from '../hooks/review'
 import type { BuildStatus, Compactions } from '../types'
 
 const A = 'a'.repeat(40)
@@ -95,7 +96,10 @@ function fakeGitHub(on: On) {
   // prints, the base branch's CLAUDE.md, and that read exits 128 when it is
   // null. `grep` is what `git grep -l` prints for the instruction files that
   // hold a Markdown import, and the search exits 1, finding none, when it is
-  // empty; `grepFail` makes it exit with an error. `nameStatus` is what `git diff --name-status -z` prints for the
+  // empty; `grepFail` makes it exit with an error. `objectFormat` is what
+  // `git rev-parse --show-object-format` prints. `links` is what
+  // `git diff-tree -r -z` prints for the instruction files on each tree, and
+  // `linksFail` makes that listing exit with an error. `nameStatus` is what `git diff --name-status -z` prints for the
   // files changed since the reviewed head, and `nameStatusFail` and
   // `sinceDiffFail` make that read and the read of the change since the
   // verdict head exit with an error.
@@ -117,7 +121,7 @@ function fakeGitHub(on: On) {
     onQuietDiff: null as (() => void) | null, afterQuietDiff: null as (() => void) | null, headHolds: {} as Record<string, Promise<void>>,
     states: {} as Record<number, string>, stateRead: null as null | 'exit' | 'throw' | 'cut' | 'text',
     messages: [{ sha: A, message: 'Build it' }] as { sha: string; message: string }[], messagesFail: false,
-    ancestorExit: 0, ancestorFail: null as null | 'throw' | 'cut', merges: '', mergesFail: null as null | 'exit' | 'throw' | 'cut', baseClaude: null as string | null, grep: '', grepFail: false, nameStatus: '', nameStatusFail: false, sinceDiffFail: false,
+    ancestorExit: 0, ancestorFail: null as null | 'throw' | 'cut', merges: '', mergesFail: null as null | 'exit' | 'throw' | 'cut', baseClaude: null as string | null, grep: '', grepFail: false, objectFormat: 'sha1', links: '', linksFail: false, nameStatus: '', nameStatusFail: false, sinceDiffFail: false,
   }
   on('process.run', async ($, e) => {
     const argv = e.argv.join(' ')
@@ -176,6 +180,8 @@ function fakeGitHub(on: On) {
     if (argv.startsWith('git rev-list --merges ')) return out(world.merges)
     if (argv.startsWith('git show origin/')) return world.baseClaude === null ? exit(128) : out(world.baseClaude)
     if (argv.startsWith('git grep ')) return world.grepFail ? exit(128) : world.grep === '' ? exit(1) : out(world.grep)
+    if (argv === 'git rev-parse --show-object-format') return out(`${world.objectFormat}\n`)
+    if (argv.startsWith('git diff-tree ')) return world.linksFail ? exit(128) : out(world.links)
     if (argv.startsWith('git diff --name-status ')) return world.nameStatusFail ? exit(128) : out(world.nameStatus)
     if (argv.startsWith('git diff --unified=15 ')) return world.sinceDiffFail ? exit(128) : out('diff --git a/since.ts b/since.ts\n')
     if (argv.startsWith('git diff') && world.cutDiff) {
@@ -1086,7 +1092,7 @@ test('the spec directory comes from the base branch\'s CLAUDE.md, not the branch
   expect(world.calls).toContain('git show origin/main:CLAUDE.md')
 })
 
-test('when an instruction file on the branch or the base imports Markdown, or the search fails, a change to documentation alone names every focused reviewer', async ($, on) => {
+test('when an instruction file on the branch or the base imports Markdown or is a symbolic link, or either search fails, a change to documentation alone names every focused reviewer', async ($, on) => {
   mock.clock(on)
   mock.store(on)
   engine(on)
@@ -1098,7 +1104,10 @@ test('when an instruction file on the branch or the base imports Markdown, or th
   world.nameStatus = 'M\0docs/guide.md\0'
 
   expect((await packageAnswer($)).split('\n').at(-1)).toBe(ONLY_MAINTAINABILITY)
-  expect(world.calls.some(call => call.startsWith('git grep ') && call.includes(' HEAD origin/main'))).toBe(true)
+  expect(world.calls.some(call => call.startsWith('git grep ') && call.endsWith(` HEAD origin/main -- ${INSTRUCTION_PATHSPECS.join(' ')}`))).toBe(true)
+  for (const tree of ['HEAD', 'origin/main']) {
+    expect(world.calls).toContain(`git diff-tree -r -z --no-renames 4b825dc642cb6eb9a060e54bf8d69288fbee4904 ${tree} -- ${INSTRUCTION_PATHSPECS.join(' ')}`)
+  }
   world.grep = 'HEAD:docs/notes.md\n'
   expect((await packageAnswer($)).split('\n').at(-1)).toBe(ONLY_MAINTAINABILITY)
   world.grep = 'HEAD:CLAUDE.md\n'
@@ -1107,6 +1116,17 @@ test('when an instruction file on the branch or the base imports Markdown, or th
   expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
   world.grep = ''
   world.grepFail = true
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  world.grepFail = false
+  world.links = `:000000 100644 ${'0'.repeat(40)} ${'d'.repeat(40)} A\0CLAUDE.md\0`
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(ONLY_MAINTAINABILITY)
+  world.links = `:000000 120000 ${'0'.repeat(40)} ${'c'.repeat(40)} A\0AGENTS.md\0`
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  world.links = ''
+  world.linksFail = true
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  world.linksFail = false
+  world.objectFormat = 'sha512'
   expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
 })
 
