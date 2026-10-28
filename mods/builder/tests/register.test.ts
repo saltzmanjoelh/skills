@@ -85,6 +85,14 @@ function fakeGitHub(on: On) {
   // `messages` are the branch's commits, oldest first, with their full
   // messages, as `git log --format=%H%x1f%B%x1e` prints them, and
   // `messagesFail` makes that read exit with an error.
+  // `ancestorExit` is the exit code of `git merge-base --is-ancestor`, and
+  // `merges` what `git rev-list --merges` prints, the merge commits since the
+  // verdict head. `baseClaude` is what `git show origin/main:CLAUDE.md`
+  // prints, the base branch's CLAUDE.md, and that read exits 128 when it is
+  // null. `nameStatus` is what `git diff --name-status -z` prints for the
+  // files changed since the reviewed head, and `nameStatusFail` and
+  // `sinceDiffFail` make that read and the read of the change since the
+  // verdict head exit with an error.
   // `states` gives the state that `gh pr view <n> --repo o/r --json state`
   // answers for pull request n; a number not listed answers the state of
   // `pr`. `stateRead`, when set, makes every such read exit with an error,
@@ -103,6 +111,7 @@ function fakeGitHub(on: On) {
     onQuietDiff: null as (() => void) | null, afterQuietDiff: null as (() => void) | null, headHolds: {} as Record<string, Promise<void>>,
     states: {} as Record<number, string>, stateRead: null as null | 'exit' | 'throw' | 'cut' | 'text',
     messages: [{ sha: A, message: 'Build it' }] as { sha: string; message: string }[], messagesFail: false,
+    ancestorExit: 0, merges: '', baseClaude: null as string | null, nameStatus: '', nameStatusFail: false, sinceDiffFail: false,
   }
   on('process.run', async ($, e) => {
     const argv = e.argv.join(' ')
@@ -146,6 +155,11 @@ function fakeGitHub(on: On) {
       return exit(finds ? 1 : 0)
     }
     if (argv.startsWith('git diff --stat')) return out(' a.ts | 2 +-\n 1 file changed\n')
+    if (argv.startsWith('git merge-base --is-ancestor ')) return exit(world.ancestorExit)
+    if (argv.startsWith('git rev-list --merges ')) return out(world.merges)
+    if (argv.startsWith('git show origin/')) return world.baseClaude === null ? exit(128) : out(world.baseClaude)
+    if (argv.startsWith('git diff --name-status ')) return world.nameStatusFail ? exit(128) : out(world.nameStatus)
+    if (argv.startsWith('git diff --unified=15 ')) return world.sinceDiffFail ? exit(128) : out('diff --git a/since.ts b/since.ts\n')
     if (argv.startsWith('git diff') && world.cutDiff) {
       return { value: { exitCode: 0, stdout: 'diff --git a/a.ts', stderr: '', isStdoutTruncated: true, isStderrTruncated: false } }
     }
@@ -870,7 +884,10 @@ test('the package tool writes the package and the diff for the head, with the ro
   expect(text).toContain('### At aaaaaaaa')
   expect(text).toContain('- Architecture document: docs/arch.md')
   expect(text).toContain('- Gotchas document: none in this project')
-  expect(files.get('/repo/.git/builder/cccccccc/diff.patch')).toContain('diff --git a/a.ts b/a.ts')
+  // The review at A makes this a later package: diff.patch is the change since
+  // A, and the whole pull request is beside it.
+  expect(files.get('/repo/.git/builder/cccccccc/diff.patch')).toContain('diff --git a/since.ts b/since.ts')
+  expect(files.get('/repo/.git/builder/cccccccc/full.patch')).toContain('diff --git a/a.ts b/a.ts')
 })
 
 test('the package tool lists the decided findings and the areas, and its first line stops the rounds at a streak of three', async ($, on) => {
@@ -947,6 +964,256 @@ test('the package tool writes no package when git fetch throws', async ($, on) =
 
   expect(String(ran.result)).toContain('git could not fetch the base')
   expect(files.has('/repo/.git/builder/cccccccc/package.md')).toBe(false)
+})
+
+const FOUR_FOCUSED = 'Focused reviewers to launch: builder:security-reviewer, builder:maintainability-reviewer, builder:performance-reviewer, builder:data-reviewer'
+const ONLY_MAINTAINABILITY = 'Focused reviewers to launch: builder:maintainability-reviewer'
+const PACKAGE_DIR = '/repo/.git/builder/cccccccc'
+
+// The answer of a package call, without the mod's prefix.
+async function packageAnswer($: Engine): Promise<string> {
+  const ran = await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
+  return String(ran.result).replace(/^builder: /, '')
+}
+
+test('a first package is the whole pull request with every review in full, writes no full patch, and names all four focused reviewers', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  await watch($)
+
+  const answer = await packageAnswer($)
+
+  expect(answer.split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  expect(answer).not.toContain('Since:')
+  expect(answer).not.toContain('First package because')
+  expect(files.get(`${PACKAGE_DIR}/diff.patch`)).toBe('diff --git a/a.ts b/a.ts\n')
+  expect(files.has(`${PACKAGE_DIR}/full.patch`)).toBe(false)
+  expect(world.calls.some(call => call.startsWith('git merge-base') || call.startsWith('git diff --unified=15'))).toBe(false)
+})
+
+test('a later package diffs from the verdict head with wider context, writes the whole pull request beside it, and repeats only the newest review in full', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  await watch($)
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: D, message: 'Fix the first round' }, { sha: C, message: 'Fix the second round' }]
+  world.nameStatus = 'M\0hooks/a.ts\0'
+  world.pr = openPullRequest({
+    commits: [{ oid: A }, { oid: D }, { oid: C }],
+    reviews: [
+      { ...verdictReview(A, 'REQUEST_CHANGES', 'APPROVE'), body: 'VERDICTS aaaaaaaa spec=REQUEST_CHANGES adversarial=APPROVE\n\nThe first notes.\n\nDropped:\n- The first dropped item.' },
+      { ...verdictReview(D, 'APPROVE', 'REQUEST_CHANGES'), body: 'VERDICTS dddddddd spec=APPROVE adversarial=REQUEST_CHANGES\n\nThe second notes.\n\nOutside the spec:\n- The second outside item.' },
+    ],
+  })
+
+  const answer = await packageAnswer($)
+  const text = files.get(`${PACKAGE_DIR}/package.md`) ?? ''
+
+  expect(world.calls).toContain(`git merge-base --is-ancestor ${D} HEAD`)
+  expect(world.calls).toContain(`git rev-list --merges ${D}..HEAD`)
+  expect(world.calls).toContain(`git diff --unified=15 --no-ext-diff ${D} HEAD`)
+  expect(world.calls).toContain(`git diff --name-status -z -M --no-ext-diff ${D} HEAD`)
+  expect(files.get(`${PACKAGE_DIR}/diff.patch`)).toBe('diff --git a/since.ts b/since.ts\n')
+  expect(files.get(`${PACKAGE_DIR}/full.patch`)).toBe('diff --git a/a.ts b/a.ts\n')
+  expect(text).toContain(`\`diff.patch\` beside this file is the change from ${D}`)
+  expect(text).toContain('- At aaaaaaaa: spec=REQUEST_CHANGES, adversarial=APPROVE')
+  expect(text).not.toContain('The first notes.')
+  expect(text).toContain('The second notes.')
+  expect(text).toContain('- D1 (review at aaaaaaaa): The first dropped item.')
+  expect(text).toContain('- D2 (review at dddddddd): The second outside item.')
+  expect(answer).toContain(`\nSince: ${D}\nWhole pull request: ${PACKAGE_DIR}/full.patch\n`)
+  expect(answer.split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  // package.md is written last, once both patches are there to read.
+  const written = files.writes.log.filter(path => path.startsWith(PACKAGE_DIR))
+  expect(written.at(-1)).toBe(`${PACKAGE_DIR}/package.md`)
+})
+
+test('a later package whose changes since the reviewed head are only tests and documentation names only the maintainability reviewer', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  fakeFiles(on)
+  await watch($)
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: 'Tighten a test' }]
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
+  world.nameStatus = 'M\0tests/a.test.ts\0A\0docs/specs/a.md\0M\0README.md\0'
+
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(ONLY_MAINTAINABILITY)
+
+  world.nameStatus = 'M\0tests/a.test.ts\0M\0skills/implement/SKILL.md\0'
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
+})
+
+test('the spec directory comes from the base branch\'s CLAUDE.md, not the branch\'s', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  await watch($)
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: 'Write the spec down' }]
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
+  world.nameStatus = 'M\0design/specs/a.md\0'
+  files.set('/repo/CLAUDE.md', 'Spec directory: elsewhere/\n')
+
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  world.baseClaude = 'Spec directory: design/specs/\n'
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(ONLY_MAINTAINABILITY)
+  expect(world.calls).toContain('git show origin/main:CLAUDE.md')
+})
+
+test('a merge since the verdict head, or a verdict head that is not an ancestor of the head, gives a first package that says why', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  await watch($)
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: 'Merge main' }]
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
+  world.nameStatus = 'M\0tests/a.test.ts\0'
+
+  world.merges = `${C}\n`
+  const merged = await packageAnswer($)
+  expect(merged).toContain('First package because a merge commit follows the verdict head')
+  expect(merged).not.toContain('Since:')
+  expect(merged.split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  expect(files.get(`${PACKAGE_DIR}/package.md`)).toContain('This is a first package because a merge commit follows the verdict head')
+  expect(files.get(`${PACKAGE_DIR}/diff.patch`)).toBe('diff --git a/a.ts b/a.ts\n')
+  expect(files.has(`${PACKAGE_DIR}/full.patch`)).toBe(false)
+
+  world.merges = ''
+  for (const code of [1, 128]) {
+    world.ancestorExit = code
+    const answer = await packageAnswer($)
+    expect(answer).toContain(`First package because the verdict head ${A} is not an ancestor of the head`)
+    expect(answer.split('\n').at(-1)).toBe(FOUR_FOCUSED)
+    expect(files.get(`${PACKAGE_DIR}/package.md`)).toContain('not an ancestor of the head')
+  }
+})
+
+test('a verdict head whose sha from GitHub is not a full sha is never passed to git, and gives a first package', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  fakeFiles(on)
+  await watch($)
+  const odd = `${A.slice(0, 39)}G`
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [{ ...verdictReview(A, 'REQUEST_CHANGES', 'APPROVE'), commit: { oid: odd } }] })
+
+  const answer = await packageAnswer($)
+
+  expect(answer).toContain('First package because')
+  expect(world.calls.some(call => call.includes(odd))).toBe(false)
+})
+
+test('a Reviewed: value that names no commit on the branch makes the reviewed head missing, so a later package names all four', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  fakeFiles(on)
+  await watch($)
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: 'Fix the round\n\nReviewed: 99999999' }]
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
+  world.nameStatus = 'M\0tests/a.test.ts\0'
+
+  const answer = await packageAnswer($)
+
+  expect(answer).toContain(`Since: ${A}`)
+  expect(answer.split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  expect(world.calls.some(call => call.startsWith('git diff --name-status'))).toBe(false)
+})
+
+test('the reviewed head that a Reviewed: line names is where the changed files are read from', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  fakeFiles(on)
+  await watch($)
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: D, message: 'Build more' }, { sha: C, message: `Fix the round\n\nReviewed: ${D.slice(0, 8)}` }]
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: D }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
+
+  await packageAnswer($)
+
+  expect(world.calls).toContain(`git diff --unified=15 --no-ext-diff ${A} HEAD`)
+  expect(world.calls).toContain(`git diff --name-status -z -M --no-ext-diff ${D} HEAD`)
+})
+
+test('git failing to give the change since the verdict head or the changed files refuses the package', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  await watch($)
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: 'Fix the round' }]
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
+
+  world.sinceDiffFail = true
+  expect(await packageAnswer($)).toContain('no package was written')
+  world.sinceDiffFail = false
+  world.nameStatusFail = true
+  expect(await packageAnswer($)).toContain('no package was written')
+  expect(files.has(`${PACKAGE_DIR}/package.md`)).toBe(false)
+  expect(files.has(`${PACKAGE_DIR}/diff.patch`)).toBe(false)
+})
+
+test('a head whose only commit since an approval with both verdicts is the cheap-fix commit is up for the check, and the answer names only the adversarial reviewer', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  await watch($)
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: "Fix this round's cheap follow-ups\n\nFixed:\n- A name." }]
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'APPROVE', 'APPROVE')] })
+  world.nameStatus = 'M\0tests/a.test.ts\0'
+
+  const answer = await packageAnswer($)
+
+  expect(answer.split('\n').slice(-2)).toEqual([
+    'Up for the check after approval: launch only builder:adversarial-reviewer.',
+    'If the check leaves a blocking finding, run the first half with: builder:maintainability-reviewer.',
+  ])
+  expect(answer).not.toContain('Focused reviewers to launch')
+  expect(answer).toContain(`Since: ${A}`)
+  expect(files.get(`${PACKAGE_DIR}/package.md`)).toContain('This head is up for the check after approval')
+
+  world.nameStatus = 'M\0hooks/a.ts\0'
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe('If the check leaves a blocking finding, run the first half with: builder:security-reviewer, builder:maintainability-reviewer, builder:performance-reviewer, builder:data-reviewer.')
+
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'APPROVE', 'REQUEST_CHANGES')] })
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
+})
+
+test('the pane plans only the reviewers the package named, and only the adversarial reviewer at a head up for the check', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  fakeFiles(on)
+  const pane = await paneOn($)
+  await watch($)
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: 'Tighten a test' }]
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
+  world.nameStatus = 'M\0tests/a.test.ts\0'
+
+  await packageAnswer($)
+  expect(await plannedIn(pane)).toEqual(['maintainability-reviewer'])
+
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: "Fix this round's cheap follow-ups" }]
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'APPROVE', 'APPROVE')] })
+  await packageAnswer($)
+  expect(await plannedIn(pane)).toEqual(['adversarial-reviewer'])
 })
 
 test('the review tool posts one comment review at the reviewed head, with the verdicts line first', async ($, on) => {
