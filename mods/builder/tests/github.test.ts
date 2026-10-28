@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { carriedRuns, changesBetween, checkOf, ciOf, failedCheckNames, isCiMonitorEvent, isSameState, plainName, pullRequestStateIn, roundInProgress, runsOf, snapshotIn, snapshotOf, WORKFLOW_LABELS, type GhPullRequest, type Snapshot, type WorkflowRun } from '../hooks/github'
-import { changePrompt, stateLines } from '../hooks/prompts'
+import { changePrompt, ciEventContext, reloadLead, RELOAD_LINE, REREAD_CLOSING, stateLines } from '../hooks/prompts'
 
 const ME = 'owner'
 const A = 'a'.repeat(40)
@@ -514,4 +514,35 @@ test('the change prompt puts the lines it is given after the state lines, apart 
   expect(plain).toContain(`${state}\n\nQuoted names`)
   const listed = changePrompt(s, ['The pull request is now merged.'], ['First.', 'Second.'])
   expect(listed).toContain(`${state}\n\nFirst.\nSecond.\n\nQuoted names`)
+})
+
+test('with the compacted flag set, the change prompt begins with the reload line and a blank line, keeps its text, and closes with the reread line in place of its usual closing line', () => {
+  const s = snapshotOf('o/r', pullRequest(), ME)
+  const changes = ['The head moved from bbbbbbbb to cccccccc.']
+  const usual = changePrompt(s, changes, ['First.'])
+  const usualClosing = 'Continue /implement from this state. Do not reread what you already know; act on what changed.'
+  expect(usual.split('\n')[usual.split('\n').length - 1]).toBe(usualClosing)
+  expect(changePrompt(s, changes, ['First.'], false)).toBe(usual)
+  const compacted = changePrompt(s, changes, ['First.'], true)
+  const lines = compacted.split('\n')
+  expect(lines[0]).toBe(RELOAD_LINE)
+  expect(lines[1]).toBe('')
+  expect(lines.slice(2).join('\n')).toBe(usual.slice(0, -usualClosing.length) + REREAD_CLOSING)
+  expect(lines[lines.length - 1]).toBe(REREAD_CLOSING)
+  expect(compacted).not.toContain(usualClosing)
+})
+
+test('the CI event context names the pull request as of the event, and with the compacted flag set begins with the reload line and a blank line before that same text', () => {
+  const s = snapshotOf('o/r', pullRequest(), ME)
+  const usual = ciEventContext(s)
+  expect(usual).toBe(['builder: the pull request as of this event.', ...stateLines(s)].join('\n'))
+  expect(ciEventContext(s, false)).toBe(usual)
+  expect(ciEventContext(s, true)).toBe([RELOAD_LINE, '', usual].join('\n'))
+})
+
+test('the reload lead is the reload line and a blank line when the conversation was compacted, and nothing otherwise', () => {
+  expect(reloadLead(false)).toEqual([])
+  expect(reloadLead(true)).toEqual([RELOAD_LINE, ''])
+  expect(RELOAD_LINE).toBe('builder: the conversation was compacted since the last prompt from the mod. Before you act, load the implement skill again with the Skill tool, read the pull request\'s state with mcp__builder__watch, and when the summary lost the spec and plan paths, read them from the spec directory on the branch.')
+  expect(REREAD_CLOSING).toBe('Continue /implement from this state. Reread what the summary does not hold; act on what changed.')
 })

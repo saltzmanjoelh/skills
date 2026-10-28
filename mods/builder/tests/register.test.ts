@@ -2,9 +2,11 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { ElementQuery, Engine, FoundElement } from 'claude-code/testing'
 
+import { FACTS_LEAD, GITHUB_NAMES_LINE, SETTINGS_HINT } from '../hooks/context'
 import { RUNS_JQ, snapshotOf, type GhPullRequest } from '../hooks/github'
 import { NOTHING_WATCHED, STALE_WARNING } from '../hooks/pane'
-import type { BuildStatus } from '../types'
+import { RELOAD_LINE, REREAD_CLOSING } from '../hooks/prompts'
+import type { BuildStatus, Compactions } from '../types'
 
 const A = 'a'.repeat(40)
 const C = 'c'.repeat(40)
@@ -2887,6 +2889,7 @@ test('the session\'s own body is still refused when it looks like it holds a sec
 // for a restart below.
 const INITIAL_STATE: Record<string, unknown> = {
   counsel: [], questions: [], busy: false, quietSince: null, stuckEvery: 45 * 60_000, usageHold: null,
+  context: null, compactions: null, checkout: null,
 }
 
 // Stands in for a restart of the session, which starts the mod's state under
@@ -7114,13 +7117,15 @@ async function ownTurn($: Engine, turnId: string, reason: 'answer' | 'refusal' |
   await $.turn.complete({ answer: reason === 'error' ? '' : 'waiting', durationMs: 1, isAborted: reason === 'aborted', turnId, reason } as never)
 }
 
-// Answers `$.session.usage()` with the windows in `rateLimits`, or throws
-// when `fails` is set, as when the engine cannot read the usage.
+// Answers `$.session.usage()` with the windows in `rateLimits` and the
+// context window's figures in `context`, which holds no figures until a test
+// gives it some, or throws when `fails` is set, as when the engine cannot
+// read the usage.
 function usageAnswers(on: On) {
-  const usage = { rateLimits: [] as object[], fails: false }
+  const usage = { rateLimits: [] as object[], fails: false, context: {} as object }
   on('session.usage', () => {
     if (usage.fails) throw new Error('the usage could not be read')
-    return { value: { startedAt: 0, context: {}, rateLimits: usage.rateLimits } } as never
+    return { value: { startedAt: 0, context: usage.context, rateLimits: usage.rateLimits } } as never
   })
   return usage
 }
@@ -10608,4 +10613,595 @@ test('a hot reload whose clock has not moved past the memo\'s generation still t
   expect(generations.at(-1)).toBe(S0 + 1)
   await reloads($, s.clock)
   expect(generations.at(-1)).toBe(S0 + 2)
+})
+
+// The context cap (see docs/specs/implement-session-context-cap.md): the
+// compact command at the end of a turn that replied at or above the
+// threshold, the handovers that wait while it runs, the facts the compaction
+// hook adds, and the reload line on the first prompt after a compaction.
+
+// The usage figures for a context of `tokens` against a window the engine
+// settled from `source`, of a million tokens unless the case gives one.
+const contextOf = (tokens: number, source = 'model-default', rawMaxTokens = 1_000_000) =>
+  ({ tokens, window: rawMaxTokens, breakdown: { autocompactSource: source, rawMaxTokens, totalTokens: tokens } })
+
+// The change prompts among the prompts recorded, since the stuck prompt can
+// come during the same stretch of time.
+const changesOf = (prompts: string[]) => prompts.filter(text => text.includes('pull request #7 changed'))
+
+// A promise a test releases by hand, for a command it keeps waiting.
+function gate() {
+  let release = () => {}
+  const until = new Promise<void>(resolve => { release = resolve })
+  return { until, release: () => release() }
+}
+
+// The one message a compaction leaves, as the kit requires at least one: the
+// transcript every compaction raised here runs over, and the one it leaves.
+const SUMMARY = [{ role: 'user', text: 'The summary.', toolUses: [] }]
+
+// The engine's end of a compaction: the bottom `session.compact` handler
+// records what reaches it and answers a compaction that stood, with the sizes
+// the engine reports.
+function compactionsStand(on: On) {
+  const reached: { trigger: string; instructions?: string; agentId?: string }[] = []
+  on('session.compact', ($, e) => {
+    reached.push({ trigger: e.trigger, instructions: e.instructions, agentId: e.agentId })
+    return { messages: SUMMARY, tokensBefore: 115_205, tokensAfter: 15_893 } as never
+  })
+  return reached
+}
+
+// The engine's end of the mod's own compact command, beside compactionsStand:
+// the bottom `command.run` handler records each compact run's arguments,
+// keeps its answer waiting while `hold` is set, throws when `throws` is set,
+// and otherwise raises the compaction event as the engine does, with the
+// arguments as the instructions, so the mod's own hook on it runs; with
+// `raises` off the command returns without a compaction.
+function compactRuns($: Engine, on: On) {
+  const runs = { args: [] as string[], hold: null as Promise<void> | null, throws: false, raises: true, reached: compactionsStand(on) }
+  on('command.run', async (hook, e) => {
+    if (e.command !== 'compact') return { text: '' }
+    runs.args.push(e.args)
+    const hold = runs.hold
+    runs.hold = null
+    if (hold !== null) await hold
+    if (runs.throws) throw new Error('the compact command was refused')
+    if (runs.raises) await $.session.compact({ trigger: 'manual', instructions: e.args, messages: SUMMARY } as never)
+    return { text: 'Compacted.' }
+  })
+  return runs
+}
+
+// A session in its review rounds, as the compaction's facts name it: the
+// pull request watched, the review stage reported, the head packaged in the
+// session's folder, and the spec and adversarial reviewers spawned, which the
+// engine lists as running until the test finishes them. The usage answers no
+// context figures until the test gives some. A test that records prompts
+// registers its hook before calling this.
+async function reviewing($: Engine, on: On) {
+  const clock = mock.clock(on, { now: T0 })
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  const listed = spawning(on)
+  const usage = usageAnswers(on)
+  const compact = compactRuns($, on)
+  await watch($)
+  await report($, 'review', { note: 'round 1' })
+  await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
+  await spawn($, 'builder:spec-reviewer')
+  await spawn($, 'builder:adversarial-reviewer')
+  await clock.settle()
+  return { clock, world, files, listed, usage, compact }
+}
+
+// Both reviewers finished, so no running agent holds the stuck prompt back or
+// keeps the poll at its long interval.
+async function reviewersDone($: Engine, listed: { id: string; status: string }[]) {
+  await finish($, listed, 'agent-1', 'VERDICT: APPROVE')
+  await finish($, listed, 'agent-2', 'VERDICT: APPROVE')
+}
+
+test('a turn that replied at 85 percent of the ceiling runs the compact command once, with instructions that name the pull request, the stage, the worktree and the reviewers', async ($, on) => {
+  const { clock, listed, usage, compact } = await reviewing($, on)
+  await reviewersDone($, listed)
+  usage.context = contextOf(255_000)
+
+  await ownTurn($, 't1')
+  await clock.settle()
+
+  expect(compact.args.length).toBe(1)
+  const lines = (compact.args[0] ?? '').split('\n')
+  expect(lines[0]).toBe(FACTS_LEAD)
+  expect(lines).toContain('Issue: ABC-123 builder progress. Stage: review rounds (round 1).')
+  expect(lines).toContain(`Pull request: o/r#7, open, head ${C.slice(0, 8)}.`)
+  expect(lines).toContain('Worktree: /repo, branch feature.')
+  expect(lines).toContain(`Reviewers at head ${C.slice(0, 8)}: ran spec-reviewer, adversarial-reviewer; running none; not started security-reviewer, maintainability-reviewer, performance-reviewer, data-reviewer.`)
+  expect(lines.at(-1)).toBe(GITHUB_NAMES_LINE)
+  // The compaction the command raised reached the engine with those
+  // instructions, which already hold the facts, so the hook added nothing.
+  expect(compact.reached.length).toBe(1)
+  expect(compact.reached[0]?.instructions).toBe(compact.args[0])
+})
+
+test('a turn one token under the threshold, a turn an error ended and an aborted turn run no compact command at any size, and each later turn that replied above it runs one', async ($, on) => {
+  const { clock, usage, compact } = await reviewing($, on)
+  usage.context = contextOf(254_999)
+  await ownTurn($, 't1')
+  await clock.settle()
+  expect(compact.args).toEqual([])
+
+  usage.context = contextOf(900_000)
+  await ownTurn($, 't2', 'error')
+  await clock.settle()
+  await ownTurn($, 't3', 'aborted')
+  await clock.settle()
+  expect(compact.args).toEqual([])
+
+  usage.context = contextOf(255_000)
+  await ownTurn($, 't4')
+  await clock.settle()
+  expect(compact.args.length).toBe(1)
+  // The compaction left the session above the threshold, as a very large
+  // summary would, and the next turn that replied compacts again, once.
+  await ownTurn($, 't5', 'refusal')
+  await clock.settle()
+  expect(compact.args.length).toBe(2)
+})
+
+test('once the pull request merged, a turn that replied at any size runs no compact command', async ($, on) => {
+  const prompts = recordPrompts(on)
+  const { clock, world, usage, compact } = await reviewing($, on)
+  world.pr = openPullRequest({ state: 'MERGED' })
+  await clock.advance(10 * MINUTE)
+  expect(changesOf(prompts).length).toBe(1)
+
+  usage.context = contextOf(900_000)
+  await ownTurn($, 't1')
+  await clock.settle()
+
+  expect(compact.args).toEqual([])
+})
+
+test('330,000 tokens of a 400,000 window the person set compact nothing, and 340,000 of it compact', async ($, on) => {
+  const { clock, usage, compact } = await reviewing($, on)
+  usage.context = contextOf(330_000, 'settings', 400_000)
+  await ownTurn($, 't1')
+  await clock.settle()
+  expect(compact.args).toEqual([])
+
+  usage.context = contextOf(340_000, 'settings', 400_000)
+  await ownTurn($, 't2')
+  await clock.settle()
+  expect(compact.args.length).toBe(1)
+})
+
+test('the context is measured at the end of every turn of the session\'s own that replied, with nothing watched too, and not at a turn an error ended', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  sessionTurns(on)
+  const usage = usageAnswers(on)
+  const written = writtenState(on)
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await clock.settle()
+
+  usage.context = contextOf(212_345, 'settings', 400_000)
+  await ownTurn($, 't1')
+  const measured = { tokens: 212_345, ceiling: 400_000, source: 'settings', at: T0, sessionId: 'session-1' }
+  expect(written.of('context', null)).toEqual(measured)
+
+  usage.context = contextOf(900_000)
+  await ownTurn($, 't2', 'error')
+  expect(written.of('context', null)).toEqual(measured)
+
+  usage.fails = true
+  await ownTurn($, 't3')
+  expect(written.of('context', null)).toEqual({ tokens: null, ceiling: 300_000, source: 'unreadable', at: T0, sessionId: 'session-1' })
+})
+
+test('the package and review tools record the checkout they resolved under the pull request\'s number', async ($, on) => {
+  mock.clock(on, { now: T0 })
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  const written = writtenState(on)
+  sessionInMainCheckout(world, files)
+  await watch($)
+
+  await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
+  expect(written.of('checkout', null)).toEqual({ number: 7, dir: '/wt', branch: 'feature', at: T0, sessionId: 'session-1' })
+
+  world.worktrees = [{ path: '/repo', branch: 'main' }]
+  world.head = C
+  await loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
+  expect(written.of('checkout', null)).toEqual({ number: 7, dir: '/repo', branch: 'feature', at: T0, sessionId: 'session-1' })
+})
+
+test('a change held during the turn is handed over after the compact command returns, not before, with the reload line, and a poll during the compaction waits', async ($, on) => {
+  const prompts = recordPrompts(on)
+  const { clock, world, listed, usage, compact } = await reviewing($, on)
+  await reviewersDone($, listed)
+  usage.context = contextOf(255_000)
+  const held = gate()
+  compact.hold = held.until
+
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  world.pr = failing()
+  await clock.advance(10 * MINUTE)
+  expect(changesOf(prompts)).toEqual([])
+  const end = $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as never)
+  await clock.settle()
+  expect(compact.args.length).toBe(1)
+  expect(changesOf(prompts)).toEqual([])
+
+  // The poll for a failed check comes 90 seconds on, while the compaction
+  // still runs, and waits as it waits for a running turn.
+  const readsBefore = world.calls.filter(call => call.startsWith('gh pr view 7')).length
+  await clock.advance(2 * MINUTE)
+  expect(world.calls.filter(call => call.startsWith('gh pr view 7')).length).toBeGreaterThan(readsBefore)
+  expect(changesOf(prompts)).toEqual([])
+
+  held.release()
+  await end
+  await clock.settle()
+  expect(changesOf(prompts).length).toBe(1)
+  expect(changesOf(prompts)[0] ?? '').toStartWith(`${RELOAD_LINE}\n\nbuilder: pull request #7 changed.`)
+  expect(changesOf(prompts)[0]).toContain('The checks went from passed to failed.')
+  expect(changesOf(prompts)[0] ?? '').toEndWith(REREAD_CLOSING)
+})
+
+test('a compact command that has not returned after five minutes is recorded as failed, the held change is handed over without the reload line, and the next turn end above the threshold tries again', async ($, on) => {
+  const prompts = recordPrompts(on)
+  const written = writtenState(on)
+  const { clock, world, listed, usage, compact } = await reviewing($, on)
+  await reviewersDone($, listed)
+  usage.context = contextOf(255_000)
+  const held = gate()
+  compact.hold = held.until
+
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  world.pr = failing()
+  await clock.advance(10 * MINUTE)
+  const end = $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as never)
+  await clock.settle()
+  expect(compact.args.length).toBe(1)
+
+  await clock.advance(5 * MINUTE - 1000)
+  expect(changesOf(prompts)).toEqual([])
+  await clock.advance(1000)
+  await end
+  await clock.settle()
+  expect(changesOf(prompts).length).toBe(1)
+  expect(changesOf(prompts)[0] ?? '').toStartWith('builder: pull request #7 changed.')
+  const failed = written.of<Compactions | null>('compactions', null)
+  expect(failed?.count).toBe(0)
+  // The failure is stamped with the time the bound fired, not the turn end.
+  expect(failed?.failed).toEqual({ at: T0 + 15 * MINUTE, reason: 'timed out' })
+  expect(failed?.owedAt).toBeNull()
+
+  // The command that never returned is let go without a compaction, and the
+  // next turn that replied above the threshold tries again.
+  compact.raises = false
+  held.release()
+  await clock.settle()
+  compact.raises = true
+  await ownTurn($, 't2')
+  await clock.settle()
+  expect(compact.args.length).toBe(2)
+  const stood = written.of<Compactions | null>('compactions', null)
+  expect(stood?.count).toBe(1)
+  expect(stood?.failed).toBeNull()
+})
+
+test('a compact command the engine refuses, and one that returns without a compaction, are each recorded as failed with the reason, and the next turn end above the threshold tries again', async ($, on) => {
+  const written = writtenState(on)
+  const { clock, usage, compact } = await reviewing($, on)
+  usage.context = contextOf(255_000)
+
+  compact.throws = true
+  await ownTurn($, 't1')
+  await clock.settle()
+  expect(compact.args.length).toBe(1)
+  // The kit gives a command whose bottom handler threw a rejection reason of
+  // its own, so the reason is checked as a line rather than by its words.
+  const refused = written.of<Compactions | null>('compactions', null)
+  expect(refused).toMatchObject({ count: 0, last: null, owedAt: null, sessionId: 'session-1' })
+  expect(refused?.failed?.at).toBe(T0)
+  expect((refused?.failed?.reason ?? '').length).toBeGreaterThan(0)
+  expect((refused?.failed?.reason ?? '').includes('\n')).toBe(false)
+
+  compact.throws = false
+  compact.raises = false
+  await ownTurn($, 't2')
+  await clock.settle()
+  expect(compact.args.length).toBe(2)
+  expect(written.of<Compactions | null>('compactions', null)?.failed).toEqual({ at: T0, reason: 'the compact command returned without a compaction' })
+
+  compact.raises = true
+  await ownTurn($, 't3')
+  await clock.settle()
+  expect(compact.args.length).toBe(3)
+  expect(written.of<Compactions | null>('compactions', null)).toEqual({ count: 1, last: { at: T0, trigger: 'manual', before: 115_205, after: 15_893 }, failed: null, owedAt: T0, sessionId: 'session-1' })
+})
+
+test('no stuck prompt comes while the compact command runs, and one comes an interval after the command returns', async ($, on) => {
+  const prompts = recordPrompts(on)
+  const { clock, listed, usage, compact } = await reviewing($, on)
+  await reviewersDone($, listed)
+  usage.context = contextOf(255_000)
+
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await clock.advance(44 * MINUTE)
+  const held = gate()
+  compact.hold = held.until
+  const end = $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as never)
+  await clock.settle()
+  expect(compact.args.length).toBe(1)
+
+  // The stuck time, 45 minutes after the watch, falls while the compaction runs.
+  await clock.advance(2 * MINUTE)
+  expect(stuckOf(prompts)).toEqual([])
+
+  held.release()
+  await end
+  await clock.settle()
+  expect(stuckOf(prompts)).toEqual([])
+  await clock.advance(45 * MINUTE)
+  expect(stuckOf(prompts).length).toBe(1)
+})
+
+test('the desktop app\'s CI event submitted while the compact command runs carries the reload line in its context', async ($, on) => {
+  const seen: { text: string; context: readonly string[] }[] = []
+  on('prompt.submit', ($, e) => {
+    seen.push({ text: e.text, context: e.context ?? [] })
+    return { text: e.text }
+  })
+  const { clock, world, usage, compact } = await reviewing($, on)
+  usage.context = contextOf(255_000)
+  const held = gate()
+  compact.hold = held.until
+  const end = ownTurn($, 't1')
+  await clock.settle()
+  expect(compact.args.length).toBe(1)
+
+  world.pr = failing()
+  await $.prompt.submit({ text: CI_EVENT, origin: { kind: 'sdk' } } as never)
+  expect(seen.length).toBe(1)
+  expect(seen[0]?.context.join('\n') ?? '').toStartWith(`${RELOAD_LINE}\n\nbuilder: the pull request as of this event.`)
+
+  // The compaction stands after that event was accepted, so the reload is
+  // owed again, and the event after it carries the line once more; the one
+  // after that does not.
+  held.release()
+  await end
+  await clock.settle()
+  await $.prompt.submit({ text: CI_EVENT, origin: { kind: 'sdk' } } as never)
+  expect(seen[1]?.context.join('\n') ?? '').toStartWith(`${RELOAD_LINE}\n\nbuilder: the pull request as of this event.`)
+  await $.prompt.submit({ text: CI_EVENT, origin: { kind: 'sdk' } } as never)
+  expect(seen[2]?.context.join('\n') ?? '').toStartWith('builder: the pull request as of this event.')
+})
+
+test('the compaction hook adds the facts to a main-conversation compaction of every trigger, after the instructions given, and leaves a subagent\'s and one that already holds the facts alone', async ($, on) => {
+  const { compact } = await reviewing($, on)
+  for (const trigger of ['manual', 'auto', 'plugin', 'precompute']) {
+    await $.session.compact({ trigger, instructions: 'Keep the test names.', messages: SUMMARY } as never)
+  }
+  expect(compact.reached.map(r => r.trigger)).toEqual(['manual', 'auto', 'plugin', 'precompute'])
+  for (const reached of compact.reached) {
+    expect(reached.instructions ?? '').toStartWith(`Keep the test names.\n\n${FACTS_LEAD}\nIssue: ABC-123 builder progress. Stage: review rounds (round 1).\nPull request: o/r#7, open, head ${C.slice(0, 8)}.`)
+    expect(reached.instructions ?? '').toEndWith(GITHUB_NAMES_LINE)
+  }
+
+  await $.session.compact({ trigger: 'auto', agentId: 'agent-1', instructions: 'Keep the test names.', messages: SUMMARY } as never)
+  expect(compact.reached[4]).toEqual({ trigger: 'auto', agentId: 'agent-1', instructions: 'Keep the test names.' })
+
+  const already = `Keep the test names.\n\n${FACTS_LEAD}\nPull request: o/r#7, open, head ${C.slice(0, 8)}.`
+  await $.session.compact({ trigger: 'manual', instructions: already, messages: SUMMARY } as never)
+  expect(compact.reached[5]?.instructions).toBe(already)
+
+  // Without any instructions, the facts stand alone.
+  await $.session.compact({ trigger: 'auto', messages: SUMMARY } as never)
+  expect(compact.reached[6]?.instructions ?? '').toStartWith(`${FACTS_LEAD}\n`)
+})
+
+test('a precompute compaction owes the reload line without being counted, and a manual one is counted and recorded with its sizes', async ($, on) => {
+  const written = writtenState(on)
+  const { clock } = await reviewing($, on)
+
+  await $.session.compact({ trigger: 'precompute', messages: SUMMARY } as never)
+  await clock.settle()
+  expect(written.of<Compactions | null>('compactions', null)).toEqual({ count: 0, last: null, failed: null, owedAt: T0, sessionId: 'session-1' })
+
+  await clock.advance(MINUTE)
+  await $.session.compact({ trigger: 'manual', messages: SUMMARY } as never)
+  await clock.settle()
+  expect(written.of<Compactions | null>('compactions', null)).toEqual({
+    count: 1, last: { at: T0 + MINUTE, trigger: 'manual', before: 115_205, after: 15_893 }, failed: null, owedAt: T0 + MINUTE, sessionId: 'session-1',
+  })
+})
+
+test('the first change prompt after a compaction begins with the reload line and ends with the reread line, and the next change prompt carries neither', async ($, on) => {
+  const prompts = recordPrompts(on)
+  const { clock, world } = await reviewing($, on)
+  await $.session.compact({ trigger: 'manual', messages: SUMMARY } as never)
+
+  world.pr = failing()
+  await clock.advance(10 * MINUTE)
+  expect(changesOf(prompts).length).toBe(1)
+  expect(changesOf(prompts)[0] ?? '').toStartWith(`${RELOAD_LINE}\n\nbuilder: pull request #7 changed.`)
+  expect(changesOf(prompts)[0] ?? '').toEndWith(REREAD_CLOSING)
+
+  world.pr = openPullRequest()
+  await clock.advance(10 * MINUTE)
+  expect(changesOf(prompts).length).toBe(2)
+  expect(changesOf(prompts)[1] ?? '').toStartWith('builder: pull request #7 changed.')
+  expect((changesOf(prompts)[1] ?? '').includes(RELOAD_LINE)).toBe(false)
+  expect(changesOf(prompts)[1] ?? '').toEndWith('Continue /implement from this state. Do not reread what you already know; act on what changed.')
+})
+
+test('the first stuck prompt after a compaction begins with the reload line, and the next does not', async ($, on) => {
+  const prompts = recordPrompts(on)
+  const { clock, listed } = await reviewing($, on)
+  await reviewersDone($, listed)
+  await $.session.compact({ trigger: 'auto', messages: SUMMARY } as never)
+
+  await clock.advance(45 * MINUTE)
+  expect(stuckOf(prompts).length).toBe(1)
+  expect(stuckOf(prompts)[0] ?? '').toStartWith(`${RELOAD_LINE}\n\nbuilder: nothing has happened on pull request #7 for 45 minutes.`)
+
+  await clock.advance(90 * MINUTE)
+  expect(stuckOf(prompts).length).toBe(2)
+  expect(stuckOf(prompts)[1] ?? '').toStartWith('builder: nothing has happened on pull request #7 for 90 minutes.')
+})
+
+test('the resume prompt after a compaction during the hold begins with the reload line, and the stuck prompt after it does not', async ($, on) => {
+  compactionsStand(on)
+  const { clock, prompts } = await holdOnWindow($, on)
+  await $.session.compact({ trigger: 'manual', messages: SUMMARY } as never)
+
+  await clock.advance(2 * HOUR + MINUTE)
+  expect(resumesOf(prompts).length).toBe(1)
+  expect(resumesOf(prompts)[0] ?? '').toStartWith(`${RELOAD_LINE}\n\nbuilder: the usage limit has reset`)
+
+  await clock.advance(45 * MINUTE)
+  expect(stuckOf(prompts).length).toBe(1)
+  expect(stuckOf(prompts)[0] ?? '').toStartWith('builder: nothing has happened on pull request #7')
+})
+
+test('the first CI event after a compaction carries the reload line in its context, and the next does not', async ($, on) => {
+  const seen: { text: string; context: readonly string[] }[] = []
+  on('prompt.submit', ($, e) => {
+    seen.push({ text: e.text, context: e.context ?? [] })
+    return { text: e.text }
+  })
+  const { world } = await reviewing($, on)
+  await $.session.compact({ trigger: 'auto', messages: SUMMARY } as never)
+
+  world.pr = failing()
+  await $.prompt.submit({ text: CI_EVENT, origin: { kind: 'sdk' } } as never)
+  expect(seen.length).toBe(1)
+  expect(seen[0]?.context.join('\n') ?? '').toStartWith(`${RELOAD_LINE}\n\nbuilder: the pull request as of this event.`)
+
+  await $.prompt.submit({ text: CI_EVENT, origin: { kind: 'sdk' } } as never)
+  expect(seen[1]?.context.join('\n') ?? '').toStartWith('builder: the pull request as of this event.')
+})
+
+test('a change prompt refused after a compaction keeps the reload line for the retry that is accepted', async ($, on) => {
+  const record = refusablePrompts(on)
+  const { clock, world } = await reviewing($, on)
+  await $.session.compact({ trigger: 'manual', messages: SUMMARY } as never)
+
+  world.pr = failing()
+  record.refusing = true
+  await clock.advance(10 * MINUTE)
+  expect(changesOf(record.prompts)).toEqual([])
+
+  record.refusing = false
+  await clock.advance(10 * MINUTE)
+  expect(changesOf(record.prompts).length).toBe(1)
+  expect(changesOf(record.prompts)[0] ?? '').toStartWith(`${RELOAD_LINE}\n\nbuilder: pull request #7 changed.`)
+})
+
+// A compaction record as a hot reload finds it, with a reload owed since T0.
+const owedSince = (sessionId: string): Compactions =>
+  ({ count: 1, last: { at: T0, trigger: 'auto', before: 300_000, after: 20_000 }, failed: null, owedAt: T0, sessionId })
+
+test('the hooks loaded afresh over a compaction no prompt has announced put the reload line on their first prompt', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 + HOUR })
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const prompts = recordPrompts(on)
+  reloadedOver(on, { compactions: owedSince('session-1') })
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await clock.settle()
+
+  world.pr = failing()
+  await clock.advance(10 * MINUTE)
+  expect(changesOf(prompts).length).toBe(1)
+  expect(changesOf(prompts)[0] ?? '').toStartWith(`${RELOAD_LINE}\n\nbuilder: pull request #7 changed.`)
+})
+
+test('a compaction record stamped with another session id is read as absent, so the first prompt of a cleared conversation carries no reload line', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 + HOUR })
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const prompts = recordPrompts(on)
+  reloadedOver(on, { compactions: owedSince('session-0') })
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await clock.settle()
+
+  world.pr = failing()
+  await clock.advance(10 * MINUTE)
+  expect(changesOf(prompts).length).toBe(1)
+  expect(changesOf(prompts)[0] ?? '').toStartWith('builder: pull request #7 changed.')
+})
+
+test('after a restart nothing of a compaction survives, so the first prompt carries no reload line', async ($, on) => {
+  const prompts = recordPrompts(on)
+  const restart = restartable(on, ['compactions', 'context', 'checkout'])
+  const { clock, world } = await reviewing($, on)
+  await $.session.compact({ trigger: 'manual', messages: SUMMARY } as never)
+
+  restart()
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await clock.settle()
+  world.pr = failing()
+  await clock.advance(10 * MINUTE)
+  expect(changesOf(prompts).length).toBe(1)
+  expect(changesOf(prompts)[0] ?? '').toStartWith('builder: pull request #7 changed.')
+})
+
+test('the line above the prompt ends with the context once a turn of the session\'s own that replied has measured it', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  sessionTurns(on)
+  const usage = usageAnswers(on)
+  const line = await abovePrompt($, on)
+  await watch($)
+  await clock.settle()
+  expect(await line()).toBe('builder: #7 open · checks passed · nothing to hand over · next look in 10m')
+
+  usage.context = contextOf(212_000)
+  await ownTurn($, 't1')
+  await clock.settle()
+  expect(await line()).toStartWith('builder: #7 open · checks passed · ')
+  expect(await line()).toEndWith(' · context 212K of 300K')
+})
+
+test('the pane shows the context with the settings hint as one dim line, and once the mod\'s own compaction has stood, the compaction line and no hint', async ($, on) => {
+  const { clock, usage, compact } = await reviewing($, on)
+  const pane = await paneOn($)
+  const drawn = async () => {
+    await pane.redraw()
+    return (await pane.find({ text: 'Context:' }))?.text ?? ''
+  }
+  expect(await drawn()).toContain('Context: not measured yet')
+  expect(await drawn()).not.toContain(SETTINGS_HINT)
+
+  usage.context = contextOf(212_000)
+  await ownTurn($, 't1')
+  await clock.settle()
+  expect(await drawn()).toContain('Context: 212K of 300K (default)')
+  expect(await drawn()).toContain(SETTINGS_HINT)
+  expect((await pane.find({ type: 'Text', text: SETTINGS_HINT }))?.props.dimColor).toBe(true)
+  expect(await drawn()).not.toContain('Compacted')
+
+  usage.context = contextOf(255_000)
+  await ownTurn($, 't2')
+  await clock.settle()
+  expect(compact.args.length).toBe(1)
+  await clock.advance(3 * MINUTE)
+  const after = await drawn()
+  expect(after).toContain('Context: 255K of 300K (default)')
+  expect(after).toContain('Compacted once, 3m ago (manual), 115K to 16K.')
+  expect(after).not.toContain(SETTINGS_HINT)
 })
