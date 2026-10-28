@@ -1973,21 +1973,22 @@ type PackageShape =
 // is not an ancestor of the head, or has a merge commit after it, gets a first
 // package that says why, because a diff from it would be wrong or would show
 // another branch's changes as the pull request's. A merge of any branch counts,
-// which keeps the commits after the verdict head in one line. Null when git
-// fails or its output is cut off, so the package is refused rather than
-// written from a partial diff. `afterCheck` says the check after approval at
+// which keeps the commits after the verdict head in one line. When git fails
+// or its output is cut off, the answer is a refusal that names the step that
+// failed, so the package is refused rather than written from a partial diff
+// and the person can tell which git command to look at. `afterCheck` says the check after approval at
 // this head left a blocking finding, so a head up for the check is packaged
 // for a normal round instead.
-async function packageShapeOf($: $, dir: string, base: string, head: string, earlier: readonly EarlierRound[], records: readonly CommitRecord[], afterCheck: boolean): Promise<PackageShape | null> {
+async function packageShapeOf($: $, dir: string, base: string, head: string, earlier: readonly EarlierRound[], records: readonly CommitRecord[], afterCheck: boolean): Promise<PackageShape | { refused: string }> {
   const first = (fallback?: string): PackageShape => ({ kind: 'first', reviewers: FOCUSED_REVIEWERS, ...(fallback === undefined ? {} : { fallback }) })
   const verdictHead = verdictHeadOf(earlier, head)
   if (verdictHead === null) return first()
   if (!isFullSha(verdictHead)) return first('the verdict head\'s sha from GitHub is not a full commit sha')
   const ancestry = await gitRun($, dir, ['merge-base', '--is-ancestor', verdictHead, 'HEAD'])
-  if (ancestry === null) return null
+  if (ancestry === null) return { refused: 'git could not check whether the verdict head is an ancestor of the head (it could not run, or its output was over 4 MiB and cut off)' }
   if (ancestry.exitCode !== 0) return first(`the verdict head ${verdictHead} is not an ancestor of the head, as after a force-push`)
   const merges = await git($, dir, ['rev-list', '--merges', `${verdictHead}..HEAD`])
-  if (merges === null) return null
+  if (merges === null) return { refused: 'git could not list the merge commits since the verdict head (it failed, or its output was over 4 MiB and cut off)' }
   if (merges.trim() !== '') return first('a merge commit follows the verdict head, so a diff from it would show the merged changes as the pull request\'s')
   // The changed files are read from the reviewed head, where the focused
   // reviewers last ran. When it is missing, all four run and no list is read.
@@ -1997,7 +1998,9 @@ async function packageShapeOf($: $, dir: string, base: string, head: string, ear
     reviewedHead === null ? '' : git($, dir, ['diff', '--name-status', '-z', '-M', '--no-ext-diff', reviewedHead, 'HEAD']),
     reviewedHead === null ? null : git($, dir, ['show', `origin/${base}:CLAUDE.md`]),
   ])
-  if (sinceDiff === null || nameStatus === null) return null
+  if (sinceDiff === null || nameStatus === null) {
+    return { refused: 'git could not produce the change since the verdict head or the list of files changed since the reviewed head (it failed, or its output was over 4 MiB and cut off)' }
+  }
   const kinds = reviewedHead === null ? null : changedKinds(nameStatus, specDirOf(baseClaude))
   const check = !afterCheck && isUpForCheck(verdictHead, reviewedHead, records, earlier)
   return { kind: 'later', since: verdictHead, sinceDiff, check, reviewers: focusedReviewersFor(kinds) }
@@ -2053,9 +2056,7 @@ async function servePackage($: $, input: PackageInput): Promise<string> {
     .map(review => ({ sha: review.commit?.oid ?? '', body: review.body ?? '' }))
   const records = commitRecordsOf(messages)
   const shape = await packageShapeOf($, checkoutDir, live.baseRefName, live.headRefOid, earlier, records, input.after_check === true)
-  if (shape === null) {
-    return 'git could not produce the change since the verdict head or the list of files changed since the reviewed head (it failed, or its output was over 4 MiB and cut off), so no package was written.'
-  }
+  if ('refused' in shape) return `${shape.refused}, so no package was written.`
   const trend = trendOf(records)
   const text = packageText(input, {
     repo: r.repo,

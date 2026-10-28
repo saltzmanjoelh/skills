@@ -87,7 +87,11 @@ function fakeGitHub(on: On) {
   // `messagesFail` makes that read exit with an error.
   // `ancestorExit` is the exit code of `git merge-base --is-ancestor`, and
   // `merges` what `git rev-list --merges` prints, the merge commits since the
-  // verdict head. `baseClaude` is what `git show origin/main:CLAUDE.md`
+  // verdict head. `ancestorFail` makes the ancestry check throw or answer
+  // with its output cut off, and `mergesFail` makes the listing of merge
+  // commits exit with an error, throw, or answer with its output cut off,
+  // while the reads of the head and the fetch before them still succeed.
+  // `baseClaude` is what `git show origin/main:CLAUDE.md`
   // prints, the base branch's CLAUDE.md, and that read exits 128 when it is
   // null. `nameStatus` is what `git diff --name-status -z` prints for the
   // files changed since the reviewed head, and `nameStatusFail` and
@@ -111,7 +115,7 @@ function fakeGitHub(on: On) {
     onQuietDiff: null as (() => void) | null, afterQuietDiff: null as (() => void) | null, headHolds: {} as Record<string, Promise<void>>,
     states: {} as Record<number, string>, stateRead: null as null | 'exit' | 'throw' | 'cut' | 'text',
     messages: [{ sha: A, message: 'Build it' }] as { sha: string; message: string }[], messagesFail: false,
-    ancestorExit: 0, merges: '', baseClaude: null as string | null, nameStatus: '', nameStatusFail: false, sinceDiffFail: false,
+    ancestorExit: 0, ancestorFail: null as null | 'throw' | 'cut', merges: '', mergesFail: null as null | 'exit' | 'throw' | 'cut', baseClaude: null as string | null, nameStatus: '', nameStatusFail: false, sinceDiffFail: false,
   }
   on('process.run', async ($, e) => {
     const argv = e.argv.join(' ')
@@ -155,7 +159,18 @@ function fakeGitHub(on: On) {
       return exit(finds ? 1 : 0)
     }
     if (argv.startsWith('git diff --stat')) return out(' a.ts | 2 +-\n 1 file changed\n')
+    if (argv.startsWith('git merge-base --is-ancestor ') && world.ancestorFail === 'throw') throw new Error('the process could not be started')
+    if (argv.startsWith('git merge-base --is-ancestor ') && world.ancestorFail === 'cut') {
+      return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: true, isStderrTruncated: false } }
+    }
     if (argv.startsWith('git merge-base --is-ancestor ')) return exit(world.ancestorExit)
+    if (argv.startsWith('git rev-list --merges ') && world.mergesFail === 'throw') throw new Error('the process could not be started')
+    if (argv.startsWith('git rev-list --merges ') && world.mergesFail === 'exit') {
+      return { value: { exitCode: 128, stdout: world.merges, stderr: 'fatal', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+    if (argv.startsWith('git rev-list --merges ') && world.mergesFail === 'cut') {
+      return { value: { exitCode: 0, stdout: world.merges, stderr: '', isStdoutTruncated: true, isStderrTruncated: false } }
+    }
     if (argv.startsWith('git rev-list --merges ')) return out(world.merges)
     if (argv.startsWith('git show origin/')) return world.baseClaude === null ? exit(128) : out(world.baseClaude)
     if (argv.startsWith('git diff --name-status ')) return world.nameStatusFail ? exit(128) : out(world.nameStatus)
@@ -1159,13 +1174,66 @@ test('git failing to give the change since the verdict head or the changed files
   world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
 
   world.sinceDiffFail = true
-  expect(await packageAnswer($)).toContain('no package was written')
+  expect(await packageAnswer($)).toBe(SINCE_DIFF_REFUSAL)
   world.sinceDiffFail = false
   world.nameStatusFail = true
-  expect(await packageAnswer($)).toContain('no package was written')
+  expect(await packageAnswer($)).toBe(SINCE_DIFF_REFUSAL)
   expect(files.has(`${PACKAGE_DIR}/package.md`)).toBe(false)
   expect(files.has(`${PACKAGE_DIR}/diff.patch`)).toBe(false)
 })
+
+const SINCE_DIFF_REFUSAL = 'git could not produce the change since the verdict head or the list of files changed since the reviewed head (it failed, or its output was over 4 MiB and cut off), so no package was written.'
+
+for (const [how, fail] of [
+  ['throws', (world: ReturnType<typeof fakeGitHub>) => { world.ancestorFail = 'throw' }],
+  ['answers with its output cut off', (world: ReturnType<typeof fakeGitHub>) => { world.ancestorFail = 'cut' }],
+] as const) {
+  test(`when the check that the verdict head is an ancestor of the head ${how}, the package is refused and the refusal names the ancestry check`, async ($, on) => {
+    mock.clock(on)
+    mock.store(on)
+    engine(on)
+    const world = fakeGitHub(on)
+    const files = fakeFiles(on)
+    await watch($)
+    world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: 'Fix the round' }]
+    world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
+    fail(world)
+
+    const answer = await packageAnswer($)
+
+    expect(answer).toBe('git could not check whether the verdict head is an ancestor of the head (it could not run, or its output was over 4 MiB and cut off), so no package was written.')
+    expect(world.calls.some(call => call.startsWith('git fetch'))).toBe(true)
+    expect(world.calls.some(call => call.startsWith('git rev-list --merges'))).toBe(false)
+    expect(files.has(`${PACKAGE_DIR}/package.md`)).toBe(false)
+    expect(files.has(`${PACKAGE_DIR}/diff.patch`)).toBe(false)
+  })
+}
+
+for (const [how, fail] of [
+  ['exits with an error', (world: ReturnType<typeof fakeGitHub>) => { world.mergesFail = 'exit' }],
+  ['throws', (world: ReturnType<typeof fakeGitHub>) => { world.mergesFail = 'throw' }],
+  ['answers with its output cut off', (world: ReturnType<typeof fakeGitHub>) => { world.mergesFail = 'cut' }],
+] as const) {
+  test(`when the listing of merge commits since the verdict head ${how}, the package is refused and the refusal names that listing`, async ($, on) => {
+    mock.clock(on)
+    mock.store(on)
+    engine(on)
+    const world = fakeGitHub(on)
+    const files = fakeFiles(on)
+    await watch($)
+    world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: 'Fix the round' }]
+    world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
+    fail(world)
+
+    const answer = await packageAnswer($)
+
+    expect(answer).toBe('git could not list the merge commits since the verdict head (it failed, or its output was over 4 MiB and cut off), so no package was written.')
+    expect(world.calls).toContain(`git merge-base --is-ancestor ${A} HEAD`)
+    expect(world.calls.some(call => call.startsWith('git diff --unified=15'))).toBe(false)
+    expect(files.has(`${PACKAGE_DIR}/package.md`)).toBe(false)
+    expect(files.has(`${PACKAGE_DIR}/diff.patch`)).toBe(false)
+  })
+}
 
 test('a head whose only commit since an approval with both verdicts is the cheap-fix commit is up for the check, and the answer names only the adversarial reviewer', async ($, on) => {
   mock.clock(on)
