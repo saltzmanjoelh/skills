@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { snapshotOf } from '../hooks/github'
-import { afterReport, barOf, endedOf, FOCUSED_REVIEWERS, modelLabel, plannedOf, progressIn, reportAnswer, reportOf, STAGES, VERDICT_REVIEWERS, type PlannedInput } from '../hooks/progress'
+import { ADVERSARIAL_REVIEWER, afterReport, barOf, endedOf, FOCUSED_REVIEWERS, focusedReviewersFor, MAINTAINABILITY_REVIEWER, modelLabel, plannedOf, progressIn, reportAnswer, reportOf, STAGES, VERDICT_REVIEWERS, type PlannedInput } from '../hooks/progress'
 import { COUNSEL_MEMBERS } from '../hooks/counsel'
 import { OWNERS_ADVOCATE, READ_ONLY_AGENTS, REVIEWERS } from '../hooks/state'
 import type { AgentCard, CounselQuestion, Progress } from '../types'
@@ -246,6 +246,40 @@ test('a counsel question plans nothing once its round is tallied, and plans the 
 
 test('a type planned by a review round and a counsel question is listed once', () => {
   expect(plannedOf(input({ counsel: [question(), question({ id: 'c2' })] }))).toEqual(COUNSEL)
+})
+
+test('the focused reviewers named follow from the kinds of the changed files', () => {
+  expect(MAINTAINABILITY_REVIEWER).toBe('builder:maintainability-reviewer')
+  expect(ADVERSARIAL_REVIEWER).toBe('builder:adversarial-reviewer')
+  // A missing reviewed head names all four.
+  expect(focusedReviewersFor(null)).toEqual(FOCUSED)
+  expect(focusedReviewersFor(['test', 'documentation', 'other'])).toEqual(FOCUSED)
+  expect(focusedReviewersFor(['other'])).toEqual(FOCUSED)
+  expect(focusedReviewersFor(['test', 'documentation'])).toEqual([MAINTAINABILITY_REVIEWER])
+  expect(focusedReviewersFor(['test'])).toEqual([MAINTAINABILITY_REVIEWER])
+  expect(focusedReviewersFor([])).toEqual([MAINTAINABILITY_REVIEWER])
+})
+
+test('a package that named only the maintainability reviewer plans it, and then the verdict pair once it has finished', () => {
+  const packaged = { head: HEAD, at: PACKAGED_AT, reviewers: [MAINTAINABILITY_REVIEWER], check: false }
+  expect(plannedOf(input({ packaged }))).toEqual([MAINTAINABILITY_REVIEWER])
+  const running = [card('m', MAINTAINABILITY_REVIEWER, PACKAGED_AT + 1)]
+  expect(plannedOf(input({ packaged, agents: running }))).toEqual([])
+  const finished = [done('m', MAINTAINABILITY_REVIEWER, PACKAGED_AT + 1)]
+  expect(plannedOf(input({ packaged, agents: finished }))).toEqual(VERDICT)
+})
+
+test('a package up for the check after approval plans only the adversarial reviewer, until it starts', () => {
+  const packaged = { head: HEAD, at: PACKAGED_AT, reviewers: FOCUSED, check: true }
+  expect(plannedOf(input({ packaged }))).toEqual([ADVERSARIAL_REVIEWER])
+  expect(plannedOf(input({ packaged, agents: [card('v', ADVERSARIAL_REVIEWER, PACKAGED_AT + 1)] }))).toEqual([])
+})
+
+test('a package without a sound list of named reviewers plans all four focused reviewers, as one an older build stored does', () => {
+  for (const reviewers of [undefined, [], ['builder:spec-reviewer'], [MAINTAINABILITY_REVIEWER, 'builder:unknown'], 'builder:maintainability-reviewer', [7]]) {
+    const packaged = { head: HEAD, at: PACKAGED_AT, reviewers } as unknown as PlannedInput['packaged']
+    expect(plannedOf(input({ packaged }))).toEqual(FOCUSED)
+  }
 })
 
 test('a model is named short, and an agent with no model shows a hyphen', () => {
