@@ -151,7 +151,11 @@ harmless, because reviewers read it only when `package.md` names it.
 - **A `normal_round` input on the package tool** (the robust plan). The
   check answer can name the normal round's reviewers instead, so no new
   input is needed, and the session's memory of a failed check would still be
-  lost on a resume, which the spec accepts.
+  lost on a resume, which the spec accepts. A review found the input was
+  needed after all, as `after_check`, because a second package call at the
+  same head works the shape out from the same commits and would store the
+  check again, so the pane would plan only the adversarial reviewer for the
+  normal round that follows a check with a blocking finding.
 - **Falling back to a first package when the verdict head is the current
   head** (the robust plan). The spec defines a first package as one with no
   verdict head, and the fallback would cost a full round whenever a head is

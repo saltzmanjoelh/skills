@@ -327,6 +327,11 @@ test('the reviewers line counts only the reviewers the package named and says th
   expect(named).toContain(`Reviewers at head ${C.slice(0, 8)}: ran maintainability-reviewer; running none; not started spec-reviewer, adversarial-reviewer; not needed at this head security-reviewer, performance-reviewer, data-reviewer.`)
   const check = compactionFacts({ ...nothing, pr, packaged: { head: C, at: packagedAt, reviewers: ['builder:maintainability-reviewer'], check: true } })
   expect(check).toContain(`Reviewers at head ${C.slice(0, 8)}: ran none; running none; not started adversarial-reviewer; not needed at this head spec-reviewer, security-reviewer, maintainability-reviewer, performance-reviewer, data-reviewer.`)
+  // A package stored again after the check left a blocking finding counts
+  // the normal round's reviewers, and the check's own run is not counted.
+  const checkRan = card('builder:adversarial-reviewer', 'completed', packagedAt - 1_000)
+  const normal = compactionFacts({ ...nothing, pr, agents: [checkRan], packaged: { head: C, at: packagedAt, reviewers: ['builder:security-reviewer', 'builder:maintainability-reviewer', 'builder:performance-reviewer', 'builder:data-reviewer'], check: false } })
+  expect(normal).toContain(`Reviewers at head ${C.slice(0, 8)}: ran none; running none; not started spec-reviewer, adversarial-reviewer, security-reviewer, maintainability-reviewer, performance-reviewer, data-reviewer.`)
   // A list the pane would not trust counts all six, as an older build's value does.
   const unsound = compactionFacts({ ...nothing, pr, packaged: { head: C, at: packagedAt, reviewers: ['builder:unknown'] } })
   expect(unsound).toContain(`Reviewers at head ${C.slice(0, 8)}: ran none; running none; not started spec-reviewer, adversarial-reviewer, security-reviewer, maintainability-reviewer, performance-reviewer, data-reviewer.`)

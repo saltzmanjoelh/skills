@@ -1195,6 +1195,60 @@ test('a head whose only commit since an approval with both verdicts is the cheap
   expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
 })
 
+test('with after_check, a head up for the check is packaged as a normal later round, and the pane plans that round\'s reviewers', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  const pane = await paneOn($)
+  await watch($)
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: "Fix this round's cheap follow-ups" }]
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'APPROVE', 'APPROVE')] })
+  world.nameStatus = 'M\0hooks/a.ts\0'
+  await packageAnswer($)
+  expect(await plannedIn(pane)).toEqual(['adversarial-reviewer'])
+
+  const afterCheck = async (nameStatus: string) => {
+    world.nameStatus = nameStatus
+    const ran = await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.', after_check: true })
+    return String(ran.result).replace(/^builder: /, '')
+  }
+
+  const answer = await afterCheck('M\0hooks/a.ts\0')
+  expect(answer.split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  expect(answer).not.toContain('Up for the check')
+  expect(answer).not.toContain('If the check leaves a blocking finding')
+  expect(answer).toContain(`Since: ${A}`)
+  expect(files.get(`${PACKAGE_DIR}/package.md`)).not.toContain('up for the check after approval')
+  // The stored package is a normal round, so the pane plans its focused
+  // reviewers rather than the adversarial reviewer alone.
+  expect(await plannedIn(pane)).toEqual(['security-reviewer', 'maintainability-reviewer', 'performance-reviewer', 'data-reviewer'])
+
+  expect((await afterCheck('M\0tests/a.test.ts\0')).split('\n').at(-1)).toBe(ONLY_MAINTAINABILITY)
+  expect(await plannedIn(pane)).toEqual(['maintainability-reviewer'])
+
+  // Without the input, the same head is up for the check again.
+  world.nameStatus = 'M\0hooks/a.ts\0'
+  expect((await packageAnswer($)).split('\n').at(-2)).toBe('Up for the check after approval: launch only builder:adversarial-reviewer.')
+  expect(await plannedIn(pane)).toEqual(['adversarial-reviewer'])
+})
+
+test('after_check changes nothing at a head that is not up for the check', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  fakeFiles(on)
+  await watch($)
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: 'Tighten a test' }]
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
+  world.nameStatus = 'M\0tests/a.test.ts\0'
+  const plain = await packageAnswer($)
+  const ran = await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.', after_check: true })
+  expect(String(ran.result).replace(/^builder: /, '')).toBe(plain)
+})
+
 test('the pane plans only the reviewers the package named, and only the adversarial reviewer at a head up for the check', async ($, on) => {
   mock.clock(on)
   mock.store(on)

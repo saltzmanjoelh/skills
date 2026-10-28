@@ -153,12 +153,17 @@ function barLabel(progress: Progress | null, ended: string | null): string {
   return progress.note === '' ? stage : `${stage} · ${progress.note}`
 }
 
-// The reviewers a review round launches first, after the package call, and
-// the two whose verdicts decide, launched once the first four have finished.
-// Together they are the six reviewers of REVIEWERS in hooks/state.ts. The
-// order here is the order the pane lists planned agents in.
+// The two reviewers named on their own: the one a later round runs when only
+// tests and documentation changed, and the one the check after approval runs.
 export const MAINTAINABILITY_REVIEWER = 'builder:maintainability-reviewer'
 export const ADVERSARIAL_REVIEWER = 'builder:adversarial-reviewer'
+
+// The reviewers a review round launches first, after the package call, and
+// the two whose verdicts decide. The verdict pair follows whichever focused
+// reviewers the package named, once they have finished, and at a head up for
+// the check after approval only the adversarial reviewer runs. Together they
+// are the six reviewers of REVIEWERS in hooks/state.ts. The order here is the
+// order the pane lists planned agents in.
 export const FOCUSED_REVIEWERS: readonly string[] = [
   'builder:security-reviewer',
   MAINTAINABILITY_REVIEWER,

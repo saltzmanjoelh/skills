@@ -11,6 +11,9 @@ export type PackageInput = {
   plan?: string
   // The test run's summary line.
   tests?: string
+  // True when the check after approval at this head left a blocking finding,
+  // so a head up for the check is packaged for a normal round instead.
+  after_check?: boolean
 }
 
 export type EarlierRound = { sha: string; body: string }

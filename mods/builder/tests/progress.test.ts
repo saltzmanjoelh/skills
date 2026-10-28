@@ -275,6 +275,18 @@ test('a package up for the check after approval plans only the adversarial revie
   expect(plannedOf(input({ packaged, agents: [card('v', ADVERSARIAL_REVIEWER, PACKAGED_AT + 1)] }))).toEqual([])
 })
 
+test('a package stored again after the check left a blocking finding plans the normal round, though the check\'s adversarial reviewer already ran', () => {
+  // The check ran before this package call, so it does not count toward the
+  // normal round the second call stored.
+  const checkRan = done('c', ADVERSARIAL_REVIEWER, PACKAGED_AT - 5_000)
+  const packaged = { head: HEAD, at: PACKAGED_AT, reviewers: FOCUSED, check: false }
+  expect(plannedOf(input({ packaged, agents: [checkRan] }))).toEqual(FOCUSED)
+  const focusedDone = FOCUSED.map((type, i) => done(`f${i}`, type, PACKAGED_AT + 1))
+  expect(plannedOf(input({ packaged, agents: [checkRan, ...focusedDone] }))).toEqual(VERDICT)
+  const onlyMaintainability = { ...packaged, reviewers: [MAINTAINABILITY_REVIEWER] }
+  expect(plannedOf(input({ packaged: onlyMaintainability, agents: [checkRan] }))).toEqual([MAINTAINABILITY_REVIEWER])
+})
+
 test('a package without a sound list of named reviewers plans all four focused reviewers, as one an older build stored does', () => {
   for (const reviewers of [undefined, [], ['builder:spec-reviewer'], [MAINTAINABILITY_REVIEWER, 'builder:unknown'], 'builder:maintainability-reviewer', [7]]) {
     const packaged = { head: HEAD, at: PACKAGED_AT, reviewers } as unknown as PlannedInput['packaged']

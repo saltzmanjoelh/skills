@@ -1957,12 +1957,15 @@ async function livePullRequest($: $, r: BuilderRun): Promise<PrForReview | null>
   }
 }
 
-// What a package holds beyond the diff against the base. A later package has
-// `since`, the verdict head, and `sinceDiff`, the change from it to the head,
-// and `check` says the head is up for the check after approval. `fallback`
-// says why a pull request that has a verdict head still gets a first package.
+// What a package holds beyond the diff against the base. A first package
+// writes only that diff, and its `fallback` says why a pull request that has a
+// verdict head still gets one. A later package has `since`, the verdict head,
+// and `sinceDiff`, the change from it to the head, and writes full.patch
+// beside it; its `check` says the head is up for the check after approval.
 // `reviewers` are the focused reviewers a normal round at this head runs.
-type PackageShape = { since?: string; sinceDiff?: string; check: boolean; fallback?: string; reviewers: readonly string[] }
+type PackageShape =
+  | { kind: 'first'; fallback?: string; reviewers: readonly string[] }
+  | { kind: 'later'; since: string; sinceDiff: string; check: boolean; reviewers: readonly string[] }
 
 // The shape of the package at the checkout's head, from the earlier verdict
 // reviews and the branch's commits, oldest first. A pull request with no
@@ -1972,9 +1975,11 @@ type PackageShape = { since?: string; sinceDiff?: string; check: boolean; fallba
 // another branch's changes as the pull request's. A merge of any branch counts,
 // which keeps the commits after the verdict head in one line. Null when git
 // fails or its output is cut off, so the package is refused rather than
-// written from a partial diff.
-async function packageShapeOf($: $, dir: string, base: string, head: string, earlier: readonly EarlierRound[], records: readonly CommitRecord[]): Promise<PackageShape | null> {
-  const first = (fallback?: string): PackageShape => ({ check: false, reviewers: FOCUSED_REVIEWERS, ...(fallback === undefined ? {} : { fallback }) })
+// written from a partial diff. `afterCheck` says the check after approval at
+// this head left a blocking finding, so a head up for the check is packaged
+// for a normal round instead.
+async function packageShapeOf($: $, dir: string, base: string, head: string, earlier: readonly EarlierRound[], records: readonly CommitRecord[], afterCheck: boolean): Promise<PackageShape | null> {
+  const first = (fallback?: string): PackageShape => ({ kind: 'first', reviewers: FOCUSED_REVIEWERS, ...(fallback === undefined ? {} : { fallback }) })
   const verdictHead = verdictHeadOf(earlier, head)
   if (verdictHead === null) return first()
   if (!isFullSha(verdictHead)) return first('the verdict head\'s sha from GitHub is not a full commit sha')
@@ -1994,7 +1999,8 @@ async function packageShapeOf($: $, dir: string, base: string, head: string, ear
   ])
   if (sinceDiff === null || nameStatus === null) return null
   const kinds = reviewedHead === null ? null : changedKinds(nameStatus, specDirOf(baseClaude))
-  return { since: verdictHead, sinceDiff, check: isUpForCheck(verdictHead, reviewedHead, records, earlier), reviewers: focusedReviewersFor(kinds) }
+  const check = !afterCheck && isUpForCheck(verdictHead, reviewedHead, records, earlier)
+  return { kind: 'later', since: verdictHead, sinceDiff, check, reviewers: focusedReviewersFor(kinds) }
 }
 
 // The answer's lines that say which reviewers to launch: the focused ones, or
@@ -2003,7 +2009,7 @@ async function packageShapeOf($: $, dir: string, base: string, head: string, ear
 // blocking finding.
 function reviewerLines(shape: PackageShape): string[] {
   const named = shape.reviewers.join(', ')
-  if (!shape.check) return [`Focused reviewers to launch: ${named}`]
+  if (shape.kind === 'first' || !shape.check) return [`Focused reviewers to launch: ${named}`]
   return [`Up for the check after approval: launch only ${ADVERSARIAL_REVIEWER}.`, `If the check leaves a blocking finding, run the first half with: ${named}.`]
 }
 
@@ -2046,7 +2052,7 @@ async function servePackage($: $, input: PackageInput): Promise<string> {
     .filter(review => review.author?.login === r.login && verdictsOf(review) !== null)
     .map(review => ({ sha: review.commit?.oid ?? '', body: review.body ?? '' }))
   const records = commitRecordsOf(messages)
-  const shape = await packageShapeOf($, checkoutDir, live.baseRefName, live.headRefOid, earlier, records)
+  const shape = await packageShapeOf($, checkoutDir, live.baseRefName, live.headRefOid, earlier, records, input.after_check === true)
   if (shape === null) {
     return 'git could not produce the change since the verdict head or the list of files changed since the reviewed head (it failed, or its output was over 4 MiB and cut off), so no package was written.'
   }
@@ -2063,12 +2069,12 @@ async function servePackage($: $, input: PackageInput): Promise<string> {
     earlier,
     decided: decidedItems(records, earlier),
     trend,
-    ...(shape.since === undefined ? {} : { since: shape.since, check: shape.check }),
-    ...(shape.fallback === undefined ? {} : { fallback: shape.fallback }),
+    ...(shape.kind === 'later' ? { since: shape.since, check: shape.check } : {}),
+    ...(shape.kind === 'first' && shape.fallback !== undefined ? { fallback: shape.fallback } : {}),
   })
   // package.md is written last, so a package.md that names full.patch never
   // stands beside a full.patch from an earlier call.
-  if (shape.sinceDiff === undefined) {
+  if (shape.kind === 'first') {
     await $.fs.write(`${dir}/diff.patch`, diff)
   } else {
     await $.fs.write(`${dir}/diff.patch`, shape.sinceDiff)
@@ -2078,7 +2084,7 @@ async function servePackage($: $, input: PackageInput): Promise<string> {
   // Recorded only once every file is written, so the pane plans the reviewers
   // the answer names only for a package they can read.
   const packagedAt = await $.clock.now()
-  await update($, packaged, () => ({ head: live.headRefOid, at: packagedAt, reviewers: [...shape.reviewers], check: shape.check }))
+  await update($, packaged, () => ({ head: live.headRefOid, at: packagedAt, reviewers: [...shape.reviewers], check: shape.kind === 'later' && shape.check }))
   $.ui.invalidate('ui.render')
   // A streak that stops the rounds comes first, so the session reads it
   // before it launches any reviewer on the package.
@@ -2090,8 +2096,8 @@ async function servePackage($: $, input: PackageInput): Promise<string> {
     `${dir}/package.md`,
     `${dir}/diff.patch`,
     'Give every reviewer the folder and the full head sha.',
-    ...(shape.since === undefined ? [] : [`Since: ${shape.since}`, `Whole pull request: ${dir}/full.patch`]),
-    ...(shape.fallback === undefined ? [] : [`First package because ${shape.fallback}.`]),
+    ...(shape.kind === 'later' ? [`Since: ${shape.since}`, `Whole pull request: ${dir}/full.patch`] : []),
+    ...(shape.kind === 'first' && shape.fallback !== undefined ? [`First package because ${shape.fallback}.`] : []),
     ...reviewerLines(shape),
   ].join('\n')
 }
@@ -3496,7 +3502,7 @@ export const register: Register = on => {
     })
     await $.tool.register({
       name: 'package',
-      description: 'Build the review package for the watched pull request at its current head: package.md (the issue, spec and plan paths, changed files, earlier rounds, the findings already decided, read from the Dropped: and Outside the spec: lists of the fix commits and earlier reviews, and the areas fixed so far, read from the fix commits\' Reviewed:, Area:, Tidied:, Retag: and Trend: lines, where a Tidied: fix counts toward no streak) and diff.patch. A first package, for a pull request with no verdict review by the session\'s login before this head, has the whole pull request against the base as diff.patch and every earlier review in full. A later package has the change from the verdict head, the newest such reviewed head, to this head as diff.patch with 15 lines of context, the whole pull request as full.patch, and only the newest earlier review in full; its answer gives the verdict head on a Since: line and full.patch on a Whole pull request: line. When the verdict head is not an ancestor of the head or a merge commit follows it, the package is a first package and its answer says why on a First package because line. Answers with the folder to hand every reviewer, and names the focused reviewers to launch on its last line: all four, or only the maintainability reviewer when every file changed since the reviewed head is a test or documentation. At a head whose only commit since a head both verdicts approved is the cheap-fix commit, it says instead that the head is up for the check after approval, that only the adversarial reviewer runs, and which focused reviewers to run if the check leaves a blocking finding. When an area was fixed at 3 reviewed heads in a row, the answer\'s first line says the rounds stop, whatever the findings behind the streak were, and the session puts the area to the counsel before launching any reviewer. The checkout used is the worktree that has the pull request\'s head branch checked out, or the session\'s folder when no worktree has it, and it must be at the pull request\'s head.',
+      description: 'Build the review package for the watched pull request at its current head: package.md (the issue, spec and plan paths, changed files, earlier rounds, the findings already decided, read from the Dropped: and Outside the spec: lists of the fix commits and earlier reviews, and the areas fixed so far, read from the fix commits\' Reviewed:, Area:, Tidied:, Retag: and Trend: lines, where a Tidied: fix counts toward no streak) and diff.patch. A first package, for a pull request with no verdict review by the session\'s login before this head, has the whole pull request against the base as diff.patch and every earlier review in full. A later package has the change from the verdict head, the newest such reviewed head, to this head as diff.patch with 15 lines of context, the whole pull request as full.patch, and only the newest earlier review in full; its answer gives the verdict head on a Since: line and full.patch on a Whole pull request: line. When the verdict head is not an ancestor of the head or a merge commit follows it, the package is a first package and its answer says why on a First package because line. Answers with the folder to hand every reviewer, and names the focused reviewers to launch on its last line: all four, or only the maintainability reviewer when every file changed since the reviewed head is a test or documentation. At a head whose only commit since a head both verdicts approved is the cheap-fix commit, it says instead that the head is up for the check after approval, that only the adversarial reviewer runs, and which focused reviewers to run if the check leaves a blocking finding; called again with after_check true at that head, it packages the head for a normal later round and names those focused reviewers instead. When an area was fixed at 3 reviewed heads in a row, the answer\'s first line says the rounds stop, whatever the findings behind the streak were, and the session puts the area to the counsel before launching any reviewer. The checkout used is the worktree that has the pull request\'s head branch checked out, or the session\'s folder when no worktree has it, and it must be at the pull request\'s head.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -3504,6 +3510,7 @@ export const register: Register = on => {
           spec: { type: 'string', description: 'Path of the spec, if there is one.' },
           plan: { type: 'string', description: 'Path of the plan, if there is one.' },
           tests: { type: 'string', description: 'The test run\'s summary line.' },
+          after_check: { type: 'boolean', description: 'true when the check after approval at this head left a blocking finding, so the head goes through a normal round.' },
         },
         required: ['issue'],
       },

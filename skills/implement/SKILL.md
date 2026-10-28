@@ -839,11 +839,14 @@ At such a head:
    left to one `builder:claim-checker`, as the first half's point 3 does.
 3. If a finding survives that is a safety finding or breaks working
    behaviour, the head goes through a normal round, as any later head
-   does: run the first half from its point 2 on the same package,
-   launching the focused reviewers that the answer's
-   `If the check leaves a blocking finding` line names, and fix the
+   does. Call `mcp__builder__package` again with the same inputs and
+   `after_check: true`, so the package and the pane's plan are for a
+   normal round rather than for the check, then run the first half from
+   its point 2 on that package, launching the focused reviewers that its
+   answer's `Focused reviewers to launch:` line names, and fix the
    check's surviving blocking findings at its point 4 together with
-   theirs.
+   theirs. Without `after_check`, the tool would store the head as up for
+   the check again, because it works that out from the same commits.
 4. Otherwise post a review at the new head with `mcp__builder__post_review`
    that carries both verdicts over from the verdict head, whatever the
    reviewer's `VERDICT:` line says. It opens with "Both verdicts are
