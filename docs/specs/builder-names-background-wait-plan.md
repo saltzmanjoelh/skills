@@ -35,8 +35,8 @@ where the other background rules already live:
   replaces the current pick, so two equal starts keep the engine's order.
 - `startsSeen(starts, tasks, now)` adds `now` for each listed task that has no
   start. `startsPruned(starts, tasks)` drops the starts of tasks that are no
-  longer listed. `startBackgrounded(starts, key, at)` keeps the earlier of the
-  stored time and `at`. `startWithout(starts, key)` drops one key. Each of them
+  longer listed. `startsBackgrounded(starts, key, at)` keeps the earlier of the
+  stored time and `at`. `startsWithout(starts, key)` drops one key. Each of them
   returns the same object when it changes nothing, so a caller can skip a
   write that would change nothing.
 
@@ -48,7 +48,7 @@ Builder records starts at five points in `mods/builder/hooks/register.tsx`:
 - `foreground` is typed to return `ToolCallResult`, which is safe because the
   `tool.call` hook is its only caller. When a call's result carries a
   `backgroundTaskId` that is a non-empty string, the call's `startedAt` is
-  written for that key with `startBackgrounded`, before the `finally` drops
+  written for that key with `startsBackgrounded`, before the `finally` drops
   the call's record. This covers a call started with `run_in_background` and
   one the person moved to the background, because both carry the id.
 - `replaceBackground($, raw, isOwnTurnEnd)` keeps its list write where it is
@@ -57,7 +57,7 @@ Builder records starts at five points in `mods/builder/hooks/register.tsx`:
   passes false, so a subagent's end never drops a start. A refused write of
   the starts is caught, so the list and the ticker carry on.
 - `removeBackground`, after its list write, drops the task's start with
-  `startWithout`.
+  `startsWithout`.
 - `liveTick` reads the starts together with its other reads, before its
   `backgroundWrites` guard. After the guard passes, when a listed task has no
   start, it fires a `startsSeen` write without awaiting it. This repairs a
@@ -205,7 +205,7 @@ list does not change.
 ## Step sequence
 
 1. Write the failing tests for the pure helpers in `tests/status.test.ts`:
-   `startsSeen`, `startsPruned`, `startBackgrounded`, `startWithout`,
+   `startsSeen`, `startsPruned`, `startsBackgrounded`, `startsWithout`,
    `startOf`, `oldestTaskOf` and `isProbablyHung`. Then add the helpers and
    `HUNG_AFTER_MS` to `status.ts`, and the atom's type to `types/index.d.ts`.
 2. Write the failing record tests in `tests/status.test.ts`, then add the

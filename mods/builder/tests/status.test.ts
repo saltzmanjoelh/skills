@@ -4,7 +4,7 @@ import { snapshotOf } from '../hooks/github'
 import {
   afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite,
   backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, ERROR_CHARS, errorLineOf, firstPromptOf, generationIn, HUNG_AFTER_MS, hungAtOf, isBackgroundOnly, isCleanupSkill,
-  isProbablyHung, issueOf, newMemo, oldestTaskOf, recordOf, shownOrWithheld, startBackgrounded, startOf, startsPruned, startsSeen, startWithout, STATE_RULES, stateOf,
+  isProbablyHung, issueOf, newMemo, oldestTaskOf, recordOf, shownOrWithheld, startOf, startsBackgrounded, startsPruned, startsSeen, startsWithout, STATE_RULES, stateOf,
   statusMemoIn, TASK_CHARS, taskKeyOf, ticketIn, WITHHELD, type StatusFacts,
 } from '../hooks/status'
 import type { AgentCard, BackgroundTask, StatusMemo } from '../types'
@@ -435,22 +435,22 @@ test('a prune drops only the starts of tasks that are no longer listed, and give
 })
 
 test('a backgrounded call\'s start is kept only when it is earlier than the one already stored', () => {
-  expect(startBackgrounded({}, 'b1', NOW - 30_000)).toEqual({ b1: NOW - 30_000 })
+  expect(startsBackgrounded({}, 'b1', NOW - 30_000)).toEqual({ b1: NOW - 30_000 })
   const starts = { b1: NOW - 30_000 }
-  expect(startBackgrounded(starts, 'b1', NOW - 60_000)).toEqual({ b1: NOW - 60_000 })
-  expect(startBackgrounded(starts, 'b1', NOW)).toBe(starts)
-  expect(startBackgrounded(starts, 'b1', NOW - 30_000)).toBe(starts)
+  expect(startsBackgrounded(starts, 'b1', NOW - 60_000)).toEqual({ b1: NOW - 60_000 })
+  expect(startsBackgrounded(starts, 'b1', NOW)).toBe(starts)
+  expect(startsBackgrounded(starts, 'b1', NOW - 30_000)).toBe(starts)
   expect(starts).toEqual({ b1: NOW - 30_000 })
   // A stored value that is not a finite number is replaced, and a time that is not one is never stored.
-  expect(startBackgrounded({ b1: Number.NaN }, 'b1', NOW)).toEqual({ b1: NOW })
-  expect(startBackgrounded(starts, 'b2', Number.NaN)).toBe(starts)
+  expect(startsBackgrounded({ b1: Number.NaN }, 'b1', NOW)).toEqual({ b1: NOW })
+  expect(startsBackgrounded(starts, 'b2', Number.NaN)).toBe(starts)
 })
 
 test('dropping one task\'s start removes only its key, and gives back the same object when the key has none', () => {
   const starts = { b1: NOW - 3000, b2: NOW - 2000 }
-  expect(startWithout(starts, 'b1')).toEqual({ b2: NOW - 2000 })
-  expect(startWithout(starts, 'b9')).toBe(starts)
-  expect(startWithout(starts, 'toString')).toBe(starts)
+  expect(startsWithout(starts, 'b1')).toEqual({ b2: NOW - 2000 })
+  expect(startsWithout(starts, 'b9')).toBe(starts)
+  expect(startsWithout(starts, 'toString')).toBe(starts)
   expect(starts).toEqual({ b1: NOW - 3000, b2: NOW - 2000 })
 })
 
@@ -460,10 +460,10 @@ test('a task whose key is a name every object inherits keeps a start of its own 
   expect(Object.hasOwn(seen, '__proto__')).toBe(true)
   expect(startOf(odd, seen, NOW)).toBe(NOW - 5000)
   expect(startsSeen(seen, [odd], NOW)).toBe(seen)
-  expect(startOf(odd, startBackgrounded(seen, '__proto__', NOW - 9000), NOW)).toBe(NOW - 9000)
+  expect(startOf(odd, startsBackgrounded(seen, '__proto__', NOW - 9000), NOW)).toBe(NOW - 9000)
   expect(Object.keys(startsPruned(seen, [odd]))).toEqual(['__proto__'])
   expect(Object.keys(startsPruned(seen, []))).toEqual([])
-  expect(Object.keys(startWithout(seen, '__proto__'))).toEqual([])
+  expect(Object.keys(startsWithout(seen, '__proto__'))).toEqual([])
   const named = task('constructor', 'other')
   expect(startOf(named, startsSeen({}, [named], NOW - 1), NOW)).toBe(NOW - 1)
 })

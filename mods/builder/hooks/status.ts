@@ -344,7 +344,7 @@ export function startsPruned(starts: Starts, tasks: readonly BackgroundTask[]): 
 // so two writes that cross still keep the true start. The same object comes
 // back when the stored start is already as early, or when `at` is not a
 // finite number.
-export function startBackgrounded(starts: Starts, key: string, at: number): Starts {
+export function startsBackgrounded(starts: Starts, key: string, at: number): Starts {
   const stored = startAt(starts, key)
   if (!isFiniteTime(at) || (stored !== undefined && stored <= at)) return starts
   return withStart(starts, key, at)
@@ -352,7 +352,7 @@ export function startBackgrounded(starts: Starts, key: string, at: number): Star
 
 // The starts without the one stored under `key`. The same object comes back
 // when there is none.
-export function startWithout(starts: Starts, key: string): Starts {
+export function startsWithout(starts: Starts, key: string): Starts {
   const entries = entriesOf(starts)
   const kept = entries.filter(([stored]) => stored !== key)
   return kept.length === entries.length ? starts : Object.fromEntries(kept)

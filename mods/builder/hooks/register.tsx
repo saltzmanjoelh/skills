@@ -13,7 +13,7 @@ import { afterReport, endedOf, plannedOf, progressIn, reportAnswer, reportOf, st
 import { changePrompt, ciEventContext, resumePrompt, stateLines, stuckPrompt } from './prompts'
 import { commitRecordsOf, decidedItems, factIn, packageText, secretIn, trendOf, trendStopLine, verdictsLine, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
-import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, firstPromptOf, generationIn, isCleanupSkill, newMemo, recordOf, startBackgrounded, startsPruned, startsSeen, startWithout, statusMemoIn, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
+import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, firstPromptOf, generationIn, isCleanupSkill, newMemo, recordOf, startsBackgrounded, startsPruned, startsSeen, startsWithout, statusMemoIn, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
 import { timeOfDay } from './text'
 
 type $ = EngineInterface
@@ -2429,7 +2429,7 @@ async function removeBackground($: $, id: string) {
     return
   }
   wroteBackground(await update($, background, list => list.filter(task => task.id !== id)))
-  await changeStarts($, starts => startWithout(starts, id))
+  await changeStarts($, starts => startsWithout(starts, id))
 }
 
 async function liveTick($: $) {
@@ -2536,7 +2536,7 @@ async function foreground($: $, e: { tool: string; tool_use_id?: string }, call:
     const ran = await call()
     const taskId = backgroundTaskIdOf(ran)
     if (typeof taskId === 'string' && taskId !== '') {
-      await changeStarts($, starts => startBackgrounded(starts, taskId, record.startedAt)).catch(() => undefined)
+      await changeStarts($, starts => startsBackgrounded(starts, taskId, record.startedAt)).catch(() => undefined)
     }
     return ran
   } finally {
