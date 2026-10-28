@@ -32,8 +32,13 @@ The shape of the change:
    `mods/builder/hooks/register.tsx` reads the clock and merges inside its
    existing `update`; the `session.start` hook, which also runs at a hot
    reload, reads the list and, only when a task lacks a stamp, writes the
-   merged list through `wroteBackground`. There is no third writer and no
-   in-memory flag.
+   merged list through `wroteBackground`. The live ticker calls the same
+   stamping step when the list it has just read holds a task without a sound
+   stamp, and hands it that list. That call repairs a list that an older copy
+   of the module, still running the turn end it had in flight, landed after a
+   hot reload and after this copy's start had already stamped the list. The
+   ticker is a second caller of the stamping step rather than a new writer of
+   the list, and there is no in-memory flag.
 2. **One sort, one time, one ceiling test.** `firstSeenOrNow(task, now)` in
    `mods/builder/hooks/status.ts` is the one rule for when a task was first
    seen: its stamp, or `now` when it has no sound stamp.

@@ -103,16 +103,21 @@ the end of each subagent's turn (`SubagentStop`), holding at least one task.
 7. The record's `backgroundOnly` field, present only while the state is
    `working` and background work is the only thing running, orders `tasks` by
    first-seen stamp, oldest first, over every task in flight, dropping empty
-   descriptions and withholding secret-shaped ones as today. Because every
-   task the wait began with was seen at or before the wait's `since` and every
-   task that joined later was seen after it, the wait's own tasks still come
-   first. The field gains `taskSince`, the first-seen stamp of the task whose
-   description is `tasks[0]`, so the words and the time always belong to the
-   same task. When `tasks` is empty, because every description was empty,
-   `taskSince` is left out. `since` keeps its meaning as the start of the
-   background-only wait, which foreman's idle rule counts from. No existing
-   field changes meaning, so `version` stays `1`. The record never writes a
-   task's command, so a task with an empty description cannot head `tasks`.
+   descriptions and withholding secret-shaped ones as today. That order, by
+   first-seen stamp, puts the wait's own tasks first, because every task the
+   wait began with was seen at or before the wait's `since` and every task
+   that joined later was seen after it, except in one case: a task the wait
+   began with that left the list when the transcript drew its notification and
+   that a later list put back is stamped again at that later time, so a task
+   that joined the wait in the gap can sort ahead of it. The field gains
+   `taskSince`, the first-seen stamp of the task whose description is
+   `tasks[0]`, so the words and the time still belong to one task, in that
+   case as in every other. When `tasks` is empty, because every description
+   was empty, `taskSince` is left out. `since` keeps its meaning as the start
+   of the background-only wait, which foreman's idle rule counts from. No
+   existing field changes meaning, so `version` stays `1`. The record never
+   writes a task's command, so a task with an empty description cannot head
+   `tasks`.
 8. Foreman's reader of the field takes `taskSince` as it takes `since`, as a
    finite number or nothing, and reads a record without it as today. When the
    row's record carries the field with at least one task and a `taskSince`,

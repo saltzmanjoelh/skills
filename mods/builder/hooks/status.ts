@@ -322,9 +322,15 @@ export function backgroundWaitOf(f: StatusFacts, now: number): StatusMemo['backg
 // shownOrWithheld shows it, with the empty ones dropped and at most
 // TASKS_SHOWN kept, together with `taskSince`, the first-seen stamp of the
 // task the first kept description names, or undefined when none is kept or
-// that task has no stamp yet. The wait's own tasks still come first, because
-// each of them was seen no later than any task that joined after the wait
-// began. A task's command is never read, since it can hold paths or secrets.
+// that task has no stamp yet. The order is by first-seen stamp, which puts
+// the wait's own tasks first, because each of them was seen no later than any
+// task that joined after the wait began, except in one case: a task the wait
+// began with that removeBackground took off the list, when the transcript
+// drew its notification, and that a later list put back is stamped again at
+// that later time, so a task that joined the wait in the gap can sort ahead
+// of it. The words and the time still belong to one task in that case,
+// because taskSince is read off the task the first kept description names.
+// A task's command is never read, since it can hold paths or secrets.
 function namedTasksOf(f: StatusFacts, now: number): { tasks: string[]; taskSince: number | undefined } {
   const named = sortedByFirstSeen(f.background, now)
     .map(task => ({ text: shownOrWithheld(task.description, TASK_CHARS), seenAt: seenAtOf(task) }))

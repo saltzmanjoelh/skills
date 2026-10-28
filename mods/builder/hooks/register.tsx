@@ -2381,14 +2381,16 @@ async function replaceBackground($: $, raw: unknown) {
 // list to decide whether anything runs. The start has no list of its own, so
 // it leaves known out and the list is read here. The guard reads the stamps
 // off the list in hand, while the write merges the list the store holds at
-// that moment, as every update does. When every task is stamped, as after a
-// reload over a list this build wrote, nothing is written, so a start over
-// such a list costs one read. The write goes through wroteBackground, as
-// every write of the list must.
+// that moment, as every update does. The clock is read only once the guard
+// has found a task to stamp, directly before the write, because the time is
+// needed for nothing else. When every task is stamped, as after a reload over
+// a list this build wrote, nothing is written and the clock is not read, so a
+// start over such a list costs one read. The write goes through
+// wroteBackground, as every write of the list must.
 async function stampBackground($: $, known?: readonly BackgroundTask[]) {
-  const now = await $.clock.now()
   const tasks = known ?? await read($, background)
   if (tasks.every(task => seenAtOf(task) !== undefined)) return
+  const now = await $.clock.now()
   wroteBackground(await update($, background, list => mergeBackground(list, list, now)))
 }
 
