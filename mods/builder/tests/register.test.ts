@@ -1572,17 +1572,18 @@ test('a session start with a watch already in place reads the pull request at on
 // state.get hook and one state.set hook, so the faults under `refused` are
 // raised here: the next `reads` reads are refused by the same readRefusal
 // that refusedReads uses, before any value is answered, and the next `writes`
-// writes are refused as refusedWrites refuses them, before the write is
-// recorded or reaches the kit, so the seeded value stays what is read.
+// writes are refused by the same writeRefusal that refusedWrites uses, before
+// the write is recorded or reaches the kit, so the seeded value stays what is
+// read.
 function olderBuildState(on: On, seeded: Record<string, unknown>, refused?: string) {
   const left = new Map(Object.entries(seeded))
-  const { refusal, refuses } = readRefusal(refused)
-  const faults = Object.assign(refusal, { writes: 0 })
+  const reads = readRefusal(refused)
+  const writes = writeRefusal(refused)
   // Every value the mod has written under each key, in order, for a test that
   // checks what a start over the saved state writes, or that it writes nothing.
   const written = new Map<string, unknown[]>()
   on('state.get', ($, e, next) => {
-    const denial = refuses(e)
+    const denial = reads.refuses(e)
     if (denial !== undefined) return denial
     if (e.plugin !== 'builder' || !left.has(e.key)) return next(e)
     // Version 0 is where the kit's own value stands, so the mod's write after
@@ -1590,17 +1591,24 @@ function olderBuildState(on: On, seeded: Record<string, unknown>, refused?: stri
     return { value: { value: left.get(e.key), version: 0 } } as never
   })
   on('state.set', ($, e, next) => {
-    if (faults.writes > 0 && e.plugin === 'builder' && e.key === refused) {
-      faults.writes -= 1
-      return { deny: 'the state could not be written' } as never
-    }
+    const denial = writes.refuses(e)
+    if (denial !== undefined) return denial
     if (e.plugin === 'builder') {
       left.delete(e.key)
       written.set(e.key, [...(written.get(e.key) ?? []), e.value])
     }
     return next(e)
   })
-  return Object.assign(faults, { writtenTo: (key: string) => written.get(key) ?? [] })
+  // Each refusal counts on its own object, which is the one its `refuses`
+  // reads, so a count a test sets here is read and set on that object rather
+  // than on a copy that the hooks would never see.
+  return {
+    get reads() { return reads.refusal.reads },
+    set reads(count: number) { reads.refusal.reads = count },
+    get writes() { return writes.refusal.writes },
+    set writes(count: number) { writes.refusal.writes = count },
+    writtenTo: (key: string) => written.get(key) ?? [],
+  }
 }
 
 test('the line above the prompt draws nothing of its own over a snapshot an older build saved, and draws once a look replaces it', async ($, on) => {
@@ -7813,19 +7821,29 @@ function refusedReads(on: On, key: string) {
   return refusal
 }
 
+// The refusal of the next `writes` writes of the mod's state under `key` whose
+// value passes `matches`, as a state the engine cannot write refuses them, and
+// `refusals` counts the writes it has refused. It registers no hook, because a
+// test may register only one state.set hook: that hook asks `refuses` first,
+// which counts the write down and answers the refusal when it refuses one, and
+// answers undefined for any other write.
+function writeRefusal(key: string | undefined, matches: (value: unknown) => boolean = () => true) {
+  const refusal = { writes: 0, refusals: 0 }
+  const refuses = (e: { plugin: string; key: string; value: unknown }) => {
+    if (refusal.writes <= 0 || e.plugin !== 'builder' || e.key !== key || !matches(e.value)) return undefined
+    refusal.writes -= 1
+    refusal.refusals += 1
+    return { deny: 'the state could not be written' } as never
+  }
+  return { refusal, refuses }
+}
+
 // Refuses the next `writes` writes of the mod's state under `key` whose value
 // passes `matches`, as a state the engine cannot write does, and `refusals`
 // counts the writes it has refused.
 function refusedWrites(on: On, key: string, matches: (value: unknown) => boolean = () => true) {
-  const refusal = { writes: 0, refusals: 0 }
-  on('state.set', ($, e, next) => {
-    if (refusal.writes > 0 && e.plugin === 'builder' && e.key === key && matches(e.value)) {
-      refusal.writes -= 1
-      refusal.refusals += 1
-      return { deny: 'the state could not be written' } as never
-    }
-    return next(e)
-  })
+  const { refusal, refuses } = writeRefusal(key, matches)
+  on('state.set', ($, e, next) => refuses(e) ?? next(e))
   return refusal
 }
 
