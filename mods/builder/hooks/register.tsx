@@ -1998,9 +1998,8 @@ async function packageShapeOf($: $, dir: string, base: string, head: string, ear
     reviewedHead === null ? '' : git($, dir, ['diff', '--name-status', '-z', '-M', '--no-ext-diff', reviewedHead, 'HEAD']),
     reviewedHead === null ? null : git($, dir, ['show', `origin/${base}:CLAUDE.md`]),
   ])
-  if (sinceDiff === null || nameStatus === null) {
-    return { refused: 'git could not produce the change since the verdict head or the list of files changed since the reviewed head (it failed, or its output was over 4 MiB and cut off)' }
-  }
+  if (sinceDiff === null) return { refused: 'git could not produce the change since the verdict head (it failed, or its output was over 4 MiB and cut off)' }
+  if (nameStatus === null) return { refused: 'git could not list the files changed since the reviewed head (it failed, or its output was over 4 MiB and cut off)' }
   const kinds = reviewedHead === null ? null : changedKinds(nameStatus, specDirOf(baseClaude))
   const check = !afterCheck && isUpForCheck(verdictHead, reviewedHead, records, earlier)
   return { kind: 'later', since: verdictHead, sinceDiff, check, reviewers: focusedReviewersFor(kinds) }

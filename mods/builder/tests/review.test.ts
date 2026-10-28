@@ -640,6 +640,20 @@ test('a later package names the head it starts from, points at both patches, rep
   expect(text).not.toContain('Read `diff.patch` beside this file first')
 })
 
+test('a later package gives an older review whose verdicts do not parse one line that says its verdicts are unreadable', () => {
+  const unreadable = { sha: sha('c'), body: 'Notes with no verdicts line at c.' }
+  const text = packageText({ issue: 'x' }, {
+    ...facts,
+    round: 4,
+    earlier: [review('a', 'REQUEST_CHANGES', 'APPROVE'), unreadable, review('b', 'APPROVE', 'REQUEST_CHANGES')],
+    since: sha('b'),
+  })
+  expect(text).toContain('- At aaaaaaaa: spec=REQUEST_CHANGES, adversarial=APPROVE')
+  expect(text.split('\n')).toContain('- At cccccccc: verdicts unreadable')
+  expect(text).not.toContain('Notes with no verdicts line at c.')
+  expect(text).toContain('### At bbbbbbbb')
+})
+
 test('a first package repeats every review in full and names no full patch, and a fallback says why', () => {
   const earlier = [review('a', 'REQUEST_CHANGES', 'APPROVE'), review('b', 'APPROVE', 'APPROVE')]
   const first = packageText({ issue: 'x' }, { ...facts, earlier })

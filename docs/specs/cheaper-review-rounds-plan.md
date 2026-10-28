@@ -14,8 +14,12 @@ keeping, which are grafted below.
 
 ## Chosen approach
 
-All the decisions are pure functions added to `mods/builder/hooks/review.ts`.
-All the git work stays in `servePackage` in `mods/builder/hooks/register.tsx`.
+All the decisions are pure functions. The heads, the check and the sorting
+of paths into kinds are added to `mods/builder/hooks/review.ts`. The choice
+of reviewers from those kinds, `focusedReviewersFor`, is added to
+`mods/builder/hooks/progress.ts` beside `FOCUSED_REVIEWERS`, the reviewer
+names it chooses from. All the git work stays in `servePackage` in
+`mods/builder/hooks/register.tsx`.
 The package tool stores the reviewers it named, so the pane plans from the
 same answer the session got.
 
@@ -175,8 +179,8 @@ harmless, because reviewers read it only when `package.md` names it.
 
 1. Tests for the pure functions in `mods/builder/tests/review.test.ts`, seen
    failing, then the functions in `review.ts`: the sorting of a path, the
-   parsing of the changed files, the reviewers named, the spec directory, the
-   verdict head, the reviewed head, the check, and the later `packageText`.
+   parsing of the changed files, the spec directory, the verdict head, the
+   reviewed head, the check, and the later `packageText`.
 2. Tests in `mods/builder/tests/register.test.ts`, seen failing, then
    `servePackage` and the package tool's description. The new fake-git
    handlers go before the cut-off diff branch and the catch-all `git diff`
@@ -184,7 +188,8 @@ harmless, because reviewers read it only when `package.md` names it.
    existing `changed`. Existing package tests are rechecked, since some
    become later packages.
 3. Tests in `mods/builder/tests/progress.test.ts`, seen failing, then
-   `plannedOf`, the `Packaged` type and `reviewersLine`.
+   `focusedReviewersFor`, which names the reviewers from the kinds of the
+   changed files, `plannedOf`, the `Packaged` type and `reviewersLine`.
 4. The agent files, the mod's `README.md` and `skills/implement/SKILL.md`.
 5. The gates from the project's `CLAUDE.md`.
 

@@ -1163,26 +1163,29 @@ test('the reviewed head that a Reviewed: line names is where the changed files a
   expect(world.calls).toContain(`git diff --name-status -z -M --no-ext-diff ${D} HEAD`)
 })
 
-test('git failing to give the change since the verdict head or the changed files refuses the package', async ($, on) => {
-  mock.clock(on)
-  mock.store(on)
-  engine(on)
-  const world = fakeGitHub(on)
-  const files = fakeFiles(on)
-  await watch($)
-  world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: 'Fix the round' }]
-  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
+const SINCE_DIFF_REFUSAL = 'git could not produce the change since the verdict head (it failed, or its output was over 4 MiB and cut off), so no package was written.'
+const NAME_STATUS_REFUSAL = 'git could not list the files changed since the reviewed head (it failed, or its output was over 4 MiB and cut off), so no package was written.'
 
-  world.sinceDiffFail = true
-  expect(await packageAnswer($)).toBe(SINCE_DIFF_REFUSAL)
-  world.sinceDiffFail = false
-  world.nameStatusFail = true
-  expect(await packageAnswer($)).toBe(SINCE_DIFF_REFUSAL)
-  expect(files.has(`${PACKAGE_DIR}/package.md`)).toBe(false)
-  expect(files.has(`${PACKAGE_DIR}/diff.patch`)).toBe(false)
-})
+for (const [what, fail, refusal] of [
+  ['the change since the verdict head', (world: ReturnType<typeof fakeGitHub>) => { world.sinceDiffFail = true }, SINCE_DIFF_REFUSAL],
+  ['the list of files changed since the reviewed head', (world: ReturnType<typeof fakeGitHub>) => { world.nameStatusFail = true }, NAME_STATUS_REFUSAL],
+] as const) {
+  test(`when git fails to give only ${what}, the package is refused and the refusal names that step alone`, async ($, on) => {
+    mock.clock(on)
+    mock.store(on)
+    engine(on)
+    const world = fakeGitHub(on)
+    const files = fakeFiles(on)
+    await watch($)
+    world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: 'Fix the round' }]
+    world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
+    fail(world)
 
-const SINCE_DIFF_REFUSAL = 'git could not produce the change since the verdict head or the list of files changed since the reviewed head (it failed, or its output was over 4 MiB and cut off), so no package was written.'
+    expect(await packageAnswer($)).toBe(refusal)
+    expect(files.has(`${PACKAGE_DIR}/package.md`)).toBe(false)
+    expect(files.has(`${PACKAGE_DIR}/diff.patch`)).toBe(false)
+  })
+}
 
 for (const [how, fail] of [
   ['throws', (world: ReturnType<typeof fakeGitHub>) => { world.ancestorFail = 'throw' }],
