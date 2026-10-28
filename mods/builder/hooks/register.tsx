@@ -15,7 +15,7 @@ import { afterComparison, afterLoad, dueComparisons, isStale, LOADED_PATHS, load
 import { AGENT_PANE, agentPaneTree, bandTree, isDrawable, messagesReadOf, NAMED_AFTER_MS, PANE, paneTree, secondRow, type Elements, type MessagesRead, type View } from './pane'
 import { ADVERSARIAL_REVIEWER, afterReport, endedOf, FOCUSED_REVIEWERS, focusedReviewersFor, plannedOf, progressIn, reportAnswer, reportOf, stageLabel, STAGES, type ReportInput } from './progress'
 import { changePrompt, ciEventContext, resumePrompt, stateLines, stuckPrompt } from './prompts'
-import { changedKinds, commitRecordsOf, decidedItems, factIn, INSTRUCTION_PATHSPECS, instructionFileIsLink, isFullSha, isUpForCheck, LATER_CONTEXT_LINES, MARKDOWN_IMPORT_PATTERN, markdownImportFound, packageText, reviewedHeadOf, secretIn, specDirOf, trendOf, trendStopLine, verdictHeadOf, verdictsLine, type CommitRecord, type EarlierRound, type PackageInput } from './review'
+import { changedKinds, commitRecordsOf, decidedItems, factIn, INSTRUCTION_PATHSPECS, instructionFileIsLink, isFullSha, isUpForCheck, LATER_CONTEXT_LINES, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pluginRootsOf, reviewedHeadOf, secretIn, specDirOf, trendOf, trendStopLine, underRoot, verdictHeadOf, verdictsLine, type CommitRecord, type EarlierRound, type FileKind, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
 import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, newMemo, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
 import { timeOfDay } from './text'
@@ -1986,6 +1986,33 @@ async function instructionListingsOf($: $, dir: string, trees: readonly string[]
   return Promise.all(trees.map(tree => git($, dir, ['diff-tree', '-r', '-z', '--no-renames', empty, tree, '--', ...INSTRUCTION_PATHSPECS])))
 }
 
+// The kinds of the changed files, from the output of
+// `git diff --name-status -z -M`. Documentation alone needs more reading,
+// because Claude Code may load a Markdown file as instructions without its
+// path showing it, so the reads below run only when the files hold
+// documentation and nothing other than tests. They cover the head and the
+// base, so what the branch adds counts as much as what is already on the
+// base. No file counts as documentation when an instruction file imports
+// Markdown or is a symbolic link, when a marketplace's plugin folders cannot
+// be known, or when any of these reads fails. A file inside a plugin's folder
+// counts as anything else. The reads open only the instruction files, though
+// git still walks every folder of both trees to match their pathspecs.
+async function sortedKindsOf($: $, dir: string, base: string, nameStatus: string, specDir: string): Promise<FileKind[]> {
+  const plain = changedKinds(nameStatus, specDir)
+  if (!plain.includes('documentation') || plain.includes('other')) return plain
+  const trees = ['HEAD', `origin/${base}`]
+  const [imports, listings] = await Promise.all([
+    gitRun($, dir, ['grep', '-l', '-I', '-i', '-E', MARKDOWN_IMPORT_PATTERN, ...trees, '--', ...INSTRUCTION_PATHSPECS]),
+    instructionListingsOf($, dir, trees),
+  ])
+  if (markdownImportFound(imports, trees) || listings.some(instructionFileIsLink)) return changedKinds(nameStatus, specDir, () => true)
+  const read = listings.map(raw => raw ?? '')
+  const marketplaces = await Promise.all(read.flatMap((raw, at) => marketplacePathsOf(raw).map(async path => marketplaceRootsOf(await git($, dir, ['show', `${trees[at]}:${path}`]), path))))
+  if (marketplaces.some(roots => roots === null)) return changedKinds(nameStatus, specDir, () => true)
+  const roots = [...read.flatMap(pluginRootsOf), ...marketplaces.flatMap(found => found ?? [])]
+  return changedKinds(nameStatus, specDir, path => roots.some(root => underRoot(path, root)))
+}
+
 // The shape of the package at the checkout's head, from the earlier verdict
 // reviews and the branch's commits, oldest first. A pull request with no
 // verdict head gets a first package. One whose verdict head is not a full sha,
@@ -2012,22 +2039,14 @@ async function packageShapeOf($: $, dir: string, base: string, head: string, ear
   // The changed files are read from the reviewed head, where the focused
   // reviewers last ran. When it is missing, all four run and no list is read.
   const reviewedHead = reviewedHeadOf(verdictHead, records)
-  // The search for Markdown imports and the listing of instruction files that
-  // are symbolic links cover the head and the base, so what the branch adds
-  // counts as much as what is already on the base. Both read only the
-  // instruction files, so their cost does not grow with the repository.
-  const trees = ['HEAD', `origin/${base}`]
-  const [sinceDiff, nameStatus, baseClaude, imports, links] = await Promise.all([
+  const [sinceDiff, nameStatus, baseClaude] = await Promise.all([
     git($, dir, ['diff', `--unified=${LATER_CONTEXT_LINES}`, '--no-ext-diff', verdictHead, 'HEAD']),
     reviewedHead === null ? '' : git($, dir, ['diff', '--name-status', '-z', '-M', '--no-ext-diff', reviewedHead, 'HEAD']),
     reviewedHead === null ? null : git($, dir, ['show', `origin/${base}:CLAUDE.md`]),
-    reviewedHead === null ? null : gitRun($, dir, ['grep', '-l', '-I', '-i', '-E', MARKDOWN_IMPORT_PATTERN, ...trees, '--', ...INSTRUCTION_PATHSPECS]),
-    reviewedHead === null ? [] : instructionListingsOf($, dir, trees),
   ])
   if (sinceDiff === null) return { refused: 'git could not produce the change since the verdict head (it failed, or its output was over 4 MiB and cut off)' }
   if (nameStatus === null) return { refused: 'git could not list the files changed since the reviewed head (it failed, or its output was over 4 MiB and cut off)' }
-  const docsAreInstructions = markdownImportFound(imports, trees) || links.some(instructionFileIsLink)
-  const kinds = reviewedHead === null ? null : changedKinds(nameStatus, specDirOf(baseClaude), docsAreInstructions)
+  const kinds = reviewedHead === null ? null : await sortedKindsOf($, dir, base, nameStatus, specDirOf(baseClaude))
   const check = !afterCheck && isUpForCheck(verdictHead, reviewedHead, records, earlier)
   return { kind: 'later', since: verdictHead, sinceDiff, check, reviewers: focusedReviewersFor(kinds) }
 }

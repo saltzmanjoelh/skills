@@ -87,15 +87,27 @@ same answer the session got.
   instructions, reads its path relative to the importing file, and an
   imported file can import others that the tool does not follow. An import
   path is read as Claude Code reads it, so a space escaped with a backslash
-  is part of the path. The search
-  reads only the instruction files, through case-insensitive glob
-  pathspecs, so its cost does not grow with the repository. A search that
+  is part of the path. The search reads only the instruction files, through
+  case-insensitive glob pathspecs, so it opens no other file. A search that
   fails counts as an import.
 - When any instruction file at the head or on the base is a symbolic link,
   found with `git diff-tree` from the empty tree over the same pathspecs, no
   file counts as documentation either, because git records a change to the
   link's target under the target's own path while Claude Code loads the
   target as instructions. A listing that fails counts as a link.
+- A Markdown file inside a plugin's folder counts as anything else, because
+  Claude Code loads a plugin's commands, agents and skills from anywhere in
+  it. A plugin's folder is the folder above a `.claude-plugin` folder that
+  holds `plugin.json`, or a local source that a marketplace manifest names,
+  read relative to the folder above the manifest's `.claude-plugin` folder.
+  When a manifest cannot be read or parsed, sets `pluginRoot`, or names a
+  source that is absolute or climbs out with `..`, no file counts as
+  documentation. A folder loaded only through a command-line flag or a
+  setting is outside the repository's own record and is not looked for.
+- The import search, the listings and the manifest reads run only when the
+  changed files hold documentation and nothing other than tests, since
+  otherwise all four focused reviewers run anyway. The reads open only the
+  instruction files, though git still walks every folder of both trees.
 - The spec directory is read with `factIn` from
   `git show origin/<base>:CLAUDE.md`. A failed read, a missing or empty fact,
   an absolute path, a `..` folder, or a value that comes down to the root

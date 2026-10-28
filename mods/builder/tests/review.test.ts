@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { verdictsOf } from '../hooks/github'
-import { CHEAP_FIX_SUBJECT, changedKinds, commitRecordsOf, DECIDED_HEADINGS, DECIDED_ITEM_CHARS, decidedItems, decidedSection, DEFAULT_SPEC_DIR, factIn, INSTRUCTION_PATHSPECS, instructionFileImportsMarkdown, instructionFileIsLink, isFullSha, isUpForCheck, MARKDOWN_IMPORT_PATTERN, markdownImportFound, packageText, pathKind, recordItems, reviewedHeadOf, secretIn, specDirOf, STREAK_STOP, trendOf, trendSection, trendStopLine, verdictHeadOf, verdictsLine } from '../hooks/review'
+import { CHEAP_FIX_SUBJECT, changedKinds, commitRecordsOf, DECIDED_HEADINGS, DECIDED_ITEM_CHARS, decidedItems, decidedSection, DEFAULT_SPEC_DIR, factIn, INSTRUCTION_PATHSPECS, instructionFileImportsMarkdown, instructionFileIsLink, isFullSha, isUpForCheck, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pathKind, pluginRootsOf, recordItems, reviewedHeadOf, secretIn, specDirOf, STREAK_STOP, trendOf, trendSection, trendStopLine, underRoot, verdictHeadOf, verdictsLine } from '../hooks/review'
 
 const facts = {
   repo: 'o/r',
@@ -585,7 +585,8 @@ test('an instruction file on either tree that git grep finds with a Markdown imp
   const spec = DEFAULT_SPEC_DIR
   const raw = 'M\0docs/guide.md\0M\0tests/a.test.ts\0'
   expect(changedKinds(raw, spec)).toEqual(['documentation', 'test'])
-  expect(changedKinds(raw, spec, true)).toEqual(['other', 'test'])
+  expect(changedKinds(raw, spec, () => true)).toEqual(['other', 'test'])
+  expect(changedKinds('M\0docs/a.md\0M\0docs/b.md\0', spec, path => path === 'docs/b.md')).toEqual(['documentation', 'other'])
 })
 
 test('the import pattern matches the paths Claude Code reads as imports, a space escaped with a backslash included, and not an email address', () => {
@@ -619,6 +620,34 @@ test('a listing of the instruction files that holds a symbolic link, or could no
   expect(instructionFileIsLink(file + link)).toBe(true)
   expect(instructionFileIsLink(file)).toBe(false)
   expect(instructionFileIsLink('')).toBe(false)
+})
+
+test('a plugin root is the folder above a .claude-plugin folder that holds plugin.json, in any case, and the root itself has the empty name', () => {
+  const zero = '0'.repeat(40)
+  const entry = (mode: string, path: string) => `:000000 ${mode} ${zero} ${'d'.repeat(40)} A\0${path}\0`
+  const raw = entry('100644', 'docs/example-plugin/.claude-plugin/plugin.json') + entry('100644', 'Tools/.Claude-Plugin/Plugin.JSON') + entry('100644', '.claude-plugin/marketplace.json') + entry('100644', 'CLAUDE.md')
+  expect(pluginRootsOf(raw)).toEqual(['docs/example-plugin', 'Tools'])
+  expect(pluginRootsOf(entry('100644', '.claude-plugin/plugin.json'))).toEqual([''])
+  expect(marketplacePathsOf(raw)).toEqual(['.claude-plugin/marketplace.json'])
+  expect(marketplacePathsOf(entry('100644', 'docs/x/.claude-plugin/Marketplace.json'))).toEqual(['docs/x/.claude-plugin/Marketplace.json'])
+  expect(underRoot('docs/example-plugin/commands/deploy.md', 'docs/example-plugin')).toBe(true)
+  expect(underRoot('docs/example-plugin-notes.md', 'docs/example-plugin')).toBe(false)
+  expect(underRoot('docs/guide.md', '')).toBe(true)
+})
+
+test('a marketplace names the folders of its local plugins, relative to the folder above its .claude-plugin folder, and an unreadable one names none for certain', () => {
+  const market = (plugins: unknown, extra: object = {}) => JSON.stringify({ name: 'm', ...extra, plugins })
+  const at = '.claude-plugin/marketplace.json'
+  expect(marketplaceRootsOf(market([{ name: 'a', source: './mods/a' }, { name: 'b', source: { source: 'github', repo: 'o/r' } }]), at)).toEqual(['mods/a'])
+  expect(marketplaceRootsOf(market([{ name: 'a', source: './' }]), at)).toEqual([''])
+  expect(marketplaceRootsOf(market([{ name: 'a', source: './a' }]), 'docs/x/.claude-plugin/marketplace.json')).toEqual(['docs/x/a'])
+  expect(marketplaceRootsOf(market([{ name: 'a', source: 'docs/plugin/' }]), at)).toEqual(['docs/plugin'])
+  expect(marketplaceRootsOf(null, at)).toBeNull()
+  expect(marketplaceRootsOf('not json', at)).toBeNull()
+  expect(marketplaceRootsOf(market('nope'), at)).toBeNull()
+  expect(marketplaceRootsOf(market([{ name: 'a', source: '../a' }]), at)).toBeNull()
+  expect(marketplaceRootsOf(market([{ name: 'a', source: '/abs' }]), at)).toBeNull()
+  expect(marketplaceRootsOf(market([{ name: 'a', source: 'a' }], { metadata: { pluginRoot: './plugins' } }), at)).toBeNull()
 })
 
 test('the instruction pathspecs name every instruction file and folder, in any case and at any depth', () => {

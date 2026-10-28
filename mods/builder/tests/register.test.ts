@@ -99,7 +99,9 @@ function fakeGitHub(on: On) {
   // empty; `grepFail` makes it exit with an error. `objectFormat` is what
   // `git rev-parse --show-object-format` prints. `links` is what
   // `git diff-tree -r -z` prints for the instruction files on each tree, and
-  // `linksFail` makes that listing exit with an error. `nameStatus` is what `git diff --name-status -z` prints for the
+  // `linksFail` makes that listing exit with an error. `marketplace` is what
+  // `git show <tree>:<path>` prints for a marketplace.json, which exits 128
+  // when it is null. `nameStatus` is what `git diff --name-status -z` prints for the
   // files changed since the reviewed head, and `nameStatusFail` and
   // `sinceDiffFail` make that read and the read of the change since the
   // verdict head exit with an error.
@@ -121,7 +123,7 @@ function fakeGitHub(on: On) {
     onQuietDiff: null as (() => void) | null, afterQuietDiff: null as (() => void) | null, headHolds: {} as Record<string, Promise<void>>,
     states: {} as Record<number, string>, stateRead: null as null | 'exit' | 'throw' | 'cut' | 'text',
     messages: [{ sha: A, message: 'Build it' }] as { sha: string; message: string }[], messagesFail: false,
-    ancestorExit: 0, ancestorFail: null as null | 'throw' | 'cut', merges: '', mergesFail: null as null | 'exit' | 'throw' | 'cut', baseClaude: null as string | null, grep: '', grepFail: false, objectFormat: 'sha1', links: '', linksFail: false, nameStatus: '', nameStatusFail: false, sinceDiffFail: false,
+    ancestorExit: 0, ancestorFail: null as null | 'throw' | 'cut', merges: '', mergesFail: null as null | 'exit' | 'throw' | 'cut', baseClaude: null as string | null, grep: '', grepFail: false, objectFormat: 'sha1', links: '', linksFail: false, marketplace: null as string | null, nameStatus: '', nameStatusFail: false, sinceDiffFail: false,
   }
   on('process.run', async ($, e) => {
     const argv = e.argv.join(' ')
@@ -178,6 +180,7 @@ function fakeGitHub(on: On) {
       return { value: { exitCode: 0, stdout: world.merges, stderr: '', isStdoutTruncated: true, isStderrTruncated: false } }
     }
     if (argv.startsWith('git rev-list --merges ')) return out(world.merges)
+    if (argv.startsWith('git show ') && argv.endsWith('marketplace.json')) return world.marketplace === null ? exit(128) : out(world.marketplace)
     if (argv.startsWith('git show origin/')) return world.baseClaude === null ? exit(128) : out(world.baseClaude)
     if (argv.startsWith('git grep ')) return world.grepFail ? exit(128) : world.grep === '' ? exit(1) : out(world.grep)
     if (argv === 'git rev-parse --show-object-format') return out(`${world.objectFormat}\n`)
@@ -1092,7 +1095,7 @@ test('the spec directory comes from the base branch\'s CLAUDE.md, not the branch
   expect(world.calls).toContain('git show origin/main:CLAUDE.md')
 })
 
-test('when an instruction file on the branch or the base imports Markdown or is a symbolic link, or either search fails, a change to documentation alone names every focused reviewer', async ($, on) => {
+test('when an instruction file on the branch or the base imports Markdown or is a symbolic link, or a plugin holds the file, or a search fails, a change to documentation alone names every focused reviewer', async ($, on) => {
   mock.clock(on)
   mock.store(on)
   engine(on)
@@ -1128,6 +1131,39 @@ test('when an instruction file on the branch or the base imports Markdown or is 
   world.linksFail = false
   world.objectFormat = 'sha512'
   expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  world.objectFormat = 'sha1'
+  const entry = (path: string) => `:000000 100644 ${'0'.repeat(40)} ${'d'.repeat(40)} A\0${path}\0`
+  // A plugin whose folder holds the changed file loads it as instructions.
+  world.links = entry('docs/.claude-plugin/plugin.json')
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  world.links = entry('tools/.claude-plugin/plugin.json')
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(ONLY_MAINTAINABILITY)
+  world.links = entry('.claude-plugin/marketplace.json')
+  world.marketplace = JSON.stringify({ name: 'm', plugins: [{ name: 'a', source: './mods/a' }] })
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(ONLY_MAINTAINABILITY)
+  expect(world.calls).toContain('git show HEAD:.claude-plugin/marketplace.json')
+  world.marketplace = JSON.stringify({ name: 'm', plugins: [{ name: 'a', source: './docs' }] })
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  world.marketplace = null
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
+})
+
+test('when a file other than a test or documentation changed, the package runs neither the search for imports nor the listing of instruction files', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  fakeFiles(on)
+  await watch($)
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: 'Change the code' }]
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
+  world.nameStatus = 'M\0docs/guide.md\0M\0src/a.ts\0'
+
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  expect(world.calls.some(call => call.startsWith('git grep ') || call.startsWith('git diff-tree ') || call.startsWith('git rev-parse --show-object-format'))).toBe(false)
+  world.nameStatus = 'M\0tests/a.test.ts\0'
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(ONLY_MAINTAINABILITY)
+  expect(world.calls.some(call => call.startsWith('git grep '))).toBe(false)
 })
 
 test('a merge since the verdict head, or a verdict head that is not an ancestor of the head, gives a first package that says why', async ($, on) => {

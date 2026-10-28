@@ -639,7 +639,75 @@ export function markdownImportFound(search: { exitCode: number; stdout: string }
 // listing that could not be read, shown as null, counts as holding a link.
 export function instructionFileIsLink(raw: string | null): boolean {
   if (raw === null) return true
-  return raw.split('\0').some(field => field.startsWith(':') && field.split(' ')[1] === '120000')
+  return listingEntries(raw).some(entry => entry.mode === '120000')
+}
+
+// The mode and path of each record in a `git diff-tree -r -z` listing from the
+// empty tree. A record is a field that starts with a colon and gives the old
+// and new modes, then a field holding the path.
+function listingEntries(raw: string): { mode: string; path: string }[] {
+  const fields = raw.split('\0')
+  return fields.flatMap((field, at) => (field.startsWith(':') && at + 1 < fields.length ? [{ mode: field.split(' ')[1] ?? '', path: fields[at + 1]! }] : []))
+}
+
+// The paths in a listing of instruction files that end in `name` inside a
+// `.claude-plugin` folder, both compared in any case.
+function pluginFilesNamed(raw: string, name: string): string[] {
+  return listingEntries(raw).map(entry => entry.path).filter(path => {
+    const parts = path.toLowerCase().split('/')
+    return parts.at(-1) === name && parts.at(-2) === '.claude-plugin'
+  })
+}
+
+// The folders a listing of instruction files shows to be plugin roots: each
+// folder above a `.claude-plugin` folder that holds `plugin.json`, in any
+// case. The repository's root is the empty name. Claude Code loads a plugin's
+// commands, agents and skills from anywhere inside its root, so a Markdown file
+// there is not documentation.
+export function pluginRootsOf(raw: string): string[] {
+  return pluginFilesNamed(raw, 'plugin.json').map(path => path.split('/').slice(0, -2).join('/'))
+}
+
+// The paths of the marketplace manifests in a listing of instruction files.
+export function marketplacePathsOf(raw: string): string[] {
+  return pluginFilesNamed(raw, 'marketplace.json')
+}
+
+// The folders of the local plugins a marketplace manifest names, read from its
+// text and its path. A plugin's source that is a string is a folder relative to
+// the folder above the manifest's `.claude-plugin` folder; any other source
+// lies outside the repository. Null means the folders cannot be known for
+// certain: the manifest could not be read or parsed, it sets a `pluginRoot`
+// that changes how sources are read, or a source is absolute or climbs out
+// with `..`. A plugin can sit in such a folder without a `plugin.json` of its
+// own, which is why the listing alone does not find it.
+export function marketplaceRootsOf(text: string | null, path: string): string[] | null {
+  if (text === null) return null
+  let manifest: unknown
+  try {
+    manifest = JSON.parse(text)
+  } catch {
+    return null
+  }
+  if (typeof manifest !== 'object' || manifest === null) return null
+  const { plugins, metadata } = manifest as { plugins?: unknown; metadata?: { pluginRoot?: unknown } }
+  if (!Array.isArray(plugins) || metadata?.pluginRoot !== undefined) return null
+  const base = path.split('/').slice(0, -2)
+  const roots: string[] = []
+  for (const plugin of plugins) {
+    const source: unknown = (plugin as { source?: unknown } | null)?.source
+    if (typeof source !== 'string') continue
+    const folders = source.split('/').filter(folder => folder !== '' && folder !== '.')
+    if (source.startsWith('/') || folders.includes('..')) return null
+    roots.push([...base, ...folders].join('/'))
+  }
+  return roots
+}
+
+// Whether a path lies inside the folder `root`, where the empty name is the
+// repository's root.
+export function underRoot(path: string, root: string): boolean {
+  return root === '' || path.startsWith(`${root}/`)
 }
 
 // The kinds of the files in the output of
@@ -649,9 +717,10 @@ export function instructionFileIsLink(raw: string | null): boolean {
 // sorts its path. R and C sort both paths, and the file is a test or
 // documentation only when both paths are the same kind. Any other status, or
 // a record cut short, adds anything else and ends the reading, since one such
-// file already names every focused reviewer. When `docsAreInstructions` is
-// true, a file that would be documentation counts as anything else.
-export function changedKinds(raw: string, specDir: string, docsAreInstructions = false): FileKind[] {
+// file already names every focused reviewer. A path that would be
+// documentation counts as anything else when `isInstructions` says Claude Code
+// may load it as instructions.
+export function changedKinds(raw: string, specDir: string, isInstructions: (path: string) => boolean = () => false): FileKind[] {
   const fields = raw.split('\0')
   if (fields.at(-1) === '') fields.pop()
   const kinds: FileKind[] = []
@@ -661,7 +730,10 @@ export function changedKinds(raw: string, specDir: string, docsAreInstructions =
     const paths = /^[AMDT]$/.test(status) ? 1 : /^[RC]\d{0,3}$/.test(status) ? 2 : 0
     const named = fields.slice(at + 1, at + 1 + paths)
     if (paths === 0 || named.length < paths) return [...kinds, 'other']
-    const sorted = named.map(path => pathKind(path, specDir)).map(kind => (docsAreInstructions && kind === 'documentation' ? 'other' : kind))
+    const sorted = named.map(path => {
+      const kind = pathKind(path, specDir)
+      return kind === 'documentation' && isInstructions(path) ? 'other' : kind
+    })
     kinds.push(sorted.every(kind => kind === sorted[0]) ? sorted[0]! : 'other')
     at += 1 + paths
   }
