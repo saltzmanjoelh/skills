@@ -386,7 +386,9 @@ declare module 'claude-code' {
       // list; a task leaves it early when the transcript draws its notification
       // saying it completed, failed or was killed. Each task carries the time
       // builder first saw it, which survives a hot reload with the list; a
-      // task an older build stored without one is stamped when the hooks start.
+      // task an older build stored without one is stamped when the hooks start,
+      // or at the live ticker's next tick when a copy of the module from before
+      // a hot reload lands an unstamped list after the start.
       background: BackgroundTask[]
       // The session's own tool calls in progress, oldest first.
       calls: ForegroundCall[]

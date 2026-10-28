@@ -2375,13 +2375,19 @@ async function replaceBackground($: $, raw: unknown) {
 // ticker, because a copy of the module from before a hot reload keeps running
 // the turn end it had in flight, so a copy from a build before stamps can
 // land its unstamped list after this copy's start has stamped the list, and a
-// session that only waits sees no turn end that would stamp it again. When
-// every task is stamped, as after a reload over a list this build wrote,
-// nothing is written, so a call over such a list costs one read. The write
-// goes through wroteBackground, as every write of the list must.
-async function stampBackground($: $) {
+// session that only waits sees no turn end that would stamp it again. A
+// caller that has just read the list may hand it over as known, and the list
+// is then not read again. The ticker does so, because its tick has read the
+// list to decide whether anything runs. The start has no list of its own, so
+// it leaves known out and the list is read here. The guard reads the stamps
+// off the list in hand, while the write merges the list the store holds at
+// that moment, as every update does. When every task is stamped, as after a
+// reload over a list this build wrote, nothing is written, so a start over
+// such a list costs one read. The write goes through wroteBackground, as
+// every write of the list must.
+async function stampBackground($: $, known?: readonly BackgroundTask[]) {
   const now = await $.clock.now()
-  const tasks = await read($, background)
+  const tasks = known ?? await read($, background)
   if (tasks.every(task => seenAtOf(task) !== undefined)) return
   wroteBackground(await update($, background, list => mergeBackground(list, list, now)))
 }
@@ -2440,8 +2446,8 @@ async function liveTick($: $) {
     // stamp is written the task's time reads as nothing and never rises. The
     // call comes after the decisions above, so that no await parts them from
     // the check, and it is made only when the list this tick read holds such
-    // a task, so a tick over a stamped list costs no second read.
-    if (tasks.some(task => seenAtOf(task) === undefined)) await stampBackground($)
+    // a task. It is handed that list, so no tick reads the list a second time.
+    if (tasks.some(task => seenAtOf(task) === undefined)) await stampBackground($, tasks)
     return
   }
   if (idleRead === 'done') {
