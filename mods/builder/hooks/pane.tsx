@@ -317,8 +317,11 @@ export function secondRow(v: View, width?: number): string | null {
   if (v.pr !== null || !v.started) return abovePromptLine(v, width)
   const stage = stageWords(v.progress)
   return withWarning(v, width, room => fitLine(v, room, names => {
-    const shown = runningOrHold(v, names) ?? (v.background.length > 0 ? null : 'idle')
-    return shown === null ? `${PREFIX}${stage}` : `${PREFIX}${stage} · ${shown}`
+    const running = runningOrHold(v, names)
+    if (running !== null) return `${PREFIX}${stage} · ${running}`
+    // The hung warning already names the one background task in flight.
+    if (v.background.length > 0) return `${PREFIX}${stage}`
+    return `${PREFIX}${stage} · idle`
   }))
 }
 

@@ -2,10 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { agentSvg } from '../hooks/art'
 import { snapshotOf } from '../hooks/github'
-import {
-  abovePromptLine, agentCount, agentLines, agentRowOf, backgroundLines, counselLines, messageLines, messagesReadOf, NAMED_AFTER_MS, nextStep, paneTree, secondRow, STALE_WARNING,
-  timeUntil, type Elements, type View,
-} from '../hooks/pane'
+import { abovePromptLine, agentCount, agentLines, agentRowOf, backgroundLines, counselLines, messageLines, messagesReadOf, NAMED_AFTER_MS, nextStep, secondRow, STALE_WARNING, timeUntil, type View } from '../hooks/pane'
 import { resumePrompt, stuckPrompt } from '../hooks/prompts'
 import { clockTime, printable, timeOfDay } from '../hooks/text'
 import type { AgentCard, BackgroundTask, CounselQuestion, CounselVote, ForegroundCall, NextLook, Progress, Question } from '../types'
@@ -694,38 +691,4 @@ test('each background row in the pane shows how long its task has run', () => {
   expect(backgroundLines(waitingView(tasks))).toEqual(['running shell · run x (1m 7s)', 'running shell · run y (1h 5m)'])
   // A task with no start counts from now, and a clock earlier than the start reads zero.
   expect(backgroundLines(view({ background: [shell('x'), shell('y')], backgroundStarts: { y: NOW + 5000 } }))).toEqual(['running shell · run x (0s)', 'running shell · run y (0s)'])
-})
-
-// Elements that build plain data, so a test can read what the pane draws
-// without a surface.
-const dataUi = {
-  Box: (props: Record<string, unknown>) => ({ type: 'Box', props }),
-  Text: (props: Record<string, unknown>) => ({ type: 'Text', props }),
-  Button: (props: Record<string, unknown>) => ({ type: 'Button', props }),
-  Link: (props: Record<string, unknown>) => ({ type: 'Link', props }),
-} as unknown as Elements
-
-type Drawn = { type: string; props: Record<string, unknown> & { children?: unknown[] } }
-
-// Every Text a drawn tree holds, in order, with its text and its props.
-function textsIn(node: unknown): { text: string; props: Record<string, unknown> }[] {
-  if (Array.isArray(node)) return node.flatMap(textsIn)
-  if (typeof node !== 'object' || node === null) return []
-  const { type, props } = node as Drawn
-  const children = props.children ?? []
-  if (type === 'Text') return [{ text: children.filter(child => typeof child === 'string').join(''), props }]
-  return children.flatMap(textsIn)
-}
-
-test('the pane draws a probably hung task\'s background row in yellow, the other rows as before, and names the background work as the next step', () => {
-  const v = waitingView([[shell('x'), 15 * MINUTE], [shell('y'), MINUTE]])
-  const texts = textsIn(paneTree(dataUi, v, { fold: () => {}, output: () => {} }))
-  const rows = texts.filter(t => t.text.startsWith('running shell'))
-  expect(rows.map(t => t.text)).toEqual(['running shell · run x (15m 0s)', 'running shell · run y (1m 0s)'])
-  expect(rows[0]?.props.color).toBe('yellow')
-  expect('color' in (rows[1]?.props ?? {})).toBe(false)
-  expect(texts.find(t => t.text.startsWith('Next:'))?.text).toBe('Next: waiting on its background commands · next look in 7m.')
-  // One minute short of the limit, no row is yellow.
-  const fresh = textsIn(paneTree(dataUi, waitingView([[shell('x'), 14 * MINUTE]]), { fold: () => {}, output: () => {} }))
-  expect(fresh.filter(t => t.text.startsWith('running shell')).map(t => 'color' in t.props)).toEqual([false])
 })

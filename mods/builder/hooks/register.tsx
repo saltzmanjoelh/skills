@@ -13,7 +13,7 @@ import { afterReport, endedOf, plannedOf, progressIn, reportAnswer, reportOf, st
 import { changePrompt, ciEventContext, resumePrompt, stateLines, stuckPrompt } from './prompts'
 import { commitRecordsOf, decidedItems, factIn, packageText, secretIn, trendOf, trendStopLine, verdictsLine, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
-import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, firstPromptOf, generationIn, isCleanupSkill, newMemo, recordOf, startBackgrounded, startsPruned, startsSeen, startWithout, statusMemoIn, ticketIn, watchedSnapshotOf, type StatusFacts } from './status'
+import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, firstPromptOf, generationIn, isCleanupSkill, newMemo, recordOf, startBackgrounded, startsPruned, startsSeen, startWithout, statusMemoIn, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
 import { timeOfDay } from './text'
 
 type $ = EngineInterface
@@ -2354,10 +2354,6 @@ function couldBeListed(id: string): boolean {
   return backgroundIds === undefined || backgroundIds.has(id)
 }
 
-// The start times of the background tasks, as the backgroundStarts atom holds
-// them and the rules in hooks/status.ts take them.
-type Starts = Readonly<Record<string, number>>
-
 // Writes the start times as `change` leaves them, and writes nothing when the
 // change gives back the value it was given, which every rule in
 // hooks/status.ts that changes the starts does when it changes nothing. The
@@ -2375,7 +2371,7 @@ async function changeStarts($: $, change: (starts: Starts) => Starts) {
 // Gives each task the background list holds that has no start the time this
 // runs, as for any task builder never saw start. The session's start runs it
 // once the list is known.
-async function startListed($: $) {
+async function fillMissingStarts($: $) {
   const tasks = await read($, background)
   const now = await $.clock.now()
   await changeStarts($, starts => startsSeen(starts, tasks, now))
@@ -3341,7 +3337,7 @@ export const register: Register = on => {
     // task builder never saw start does. A task that has a start keeps it.
     // When the read or the write is refused, the live ticker started below
     // gives the task a start at its first tick.
-    await startListed($).catch(() => undefined)
+    await fillMissingStarts($).catch(() => undefined)
     void inLabelQueue(() => takeOffAnsweredLabels($))
     const readFile = readOnce($)
     await readIssueAddress($, readFile, e.cwd)

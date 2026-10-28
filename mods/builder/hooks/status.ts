@@ -142,7 +142,7 @@ export type StatusFacts = {
   agents: readonly AgentCard[]
   background: readonly BackgroundTask[]
   // When each background task started, keyed as taskKeyOf keys a task.
-  backgroundStarts: Readonly<Record<string, number>>
+  backgroundStarts: Starts
   calls: readonly ForegroundCall[]
   questions: readonly Question[]
   nextLook: NextLook | null
@@ -270,7 +270,7 @@ export function isProbablyHung(startedAt: number, now: number): boolean {
 
 // When each background task started, in milliseconds since the epoch, keyed
 // as taskKeyOf keys a task, as builder's backgroundStarts atom holds them.
-type Starts = Readonly<Record<string, number>>
+export type Starts = Readonly<Record<string, number>>
 
 // The start `starts` holds for `key`, or undefined when it holds none or
 // holds something other than a finite number. Only the object's own keys

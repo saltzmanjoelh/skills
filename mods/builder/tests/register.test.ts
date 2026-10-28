@@ -3942,11 +3942,11 @@ async function transcriptRow($: Engine, props: { origin: object; task?: object }
   return $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'UserMessage', props: { text: 'the task ended', isExpanded: true, ...props } as never })
 }
 
-// Counts the mod's writes of its background list.
-function backgroundWrites(on: On) {
+// Counts the mod's writes of its state under `key`.
+function stateWrites(on: On, key: string) {
   const writes = { count: 0 }
   on('state.set', ($, e, next) => {
-    if (e.plugin === 'builder' && e.key === 'background') writes.count += 1
+    if (e.plugin === 'builder' && e.key === key) writes.count += 1
     return next(e)
   })
   return writes
@@ -3959,7 +3959,7 @@ for (const status of ['completed', 'failed', 'killed']) {
     engine(on)
     fakeGitHub(on)
     stops(on)
-    const writes = backgroundWrites(on)
+    const writes = stateWrites(on, 'background')
     rowHost(on)
     const line = await abovePrompt($, on)
     await startOnly($)
@@ -3997,7 +3997,7 @@ for (const [what, props] of leftAlone) {
     engine(on)
     fakeGitHub(on)
     stops(on)
-    const writes = backgroundWrites(on)
+    const writes = stateWrites(on, 'background')
     rowHost(on)
     const line = await abovePrompt($, on)
     await startOnly($)
@@ -4082,7 +4082,7 @@ test('an ended subagent\'s notification row, and a row whose task already left t
   fakeGitHub(on)
   stops(on)
   const reads = backgroundReads(on)
-  const writes = backgroundWrites(on)
+  const writes = stateWrites(on, 'background')
   rowHost(on)
   const line = await abovePrompt($, on)
   await startOnly($)
@@ -4366,16 +4366,6 @@ test('a removal by a notification row that lands while a tick\'s read of the bac
   expect(late.seen).toBe(seen)
 })
 
-// Counts the mod's writes of the start times of its background tasks.
-function startWrites(on: On) {
-  const writes = { count: 0 }
-  on('state.set', ($, e, next) => {
-    if (e.plugin === 'builder' && e.key === 'backgroundStarts') writes.count += 1
-    return next(e)
-  })
-  return writes
-}
-
 // What a Bash call answers once it has moved to the background, as the
 // engine answers both a call started with run_in_background and one the
 // person moved there part way through.
@@ -4562,6 +4552,34 @@ test('on the pane, a background task that has run 15 minutes is drawn in yellow,
   expect(await rowOf('running monitor')).toEqual({ text: 'running monitor · Watch the build (1m 0s)', color: undefined })
 })
 
+test('on the pane of a watched pull request, the background rows keep their order and times, and the next step names the background work while a task is probably hung', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  stops(on)
+  const pane = await $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'Pane', requestId: 'builder', props: {} as never })
+  const rowsOf = async (start: string) => {
+    await pane.redraw()
+    return (await pane.findAll({ type: 'Text' })).filter(text => text.text.startsWith(start)).map(text => ({ text: text.text, color: text.props.color }))
+  }
+  const lintTask = { ...shellTask, id: 'b4', description: 'Lint the code', command: 'npm run lint' }
+  await watch($)
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [shellTask] } as never)
+  await clock.advance(14 * MINUTE)
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [shellTask, lintTask] } as never)
+  await clock.advance(MINUTE)
+
+  expect(await rowsOf('running shell')).toEqual([
+    { text: 'running shell · Run the suite (15m 0s)', color: 'yellow' },
+    { text: 'running shell · Lint the code (1m 0s)', color: undefined },
+  ])
+  // The line's hung warning names the oldest task, but the pane's next step
+  // still names the background work, as commands because both are shell
+  // commands.
+  expect(await rowsOf('Next:')).toEqual([{ text: 'Next: waiting on its background commands · next look in 5m.', color: undefined }])
+})
+
 test('a turn end or a tick that would change no start time writes none', async ($, on) => {
   const clock = mock.clock(on)
   mock.store(on)
@@ -4569,7 +4587,7 @@ test('a turn end or a tick that would change no start time writes none', async (
   fakeGitHub(on)
   stops(on)
   on('classic.SubagentStop', () => ({}))
-  const writes = startWrites(on)
+  const writes = stateWrites(on, 'backgroundStarts')
   await startOnly($)
 
   await $.classic.Stop({ stop_hook_active: false, background_tasks: [shellTask] } as never)

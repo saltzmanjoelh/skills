@@ -188,9 +188,9 @@ task, and is shown as one already.
 
 ## Failure modes
 
-- If builder's state is lost, as after a `/clear`, the start times restart
-  from when builder next sees each task, so elapsed times read low until the
-  tasks end.
+- If builder's state is lost, as after a restart of the session, the start
+  times restart from when builder next sees each task, so elapsed times read
+  low until the tasks end.
 - If a Bash result's background task id does not match the id in the engine's
   turn-end report, every task falls back to the time builder first saw it.
   Verification checks the match once against the real engine.
