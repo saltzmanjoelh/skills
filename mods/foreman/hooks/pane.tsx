@@ -9,7 +9,8 @@ import { BAR_SVG_HEIGHT, barSvg, fitBar, hasSvg, svgWidth, type Bar } from './ar
 import { linkOf } from './links'
 import { STAGES, stageLabel } from './stages'
 import {
-  busyCount, chipParts, chipText, fitChips, keyOf, moreWords, SEPARATOR, STATE_LOOK, staleWords, untilWords, type SubRow, type Tone,
+  busyCount, chipParts, chipText, fitChips, isProbablyHung, keyOf, moreWords, SEPARATOR, STATE_LOOK, staleWords, untilWords, waitWords, type SubRow,
+  type Tone,
 } from './subs'
 import { printable, timeOfDay } from './text'
 
@@ -149,12 +150,15 @@ function pullRequestWords(row: SubRow): string {
   return `#${pr.number} ${printable(pr.state, 20)} · checks ${printable(pr.checks, 20)}`
 }
 
-// The state in words with its reason, and how long the file has gone without
-// an update when it is stale.
+// The state in words with its reason, then the background task the sub
+// session waits on and how long it has run when the record names one, and
+// last how long the file has gone without an update when it is stale.
 export function stateWords(row: SubRow, now: number): string {
   const parts = [STATE_LOOK[row.record.state].words]
   const reason = printable(row.record.reason, 120)
   if (reason !== '') parts.push(reason)
+  const wait = waitWords(row, now)
+  if (wait !== null) parts.push(wait)
   if (row.isStale) parts.push(staleWords(row, now))
   return parts.join(SEPARATOR)
 }
@@ -184,10 +188,14 @@ function issueRow(ui: Elements, row: SubRow, address: string | null, presses: Pa
 // One sub session in the pane: the issue row, the bar, the state, and the
 // Nudge and Release buttons. A released one shows `released`, dimmed, in
 // place of its state and has no Nudge or Release button; its issue button
-// still opens it.
+// still opens it. The state is drawn in its own tone, or in the warning tone
+// once the sub session's oldest background task is probably hung, unless its
+// own tone is red, so the mark never makes a row look less urgent. A stale
+// state stays dimmed and uncolored either way.
 function subTree(ui: Elements, row: SubRow, now: number, address: string | null, columns: number | undefined, presses: PanePresses) {
   const { Box, Text, Button } = ui
-  const tone = STATE_LOOK[row.record.state].tone
+  const own = STATE_LOOK[row.record.state].tone
+  const tone: Tone = own !== 'red' && isProbablyHung(row, now) ? 'amber' : own
   const issue = issueRow(ui, row, address, presses)
   const bar = barRow(ui, row, columns)
   if (row.isReleased === true) {

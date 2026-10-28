@@ -7,7 +7,7 @@
 import type { ForemanFile } from '../types'
 import { recordIn, type SubRecord, type BuildState } from './record'
 import { stageLabel } from './stages'
-import { printable } from './text'
+import { clockTime, printable } from './text'
 
 // How old a file may be, against the read that listed it, before it is
 // stale: three minutes.
@@ -125,6 +125,38 @@ export function untilWords(ms: number): string | null {
 // How long a sub session's file has gone without an update, as a stale row
 // says it.
 export const staleWords = (row: SubRow, now: number) => `no update for ${ageWords(now - row.mtimeMs)}`
+
+// Whether a row's oldest background task is probably hung at `now`: from the
+// hung time builder wrote for it on, and not a millisecond before. Builder
+// alone holds the limit, so the row and builder's own line mark the task at
+// the same moment. A record that names no task, or whose hung time foreman
+// could not read, is never marked.
+export function isProbablyHung(row: SubRow, now: number): boolean {
+  const hungAt = row.record.oldestBackground?.hungAt
+  return typeof hungAt === 'number' && now >= hungAt
+}
+
+// What a row calls a background task whose description is empty.
+const NO_DESCRIPTION = 'a background task'
+
+// The most characters of a task's description a row shows, as many as
+// builder writes.
+const TASK_CHARS = 80
+
+// What a row says about the background work its sub session waits on, such as
+// `waiting on: full UI test run (7m 40s)`, with `, it may be hung` after it
+// once the task is probably hung, or null when the record names no task. The
+// description is cleaned before it is drawn, and one that is empty once
+// cleaned reads as `a background task`. The time runs from the start builder
+// wrote to `now`, in builder's duration format, and is never below zero, so a
+// clock that reads earlier than the start shows 0s.
+export function waitWords(row: SubRow, now: number): string | null {
+  const task = row.record.oldestBackground
+  if (task === undefined) return null
+  const description = printable(task.description, TASK_CHARS)
+  const words = `waiting on: ${description === '' ? NO_DESCRIPTION : description} (${clockTime(Math.max(now - task.startedAt, 0))})`
+  return isProbablyHung(row, now) ? `${words}, it may be hung` : words
+}
 
 // What a row with no issue yet shows where the key would go.
 export const NO_ISSUE = 'no issue yet'

@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { prStateOf, recordIn, STATES, verdictsIn, type SubRecord } from '../hooks/record'
+import { oldestBackgroundIn, prStateOf, recordIn, STATES, verdictsIn, type SubRecord } from '../hooks/record'
 
 // A whole record as builder writes it, which each test changes.
 const WHOLE = {
@@ -148,4 +148,38 @@ test('a background-only wait without a finite since reads as none, and one whose
   }
   expect(recordIn(text({ backgroundOnly: { since: 1500 } }))?.backgroundOnly).toEqual({ since: 1500, tasks: [] })
   expect(recordIn(text({ backgroundOnly: { since: 1500, tasks: 'run the tests' } }))?.backgroundOnly).toEqual({ since: 1500, tasks: [] })
+})
+
+test('the oldest background task is read with its description, its start and its hung time, and is absent until then', () => {
+  const task = { description: 'full UI test run', startedAt: 1500, hungAt: 1500 + 15 * 60_000 }
+  expect(recordIn(text({ oldestBackground: task }))?.oldestBackground).toEqual(task)
+  expect(oldestBackgroundIn(task)).toEqual(task)
+  // Only the three fields are kept, so a command a record holds is never read.
+  expect(recordIn(text({ oldestBackground: { ...task, command: 'npm test' } }))?.oldestBackground).toEqual(task)
+  // A record from a builder that writes no such field reads without one.
+  expect(recordIn(text())?.oldestBackground).toBeUndefined()
+  expect(recordIn(text())).not.toHaveProperty('oldestBackground')
+})
+
+test('an oldest background task that is missing, not an object, a list, or without a finite start reads as none', () => {
+  for (const bad of [undefined, null, 'soon', 3, true, [], [{ description: 'x', startedAt: 1500, hungAt: 2000 }], {},
+    { description: 'x', hungAt: 2000 }, { description: 'x', startedAt: 'then', hungAt: 2000 }, { description: 'x', startedAt: null, hungAt: 2000 },
+    { description: 'x', startedAt: Number.NaN, hungAt: 2000 }, { description: 'x', startedAt: Number.POSITIVE_INFINITY, hungAt: 2000 },
+    { description: 'x', startedAt: Number.NEGATIVE_INFINITY, hungAt: 2000 }]) {
+    expect(oldestBackgroundIn(bad)).toBeUndefined()
+    expect(recordIn(text({ oldestBackground: bad }))).not.toHaveProperty('oldestBackground')
+  }
+})
+
+test('an oldest background task whose hung time is not finite loses only the mark, and a description that is not a string reads as empty', () => {
+  for (const hungAt of ['later', null, Number.NaN, Number.POSITIVE_INFINITY, {}, undefined]) {
+    expect(oldestBackgroundIn({ description: 'full UI test run', startedAt: 1500, hungAt })).toEqual({ description: 'full UI test run', startedAt: 1500, hungAt: null })
+  }
+  expect(recordIn(text({ oldestBackground: { description: 'full UI test run', startedAt: 1500 } }))?.oldestBackground)
+    .toEqual({ description: 'full UI test run', startedAt: 1500, hungAt: null })
+  for (const description of [7, null, undefined, ['run'], { text: 'run' }]) {
+    expect(oldestBackgroundIn({ description, startedAt: 1500, hungAt: 2000 })).toEqual({ description: '', startedAt: 1500, hungAt: 2000 })
+  }
+  expect(recordIn(text({ oldestBackground: { description: '', startedAt: 1500, hungAt: 2000 } }))?.oldestBackground)
+    .toEqual({ description: '', startedAt: 1500, hungAt: 2000 })
 })

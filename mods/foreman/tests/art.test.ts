@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import { barCells, barSvg, BAR_SVG_HEIGHT, fitBar, hasSvg, isSvgSurface, svgWidth, xmlText, type Bar } from '../hooks/art'
 import { gitDirOf, ignoredLine, issueLinkIn, linkFactIn, linkOf, mainCheckoutOf, resolved, whyUnusable } from '../hooks/links'
 import { STAGES, stageLabel, type StageId } from '../hooks/stages'
-import { printable, timeOfDay } from '../hooks/text'
+import { clockTime, printable, timeOfDay } from '../hooks/text'
 import { BUILDER_DRAWN, BUILDER_STAGE_IDS } from './builder-drawn'
 
 // Foreman copies builder's drawing code and its issue link rules, because a
@@ -16,6 +16,7 @@ import { BUILDER_DRAWN, BUILDER_STAGE_IDS } from './builder-drawn'
 // Each copied function, by the name the fixture gives it.
 const COPIES: Record<string, (...args: never[]) => unknown> = {
   printable: printable as (...args: never[]) => unknown,
+  clockTime: clockTime as (...args: never[]) => unknown,
   timeOfDay: timeOfDay as (...args: never[]) => unknown,
   isSvgSurface: isSvgSurface as (...args: never[]) => unknown,
   xmlText: xmlText as (...args: never[]) => unknown,

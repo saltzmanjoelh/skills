@@ -40,6 +40,7 @@ function view(over: Partial<View> = {}): View {
     nextLook: { at: NOW + 7 * 60_000, isNewHead: false },
     counsel: [],
     background: [],
+    backgroundStarts: {},
     calls: [],
     started: false,
     progress: null,
@@ -296,17 +297,18 @@ test('with nothing watched the line names what runs, and there is no line when n
   // Finished agents, and words an older build saved, are not running.
   const finished = [typed('d', 'Explore', 0, { status: 'completed' }), typed('e', 'Explore', 0, { status: 'done' as AgentCard['status'] }), typed('f', 'Explore', 0, { isListed: false })]
   expect(abovePromptLine(view({ pr: null, nextLook: null, agents: finished }))).toBeNull()
-  expect(abovePromptLine(view({ pr: null, nextLook: null, background: [shell('x')] }))).toBe('builder: no pull request yet · 1 background command')
+  // A task with no start recorded counts from now.
+  expect(abovePromptLine(view({ pr: null, nextLook: null, background: [shell('x')] }))).toBe('builder: no pull request yet · waiting on: run x (0s)')
 })
 
-test('background work is counted as commands when every task is a shell command, and as tasks otherwise', () => {
+test('the line names the oldest background task, a shell command or another kind, and counts the others after it', () => {
   const none = { pr: null, nextLook: null }
-  expect(abovePromptLine(view({ ...none, background: [shell('x'), shell('y')] }))).toBe('builder: no pull request yet · 2 background commands')
+  expect(abovePromptLine(view({ ...none, background: [shell('x'), shell('y')] }))).toBe('builder: no pull request yet · waiting on: run x (0s) and 1 more')
   const monitor: BackgroundTask = { id: 'm', type: 'monitor', status: 'running', description: 'ci' }
-  expect(abovePromptLine(view({ ...none, background: [monitor] }))).toBe('builder: no pull request yet · 1 background task')
-  expect(abovePromptLine(view({ ...none, background: [monitor, shell('x')] }))).toBe('builder: no pull request yet · 2 background tasks')
+  expect(abovePromptLine(view({ ...none, background: [monitor] }))).toBe('builder: no pull request yet · waiting on: ci (0s)')
+  expect(abovePromptLine(view({ ...none, background: [monitor, shell('x')] }))).toBe('builder: no pull request yet · waiting on: ci (0s) and 1 more')
   expect(abovePromptLine(view({ agents: [typed('a', 'Explore', NOW)], background: [shell('x')] })))
-    .toBe('builder: #7 open · checks passed · 1 agent: Explore · 1 background command · next look in 7m')
+    .toBe('builder: #7 open · checks passed · 1 agent: Explore · waiting on: run x (0s) · next look in 7m')
 })
 
 test('a foreground call is named once it has run ten seconds, the earliest first, and not before', () => {
@@ -318,7 +320,7 @@ test('a foreground call is named once it has run ten seconds, the earliest first
   expect(abovePromptLine(view({ calls: two }))).toBe('builder: #7 open · checks passed · running: label early (1m 7s) · nothing to hand over · next look in 7m')
   // The call comes first, then the agents, then the background work.
   expect(abovePromptLine(view({ ...none, calls: [call('x', NOW - 10_000)], agents: [typed('a', 'Explore', NOW)], background: [shell('y')] })))
-    .toBe('builder: no pull request yet · running: label x (10s) · 1 agent: Explore · 1 background command')
+    .toBe('builder: no pull request yet · running: label x (10s) · 1 agent: Explore · waiting on: run y (0s)')
 })
 
 test('a long line drops agent names from the end first, then is cut, to the width the band gives', () => {
@@ -462,7 +464,8 @@ test('a dropped agent whose stored status is finished keeps that word, and a dro
 
 test('the pane lists background tasks with their status and description, else their command', () => {
   const tasks: BackgroundTask[] = [shell('x'), { id: 'y', type: 'shell', status: 'running', description: ' ', command: 'npm\u0007 test' }]
-  expect(backgroundLines(view({ background: tasks }))).toEqual(['running shell · run x', 'running shell · npm test'])
+  // Tasks with no start recorded count from now.
+  expect(backgroundLines(view({ background: tasks }))).toEqual(['running shell · run x (0s)', 'running shell · npm test (0s)'])
 })
 
 const reported = (over: Partial<Progress> = {}): Progress =>
@@ -577,6 +580,137 @@ test('a read of an agent\'s messages keeps only the lines the agent pane draws, 
   expect(messagesReadOf({ deny: 'no transcript was saved' })).toEqual({ reason: 'no transcript was saved' })
   expect(messagesReadOf('not a list')).toEqual({ reason: 'the engine answered something other than a list.' })
   expect(messagesReadOf(undefined)).toEqual({ reason: 'the engine answered something other than a list.' })
+})
+
+// A view whose background tasks started the given number of milliseconds
+// before NOW, keyed by their ids, unless the case says otherwise.
+function waitingView(tasks: [BackgroundTask, number][], over: Partial<View> = {}): View {
+  return view({ background: tasks.map(([task]) => task), backgroundStarts: Object.fromEntries(tasks.map(([task, ago]) => [task.id, NOW - ago])), ...over })
+}
+
+const MINUTE = 60_000
+const monitorTask: BackgroundTask = { id: 'm', type: 'monitor', status: 'running', description: 'ci' }
+
+test('the line names the oldest background task by its label and how long it has run, and counts the others after it', () => {
+  expect(abovePromptLine(waitingView([[shell('x'), 45_000], [shell('y'), 7 * MINUTE + 40_000], [shell('z'), 1000]])))
+    .toBe('builder: #7 open · checks passed · waiting on: run y (7m 40s) and 2 more · next look in 7m')
+  const none = { pr: null, nextLook: null }
+  expect(abovePromptLine(waitingView([[shell('x'), 45_000]], none))).toBe('builder: no pull request yet · waiting on: run x (45s)')
+  // The label is the command when the description is blank, cleaned of control characters.
+  const bare: BackgroundTask = { id: 'b', type: 'shell', status: 'running', description: ' ', command: 'npm\u0007 test' }
+  expect(abovePromptLine(waitingView([[bare, 67_000]], none))).toBe('builder: no pull request yet · waiting on: npm test (1m 7s)')
+  // A task with neither is named for what it is.
+  const empty: BackgroundTask = { id: 'e', type: 'shell', status: 'running', description: '' }
+  expect(abovePromptLine(waitingView([[empty, 1000]], none))).toBe('builder: no pull request yet · waiting on: a background task (1s)')
+  // A clock that reads earlier than the start shows zero.
+  expect(abovePromptLine(waitingView([[shell('x'), -5000]], none))).toBe('builder: no pull request yet · waiting on: run x (0s)')
+})
+
+test('a task that has run 14 minutes 59 seconds is not marked, and at 15 minutes the hung warning leads the line', () => {
+  expect(abovePromptLine(waitingView([[shell('x'), 14 * MINUTE + 59_000]])))
+    .toBe('builder: #7 open · checks passed · waiting on: run x (14m 59s) · next look in 7m')
+  expect(abovePromptLine(waitingView([[shell('x'), 15 * MINUTE - 1]])))
+    .toBe('builder: #7 open · checks passed · waiting on: run x (14m 59s) · next look in 7m')
+  expect(abovePromptLine(waitingView([[shell('x'), 15 * MINUTE]])))
+    .toBe('builder: run x has run 15m 0s, over 15 minutes; it may be hung · #7 open · checks passed · next look in 7m')
+  // With nothing watched and nothing else running, the line is the warning alone.
+  expect(abovePromptLine(waitingView([[shell('x'), 65 * MINUTE]], { pr: null, nextLook: null })))
+    .toBe('builder: run x has run 1h 5m, over 15 minutes; it may be hung')
+})
+
+test('once the oldest task is probably hung, the rest of the line counts only the others, by their own kinds, so the hung task is not named twice', () => {
+  const line = abovePromptLine(waitingView([[shell('x'), 20 * MINUTE], [shell('y'), MINUTE]]))!
+  expect(line).toBe('builder: run x has run 20m 0s, over 15 minutes; it may be hung · #7 open · checks passed · 1 more background command · next look in 7m')
+  expect(line.split('run x').length).toBe(2)
+  const none = { pr: null, nextLook: null }
+  expect(abovePromptLine(waitingView([[shell('x'), 20 * MINUTE], [shell('y'), MINUTE], [shell('z'), 1000]], none)))
+    .toBe('builder: run x has run 20m 0s, over 15 minutes; it may be hung · no pull request yet · 2 more background commands')
+  expect(abovePromptLine(waitingView([[shell('x'), 20 * MINUTE], [monitorTask, MINUTE]], none)))
+    .toBe('builder: run x has run 20m 0s, over 15 minutes; it may be hung · no pull request yet · 1 more background task')
+  expect(abovePromptLine(waitingView([[monitorTask, 20 * MINUTE], [shell('x'), MINUTE], [shell('y'), 1000]], none)))
+    .toBe('builder: ci has run 20m 0s, over 15 minutes; it may be hung · no pull request yet · 2 more background commands')
+  expect(abovePromptLine(waitingView([[shell('x'), 20 * MINUTE], [monitorTask, MINUTE], [shell('y'), 1000]], none)))
+    .toBe('builder: run x has run 20m 0s, over 15 minutes; it may be hung · no pull request yet · 2 more background tasks')
+})
+
+test('the hung warning is never cut, even at widths narrower than it, and the rest is fitted to the width it leaves', () => {
+  const v = waitingView([[shell('x'), 15 * MINUTE]])
+  const warning = 'builder: run x has run 15m 0s, over 15 minutes; it may be hung'
+  for (const width of [warning.length + 3, warning.length, 40, 20, 0]) {
+    expect(abovePromptLine(v, width)).toBe(warning)
+    expect(secondRow({ ...v, started: true }, width)).toBe(warning)
+  }
+  for (const width of [200, 100, 80]) {
+    const line = abovePromptLine(v, width)!
+    expect(line.startsWith(`${warning} · `)).toBe(true)
+    expect(line.length).toBeLessThanOrEqual(width)
+  }
+  expect(abovePromptLine(v, 80)).toBe(`${warning} · #7 open · chec…`)
+  // A width that cannot be read fits nothing, as it does without the warning.
+  expect(abovePromptLine(v, Number.NaN)).toBe(abovePromptLine(v))
+})
+
+test('a stale session\'s line has the stale warning first and the hung warning second without its prefix, and neither is cut', () => {
+  const v = waitingView([[shell('x'), 15 * MINUTE]], { stale: true })
+  const both = `${STALE_WARNING} · run x has run 15m 0s, over 15 minutes; it may be hung`
+  expect(abovePromptLine(v)).toBe(`${both} · #7 open · checks passed · next look in 7m`)
+  for (const width of [both.length + 3, both.length, 60, 0]) expect(abovePromptLine(v, width)).toBe(both)
+  expect(secondRow({ ...v, pr: null, nextLook: null, started: true, progress: reported() })).toBe(`${both} · spec`)
+  // A stale session whose task is not yet hung has the stale warning alone.
+  expect(abovePromptLine(waitingView([[shell('x'), MINUTE]], { stale: true })))
+    .toBe(`${STALE_WARNING} · #7 open · checks passed · waiting on: run x (1m 0s) · next look in 7m`)
+})
+
+test('a label longer than 40 characters is cut on the line and in the hung warning, and the pane\'s row keeps its longer label', () => {
+  const long: BackgroundTask = { id: 'l', type: 'shell', status: 'running', description: 'x'.repeat(100) }
+  const label = `${'x'.repeat(39)}…`
+  const none = { pr: null, nextLook: null }
+  expect(abovePromptLine(waitingView([[long, 5000]], none))).toBe(`builder: no pull request yet · waiting on: ${label} (5s)`)
+  expect(abovePromptLine(waitingView([[long, 16 * MINUTE]], none))).toBe(`builder: ${label} has run 16m 0s, over 15 minutes; it may be hung`)
+  expect(backgroundLines(waitingView([[long, 5000]]))).toEqual([`running shell · ${'x'.repeat(79)}… (5s)`])
+})
+
+test('once builder is started with nothing watched, the second row does not say idle while a background task is in flight', () => {
+  const none = { pr: null, nextLook: null, started: true, progress: reported() }
+  expect(secondRow(waitingView([[shell('x'), 15 * MINUTE]], none))).toBe('builder: run x has run 15m 0s, over 15 minutes; it may be hung · spec')
+  expect(secondRow(waitingView([[shell('x'), MINUTE]], none))).toBe('builder: spec · waiting on: run x (1m 0s)')
+  expect(secondRow(view(none))).toBe('builder: spec · idle')
+})
+
+test('with nothing else waited on, the next step names the background work, as commands or tasks by the line\'s rule', () => {
+  expect(nextStep(view({ background: [shell('x')] }))).toBe('waiting on its background command · next look in 7m')
+  expect(nextStep(view({ background: [shell('x'), shell('y')] }))).toBe('waiting on its background commands · next look in 7m')
+  expect(nextStep(view({ background: [monitorTask] }))).toBe('waiting on its background task · next look in 7m')
+  expect(nextStep(view({ background: [monitorTask, shell('x')] }))).toBe('waiting on its background tasks · next look in 7m')
+  expect(nextStep(view({ pr: { ...pullRequest(passed), state: 'MERGED' }, background: [shell('x')] }))).toBe('waiting on its background command · next look in 7m')
+  // With no look scheduled the next step still says so.
+  expect(nextStep(view({ nextLook: null, background: [shell('x')] }))).toBe('not polling')
+})
+
+test('running checks, a failed check, a pending merge, a question and running agents are still waited on while a background task runs', () => {
+  const background = [shell('x')]
+  expect(nextStep(view({ pr: pullRequest(running), background }))).toBe('waiting on checks · next look in 7m')
+  expect(nextStep(view({ pr: pullRequest(failed), background }))).toBe('waiting on a fix · next look in 7m')
+  expect(nextStep(view({ pr: pullRequest(passed, ['ready-to-merge']), background }))).toBe('waiting on the merge · next look in 7m')
+  expect(nextStep(view({ questions: [question], background }))).toBe('waiting on your answer · next look in 7m')
+  expect(nextStep(view({ agents: [agent('a')], background }))).toBe('1 agent running · next look in 7m')
+  expect(abovePromptLine(view({ pr: pullRequest(running), background })))
+    .toBe('builder: #7 open · checks pending · waiting on: run x (0s) · waiting on checks · next look in 7m')
+})
+
+test('on the line, where the background part or the hung warning already names the work, the next step says only when the next look is', () => {
+  expect(nextStep(view({ background: [shell('x')] }), true)).toBe('next look in 7m')
+  expect(abovePromptLine(view({ background: [shell('x')] }))).toBe('builder: #7 open · checks passed · waiting on: run x (0s) · next look in 7m')
+  expect(abovePromptLine(waitingView([[shell('x'), 15 * MINUTE]]))).not.toContain('its background')
+  // With nothing in flight the line still says there is nothing to hand over.
+  expect(nextStep(view(), true)).toBe('nothing to hand over · next look in 7m')
+})
+
+test('each background row in the pane shows how long its task has run', () => {
+  const tasks: [BackgroundTask, number][] = [[shell('x'), 67_000], [shell('y'), 65 * MINUTE]]
+  expect(backgroundLines(waitingView(tasks))).toEqual(['running shell · run x (1m 7s)', 'running shell · run y (1h 5m)'])
+  // A task with no start counts from now, and a clock earlier than the start reads zero.
+  expect(backgroundLines(view({ background: [shell('x'), shell('y')], backgroundStarts: { y: NOW + 5000 } }))).toEqual(['running shell · run x (0s)', 'running shell · run y (0s)'])
 })
 
 // The context cap (see docs/specs/implement-session-context-cap.md): the

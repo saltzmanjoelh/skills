@@ -17,7 +17,7 @@ import { afterReport, endedOf, plannedOf, progressIn, reportAnswer, reportOf, st
 import { changePrompt, ciEventContext, resumePrompt, stateLines, stuckPrompt } from './prompts'
 import { commitRecordsOf, decidedItems, factIn, packageText, secretIn, trendOf, trendStopLine, verdictsLine, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
-import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, newMemo, recordOf, statusMemoIn, ticketIn, watchedSnapshotOf, type StatusFacts } from './status'
+import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, newMemo, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
 import { timeOfDay } from './text'
 
 type $ = EngineInterface
@@ -33,6 +33,10 @@ const busy = atom({ plugin: 'builder', key: 'busy' } as const, false)
 const nextLook = atom({ plugin: 'builder', key: 'nextLook' } as const, null)
 const counsel = atom({ plugin: 'builder', key: 'counsel' } as const, [])
 const background = atom({ plugin: 'builder', key: 'background' } as const, [])
+// When each background task started, keyed as taskKeyOf keys a task. It lives
+// beside the background list and keeps the same lifetime: a hot reload and a
+// /clear keep both, and a restart starts both empty.
+const backgroundStarts = atom({ plugin: 'builder', key: 'backgroundStarts' } as const, {})
 const calls = atom({ plugin: 'builder', key: 'calls' } as const, [])
 const started = atom({ plugin: 'builder', key: 'started' } as const, false)
 const progress = atom({ plugin: 'builder', key: 'progress' } as const, null)
@@ -2577,14 +2581,55 @@ function couldBeListed(id: string): boolean {
   return backgroundIds === undefined || backgroundIds.has(id)
 }
 
+// Writes the start times as `change` leaves them, and writes nothing when the
+// change gives back the value it was given, which every rule in
+// hooks/status.ts that changes the starts does when it changes nothing. The
+// stored value is read first, because `update` writes even when its change
+// hands back the value it was given, and every write of a builder value asks
+// for the status file to be worked out again. The change is made again inside
+// `update`, on the value stored by then, so a write that landed between the
+// read and the update is kept. Both reads go through startsIn, so a rule only
+// ever sees start times that are finite numbers.
+async function changeStarts($: $, change: (starts: Starts) => Starts) {
+  const stored = startsIn(await read($, backgroundStarts))
+  if (change(stored) === stored) return
+  await update($, backgroundStarts, raw => change(startsIn(raw)))
+}
+
+// Gives each task the background list holds that has no start the time this
+// runs, as for any task builder never saw start. The session's start runs it
+// once the list is known.
+async function fillMissingStarts($: $) {
+  const tasks = await read($, background)
+  const now = await $.clock.now()
+  await changeStarts($, starts => startsSeen(starts, tasks, now))
+}
+
 // Replaces the background work with what a turn end reported, filtered by
 // backgroundOf, and keeps the line live while any of it is in flight. The
 // session's Stop and a subagent's SubagentStop both use it, so their filtering
 // cannot drift apart.
-async function replaceBackground($: $, raw: unknown) {
+//
+// The start times follow the list. Each listed task that has none takes this
+// moment, and only at the session's own turn end (`isOwnTurnEnd`) do the
+// starts of tasks that the list no longer holds go. A subagent's end never
+// drops a start, because it can come before the session's own report lists a
+// command the session has just moved to the background, whose start the call
+// wrote when it returned. The list is written first, where the live ticker
+// and the notification rows expect it, and the starts after it, so a listed
+// task is without a start only until the second write lands. A refused write
+// of the starts is caught, so the list stays written and the caller carries
+// on, and the live ticker gives the task a start at its next tick.
+async function replaceBackground($: $, raw: unknown, isOwnTurnEnd: boolean) {
   const tasks = backgroundOf(raw)
-  wroteBackground(await update($, background, () => tasks))
+  const listed = await update($, background, () => tasks)
+  wroteBackground(listed)
   if (tasks.length > 0) ensureLive($)
+  const now = await $.clock.now()
+  await changeStarts($, starts => {
+    const seen = startsSeen(starts, listed, now)
+    return isOwnTurnEnd ? startsPruned(seen, listed) : seen
+  }).catch(() => undefined)
 }
 
 // The ids of a background list.
@@ -2600,7 +2645,12 @@ function idsOf(tasks: readonly BackgroundTask[]): Set<string> {
 // answered, and an older copy would then hide a task the list now holds from
 // its row. The read fills the ids in only when none are known yet, as after a
 // hot reload, and the check comes after the read is answered, so a set that a
-// turn end wrote in the meantime is kept.
+// turn end wrote in the meantime is kept. Once the task is off the list, its
+// start goes too, under the key taskKeyOfId gives its id, which is the key
+// taskKeyOf gives a task that has one. The start goes after the list, so the
+// task is never listed without it; when its write is refused, the start stays
+// until the session's own turn end drops it with every other start whose task
+// is no longer listed.
 async function removeBackground($: $, id: string) {
   const tasks = await read($, background)
   if (!tasks.some(task => task.id === id)) {
@@ -2608,6 +2658,7 @@ async function removeBackground($: $, id: string) {
     return
   }
   wroteBackground(await update($, background, list => list.filter(task => task.id !== id)))
+  await changeStarts($, starts => startsWithout(starts, taskKeyOfId(id)))
 }
 
 async function liveTick($: $) {
@@ -2620,6 +2671,11 @@ async function liveTick($: $) {
   // answered out of order left behind are then put right within a tick, and
   // the redraw below lets the row of a task they had missed take it off.
   const tasks = await read($, background)
+  // The start times and the moment are read with the list, before the check
+  // below, because no await may come after it. They tell the tick whether a
+  // listed task has no start.
+  const starts = startsIn(await read($, backgroundStarts))
+  const now = await $.clock.now()
   const isAnythingRunning = tasks.length > 0
     || (await read($, agents)).some(isRunning)
     || (await read($, calls)).length > 0
@@ -2631,6 +2687,16 @@ async function liveTick($: $) {
   // could answer after it and be overruled by this read.
   if (backgroundWrites !== writes) return
   backgroundIds = idsOf(tasks)
+  // A listed task without a start takes this tick's moment. That puts right
+  // a turn end's refused write of the starts, a prune by an older copy of
+  // this module still running after a hot reload, and a session's turn end
+  // and a subagent's end that crossed, all within a second. The write is not
+  // awaited, so that nothing waits between the check above and the decisions
+  // below, and when it is refused the next tick finds the task still without
+  // a start and tries again.
+  if (startsSeen(starts, tasks, now) !== starts) {
+    void changeStarts($, stored => startsSeen(stored, tasks, now)).catch(() => undefined)
+  }
   if (isAnythingRunning) {
     idleRead = 'none'
     if (isListTick) startListRead($)
@@ -2670,9 +2736,21 @@ function startListRead($: $) {
 // Runs one of the session's own tool calls with a record of it in `calls`, so
 // the line can name it once it has run NAMED_AFTER_MS. A redraw is asked for
 // at that mark, so the name appears without a keystroke. The record goes when
-// the call returns, throws or is refused.
+// the call returns, throws or is refused. The tool.call hook is its only
+// caller, so the call answers what that hook answers.
+//
+// A call whose result names a background task, as one started with
+// run_in_background or moved to the background by the person part way
+// through does, goes on running as that task, so the task's start is the
+// call's start. It is written before the record of the call goes, so the
+// work is named by the call until then and by a task that keeps the call's
+// start from the next turn end that lists it. A turn end or a subagent's end
+// that lists the task first gives it a later start, and the earlier one is
+// kept, so this write still wins whichever lands first. A refused write is
+// caught and leaves the task to count from when a turn end first lists it,
+// and the call answers the same either way.
 let callCount = 0
-async function foreground<T>($: $, e: { tool: string; tool_use_id?: string }, call: () => Promise<T>): Promise<T> {
+async function foreground($: $, e: { tool: string; tool_use_id?: string }, call: () => Promise<ToolCallResult>): Promise<ToolCallResult> {
   callCount += 1
   const record: ForegroundCall = {
     id: e.tool_use_id ?? `call-${callCount}`,
@@ -2684,7 +2762,12 @@ async function foreground<T>($: $, e: { tool: string; tool_use_id?: string }, ca
   const named = $.clock.after(NAMED_AFTER_MS, () => $.ui.invalidate('ui.render'))
   ensureLive($)
   try {
-    return await call()
+    const ran = await call()
+    const taskId = backgroundTaskIdOf(ran)
+    if (typeof taskId === 'string' && taskId !== '') {
+      await changeStarts($, starts => startsBackgrounded(starts, taskKeyOfId(taskId), record.startedAt)).catch(() => undefined)
+    }
+    return ran
   } finally {
     named.cancel()
     await update($, calls, list => list.filter(c => c.id !== record.id)).catch(() => undefined)
@@ -2762,6 +2845,7 @@ async function view($: $): Promise<View> {
     nextLook: await read($, nextLook),
     counsel: counselQuestions,
     background: await read($, background),
+    backgroundStarts: startsIn(await read($, backgroundStarts)),
     calls: await read($, calls),
     started: (await read($, started)) === true,
     progress: progressIn(await read($, progress)),
@@ -2889,12 +2973,20 @@ async function route($: $, e: ToolCallInput, next: Next<'tool.call'>): Promise<T
   return next(e)
 }
 
+// The background task id a call's result carries, which it does when the call
+// was moved to the background, or undefined when it carries none. It is read
+// here alone, so whether a call went to the background and which task it
+// became are read the same way.
+function backgroundTaskIdOf(ran: ToolCallResult): unknown {
+  const result = ran.result as { backgroundTaskId?: unknown } | null | undefined
+  return typeof result === 'object' && result !== null ? result.backgroundTaskId : undefined
+}
+
 // Whether a call succeeded: it was not refused, did not end in an error, and
 // was not moved to the background, where a command has not finished yet.
 function succeeded(ran: ToolCallResult): boolean {
   if (ran.deny !== undefined || ran.isError === true) return false
-  const result = ran.result as { backgroundTaskId?: unknown } | null | undefined
-  return typeof result !== 'object' || result === null || result.backgroundTaskId === undefined
+  return backgroundTaskIdOf(ran) === undefined
 }
 
 // The status file for the foreman. A session whose first prompt holds a
@@ -3095,6 +3187,7 @@ async function statusFacts($: $): Promise<StatusFacts | null> {
     busy: (await read($, busy)) === true,
     agents: await read($, agents),
     background: await read($, background),
+    backgroundStarts: startsIn(await read($, backgroundStarts)),
     calls: await read($, calls),
     questions: await read($, questions),
     nextLook: await read($, nextLook),
@@ -3470,6 +3563,12 @@ export const register: Register = on => {
     // the line waiting on the owner for the rest of the session.
     await update($, calls, () => [])
     await update($, questions, list => list.map(q => (q.answered ? q : { ...q, answered: true })))
+    // A hot reload from a build that kept no start times finds tasks listed
+    // without one, and each takes the time this load first saw it, as any
+    // task builder never saw start does. A task that has a start keeps it.
+    // When the read or the write is refused, the live ticker started below
+    // gives the task a start at its first tick.
+    await fillMissingStarts($).catch(() => undefined)
     void inLabelQueue(() => takeOffAnsweredLabels($))
     const readFile = readOnce($)
     await readIssueAddress($, readFile, e.cwd)
@@ -3556,10 +3655,11 @@ export const register: Register = on => {
   })
 
   // The session's own turn end reports its background work in flight, which
-  // replaces what the last one reported. A subagent's Stop carries its
+  // replaces what the last one reported, and it is the end that drops the
+  // start times of tasks no longer listed. A subagent's Stop carries its
   // agent_id and says nothing about the session's work.
   on('classic.Stop', async ($, e, next) => {
-    if (e.agent_id === undefined) await replaceBackground($, e.background_tasks)
+    if (e.agent_id === undefined) await replaceBackground($, e.background_tasks, true)
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -3568,8 +3668,10 @@ export const register: Register = on => {
   // that finished while a subagent ran leaves the line sooner. Only a list is
   // taken: an older engine sends no field, and its absence says nothing about
   // the session's work, where the Stop's absence means nothing is in flight.
+  // It keeps the start times of tasks its list leaves out (see
+  // replaceBackground).
   on('classic.SubagentStop', async ($, e, next) => {
-    if (Array.isArray(e.background_tasks)) await replaceBackground($, e.background_tasks)
+    if (Array.isArray(e.background_tasks)) await replaceBackground($, e.background_tasks, false)
     return next(e)
   }).catch(($, e, next) => next(e))
 

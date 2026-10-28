@@ -3,8 +3,8 @@ import { expect, test } from 'claude-code/testing'
 import type { ForemanFile } from '../types'
 import { STATES } from '../hooks/record'
 import {
-  afterRead, ageWords, busyCount, byKeyThenFile, chipParts, chipText, fitChips, isStale, nextReadDelay, READ_LATER_MS, READ_SOON_MS, rowsOf,
-  STALE_MS, STATE_LOOK, untilWords,
+  afterRead, ageWords, busyCount, byKeyThenFile, chipParts, chipText, fitChips, isProbablyHung, isStale, nextReadDelay, READ_LATER_MS, READ_SOON_MS,
+  rowsOf, STALE_MS, STATE_LOOK, untilWords, waitWords,
 } from '../hooks/subs'
 
 const MIN = 60_000
@@ -189,4 +189,57 @@ test('a read keeps the kept text with the new time for an unchanged text, replac
   expect(after[1]).toBe(before[1])
   // The changed text that parses replaces the kept entry.
   expect(after[2]).toEqual(kept('c.json', changed, 30))
+})
+
+// A fresh working row whose record holds `oldestBackground` as given, read
+// as foreman reads a file.
+const waitingRow = (oldestBackground: unknown) =>
+  rowsOf([kept('a.json', record('ABC-1', 'working', { reason: '1 background task running.', oldestBackground }), 0)], 0)[0]!
+
+test('a row waiting on background work names its oldest task and how long it has run, in builder\'s duration format', () => {
+  const startedAt = 10 * MIN
+  const row = waitingRow({ description: 'full UI test run', startedAt, hungAt: startedAt + 15 * MIN })
+  expect(waitWords(row, startedAt)).toBe('waiting on: full UI test run (0s)')
+  expect(waitWords(row, startedAt + 45_000)).toBe('waiting on: full UI test run (45s)')
+  expect(waitWords(row, startedAt + 7 * MIN + 40_000)).toBe('waiting on: full UI test run (7m 40s)')
+  expect(waitWords(row, startedAt + 65 * MIN)).toBe('waiting on: full UI test run (1h 5m), it may be hung')
+})
+
+test('the elapsed time of a background task is never below zero when the clock reads earlier than its start', () => {
+  const startedAt = 10 * MIN
+  const row = waitingRow({ description: 'full UI test run', startedAt, hungAt: startedAt + 15 * MIN })
+  expect(waitWords(row, startedAt - 1)).toBe('waiting on: full UI test run (0s)')
+  expect(waitWords(row, 0)).toBe('waiting on: full UI test run (0s)')
+})
+
+test('a task\'s description is cleaned before it is drawn, and one that is empty reads as a background task', () => {
+  const at = 10 * MIN
+  const task = (description: unknown) => waitingRow({ description, startedAt: at, hungAt: at + 15 * MIN })
+  expect(waitWords(task('run \u001b[31mthe\u001b[0m\ntests'), at)).toBe('waiting on: run the tests (0s)')
+  expect(waitWords(task(''), at)).toBe('waiting on: a background task (0s)')
+  expect(waitWords(task(' \u001b[2J '), at)).toBe('waiting on: a background task (0s)')
+  expect(waitWords(task(7), at)).toBe('waiting on: a background task (0s)')
+  expect(waitWords(task('x'.repeat(100)), at)).toBe(`waiting on: ${'x'.repeat(79)}… (0s)`)
+})
+
+test('a row is probably hung from its hung time on and not a millisecond before', () => {
+  const startedAt = 10 * MIN
+  const hungAt = startedAt + 15 * MIN
+  const row = waitingRow({ description: 'full UI test run', startedAt, hungAt })
+  expect(isProbablyHung(row, hungAt - 1)).toBe(false)
+  expect(waitWords(row, hungAt - 1)).toBe('waiting on: full UI test run (14m 59s)')
+  expect(isProbablyHung(row, hungAt)).toBe(true)
+  expect(waitWords(row, hungAt)).toBe('waiting on: full UI test run (15m 0s), it may be hung')
+  expect(isProbablyHung(row, hungAt + 1)).toBe(true)
+})
+
+test('a row whose hung time could not be read is never marked, and a row without a background task has no wait words', () => {
+  const startedAt = 10 * MIN
+  const unmarked = waitingRow({ description: 'full UI test run', startedAt, hungAt: 'later' })
+  expect(unmarked.record.oldestBackground?.hungAt).toBeNull()
+  expect(isProbablyHung(unmarked, startedAt + 1000 * MIN)).toBe(false)
+  expect(waitWords(unmarked, startedAt + 65 * MIN)).toBe('waiting on: full UI test run (1h 5m)')
+  const plain = rowsOf([kept('a.json', record('ABC-1', 'working', { reason: 'building' }), 0)], 0)[0]!
+  expect(isProbablyHung(plain, 1000 * MIN)).toBe(false)
+  expect(waitWords(plain, 1000 * MIN)).toBeNull()
 })

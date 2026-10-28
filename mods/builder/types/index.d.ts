@@ -354,6 +354,15 @@ export type BuildStatus = {
   // that looks like a secret. A task's command is never written. An older
   // record has no such field.
   backgroundOnly?: { since: number; tasks: string[] }
+  // Present whenever at least one background task is in flight, whatever the
+  // state: the oldest task by its start time. `description` is cleaned and cut
+  // short like those in `backgroundOnly`, or the withheld text in place of one
+  // that looks like a secret, or the empty string when the task has none; a
+  // task's command is never written. `startedAt` is when builder recorded the
+  // task as started, and `hungAt` is when it counts as probably hung, its start
+  // plus builder's 15 minutes. The three stay fixed while the same task is the
+  // oldest. An older record has no such field.
+  oldestBackground?: { description: string; startedAt: number; hungAt: number }
 }
 
 // The permission prompts of one loop and one tool that are open: `loop` is
@@ -433,6 +442,15 @@ declare module 'claude-code' {
       // list; a task leaves it early when the transcript draws its notification
       // saying it completed, failed or was killed.
       background: BackgroundTask[]
+      // When each background task started, in milliseconds since the epoch,
+      // keyed as taskKeyOf in hooks/status.ts keys a task. A Bash call of the
+      // session's own that went to the background holds the time the call
+      // started; any other task holds the time a turn end first listed it. A
+      // start is dropped only when the session's own turn end reports a list
+      // without its task, or when a completion notice takes the task off the
+      // list. A subagent's end never drops one, even when its list leaves the
+      // task out.
+      backgroundStarts: Record<string, number>
       // The session's own tool calls in progress, oldest first.
       calls: ForegroundCall[]
       // Whether builder was started this session, by the open_pane tool or the

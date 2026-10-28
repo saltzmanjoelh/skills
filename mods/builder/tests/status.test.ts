@@ -3,8 +3,9 @@ import { expect, test } from 'claude-code/testing'
 import { snapshotOf } from '../hooks/github'
 import {
   afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite,
-  backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, ERROR_CHARS, errorLineOf, firstPromptOf, generationIn, isBackgroundOnly, isCleanupSkill, issueOf, newMemo,
-  recordOf, shownOrWithheld, STATE_RULES, stateOf, statusMemoIn, TASK_CHARS, taskKeyOf, ticketIn, WITHHELD, type StatusFacts,
+  backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, ERROR_CHARS, errorLineOf, firstPromptOf, generationIn, HUNG_AFTER_MS, hungAtOf, isBackgroundOnly, isCleanupSkill,
+  isProbablyHung, issueOf, newMemo, oldestTaskOf, recordOf, shownOrWithheld, startOf, startsBackgrounded, startsIn, startsPruned, startsSeen, startsWithout, STATE_RULES, stateOf,
+  statusMemoIn, TASK_CHARS, taskKeyOf, taskKeyOfId, ticketIn, WITHHELD, type StatusFacts,
 } from '../hooks/status'
 import type { AgentCard, BackgroundTask, StatusMemo } from '../types'
 
@@ -27,7 +28,7 @@ function memo(over: Partial<StatusMemo> = {}): StatusMemo & { ticket: string } {
 // The facts of an idle session with a ticket, unless the case says otherwise.
 function facts(over: Partial<StatusFacts> = {}): StatusFacts {
   return {
-    memo: memo(), progress: null, run: null, pr: null, busy: false, agents: [], background: [], calls: [], questions: [],
+    memo: memo(), progress: null, run: null, pr: null, busy: false, agents: [], background: [], backgroundStarts: {}, calls: [], questions: [],
     nextLook: null, usageHold: null, ...over,
   }
 }
@@ -278,7 +279,8 @@ test('a background-only wait shows in the record with its start and its tasks, a
   const record = recordOf(facts({ memo: waiting(NOW - 5000, ['b1']), background: [suite] }), NOW)
   expect(record.state).toBe('working')
   expect(record.backgroundOnly).toEqual({ since: NOW - 5000, tasks: ['Run the suite'] })
-  expect(Object.keys(record).slice(-2)).toEqual(['writtenAt', 'backgroundOnly'])
+  // The oldest task's field comes right after the background-only field.
+  expect(Object.keys(record).slice(-3)).toEqual(['writtenAt', 'backgroundOnly', 'oldestBackground'])
 })
 
 test('the field is left out while the turn runs, an agent runs, an own call runs, a permission prompt is open, or nothing runs', () => {
@@ -326,6 +328,7 @@ test('a task without an id is keyed by its kind and description, so it cannot ke
   const first = task('', 'Run the suite')
   const second = task('', 'Run the linter')
   expect(taskKeyOf(suite)).toBe('b1')
+  expect(taskKeyOf(suite)).toBe(taskKeyOfId(suite.id))
   expect(taskKeyOf(first)).not.toBe(taskKeyOf(second))
   expect(taskKeyOf(first)).not.toBe(taskKeyOf({ ...first, type: 'monitor' }))
   const m = waiting(NOW - 60_000, [taskKeyOf(first)])
@@ -361,9 +364,11 @@ test('a description that looks like a secret is withheld, before or after cleani
 
 test('two records with the same wait compare the same, and a new wait compares different', () => {
   const written = (since: number) => memo({ state: 'working', stateSince: NOW, backgroundWait: { since, keys: ['b1'] } })
-  const one = recordOf(facts({ memo: written(NOW), background: [suite] }), NOW)
-  expect(comparedTextOf(recordOf(facts({ memo: written(NOW), background: [suite] }), NOW + 60_000))).toBe(comparedTextOf(one))
-  expect(comparedTextOf(recordOf(facts({ memo: written(NOW + 1), background: [suite] }), NOW))).not.toBe(comparedTextOf(one))
+  // The task's start is recorded, so the oldest task's field holds still too.
+  const backgroundStarts = { b1: NOW }
+  const one = recordOf(facts({ memo: written(NOW), background: [suite], backgroundStarts }), NOW)
+  expect(comparedTextOf(recordOf(facts({ memo: written(NOW), background: [suite], backgroundStarts }), NOW + 60_000))).toBe(comparedTextOf(one))
+  expect(comparedTextOf(recordOf(facts({ memo: written(NOW + 1), background: [suite], backgroundStarts }), NOW))).not.toBe(comparedTextOf(one))
 })
 
 test('a stored wait reads back, and a memo without one or with a malformed one reads with none and is kept', () => {
@@ -377,4 +382,162 @@ test('a stored wait reads back, and a memo without one or with a malformed one r
     const read = statusMemoIn({ ...memo({ state: 'idle' }), backgroundWait: bad }, 'session-1')
     expect(read).toEqual(memo({ state: 'idle' }))
   }
+})
+
+test('a task counts as probably hung once it has run fifteen minutes from its start, and not a millisecond before', () => {
+  expect(HUNG_AFTER_MS).toBe(15 * 60_000)
+  expect(hungAtOf(NOW)).toBe(NOW + 15 * 60_000)
+  expect(isProbablyHung(NOW, NOW + 14 * 60_000 + 59_000)).toBe(false)
+  expect(isProbablyHung(NOW, NOW + 15 * 60_000 - 1)).toBe(false)
+  expect(isProbablyHung(NOW, NOW + 15 * 60_000)).toBe(true)
+  expect(isProbablyHung(NOW, NOW + 65 * 60_000)).toBe(true)
+  // A clock that reads earlier than the start has not reached the limit.
+  expect(isProbablyHung(NOW, NOW - 60_000)).toBe(false)
+})
+
+test('the stored start times are read leniently: a value that is not an object, or is a list, holds none, a start that is not a finite number is left out, and a sound value comes back as the same object', () => {
+  const sound = { b1: NOW - 5000, b2: NOW - 2000 }
+  expect(startsIn(sound)).toBe(sound)
+  expect(startsIn({})).toEqual({})
+  expect(startsIn({ b1: NOW - 5000, b2: Number.NaN, b3: 'soon', b4: Number.POSITIVE_INFINITY, b5: null })).toEqual({ b1: NOW - 5000 })
+  for (const bad of [null, undefined, 'soon', 3, [NOW - 5000]]) expect(startsIn(bad)).toEqual({})
+})
+
+test('a task\'s start is the one recorded under its key, and now when none is recorded or the stored value was not a finite number', () => {
+  const starts = startsIn({ b1: NOW - 5000, b2: Number.NaN, b3: 'soon', b4: Number.POSITIVE_INFINITY })
+  expect(startOf(suite, starts, NOW)).toBe(NOW - 5000)
+  for (const id of ['b2', 'b3', 'b4', 'b9']) expect(startOf(task(id, 'x'), starts, NOW)).toBe(NOW)
+  // Only the object's own keys count, so a key that every object inherits reads as none.
+  for (const id of ['toString', 'constructor', '__proto__', 'hasOwnProperty']) expect(startOf(task(id, 'x'), {}, NOW)).toBe(NOW)
+  // A stored value that is not an object holds no start, rather than stopping the read.
+  expect(startOf(suite, startsIn(null), NOW)).toBe(NOW)
+})
+
+test('the oldest task is the one with the earliest start, two equal starts keep the engine\'s order, and an empty list has none', () => {
+  const tasks = [task('b1', 'one'), task('b2', 'two'), task('b3', 'three')]
+  expect(oldestTaskOf(tasks, { b1: NOW - 1000, b2: NOW - 3000, b3: NOW - 2000 }, NOW)).toEqual({ task: tasks[1], startedAt: NOW - 3000 })
+  expect(oldestTaskOf(tasks, { b1: NOW - 1000, b2: NOW - 3000, b3: NOW - 3000 }, NOW)?.task).toBe(tasks[1])
+  expect(oldestTaskOf([tasks[2]!, tasks[1]!], { b2: NOW - 3000, b3: NOW - 3000 }, NOW)?.task).toBe(tasks[2])
+  // A task with no start counts from now, so any task with a start is older.
+  expect(oldestTaskOf(tasks, { b3: NOW - 10 }, NOW)).toEqual({ task: tasks[2], startedAt: NOW - 10 })
+  expect(oldestTaskOf(tasks, {}, NOW)).toEqual({ task: tasks[0], startedAt: NOW })
+  expect(oldestTaskOf([], { b1: NOW }, NOW)).toBeNull()
+})
+
+test('a first sighting adds a start of now, a task that has one keeps it, and a sighting that adds nothing gives back the same object', () => {
+  const starts = { b1: NOW - 60_000 }
+  const seen = startsSeen(starts, [suite, task('b2', 'two')], NOW)
+  expect(seen).toEqual({ b1: NOW - 60_000, b2: NOW })
+  expect(starts).toEqual({ b1: NOW - 60_000 })
+  expect(startsSeen(seen, [suite, task('b2', 'two')], NOW + 5000)).toBe(seen)
+  expect(startsSeen(seen, [], NOW + 5000)).toBe(seen)
+  // A stored start that was not a finite number is replaced, as a missing one is.
+  expect(startsSeen(startsIn({ b1: Number.NaN }), [suite], NOW)).toEqual({ b1: NOW })
+})
+
+test('a prune drops only the starts of tasks that are no longer listed, and gives back the same object when every start is still listed', () => {
+  const starts = { b1: NOW - 3000, b2: NOW - 2000, b3: NOW - 1000 }
+  expect(startsPruned(starts, [suite, task('b3', 'three')])).toEqual({ b1: NOW - 3000, b3: NOW - 1000 })
+  expect(startsPruned(starts, [])).toEqual({})
+  expect(startsPruned(starts, [suite, task('b2', ''), task('b3', ''), task('b4', '')])).toBe(starts)
+  expect(starts).toEqual({ b1: NOW - 3000, b2: NOW - 2000, b3: NOW - 1000 })
+})
+
+test('a backgrounded call\'s start is kept only when it is earlier than the one already stored', () => {
+  expect(startsBackgrounded({}, 'b1', NOW - 30_000)).toEqual({ b1: NOW - 30_000 })
+  const starts = { b1: NOW - 30_000 }
+  expect(startsBackgrounded(starts, 'b1', NOW - 60_000)).toEqual({ b1: NOW - 60_000 })
+  expect(startsBackgrounded(starts, 'b1', NOW)).toBe(starts)
+  expect(startsBackgrounded(starts, 'b1', NOW - 30_000)).toBe(starts)
+  expect(starts).toEqual({ b1: NOW - 30_000 })
+  // A stored value that was not a finite number is replaced, and a time that is not one is never stored.
+  expect(startsBackgrounded(startsIn({ b1: Number.NaN }), 'b1', NOW)).toEqual({ b1: NOW })
+  expect(startsBackgrounded(starts, 'b2', Number.NaN)).toBe(starts)
+})
+
+test('dropping one task\'s start removes only its key, and gives back the same object when the key has none', () => {
+  const starts = { b1: NOW - 3000, b2: NOW - 2000 }
+  expect(startsWithout(starts, 'b1')).toEqual({ b2: NOW - 2000 })
+  expect(startsWithout(starts, 'b9')).toBe(starts)
+  expect(startsWithout(starts, 'toString')).toBe(starts)
+  expect(starts).toEqual({ b1: NOW - 3000, b2: NOW - 2000 })
+})
+
+test('a task whose key is a name every object inherits keeps a start of its own like any other task', () => {
+  const odd = task('__proto__', 'odd')
+  const seen = startsSeen({}, [odd], NOW - 5000)
+  expect(Object.hasOwn(seen, '__proto__')).toBe(true)
+  expect(startOf(odd, seen, NOW)).toBe(NOW - 5000)
+  expect(startsSeen(seen, [odd], NOW)).toBe(seen)
+  expect(startOf(odd, startsBackgrounded(seen, '__proto__', NOW - 9000), NOW)).toBe(NOW - 9000)
+  expect(Object.keys(startsPruned(seen, [odd]))).toEqual(['__proto__'])
+  expect(Object.keys(startsPruned(seen, []))).toEqual([])
+  expect(Object.keys(startsWithout(seen, '__proto__'))).toEqual([])
+  const named = task('constructor', 'other')
+  expect(startOf(named, startsSeen({}, [named], NOW - 1), NOW)).toBe(NOW - 1)
+})
+
+test('two tasks without ids and with different descriptions keep separate starts', () => {
+  const first = task('', 'Run the suite')
+  const second = task('', 'Run the linter')
+  const starts = startsSeen(startsSeen({}, [first], NOW - 60_000), [first, second], NOW)
+  expect(startOf(first, starts, NOW + 1000)).toBe(NOW - 60_000)
+  expect(startOf(second, starts, NOW + 1000)).toBe(NOW)
+  expect(Object.keys(startsPruned(starts, [second]))).toEqual([taskKeyOf(second)])
+})
+
+test('the record names the oldest background task with its start and the moment it counts as probably hung', () => {
+  const background = [suite, task('b2', 'Watch the build', { type: 'monitor' })]
+  const record = recordOf(facts({ memo: waiting(NOW - 5000, ['b1', 'b2']), background, backgroundStarts: { b1: NOW - 60_000, b2: NOW - 120_000 } }), NOW)
+  expect(record.state).toBe('working')
+  expect(record.oldestBackground).toEqual({ description: 'Watch the build', startedAt: NOW - 120_000, hungAt: NOW - 120_000 + HUNG_AFTER_MS })
+  // The background-only field keeps its meaning and its order.
+  expect(record.backgroundOnly).toEqual({ since: NOW - 5000, tasks: ['Run the suite', 'Watch the build'] })
+  // A task with no start recorded counts from the write.
+  expect(recordOf(facts({ background: [suite] }), NOW).oldestBackground).toEqual({ description: 'Run the suite', startedAt: NOW, hungAt: NOW + HUNG_AFTER_MS })
+})
+
+test('the oldest task\'s field is written whenever a background task is in flight, whatever the state, and left out when none is', () => {
+  const backgroundStarts = { b1: NOW - 60_000 }
+  const oldest = { description: 'Run the suite', startedAt: NOW - 60_000, hungAt: hungAtOf(NOW - 60_000) }
+  const needsYou = recordOf(facts({ background: [suite], backgroundStarts, questions: [{ asked: 'Which?', at: NOW, answered: false, labelled: false }] }), NOW)
+  expect(needsYou.state).toBe('needs-you')
+  expect(needsYou.oldestBackground).toEqual(oldest)
+  expect('backgroundOnly' in needsYou).toBe(false)
+  const working = recordOf(facts({ background: [suite], backgroundStarts, busy: true }), NOW)
+  expect(working.state).toBe('working')
+  expect(working.oldestBackground).toEqual(oldest)
+  expect('backgroundOnly' in working).toBe(false)
+  const backgroundOnly = recordOf(facts({ memo: waiting(NOW - 5000, ['b1']), background: [suite], backgroundStarts }), NOW)
+  expect(backgroundOnly.backgroundOnly).toEqual({ since: NOW - 5000, tasks: ['Run the suite'] })
+  expect(backgroundOnly.oldestBackground).toEqual(oldest)
+  // A start left over for a task that is no longer listed writes nothing.
+  expect('oldestBackground' in recordOf(facts({ backgroundStarts }), NOW)).toBe(false)
+  expect('oldestBackground' in recordOf(facts({ busy: true }), NOW)).toBe(false)
+})
+
+test('the oldest task\'s description is cleaned and cut, a secret is withheld, and an empty one is written as the empty string, never as the command', () => {
+  const described = (description: string) => recordOf(facts({ busy: true, background: [task('b1', description)], backgroundStarts: { b1: NOW } }), NOW).oldestBackground?.description
+  expect(described('\u001b[31mtwo\u001b[0m\tlines\nhere')).toBe('two lines here')
+  const cut = described('x'.repeat(200)) ?? ''
+  expect(cut.length).toBe(TASK_CHARS)
+  expect(cut.endsWith('…')).toBe(true)
+  expect(described(`deploy with ghp_${'A'.repeat(36)}`)).toBe(WITHHELD)
+  expect(described(`key sk-\u0007${'b'.repeat(30)}`)).toBe(WITHHELD)
+  expect(described('')).toBe('')
+  expect(described('   ')).toBe('')
+  expect(JSON.stringify(recordOf(facts({ busy: true, background: [task('b1', '')], backgroundStarts: { b1: NOW } }), NOW))).not.toContain('secret-command')
+})
+
+test('the compared text stays the same as time passes while the same task is the oldest, and changes when another task becomes the oldest', () => {
+  const written = memo({ state: 'working', stateSince: NOW, backgroundWait: { since: NOW, keys: ['b1', 'b2'] } })
+  const backgroundStarts = { b1: NOW - 60_000, b2: NOW - 30_000 }
+  const both = [suite, task('b2', 'Build')]
+  const textAt = (now: number, over: Partial<StatusFacts>) => comparedTextOf(recordOf(facts({ memo: written, backgroundStarts, ...over }), now))
+  // Twenty minutes apart, across the moment the task counts as probably hung,
+  // with the session's own turn running and with only background work running.
+  expect(textAt(NOW + 20 * 60_000, { background: both, busy: true })).toBe(textAt(NOW, { background: both, busy: true }))
+  expect(textAt(NOW + 20 * 60_000, { background: both })).toBe(textAt(NOW, { background: both }))
+  // The oldest task ended, so the next one is named and the text changes.
+  expect(textAt(NOW, { background: [task('b2', 'Build')], busy: true })).not.toBe(textAt(NOW, { background: both, busy: true }))
 })

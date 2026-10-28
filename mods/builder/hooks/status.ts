@@ -1,9 +1,12 @@
 // The rules of the status file builder writes for the foreman: which session
 // writes one, where it goes, which of the six states holds and why, the
 // record itself, and how each event changes the memo the record is worked
-// out from. Nothing here touches the engine; hooks/register.tsx reads the
-// state, calls these and writes the file. Every function is pure, so the
-// tests can check each rule without the engine.
+// out from. It also holds the rules for the start times of background tasks
+// and the rule that marks one as probably hung, which the line above the
+// prompt and the pane share with the record. Nothing here touches the
+// engine; hooks/register.tsx reads the state, calls these and writes the
+// file. Every function is pure, so the tests can check each rule without the
+// engine.
 
 import type { SessionMessage } from 'claude-code'
 
@@ -141,6 +144,8 @@ export type StatusFacts = {
   busy: boolean
   agents: readonly AgentCard[]
   background: readonly BackgroundTask[]
+  // When each background task started, keyed as taskKeyOf keys a task.
+  backgroundStarts: Starts
   calls: readonly ForegroundCall[]
   questions: readonly Question[]
   nextLook: NextLook | null
@@ -243,7 +248,128 @@ void RULES_MATCH_THE_STATE
 // description with a character between them that neither holds. So tasks
 // without ids that differ cannot keep one wait alive.
 export function taskKeyOf(task: BackgroundTask): string {
-  return task.id !== '' ? task.id : `${task.type}\u0000${task.description}`
+  return task.id !== '' ? taskKeyOfId(task.id) : `${task.type}\u0000${task.description}`
+}
+
+// The key taskKeyOf gives a task that has an id. The hooks that write or drop
+// a start time knowing only the task's id, before the task is listed or once a
+// completion notice names it, build their key here, so that they and
+// taskKeyOf cannot drift apart.
+export function taskKeyOfId(id: string): string {
+  return id
+}
+
+// How long a background task runs, from its start, before builder counts it
+// as probably hung: 15 minutes. It mirrors the moment foreman, at its default
+// `idleMinutes` of 5, wakes the parent about a session that waits only on
+// background work. It does not follow a different `idleMinutes` setting, so
+// at any other setting the mark and foreman's wake come at different moments.
+export const HUNG_AFTER_MS = 15 * 60_000
+
+// The moment a task that started at `startedAt` counts as probably hung.
+export function hungAtOf(startedAt: number): number {
+  return startedAt + HUNG_AFTER_MS
+}
+
+// Whether a task that started at `startedAt` counts as probably hung at
+// `now`: once it has run HUNG_AFTER_MS or longer. The line and the pane both
+// ask this rule, so given the same moment they mark the same task. The status
+// record does not ask it: recordOf writes `hungAt` from hungAtOf, the moment
+// this rule turns true, and foreman's row repeats the `now >= hungAt`
+// comparison in its own isProbablyHung, so a change to the comparison has to
+// be made in both mods.
+export function isProbablyHung(startedAt: number, now: number): boolean {
+  return now >= hungAtOf(startedAt)
+}
+
+// When each background task started, in milliseconds since the epoch, keyed
+// as taskKeyOf keys a task, as builder's backgroundStarts atom holds them.
+export type Starts = Readonly<Record<string, number>>
+
+// The start times as builder's state holds them, read without trusting them,
+// as every value builder reads from its state is: a value that is not an
+// object, or is a list, holds no start, and an entry whose start is not a
+// finite number is left out. The same object comes back when every entry is
+// a finite number, so a caller can still tell that a rule changed nothing.
+export function startsIn(raw: unknown): Starts {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return {}
+  const entries = Object.entries(raw)
+  const kept = entries.filter(([, at]) => isFiniteTime(at))
+  return kept.length === entries.length ? raw as Starts : Object.fromEntries(kept)
+}
+
+// The start `starts` holds for `key`, or undefined when it holds none. Only
+// the object's own keys count, so a key such as `__proto__` or `toString`
+// never reads what every object inherits.
+function startAt(starts: Starts, key: string): number | undefined {
+  return Object.hasOwn(starts, key) ? starts[key] : undefined
+}
+
+// `starts` with `key` set to `at`. The copy is built from its entries rather
+// than by assignment, so a key such as `__proto__` becomes an own key like any
+// other instead of changing the copy's prototype.
+function withStart(starts: Starts, key: string, at: number): Starts {
+  return Object.fromEntries([...Object.entries(starts), [key, at]])
+}
+
+// When a task started: the start `starts` holds under the task's key, or
+// `now` when it holds none.
+export function startOf(task: BackgroundTask, starts: Starts, now: number): number {
+  return startAt(starts, taskKeyOf(task)) ?? now
+}
+
+// The task with the earliest start and that start, or null when the list is
+// empty. Only a strictly earlier start replaces the task picked so far, so of
+// two tasks with the same start the one the engine listed first is the
+// oldest.
+export function oldestTaskOf(tasks: readonly BackgroundTask[], starts: Starts, now: number): { task: BackgroundTask; startedAt: number } | null {
+  let oldest: { task: BackgroundTask; startedAt: number } | null = null
+  for (const task of tasks) {
+    const startedAt = startOf(task, starts, now)
+    if (oldest === null || startedAt < oldest.startedAt) oldest = { task, startedAt }
+  }
+  return oldest
+}
+
+// The starts once a turn end has listed `tasks` at `now`: each listed task
+// that has no start takes `now`, and every other start is kept. The same
+// object comes back when no task needed one, so the caller can skip a write
+// that would change nothing.
+export function startsSeen(starts: Starts, tasks: readonly BackgroundTask[], now: number): Starts {
+  let seen = starts
+  for (const task of tasks) {
+    const key = taskKeyOf(task)
+    if (startAt(seen, key) === undefined) seen = withStart(seen, key, now)
+  }
+  return seen
+}
+
+// The starts of the tasks still listed in `tasks`, with every other start
+// dropped. The same object comes back when every start is still listed.
+export function startsPruned(starts: Starts, tasks: readonly BackgroundTask[]): Starts {
+  const listed = new Set(tasks.map(taskKeyOf))
+  const entries = Object.entries(starts)
+  const kept = entries.filter(([key]) => listed.has(key))
+  return kept.length === entries.length ? starts : Object.fromEntries(kept)
+}
+
+// The starts once a call that started at `at` went to the background as the
+// task keyed `key`. The earlier of `at` and the start already stored is kept,
+// so two writes that cross still keep the true start. The same object comes
+// back when the stored start is already as early, or when `at` is not a
+// finite number.
+export function startsBackgrounded(starts: Starts, key: string, at: number): Starts {
+  const stored = startAt(starts, key)
+  if (!isFiniteTime(at) || (stored !== undefined && stored <= at)) return starts
+  return withStart(starts, key, at)
+}
+
+// The starts without the one stored under `key`. The same object comes back
+// when there is none.
+export function startsWithout(starts: Starts, key: string): Starts {
+  const entries = Object.entries(starts)
+  const kept = entries.filter(([stored]) => stored !== key)
+  return kept.length === entries.length ? starts : Object.fromEntries(kept)
 }
 
 // Whether background work is the only thing running: the session's own turn
@@ -302,6 +428,11 @@ function verdictsAtHead(s: Snapshot): Verdicts | null {
 // built in one fixed order, so two records that hold the same values print
 // the same text. The background-only wait is the one the memo holds, which
 // the writer works out with backgroundWaitOf and stores before it calls this.
+// The oldest background task is named whenever one is in flight, whatever
+// the state, by its description as shownOrWithheld shows it, never by its
+// command, with its start and the moment it counts as probably hung. Those
+// stay fixed while the same task is the oldest, so the field asks for no
+// write as time passes.
 export function recordOf(f: StatusFacts, writtenAt: number): BuildStatus {
   const { state, reason } = stateOf(f)
   const s = watchedOf(f)
@@ -324,6 +455,10 @@ export function recordOf(f: StatusFacts, writtenAt: number): BuildStatus {
   }
   const wait = f.memo.backgroundWait
   if (state === 'working' && isBackgroundOnly(f) && wait !== null) record.backgroundOnly = { since: wait.since, tasks: taskDescriptionsOf(f, wait.keys) }
+  const oldest = oldestTaskOf(f.background, f.backgroundStarts, writtenAt)
+  if (oldest !== null) {
+    record.oldestBackground = { description: shownOrWithheld(oldest.task.description, TASK_CHARS), startedAt: oldest.startedAt, hungAt: hungAtOf(oldest.startedAt) }
+  }
   if (f.memo.cleanup !== null) record.cleanup = { failedCalls: f.memo.cleanup.failedCalls, lastError: f.memo.cleanup.lastError }
   return record
 }
