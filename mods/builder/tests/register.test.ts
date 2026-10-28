@@ -1083,6 +1083,23 @@ test('the spec directory comes from the base branch\'s CLAUDE.md, not the branch
   expect(world.calls).toContain('git show origin/main:CLAUDE.md')
 })
 
+test('when the base branch\'s CLAUDE.md imports a documentation file, a change to documentation alone names every focused reviewer', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  fakeFiles(on)
+  await watch($)
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: C, message: 'Reword the guide' }]
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(A, 'REQUEST_CHANGES', 'APPROVE')] })
+  world.nameStatus = 'M\0docs/guide.md\0'
+
+  world.baseClaude = '# Project\n'
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(ONLY_MAINTAINABILITY)
+  world.baseClaude = '# Project\n\nFollow @docs/rules.md.\n'
+  expect((await packageAnswer($)).split('\n').at(-1)).toBe(FOUR_FOCUSED)
+})
+
 test('a merge since the verdict head, or a verdict head that is not an ancestor of the head, gives a first package that says why', async ($, on) => {
   mock.clock(on)
   mock.store(on)

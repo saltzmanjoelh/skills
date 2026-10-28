@@ -125,9 +125,11 @@ function earlierLines(facts: PackageFacts): string[] {
       ...facts.earlier.flatMap(full),
     ]
   }
-  const since = facts.since
-  let index = facts.earlier.length - 1
-  while (index > 0 && facts.earlier[index]!.sha !== since) index--
+  // The verdict head is always the commit of one of the earlier reviews,
+  // because verdictHeadOf picks it from the same list. Should it ever not be,
+  // the newest review of all is the one repeated in full.
+  const at = facts.earlier.map(round => round.sha).lastIndexOf(facts.since)
+  const index = at === -1 ? facts.earlier.length - 1 : at
   const newest = facts.earlier[index]!
   const older = facts.earlier.filter((_, i) => i !== index).map(round => {
     const verdicts = verdictsOf({ body: round.body, commit: { oid: round.sha } })
@@ -574,6 +576,22 @@ export function pathKind(path: string, specDir: string): FileKind {
   return 'other'
 }
 
+// Whether a CLAUDE.md imports, with Claude Code's `@path` syntax, a file that
+// `pathKind` would sort as documentation. Claude Code loads an imported file
+// as instructions, and an imported file can import others in turn, which the
+// tool cannot follow without reading each one, so then no documentation can be
+// sorted for certain. An `@` counts only at the start of a line or after
+// white space, so an email address is not an import. Reading too much as an
+// import only costs reviewer runs.
+export function claudeImportsDocumentation(claude: string | null, specDir: string): boolean {
+  if (claude === null) return false
+  for (const match of claude.matchAll(/(?:^|\s)@([^\s`'"()<>\[\]]+)/g)) {
+    const path = match[1]!.replace(/^(\.\/)+/, '').replace(/[.,;:!?]+$/, '')
+    if (path !== '' && pathKind(path, specDir) === 'documentation') return true
+  }
+  return false
+}
+
 // The kinds of the files in the output of
 // `git diff --name-status -z -M`, one per changed file, in order: each record
 // is a status and a path, or for a rename or a copy a status, the old path and
@@ -581,8 +599,9 @@ export function pathKind(path: string, specDir: string): FileKind {
 // sorts its path. R and C sort both paths, and the file is a test or
 // documentation only when both paths are the same kind. Any other status, or
 // a record cut short, adds anything else and ends the reading, since one such
-// file already names every focused reviewer.
-export function changedKinds(raw: string, specDir: string): FileKind[] {
+// file already names every focused reviewer. When `docsAreInstructions` is
+// true, a file that would be documentation counts as anything else.
+export function changedKinds(raw: string, specDir: string, docsAreInstructions = false): FileKind[] {
   const fields = raw.split('\0')
   if (fields.at(-1) === '') fields.pop()
   const kinds: FileKind[] = []
@@ -592,7 +611,7 @@ export function changedKinds(raw: string, specDir: string): FileKind[] {
     const paths = /^[AMDT]$/.test(status) ? 1 : /^[RC]\d{0,3}$/.test(status) ? 2 : 0
     const named = fields.slice(at + 1, at + 1 + paths)
     if (paths === 0 || named.length < paths) return [...kinds, 'other']
-    const sorted = named.map(path => pathKind(path, specDir))
+    const sorted = named.map(path => pathKind(path, specDir)).map(kind => (docsAreInstructions && kind === 'documentation' ? 'other' : kind))
     kinds.push(sorted.every(kind => kind === sorted[0]) ? sorted[0]! : 'other')
     at += 1 + paths
   }

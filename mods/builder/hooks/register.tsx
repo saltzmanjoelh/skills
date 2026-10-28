@@ -15,7 +15,7 @@ import { afterComparison, afterLoad, dueComparisons, isStale, LOADED_PATHS, load
 import { AGENT_PANE, agentPaneTree, bandTree, isDrawable, messagesReadOf, NAMED_AFTER_MS, PANE, paneTree, secondRow, type Elements, type MessagesRead, type View } from './pane'
 import { ADVERSARIAL_REVIEWER, afterReport, endedOf, FOCUSED_REVIEWERS, focusedReviewersFor, plannedOf, progressIn, reportAnswer, reportOf, stageLabel, STAGES, type ReportInput } from './progress'
 import { changePrompt, ciEventContext, resumePrompt, stateLines, stuckPrompt } from './prompts'
-import { changedKinds, commitRecordsOf, decidedItems, factIn, isFullSha, isUpForCheck, LATER_CONTEXT_LINES, packageText, reviewedHeadOf, secretIn, specDirOf, trendOf, trendStopLine, verdictHeadOf, verdictsLine, type CommitRecord, type EarlierRound, type PackageInput } from './review'
+import { changedKinds, claudeImportsDocumentation, commitRecordsOf, decidedItems, factIn, isFullSha, isUpForCheck, LATER_CONTEXT_LINES, packageText, reviewedHeadOf, secretIn, specDirOf, trendOf, trendStopLine, verdictHeadOf, verdictsLine, type CommitRecord, type EarlierRound, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
 import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, newMemo, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
 import { timeOfDay } from './text'
@@ -2000,7 +2000,8 @@ async function packageShapeOf($: $, dir: string, base: string, head: string, ear
   ])
   if (sinceDiff === null) return { refused: 'git could not produce the change since the verdict head (it failed, or its output was over 4 MiB and cut off)' }
   if (nameStatus === null) return { refused: 'git could not list the files changed since the reviewed head (it failed, or its output was over 4 MiB and cut off)' }
-  const kinds = reviewedHead === null ? null : changedKinds(nameStatus, specDirOf(baseClaude))
+  const specDir = specDirOf(baseClaude)
+  const kinds = reviewedHead === null ? null : changedKinds(nameStatus, specDir, claudeImportsDocumentation(baseClaude, specDir))
   const check = !afterCheck && isUpForCheck(verdictHead, reviewedHead, records, earlier)
   return { kind: 'later', since: verdictHead, sinceDiff, check, reviewers: focusedReviewersFor(kinds) }
 }

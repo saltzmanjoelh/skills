@@ -77,8 +77,14 @@ same answer the session got.
   directory or under `docs/`, or is `README.md` at the root, and it is not an
   instruction file. An instruction file is any path with a `.claude` or
   `.claude-plugin` folder, or named `CLAUDE.md`, `CLAUDE.local.md`,
-  `AGENTS.md` or `SKILL.md`. Such files count as anything else wherever they
-  are, because Claude Code loads them as instructions.
+  `AGENTS.md` or `SKILL.md`, in any case, because on a filesystem that
+  ignores case another spelling may be the same file. Such files count as
+  anything else wherever they are, because Claude Code loads them as
+  instructions.
+- When the base branch's `CLAUDE.md` imports, with an `@path` line, a file
+  that would be documentation, no file counts as documentation, because
+  Claude Code loads an imported file as instructions and an imported file can
+  import others that the tool does not read.
 - The spec directory is read with `factIn` from
   `git show origin/<base>:CLAUDE.md`. A failed read, a missing or empty fact,
   an absolute path, a `..` folder, or a value that comes down to the root
