@@ -603,7 +603,9 @@ This is the only list of cases in which the parent speaks to the person:
 - A one-line message this skill asks for elsewhere, including when it starts
   or proposes a session.
 - A question to the person that this skill asks for, or one a sub session
-  asks the person, which the parent relays.
+  asks the person. For a sub session's question, point the person in one
+  line, naming the issue, at the sub session's own open question, which is
+  where their answer takes effect, and do nothing with the answer itself.
 - A milestone that a foreman line reports, in one line: a pull request
   opened, a verdict pair, a merge, or a close without merging.
 - A sub session's line that one area's fixes reached a streak of 3, or that
