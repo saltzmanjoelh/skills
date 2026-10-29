@@ -35,6 +35,10 @@ const tickets = atom({ plugin: 'foreman', key: 'tickets' } as const, TICKETS_EMP
 const turnRuns = atom({ plugin: 'foreman', key: 'turnRuns' } as const, false)
 const quietLine = atom({ plugin: 'foreman', key: 'quietLine' } as const, null)
 
+// The spending builder publishes for the session it runs in, which ownSpend
+// reads. Builder writes it; foreman only reads it.
+const builderUsage = atom({ plugin: 'builder', key: 'usage' } as const, null)
+
 // How many lines the log keeps.
 export const LOG_KEPT = 20
 
@@ -467,10 +471,13 @@ async function ensureArmed($: $) {
 // is no value, when foreman cannot read it, and when it is stamped with
 // another session id, as builder's value still is after a /clear until builder
 // counts its first step.
+// Builder's contract types the value, but a build of builder that stored it in
+// another shape may have left one behind, so it is still parsed with usageIn.
 async function ownSpend($: $) {
-  const raw: unknown = await read($, { plugin: 'builder', key: 'usage' } as const)
-  if (typeof raw !== 'object' || raw === null || (raw as { sessionId?: unknown }).sessionId !== (await $.session.id())) return null
-  return spendOf(usageIn(raw))
+  const usage = await read($, builderUsage)
+  if (typeof usage !== 'object' || usage === null) return null
+  if (usage.sessionId !== (await $.session.id())) return null
+  return spendOf(usageIn(usage))
 }
 
 // The View the band and the pane draw from. The ledger is read and parsed

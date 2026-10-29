@@ -65,8 +65,8 @@ export type View = {
   // session's start seeds an empty ledger, with no models and no dollar
   // figure, so from then on this is a ledger even before anything is
   // counted. It is null only while no ledger for this session is held: before
-  // that seed lands, or when the held one is another session's or cannot be
-  // read.
+  // that seed lands, when the held one is another session's or cannot be
+  // read, and always in the band's view, which never reads it.
   usage: UsageLedger | null
 }
 

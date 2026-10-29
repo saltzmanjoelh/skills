@@ -3111,7 +3111,11 @@ async function agentType($: $, id: string): Promise<string | undefined> {
 
 // What the band and the panes draw from. A value an older build stored in
 // another shape is read as its default: no progress, not started, folded.
-async function view($: $): Promise<View> {
+// The spending is read only when `withUsage` is set, which only the pane
+// sets, because the band never shows it, and reading it while drawing would
+// subscribe the band to the usage value, which changes after every counted
+// model step. Without the flag the usage is null.
+async function view($: $, withUsage: boolean): Promise<View> {
   const s = await read($, pr)
   const shown = isDrawable(s) ? s : null
   const cards = await read($, agents)
@@ -3138,7 +3142,7 @@ async function view($: $): Promise<View> {
     issueLink: issueAddress,
     context: await storedMeasure($),
     compactions: await storedCompactions($),
-    usage: await storedUsage($),
+    usage: withUsage ? await storedUsage($) : null,
   }
 }
 
@@ -4255,7 +4259,7 @@ export const register: Register = on => {
         void showOutput($, id).catch(() => undefined)
       },
     }
-    return paneTree(elementsOf($, e), await view($), presses, columnsOf(e.props.bodyColumns))
+    return paneTree(elementsOf($, e), await view($, true), presses, columnsOf(e.props.bodyColumns))
   })
 
   // The agent pane, on the agent whose output button was pressed last. When
@@ -4298,7 +4302,7 @@ export const register: Register = on => {
   // pane, as /builder does; pressing the agent count opens it or closes it.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
-    const v = await view($)
+    const v = await view($, false)
     const width = columnsOf(e.props.bodyColumns)
     const line = secondRow(v, width)
     const presses = {

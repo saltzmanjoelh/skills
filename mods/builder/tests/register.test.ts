@@ -12126,6 +12126,37 @@ test('a refused write leaves the pane\'s totals right, and the next step\'s writ
   expect(await spent()).toBe('Spent: 5K in, 5K out, 5K cache read, 5K cache write · cost unknown')
 })
 
+// Reading a value while drawing subscribes the drawing to it, so a band that
+// read the usage would be drawn again after every counted model step, though
+// it never shows the spending. The read of the watched pull request shows that
+// the band's draw did read its own values.
+test('the band\'s draw never reads the usage value, which only the pane shows, and the pane\'s draw does', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  usageStore(on)
+  engine(on)
+  fakeGitHub(on)
+  const answer = modelSteps(on)
+  answer.usage = stepUsage(1_000)
+  const reads = new Map<string, number>()
+  on('state.get', ($, e, next) => {
+    if (e.plugin === 'builder') reads.set(e.key, (reads.get(e.key) ?? 0) + 1)
+    return next(e)
+  })
+  const { band } = await liveBand($, on)
+  await startOnly($)
+  await modelStep($, 'turn-1', 0)
+  await clock.settle()
+  reads.clear()
+  await band.redraw()
+  expect(reads.get('pr') ?? 0).toBeGreaterThan(0)
+  expect(reads.get('usage') ?? 0).toBe(0)
+
+  const pane = await $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'Pane', requestId: 'builder', props: {} as never })
+  await pane.redraw()
+  expect(reads.get('usage') ?? 0).toBeGreaterThan(0)
+  expect((await pane.find({ type: 'Text', text: /^Spent: / }))?.text).toBe('Spent: 1K in, 1K out, 1K cache read, 1K cache write · cost unknown')
+})
+
 test('the totals come back from the store after a restart, and a step counted before it is not counted again', async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
   const earlier = {
