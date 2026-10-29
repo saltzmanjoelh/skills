@@ -473,22 +473,29 @@ async function ownSpend($: $) {
   return spendOf(usageIn(raw))
 }
 
-// The View the band and the pane draw from. The spending is read only in a
-// parent, because only the parent's pane shows it.
-async function view($: $): Promise<View> {
+// The View the band and the pane draw from. The ledger is read and parsed
+// once per draw, for both the rows and the sum. The spending figures are
+// worked out only when `withSpending` is set, which only the pane sets,
+// because the band never shows them and is drawn every second and again
+// after each change to builder's usage value, which reading that value while
+// drawing subscribes the drawing to. They are also worked out only in a
+// parent, because only the parent's pane shows them.
+async function view($: $, withSpending: boolean): Promise<View> {
   const settings = parentIn(await read($, parent))
   const due = await read($, nextReadAt)
   const lines = await read($, log)
+  const ledger = settings.isOn ? ticketsIn(await read($, tickets)) : null
+  const isSpendingShown = withSpending && ledger !== null
   return {
     isOn: settings.isOn,
     slots: slotsOf(settings, currentOptions.slots),
-    rows: settings.isOn ? await shownNow($) : [],
+    rows: ledger === null ? [] : shownRows(await rowsNow($), ledger),
     now: await $.clock.now(),
     nextReadAt: typeof due === 'number' && Number.isFinite(due) ? due : null,
     log: Array.isArray(lines) ? lines : [],
     issueLink: settings.isOn ? issueAddress : null,
-    subsSpent: settings.isOn ? spentSum(ticketsIn(await read($, tickets))) : null,
-    ownSpent: settings.isOn ? await ownSpend($) : null,
+    subsSpent: isSpendingShown ? spentSum(ledger) : null,
+    ownSpent: isSpendingShown ? await ownSpend($) : null,
   }
 }
 
@@ -1013,14 +1020,14 @@ export const register: Register = (on, options) => {
         void releaseRow($, file).catch(() => undefined)
       },
     }
-    return paneTree(elementsOf($, e), await view($), presses, columnsOf(e.props.bodyColumns))
+    return paneTree(elementsOf($, e), await view($, true), presses, columnsOf(e.props.bodyColumns))
   })
 
   // The band gives way to Claude Code's survey, and to the host in a session
   // that is not a parent, which bandTree answers with null.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
-    const v = await view($)
+    const v = await view($, false)
     const presses = {
       open: (file: string) => {
         void openRow($, file).catch(() => undefined)

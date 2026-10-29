@@ -150,8 +150,12 @@ export type StatusFacts = {
   questions: readonly Question[]
   nextLook: NextLook | null
   usageHold: UsageHold | null
-  // What the session has spent, read through usageIn in hooks/usage.ts, or
-  // null before anything was counted for this session.
+  // What the session has spent, read through usageIn in hooks/usage.ts. The
+  // session's start seeds an empty ledger, with no models and no dollar
+  // figure, so from then on this is a ledger even before anything is
+  // counted, and the record carries it. It is null only while no ledger for
+  // this session is held: before that seed lands, or when the held one is
+  // another session's or cannot be read.
   usage: UsageLedger | null
 }
 

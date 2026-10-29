@@ -11995,12 +11995,21 @@ test('the pane shows the context with the settings hint as one dim line, and onc
 // A store in memory that records every write of a ledger of the session's
 // spending, under a key starting usage:, in `writes`, and refuses every write
 // while `refuses` is set, as the engine does past 4 MiB. A refused write is
-// recorded too, with `refused` set.
+// recorded too, with `refused` set. While `hold` is set, the next read of a
+// ledger waits until that promise resolves, and `hold` is cleared, so only
+// that one read is slow.
 function usageStore(on: On, entries: [string, unknown][] = []) {
   const stored = new Map<string, unknown>(entries)
-  const seen = { stored, refuses: false, writes: [] as { key: string; value: unknown; refused: boolean }[] }
+  const seen = { stored, refuses: false, hold: null as Promise<void> | null, writes: [] as { key: string; value: unknown; refused: boolean }[] }
   on('store.keys', () => ({ value: [...stored.keys()] }))
-  on('store.get', ($, e) => ({ value: stored.get(e.key) }))
+  on('store.get', async ($, e) => {
+    const hold = e.key.startsWith('usage:') ? seen.hold : null
+    if (hold !== null) {
+      seen.hold = null
+      await hold
+    }
+    return { value: stored.get(e.key) }
+  })
   on('store.set', ($, e) => {
     if (e.key.startsWith('usage:')) seen.writes.push({ key: e.key, value: e.value, refused: seen.refuses })
     if (seen.refuses) return { deny: 'the store is full' }
@@ -12091,7 +12100,7 @@ test('a refused write leaves the pane\'s totals right, and the next step\'s writ
     await pane.redraw()
     return (await pane.find({ type: 'Text', text: /^Spent: / }))?.text ?? ''
   }
-  expect(await spent()).toBe('Spent: 0K in, 0K out, 0K cache read, 0K cache write · cost unknown')
+  expect(await spent()).toBe('Spent: nothing counted yet · cost unknown')
 
   store.refuses = true
   answer.usage = stepUsage(2_000)
@@ -12177,6 +12186,28 @@ test('a session that starts with a lower engine dollar figure than the stored on
   await $.session.measure({ context: { window: 200_000 }, rateLimits: [], changed: ['context'] })
   await clock.settle()
   expect(spentOf(store.stored.get('usage:session-1')).usd).toBe(6)
+})
+
+test('two dollar readings taken in order apply in that order, so a slow first one is not taken for a fresh start and added on top of the second', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const store = usageStore(on)
+  // No ledger is held in state, so the first reading's change reads the
+  // stored one for its seed, and that read waits until the test lets it go.
+  let release = () => {}
+  store.hold = new Promise<void>(resolve => {
+    release = resolve
+  })
+  engine(on)
+  fakeGitHub(on)
+  on('session.measure', ($, e) => ({ changed: e.changed }))
+
+  await $.session.measure({ context: { window: 200_000 }, rateLimits: [], cost: { usd: 1 }, changed: ['cost'] })
+  await $.session.measure({ context: { window: 200_000 }, rateLimits: [], cost: { usd: 1.5 }, changed: ['cost'] })
+  await clock.settle()
+  release()
+  await clock.settle()
+  const stored = spentOf(store.stored.get('usage:session-1'))
+  expect(stored.usd).toBe(1.5)
 })
 
 test('a stored ledger untouched for more than 14 days is pruned at the session\'s start, and a fresher one is kept', async ($, on) => {

@@ -33,7 +33,8 @@ export type View = {
   // null, which draws every key as plain text.
   issueLink: string | null
   // What every sub session this parent started spent, and what this session
-  // spent itself, or null for each while it is unknown.
+  // spent itself, or null for each while it is unknown. Only the pane's view
+  // works them out, so in the band's view both are always null.
   subsSpent: ForemanSpend | null
   ownSpent: ForemanSpend | null
 }

@@ -857,8 +857,12 @@ test('with no dollar reading the pane says the cost is unknown and never shows $
   expect(lines.join('\n')).not.toContain('$0')
   expect(usageLines(null)).toEqual(['Spent: nothing counted yet · cost unknown'])
   expect(usageLines(null).join('\n')).not.toContain('$0')
-  // A known reading of nothing is shown, since it is not unknown.
-  expect(usageLines(afterCost(emptyUsage('session-1', NOW), 0))).toEqual(['Spent: 0K in, 0K out, 0K cache read, 0K cache write · $0.00'])
+  // An empty ledger, as the session's start seeds, reads as foreman's pane
+  // reads one, with the dollars beside it. A known reading of nothing is
+  // shown, since it is not unknown.
+  expect(usageLines(emptyUsage('session-1', NOW))).toEqual(['Spent: nothing counted yet · cost unknown'])
+  expect(usageLines(afterCost(emptyUsage('session-1', NOW), 0))).toEqual(['Spent: nothing counted yet · $0.00'])
+  expect(usageLines(afterCost(emptyUsage('session-1', NOW), 1.25))).toEqual(['Spent: nothing counted yet · $1.25'])
 })
 
 test('a model name that holds control characters is cleaned before the pane shows it', () => {

@@ -113,7 +113,9 @@ export function afterCost(ledger: UsageLedger, usd: unknown): UsageLedger {
 }
 
 // A count as the pane shows it: in thousands below a million, and in millions
-// with one decimal from a million up.
+// with one decimal from a million up. Foreman's pane writes the same words
+// for its sub sessions' spending with its own copy of this, in
+// mods/foreman/hooks/spend.ts, so a change here has to be made there too.
 const countWords = (n: number) => (n < 1_000_000 ? thousands(n) : `${(n / 1_000_000).toFixed(1)}M`)
 
 const kindsWords = (c: TokenCounts) =>
@@ -124,10 +126,14 @@ const dollarsWords = (usd: number | null) => (usd === null ? 'cost unknown' : `$
 // The pane's lines for what the session spent: the four kinds summed over
 // the models and the dollar total, or the words "cost unknown" while the
 // engine has given no reading, never $0; then one line per model with its
-// four counts. Before anything is counted it says so. The model names came
-// from the API, so they are cleaned.
+// four counts. While no model step has been counted, which is the case for
+// the empty ledger the session's start seeds as well as when there is no
+// ledger at all, it says "nothing counted yet" in place of the counts, with
+// the dollars beside it, as foreman's pane words an empty ledger. The model
+// names came from the API, so they are cleaned.
 export function usageLines(usage: UsageLedger | null): string[] {
   if (usage === null) return [`Spent: nothing counted yet · ${dollarsWords(null)}`]
+  if (usage.models.length === 0) return [`Spent: nothing counted yet · ${dollarsWords(usage.usd)}`]
   const total = usage.models.reduce<TokenCounts>(
     (sum, m) => ({ input: sum.input + m.input, output: sum.output + m.output, cacheRead: sum.cacheRead + m.cacheRead, cacheWrite: sum.cacheWrite + m.cacheWrite }),
     { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

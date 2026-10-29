@@ -101,6 +101,9 @@ let armed = false
 // text of the ledger last stored, so a ledger equal to it is not written again.
 let usageWrites: Promise<void> = Promise.resolve()
 let lastStoredUsage: string | undefined
+// The chain the dollar readings go through, one after another in the order
+// recordCost was called (see recordCost).
+let costChanges: Promise<void> = Promise.resolve()
 let timer: { cancel: () => void } | undefined
 // The time `timer` is due to fire, so that a look which only observes can
 // keep that timer when it is sooner than the one it would set.
@@ -1189,12 +1192,14 @@ async function measureContext($: $): Promise<ContextMeasure | null> {
     } catch {
       // Read as unreadable, as said above.
     }
+    // The same read carries the session's dollar figure. It is handed over
+    // at once, before anything else is awaited, so that it takes its place
+    // among the other readings in the order it was read (see recordCost). It
+    // is counted without waiting, so a slow store never holds up the
+    // compaction that follows this measure.
+    void recordCost($, usage?.cost?.usd).catch(() => undefined)
     const measure = measureOf(usage, await $.clock.now(), await $.session.id())
     await update($, context, () => measure).catch(() => undefined)
-    // The same read carries the session's dollar figure, which is counted
-    // without waiting, so a slow store never holds up the compaction below.
-    const cost = usage?.cost?.usd
-    void recordCost($, cost).catch(() => undefined)
     return measure
   } catch {
     return null
@@ -1284,9 +1289,20 @@ async function countStep($: $, r: TurnStepResult) {
 }
 
 // Takes one reading of the engine's dollar figure for the session, as
-// afterCost reads it.
+// afterCost reads it. The readings must be applied in the order they were
+// taken, because afterCost reads a reading lower than the last one applied as
+// the engine starting again and adds it in full. Each change awaits the
+// session id, the seed and the state write first, so two changes started
+// side by side could land in either order, and a late, older reading would
+// then inflate the total for good. So every reading joins one chain here, in
+// the order recordCost was called, and waits for the reading before it to be
+// applied. Every caller hands its reading over synchronously, straight after
+// reading it, so the order of the calls is the order of the readings. A
+// change that fails leaves the chain running for the next one.
 async function recordCost($: $, usd: unknown) {
-  await changeUsage($, ledger => afterCost(ledger, usd))
+  const next = costChanges.then(() => changeUsage($, ledger => afterCost(ledger, usd)))
+  costChanges = next.catch(() => undefined)
+  await next
 }
 
 // Drops every stored ledger that no step has touched for two weeks, and one
@@ -1318,6 +1334,7 @@ async function startUsage($: $) {
   } catch {
     return
   }
+  // Handed over straight after the read, as recordCost needs.
   await recordCost($, cost)
 }
 
@@ -4197,8 +4214,6 @@ export const register: Register = on => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
-  // The session's end stops the status file, and deletes it after a merge,
-  // within the engine's short budget for ending a session.
   // Every model step, the main loop's and each subagent's, is passed through
   // untouched, and its usage is then counted without waiting, so a failure in
   // the counting or a slow store can never hold up or change the model's
@@ -4213,13 +4228,16 @@ export const register: Register = on => {
 
   // The engine measures the session after each turn of its own loop, with the
   // session's dollar figure when it keeps one, which is counted without
-  // waiting.
+  // waiting. The figure is handed over before the rest of the chain runs, so
+  // that it takes its place among the readings in the order it arrived (see
+  // recordCost).
   on('session.measure', async ($, e, next) => {
-    const measured = await next(e)
     void recordCost($, e.cost?.usd).catch(() => undefined)
-    return measured
+    return await next(e)
   })
 
+  // The session's end stops the status file, and deletes it after a merge,
+  // within the engine's short budget for ending a session.
   on('session.end', async ($, e, next) => {
     await endStatus($, e.reason, e.sessionId, next.budget).catch(() => undefined)
     return next(e)

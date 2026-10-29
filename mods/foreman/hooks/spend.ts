@@ -97,14 +97,19 @@ export function spentSum(t: ForemanTickets): ForemanSpend | null {
 }
 
 // A count as builder's pane shows it: in thousands below a million, and in
-// millions with one decimal from a million up.
+// millions with one decimal from a million up. This is a copy of the
+// countWords in builder's hooks/usage.ts, written out again by hand because
+// foreman does not import builder's code, so it must stay the same as
+// builder's, and a change to either has to be made to both.
 const countWords = (n: number) => (n < 1_000_000 ? `${Math.round(n / 1000)}K` : `${(n / 1_000_000).toFixed(1)}M`)
 
-// The words for some spending, as builder's pane words its own: the four
-// kinds and the dollar total, or "cost unknown" while no dollar figure is
-// known. Spending with no tokens counted says so rather than showing zeros,
-// and spending that is missing altogether is "unknown". Neither ever reads as
-// $0 or as zero tokens.
+// The words for some spending, in the same form as builder's pane words its
+// own: the four kinds and the dollar total, or "cost unknown" while no dollar
+// figure is known. Spending whose tokens sum to zero reads "nothing counted
+// yet" in place of the counts, with the dollars beside it, as builder's pane
+// reads a ledger with no model counted, which is what an empty ledger gives
+// here. Spending that is missing altogether is "unknown". Neither reads as
+// zero tokens, and only a known dollar figure of zero reads as $0.00.
 export function spendWords(spend: ForemanSpend | null): string {
   if (spend === null) return 'unknown'
   const { counts: c, usd } = spend

@@ -608,6 +608,29 @@ for (const [what, value, words] of OWN_CASES) {
   })
 }
 
+test('the band\'s draw never reads builder\'s usage value, which only the pane shows, and the pane\'s draw does', async ($, on) => {
+  const w = world(on)
+  w.folder.put('a.json', record('ABC-1', 'working', { usage: USAGE }))
+  let usageReads = 0
+  on('state.get', ($, e, next) => {
+    if (e.plugin === 'builder' && e.key === 'usage') usageReads++
+    return next(e)
+  })
+  on('ui.render', ($, e) => ($.ui.resolve(e) as unknown as { Text: (props: object) => never }).Text({ children: 'host line' }))
+  const band = await $.ui.mount({ plugin: 'foreman', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, bodyColumns: 200 } as never })
+  await start($)
+  await foreman($)
+  await w.clock.settle()
+  usageReads = 0
+  await band.redraw()
+  expect((await band.find({ key: 'foreman-band' }))?.text ?? '').toContain('ABC-1')
+  expect(usageReads).toBe(0)
+
+  const pane = await $.ui.mount({ plugin: 'foreman', surface: 'terminal', component: 'Pane', requestId: 'foreman', props: { bodyColumns: 200 } as never })
+  await pane.redraw()
+  expect(usageReads).toBeGreaterThan(0)
+})
+
 test('after a reload, a ledger left in $.state that holds only readings outweighs an older stored one', async ($, on) => {
   const counts = { input: 4000, output: 1000, cacheRead: 90_000, cacheWrite: 2000 }
   const w = world(on, { store: { [ticketsKey('session-1')]: { ...TICKETS_EMPTY, offRefusedFor: 'session-1' } } })
