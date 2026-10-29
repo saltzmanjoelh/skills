@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { oldestBackgroundIn, prStateOf, recordIn, STATES, verdictsIn, type SubRecord } from '../hooks/record'
+import { oldestBackgroundIn, prStateOf, recordIn, STATES, usageIn, verdictsIn, type SubRecord } from '../hooks/record'
 
 // A whole record as builder writes it, which each test changes.
 const WHOLE = {
@@ -182,4 +182,33 @@ test('an oldest background task whose hung time is not finite loses only the mar
   }
   expect(recordIn(text({ oldestBackground: { description: '', startedAt: 1500, hungAt: 2000 } }))?.oldestBackground)
     .toEqual({ description: '', startedAt: 1500, hungAt: 2000 })
+})
+
+test('the spending a record carries reads back model for model, with its dollar total or null', () => {
+  const usage = { models: [{ model: 'model-a', input: 10, output: 20, cacheRead: 30, cacheWrite: 40 }], usd: 1.5 }
+  expect(recordIn(text({ usage }))?.usage).toEqual(usage)
+  expect(recordIn(text({ usage: { models: [], usd: null } }))?.usage).toEqual({ models: [], usd: null })
+  // Only the five fields of a model are kept.
+  expect(recordIn(text({ usage: { models: [{ ...usage.models[0], extra: 'x' }], usd: 1.5 } }))?.usage).toEqual(usage)
+})
+
+test('a record without spending, and one whose spending is malformed in any part, parse with the field left out', () => {
+  expect(recordIn(text())).not.toHaveProperty('usage')
+  const good = { model: 'model-a', input: 10, output: 20, cacheRead: 30, cacheWrite: 40 }
+  for (const bad of [
+    null, 'lots', 3, [], {}, { models: [] }, { usd: 1 }, { models: 'x', usd: 1 }, { models: [good], usd: -1 }, { models: [good], usd: '1' },
+    { models: [good, null], usd: 1 }, { models: [{ ...good, input: -1 }], usd: 1 }, { models: [{ ...good, output: 2.5 }], usd: 1 },
+    { models: [{ ...good, cacheRead: '30' }], usd: 1 }, { models: [{ ...good, cacheWrite: null }], usd: 1 }, { models: [{ ...good, model: 7 }], usd: 1 },
+    { models: [{ ...good, model: undefined }], usd: 1 },
+  ]) {
+    expect(usageIn(bad)).toBeUndefined()
+    const r = recordIn(text({ usage: bad }))
+    expect(r).not.toBeNull()
+    expect(r).not.toHaveProperty('usage')
+  }
+  // Numbers that JSON cannot carry, which only a value read some other way
+  // could hold.
+  for (const bad of [{ models: [good], usd: Number.NaN }, { models: [good], usd: Number.POSITIVE_INFINITY }, { models: [{ ...good, input: Number.POSITIVE_INFINITY }], usd: 1 }]) {
+    expect(usageIn(bad)).toBeUndefined()
+  }
 })

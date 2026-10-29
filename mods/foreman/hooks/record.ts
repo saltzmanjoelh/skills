@@ -7,8 +7,9 @@
 // loosened. SubRecord is derived from BuildStatus, so a field builder adds or
 // renames reaches foreman's type check.
 
-import type { BuildStage, BuildState, BuildStatus } from 'builder'
+import type { BuildStage, BuildState, BuildStatus, BuildUsage, TokenCounts } from 'builder'
 
+import type { ForemanCounts } from '../types'
 import { isStage, STAGES } from './stages'
 
 export type { BuildStage, BuildState }
@@ -46,7 +47,7 @@ export type RecordOldestBackground = Omit<NonNullable<BuildStatus['oldestBackgro
 // A record as foreman reads it. The ticket, the folder and the two times may
 // be null where builder always writes them, the oldest background task's hung
 // time may be null too, and `version` is not read.
-export type SubRecord = Omit<BuildStatus, 'version' | 'ticket' | 'cwd' | 'stateSince' | 'writtenAt' | 'pr' | 'oldestBackground'> & {
+export type SubRecord = Omit<BuildStatus, 'version' | 'ticket' | 'cwd' | 'stateSince' | 'writtenAt' | 'pr' | 'oldestBackground' | 'usage'> & {
   // The ticket the parent gave the sub session, or null when it has none.
   ticket: string | null
   // The folder the sub session works in, or null when the record has none.
@@ -59,6 +60,9 @@ export type SubRecord = Omit<BuildStatus, 'version' | 'ticket' | 'cwd' | 'stateS
   // The oldest background task in flight, with a hung time that may be null,
   // or absent when the record names none.
   oldestBackground?: RecordOldestBackground
+  // What the sub session spent up to the write, or absent when the record
+  // carries no spending that foreman can read.
+  usage?: RecordUsage
 }
 
 const isState = (raw: unknown): raw is BuildState => typeof raw === 'string' && (STATES as readonly string[]).includes(raw)
@@ -178,6 +182,55 @@ export function oldestBackgroundIn(raw: unknown): RecordOldestBackground | undef
   return { description: textOr(o.description, ''), startedAt, hungAt: timeOr(o.hungAt) }
 }
 
+// The spending a record carries, as foreman reads it: the tokens of each
+// model in the four kinds, and the dollar total, or null when the sub session
+// has no dollar reading yet. Foreman declares the shape itself, with its own
+// counts, so the ledger's type stands alone.
+export type RecordUsage = { models: (ForemanCounts & { model: string })[]; usd: number | null }
+
+// These lines stop the type check when the counts or the spending foreman
+// reads differ from builder's in either direction, so a kind of token that
+// builder adds or renames cannot be dropped without a sound.
+const COUNTS_MATCH_BUILDER: [ForemanCounts, TokenCounts] extends [TokenCounts, ForemanCounts] ? true : never = true
+void COUNTS_MATCH_BUILDER
+const USAGE_MATCHES_BUILDER: [RecordUsage, BuildUsage] extends [BuildUsage, RecordUsage] ? true : never = true
+void USAGE_MATCHES_BUILDER
+
+// Whether a value can be a count of tokens, a whole number of zero or more,
+// and whether it can be a dollar figure, a finite number of zero or more. The
+// ledger's reader checks the dollars it keeps by the second too.
+const isTokenCount = (raw: unknown): raw is number => typeof raw === 'number' && Number.isInteger(raw) && raw >= 0
+export const isDollars = (raw: unknown): raw is number => typeof raw === 'number' && Number.isFinite(raw) && raw >= 0
+
+// The four counts, or null unless every one is a count of tokens. Only the
+// four are kept. The ledger's reader reads the counts it keeps through it too.
+export function countsIn(raw: unknown): ForemanCounts | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
+  const c = raw as Record<string, unknown>
+  if (!isTokenCount(c.input) || !isTokenCount(c.output) || !isTokenCount(c.cacheRead) || !isTokenCount(c.cacheWrite)) return null
+  return { input: c.input, output: c.output, cacheRead: c.cacheRead, cacheWrite: c.cacheWrite }
+}
+
+// The spending, or undefined unless it is an object whose `models` is a list
+// of models that each have a string name and four counts, and whose `usd` is a
+// dollar figure or null. A record with one bad model reads as carrying no
+// spending at all, because a total that left a model out would look smaller
+// than it is, and foreman shows unknown rather than a figure that is wrong.
+export function usageIn(raw: unknown): RecordUsage | undefined {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
+  const { models: list, usd } = raw as Record<string, unknown>
+  if (!Array.isArray(list) || (usd !== null && !isDollars(usd))) return undefined
+  const models: RecordUsage['models'] = []
+  for (const m of list) {
+    const counts = countsIn(m)
+    if (counts === null) return undefined
+    const name = (m as Record<string, unknown>).model
+    if (typeof name !== 'string') return undefined
+    models.push({ model: name, ...counts })
+  }
+  return { models, usd }
+}
+
 // The record a file's text holds, or null when it does not parse. It parses
 // only as a JSON object with a non-empty string `sessionId`, an `issueKey`
 // that is null or a non-empty string, and one of the six states, because
@@ -201,6 +254,7 @@ export function recordIn(text: string): SubRecord | null {
   const cleanup = cleanupIn(r.cleanup)
   const backgroundOnly = backgroundOnlyIn(r.backgroundOnly)
   const oldestBackground = oldestBackgroundIn(r.oldestBackground)
+  const usage = usageIn(r.usage)
   return {
     sessionId: r.sessionId,
     ticket: textOr(r.ticket, null),
@@ -218,5 +272,6 @@ export function recordIn(text: string): SubRecord | null {
     ...(cleanup === undefined ? {} : { cleanup }),
     ...(backgroundOnly === undefined ? {} : { backgroundOnly }),
     ...(oldestBackground === undefined ? {} : { oldestBackground }),
+    ...(usage === undefined ? {} : { usage }),
   }
 }
