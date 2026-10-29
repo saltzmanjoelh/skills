@@ -113,7 +113,8 @@ one a sub session asks the person, which the parent relays." with:
    exactly as on the base.
 2. `grep -n "which the parent relays" mods/foreman/skills/wake/SKILL.md`
    prints nothing, `grep -n "own open question" mods/foreman/skills/wake/SKILL.md`
-   finds the new bullet, and the diff of that file touches only that bullet.
+   finds the new bullet, and the diff of that file touches only that bullet
+   and the "Noted." rule, which changes as the spec's Behavior 6 says.
 3. `grep -n "foreman-ticket:" skills/implement/SKILL.md` shows no hit at the
    start of a line.
 4. The four gates from the repository's CLAUDE.md pass. The report says
