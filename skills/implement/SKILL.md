@@ -572,6 +572,25 @@ limit**, whatever the counsel decides. The line names the issue and the
 area or the limit, and says either that the session waits on the person's
 answer or, when the counsel decided, what it decided.
 
+**Messages to a foreman parent.** A session whose first message holds a
+line that begins `foreman-ticket:` was started by a foreman parent, and so
+was a session whose compaction summary says its first message held one.
+Such a session sends that parent a message only to ask a question that the
+parent alone can answer, such as one about the brief it was started with:
+which repository, which issue, or what is in scope. It never sends the
+parent a report of its progress, because foreman's own lines already tell
+the parent about every pull request opened, every pair of verdicts, every
+merge and every close. The one exception is the line that **The line to
+the starting session** describes, which the session still sends as that
+paragraph says. A question for the person never goes to the parent. It
+goes as **Questions** says, to the counsel and then to the person, or
+straight to the person where that section says so, inside this session
+itself. A question that the session cannot tell is one only the parent can
+answer counts as a question for the person, and so does one the parent
+answers that it cannot settle. This holds at
+every stage, from the spec to the merge. A session whose first message
+holds no such line is not affected by this paragraph.
+
 **First half, at a head where the focused reviewers have not run** (**The
 focused reviewers have not run at this head** says which heads those are).
 

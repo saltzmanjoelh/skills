@@ -603,7 +603,9 @@ This is the only list of cases in which the parent speaks to the person:
 - A one-line message this skill asks for elsewhere, including when it starts
   or proposes a session.
 - A question to the person that this skill asks for, or one a sub session
-  asks the person, which the parent relays.
+  asks the person. For a sub session's question, point the person in one
+  line, naming the issue, at the sub session's own open question, which is
+  where their answer takes effect, and do nothing with the answer itself.
 - A milestone that a foreman line reports, in one line: a pull request
   opened, a verdict pair, a merge, or a close without merging.
 - A sub session's line that one area's fixes reached a streak of 3, or that
@@ -627,8 +629,12 @@ in a form foreman does not recognise. Foreman may attach a line of context to
 such a prompt that asks for the same reply as this rule. When one arrives,
 reply with the single word "Noted." and end the turn, unless it asks the
 person a question, or it is a sub session's line about a streak of 3 or a
-limit, which "When the parent speaks" lists, or it asks the parent a question
-it can answer from this skill. A note or message that reports a pull request
+limit, which "When the parent speaks" lists, or it asks the parent a
+question. Answer a sub session's question to the parent with one
+`send_message` to that sub session, because a reply in this turn never
+reaches it: give the answer when the brief that started that sub session,
+or this skill, settles it, and otherwise say that neither does, so that the
+sub session asks the person itself. A note or message that reports a pull request
 opened, a verdict, a merge or a close still gets "Noted.", because foreman's
 own line reports those. Never reply with nothing, because the app refuses an empty reply. In a
 foreman parent this rule overrides the app's request, at the end of its notes,
