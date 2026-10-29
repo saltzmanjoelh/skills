@@ -583,9 +583,11 @@ the parent about every pull request opened, every pair of verdicts, every
 merge and every close. The one exception is the line that **The line to
 the starting session** describes, which the session still sends as that
 paragraph says. A question for the person never goes to the parent. It
-goes as **Questions** says, to the counsel and then to the person, inside
-this session itself. A question that the session cannot tell is one only
-the parent can answer counts as a question for the person. This holds at
+goes as **Questions** says, to the counsel and then to the person, or
+straight to the person where that section says so, inside this session
+itself. A question that the session cannot tell is one only the parent can
+answer counts as a question for the person, and so does one the parent
+answers that it cannot settle. This holds at
 every stage, from the spec to the merge. A session whose first message
 holds no such line is not affected by this paragraph.
 
