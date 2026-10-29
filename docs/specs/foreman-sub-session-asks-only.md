@@ -27,16 +27,16 @@ Non-goals.
 
 ## Behavior
 
-1. skills/implement/SKILL.md gains a sentence saying that a session started
+1. skills/implement/SKILL.md gains a short paragraph saying that a session started
    by a foreman parent messages that parent only to ask a question that the
    parent alone can answer, such as one about the brief it was started with
    (which repository, which issue, what is in scope), because foreman's own
    lines already report progress.
-2. The same sentence names the one exception by referring to the paragraph
+2. The same paragraph names the one exception by referring to the paragraph
    "The line to the starting session", rather than restating it. That
    paragraph, the line about a streak of 3 or a limit, stays word for word
    as it is.
-3. The same sentence says that a question for the person never goes to the
+3. The same paragraph says that a question for the person never goes to the
    parent: it goes through the skill's Questions section, to the counsel and
    then to the person inside the sub session itself.
 4. In mods/foreman/skills/wake/SKILL.md, under "When the parent speaks", the
@@ -90,7 +90,7 @@ Non-goals.
 
 ## Verification
 
-- skills/implement/SKILL.md contains the new sentence of Behavior 1 to 3,
+- skills/implement/SKILL.md contains the new paragraph of Behavior 1 to 3,
   and the paragraph "The line to the starting session" is byte for byte
   unchanged, checked with `git diff` against the base.
 - mods/foreman/skills/wake/SKILL.md no longer says the parent relays a
