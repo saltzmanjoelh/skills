@@ -55,7 +55,9 @@ async function expectLinkedRow(ui: Awaited<ReturnType<typeof mountBoth>>, file: 
 // code, so that a change to how a chip or a row is drawn without a fact shows
 // as a failure here. Each Button's press handle is left out, since its number
 // changes from run to run, and so is each drawing's source, as `compared`
-// says. The band is the same on both surfaces.
+// says. The band is the same on both surfaces. The lines that say what each
+// sub session, the sub sessions together and this session spent came later,
+// with the counting of what sessions spend, and were added here then.
 const BAND_BEFORE = {
   type: 'Box', props: { key: 'foreman-band', flexDirection: 'row' },
   children: [
@@ -75,12 +77,17 @@ const PANE_BEFORE = {
       { type: 'Button', props: { key: 'open-a.json', label: '→ ABC-1 · #4 open · checks passed', variant: 'primary' } },
       { type: 'Text', children: ['Title of ABC-1 · plan tournament · ███░░░░░░░ 3 of 9 · 33%'] },
       { type: 'Text', children: ['working'] },
+      { type: 'Text', props: { dimColor: true }, children: ['Spent: unknown'] },
       { type: 'Box', props: { key: 'actions-a.json', flexDirection: 'row' }, children: [{ type: 'Button', props: { key: 'nudge-a.json', label: 'Nudge' } }, { type: 'Text', children: [' '] }, { type: 'Button', props: { key: 'release-a.json', label: 'Release' } }] },
       { type: 'Text', children: [' '] },
       { type: 'Button', props: { key: 'open-b.json', label: '→ ABC-2 · no pull request yet', variant: 'primary' } },
       { type: 'Text', children: ['Title of ABC-2 · spec · ██░░░░░░░░ 2 of 9 · 22%'] },
       { type: 'Text', props: { color: 'error' }, children: ['needs you'] },
+      { type: 'Text', props: { dimColor: true }, children: ['Spent: unknown'] },
       { type: 'Box', props: { key: 'actions-b.json', flexDirection: 'row' }, children: [{ type: 'Button', props: { key: 'nudge-b.json', label: 'Nudge' } }, { type: 'Text', children: [' '] }, { type: 'Button', props: { key: 'release-b.json', label: 'Release' } }] },
+      { type: 'Text', children: [' '] },
+      { type: 'Text', children: ['Sub sessions spent: unknown'] },
+      { type: 'Text', children: ['This session spent: unknown'] },
       { type: 'Text', children: [' '] },
       { type: 'Text', props: { bold: true }, children: ['Log'] },
       { type: 'Text', props: { dimColor: true }, children: ['Nothing yet.'] },
@@ -93,12 +100,17 @@ const PANE_BEFORE = {
       { type: 'Button', props: { key: 'open-a.json', label: '→ ABC-1 · #4 open · checks passed', variant: 'primary' } },
       { type: 'Svg', props: { alt: 'Title of ABC-1 · plan tournament · ███░░░░░░░ 3 of 9 · 33%', width: 1600, height: 34 } },
       { type: 'Text', children: ['working'] },
+      { type: 'Text', props: { dimColor: true }, children: ['Spent: unknown'] },
       { type: 'Box', props: { key: 'actions-a.json', flexDirection: 'row' }, children: [{ type: 'Button', props: { key: 'nudge-a.json', label: 'Nudge' } }, { type: 'Text', children: [' '] }, { type: 'Button', props: { key: 'release-a.json', label: 'Release' } }] },
       { type: 'Text', children: [' '] },
       { type: 'Button', props: { key: 'open-b.json', label: '→ ABC-2 · no pull request yet', variant: 'primary' } },
       { type: 'Svg', props: { alt: 'Title of ABC-2 · spec · ██░░░░░░░░ 2 of 9 · 22%', width: 1600, height: 34 } },
       { type: 'Text', props: { color: 'error' }, children: ['needs you'] },
+      { type: 'Text', props: { dimColor: true }, children: ['Spent: unknown'] },
       { type: 'Box', props: { key: 'actions-b.json', flexDirection: 'row' }, children: [{ type: 'Button', props: { key: 'nudge-b.json', label: 'Nudge' } }, { type: 'Text', children: [' '] }, { type: 'Button', props: { key: 'release-b.json', label: 'Release' } }] },
+      { type: 'Text', children: [' '] },
+      { type: 'Text', children: ['Sub sessions spent: unknown'] },
+      { type: 'Text', children: ['This session spent: unknown'] },
       { type: 'Text', children: [' '] },
       { type: 'Text', props: { bold: true, weight: 'semibold' }, children: ['Log'] },
       { type: 'Text', props: { dimColor: true }, children: ['Nothing yet.'] },

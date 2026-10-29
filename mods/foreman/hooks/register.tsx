@@ -11,6 +11,8 @@ import { checkLine, FOREMAN_REPORTS, isAppParts, keptLine, keptNames, NOTED, NOT
 import { bandTree, PANE, paneTree, type Elements, type View } from './pane'
 import type { ForemanParent, ForemanTickets } from '../types'
 import { PARENT_OFF, parentIn, slotsOf, storeKey } from './parent'
+import { usageIn } from './record'
+import { spendOf, spentSum } from './spend'
 import { afterRead, busyCount, nameOf, nextReadDelay, READ_LATER_MS, rowsOf, type FileRead, type SubRow } from './subs'
 import { printable } from './text'
 import {
@@ -459,7 +461,20 @@ async function ensureArmed($: $) {
   else await readNow($)
 }
 
-// The View the band and the pane draw from.
+// What this session spent, from the `usage` value builder publishes in its
+// state, because builder counts in every session where it runs. Only
+// `sessionId`, `models` and `usd` are read. The spending is unknown when there
+// is no value, when foreman cannot read it, and when it is stamped with
+// another session id, as builder's value still is after a /clear until builder
+// counts its first step.
+async function ownSpend($: $) {
+  const raw: unknown = await read($, { plugin: 'builder', key: 'usage' } as const)
+  if (typeof raw !== 'object' || raw === null || (raw as { sessionId?: unknown }).sessionId !== (await $.session.id())) return null
+  return spendOf(usageIn(raw))
+}
+
+// The View the band and the pane draw from. The spending is read only in a
+// parent, because only the parent's pane shows it.
 async function view($: $): Promise<View> {
   const settings = parentIn(await read($, parent))
   const due = await read($, nextReadAt)
@@ -472,6 +487,8 @@ async function view($: $): Promise<View> {
     nextReadAt: typeof due === 'number' && Number.isFinite(due) ? due : null,
     log: Array.isArray(lines) ? lines : [],
     issueLink: settings.isOn ? issueAddress : null,
+    subsSpent: settings.isOn ? spentSum(ticketsIn(await read($, tickets))) : null,
+    ownSpent: settings.isOn ? await ownSpend($) : null,
   }
 }
 
@@ -882,6 +899,7 @@ export const register: Register = (on, options) => {
       await update($, tickets, heldRaw => {
         const held = ticketsIn(heldRaw)
         const isEmpty = held.pairings.length === 0 && !hasWork(held.outbox) && held.held.length === 0 && held.offRefusedFor === null && held.unwatched.length === 0
+          && held.spent.length === 0 && held.earlier === null
         return isEmpty ? storedTickets : held
       })
     }

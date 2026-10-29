@@ -1,7 +1,8 @@
 import { expect, test } from 'claude-code/testing'
+import type { On } from 'claude-code'
 
 import { REASONS } from '../hooks/desktop'
-import { ticketsKey } from '../hooks/tickets'
+import { ticketsIn, ticketsKey, TICKETS_EMPTY } from '../hooks/tickets'
 import { foreman, HOME, MINUTE, SECOND, SECRET, SURFACES, T0, leftInState, mountBoth, record, start, statusFolder, world } from './world'
 
 // Two sub sessions: one working at the plan stage with three stages done and
@@ -524,3 +525,95 @@ for (const surface of SURFACES) {
     }
   })
 }
+
+// What a sub session spent, as builder writes it in its status file.
+const USAGE = { models: [{ model: 'model-a', input: 4000, output: 1000, cacheRead: 90_000, cacheWrite: 2000 }], usd: 1.75 }
+const USAGE_WORDS = '4K in, 1K out, 90K cache read, 2K cache write · $1.75'
+
+// The text of every line of the pane that begins with `head`, in the order
+// the pane draws them.
+async function linesOf(ui: Awaited<ReturnType<typeof mountBoth>>, head: string): Promise<string[]> {
+  await ui.pane.redraw()
+  return (await ui.pane.findAll({ type: 'Text', text: new RegExp(`^${head}`) })).map(t => t.text)
+}
+
+// Answers foreman's reads of builder's `usage` state value with `value`, as
+// builder running in the same session would hold it.
+function builderUsage(on: On, value: unknown) {
+  on('state.get', ($, e, next) => {
+    if (e.plugin !== 'builder' || e.key !== 'usage') return next(e)
+    return { value: { value, version: 0 } } as never
+  })
+}
+
+test('each row shows its sub session\'s spending, and a row whose file carries none shows it as unknown, never as $0', async ($, on) => {
+  const w = world(on)
+  w.folder.put('a.json', record('ABC-1', 'working', { usage: USAGE }))
+  w.folder.put('b.json', record('ABC-2', 'working'))
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await w.clock.settle()
+  expect(await linesOf(ui, 'Spent: ')).toEqual([`Spent: ${USAGE_WORDS}`, 'Spent: unknown'])
+  expect(await ui.paneText()).not.toContain('$0')
+})
+
+test('the pane sums every sub session this parent started, and keeps a sub session whose file is gone in the sum', async ($, on) => {
+  const w = world(on)
+  w.folder.put('a.json', record('ABC-1', 'working', { usage: USAGE }))
+  w.folder.put('b.json', record('ABC-2', 'working', { usage: { ...USAGE, usd: 0.25 } }))
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await w.clock.settle()
+  const sum = 'Sub sessions spent: 8K in, 2K out, 180K cache read, 4K cache write · $2.00'
+  expect(await linesOf(ui, 'Sub sessions spent: ')).toEqual([sum])
+  w.folder.files.delete('b.json')
+  await w.clock.advance(30 * SECOND)
+  expect(await ui.pane.find({ key: 'open-b.json' })).toBeUndefined()
+  expect(await linesOf(ui, 'Spent: ')).toEqual([`Spent: ${USAGE_WORDS}`])
+  expect(await linesOf(ui, 'Sub sessions spent: ')).toEqual([sum])
+  expect((ticketsIn(w.stored.get(ticketsKey('session-1')))).spent.map(e => e.ticket)).toEqual(['ft-ABC-1', 'ft-ABC-2'])
+})
+
+test('with no reading yet, the sum and this session\'s spending say unknown', async ($, on) => {
+  const w = world(on)
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await w.clock.settle()
+  expect(await linesOf(ui, 'Sub sessions spent: ')).toEqual(['Sub sessions spent: unknown'])
+  expect(await linesOf(ui, 'This session spent: ')).toEqual(['This session spent: unknown'])
+})
+
+// Builder's usage value for this session, which foreman shows as this
+// session's own spending, and values it reads as unknown.
+const OWN_LEDGER = { ...USAGE, sessionId: 'session-1', lastEngineUsd: 1.75, turns: [], at: T0 }
+const OWN_CASES: [string, unknown, string][] = [
+  ['builder\'s usage value for this session', OWN_LEDGER, USAGE_WORDS],
+  ['a usage value stamped with another session id', { ...OWN_LEDGER, sessionId: 'session-0' }, 'unknown'],
+  ['a damaged usage value', { ...OWN_LEDGER, models: 'lots' }, 'unknown'],
+  ['no usage value', null, 'unknown'],
+]
+
+for (const [what, value, words] of OWN_CASES) {
+  test(`this session's own spending, from ${what}, reads "${words}"`, async ($, on) => {
+    const w = world(on)
+    builderUsage(on, value)
+    const ui = await mountBoth($, on)
+    await start($)
+    await foreman($)
+    await w.clock.settle()
+    expect(await linesOf(ui, 'This session spent: ')).toEqual([`This session spent: ${words}`])
+  })
+}
+
+test('after a reload, a ledger left in $.state that holds only readings outweighs an older stored one', async ($, on) => {
+  const counts = { input: 4000, output: 1000, cacheRead: 90_000, cacheWrite: 2000 }
+  const w = world(on, { store: { [ticketsKey('session-1')]: { ...TICKETS_EMPTY, offRefusedFor: 'session-1' } } })
+  leftInState(on, { tickets: { ...TICKETS_EMPTY, spent: [{ ticket: 'ft-a', counts, usd: 1.75 }] }, parent: { isOn: true, slots: null }, nextReadAt: T0 + 20 * SECOND })
+  const ui = await mountBoth($, on)
+  await start($)
+  expect(await linesOf(ui, 'Sub sessions spent: ')).toEqual([`Sub sessions spent: ${USAGE_WORDS}`])
+  expect(w.store.writes.get(ticketsKey('session-1'))).toBeUndefined()
+})
