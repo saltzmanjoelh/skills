@@ -1,6 +1,6 @@
 import type { Elements as EngineElements } from 'claude-code'
 
-import type { AgentCard, BackgroundTask, Compactions, ContextMeasure, CounselQuestion, CounselTally, ForegroundCall, NextLook, Progress, Question, WaitingOn, Wake } from '../types'
+import type { AgentCard, BackgroundTask, Compactions, ContextMeasure, CounselQuestion, CounselTally, ForegroundCall, NextLook, Progress, Question, UsageLedger, WaitingOn, Wake } from '../types'
 import { AGENT_SVG_HEIGHT, agentSvg, BAR_SVG_HEIGHT, barSvg, fitBar, hasSvg, PLANNED_SVG_HEIGHT, plannedSvg, svgWidth, type AgentRow } from './art'
 import { contextWords, SETTINGS_HINT, thousands } from './context'
 import { abstainerReason, chosenOf, COUNSEL_KEPT, FOLLOW_UP_WORDS, followUpOutcomes, noOptionCount, shortName, turnoutOf } from './counsel'
@@ -10,6 +10,7 @@ import { barOf, modelLabel, stageLabel, type Bar } from './progress'
 import { isRunning, shownStatus, waitingOn } from './state'
 import { HUNG_AFTER_MS, isProbablyHung, issueOf, oldestTaskOf, startOf } from './status'
 import { clockTime, printable, timeOfDay } from './text'
+import { usageLines } from './usage'
 
 export const PANE = 'builder'
 // The second pane, which shows one agent's card and messages.
@@ -60,6 +61,13 @@ export type View = {
   // The record of the main conversation's compactions, read through
   // compactionsIn, or null while this session has none.
   compactions: Compactions | null
+  // What the session has spent, read through usageIn in hooks/usage.ts. The
+  // session's start seeds an empty ledger, with no models and no dollar
+  // figure, so from then on this is a ledger even before anything is
+  // counted. It is null only while no ledger for this session is held: before
+  // that seed lands, when the held one is another session's or cannot be
+  // read, and always in the band's view, which never reads it.
+  usage: UsageLedger | null
 }
 
 type El = Pick<EngineElements['terminal'], 'Box' | 'Text'>
@@ -574,6 +582,12 @@ function contextTree({ Text }: El, v: View) {
   return contextLines(v).map((line, i) => <Text key={`context-${i}`} dimColor={line === SETTINGS_HINT}>{line}</Text>)
 }
 
+// What the session has spent, as usageLines words it, the lines for each
+// model dim.
+function usageTree({ Text }: El, v: View) {
+  return usageLines(v.usage).map((line, i) => <Text key={`usage-${i}`} dimColor={i > 0}>{line}</Text>)
+}
+
 // The agents as the pane lists them: running ones first, newest first within
 // each group.
 function agentsInOrder(cards: readonly AgentCard[]): AgentCard[] {
@@ -725,10 +739,11 @@ function staleTree({ Text }: El, v: View) {
 
 // The pane, with a pull request watched or not: the stale warning when the
 // session is stale, then the work, then the pull request's state when one is
-// watched, then the context lines, then the agents, the background work, the
-// open questions, the counsel and, with a pull request, the next step and the
-// last look. With none watched, as during /spec, it still shows the context
-// and lists the agents, the background work and the counsel.
+// watched, then the context lines and what the session has spent, then the
+// agents, the background work, the open questions, the counsel and, with a
+// pull request, the next step and the last look. With none watched, as during
+// /spec, it still shows the context and the spending, and lists the agents,
+// the background work and the counsel.
 export function paneTree(ui: Elements, v: View, presses: PanePresses, columns?: number) {
   const { Box, Text } = ui
   const s = v.pr
@@ -739,6 +754,7 @@ export function paneTree(ui: Elements, v: View, presses: PanePresses, columns?: 
         {workTree(ui, v, columns)}
         <Text dimColor>{NOTHING_WATCHED}</Text>
         {contextTree(ui, v)}
+        {usageTree(ui, v)}
         <Text> </Text>
         {agentsTree(ui, v, columns, presses)}
         {counselTree(ui, v.counsel)}
@@ -762,6 +778,7 @@ export function paneTree(ui: Elements, v: View, presses: PanePresses, columns?: 
       <Text>{`Verdicts at head: ${verdicts}`}</Text>
       <Text>{`Round ${roundInProgress(s)} (${s.headsReviewed} reviewed) · ${s.pushesSinceVerdict} ${s.pushesSinceVerdict === 1 ? 'push' : 'pushes'} since the last changes-requested verdict`}</Text>
       {contextTree(ui, v)}
+      {usageTree(ui, v)}
       <Text> </Text>
       {agentsTree(ui, v, columns, presses)}
       {open.length > 0 && <Text> </Text>}

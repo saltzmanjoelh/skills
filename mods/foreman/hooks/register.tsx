@@ -11,6 +11,8 @@ import { checkLine, FOREMAN_REPORTS, isAppParts, keptLine, keptNames, NOTED, NOT
 import { bandTree, PANE, paneTree, type Elements, type View } from './pane'
 import type { ForemanParent, ForemanTickets } from '../types'
 import { PARENT_OFF, parentIn, slotsOf, storeKey } from './parent'
+import { usageIn } from './record'
+import { spendOf, spentSum } from './spend'
 import { afterRead, busyCount, nameOf, nextReadDelay, READ_LATER_MS, rowsOf, type FileRead, type SubRow } from './subs'
 import { printable } from './text'
 import {
@@ -32,6 +34,10 @@ const log = atom({ plugin: 'foreman', key: 'log' } as const, [])
 const tickets = atom({ plugin: 'foreman', key: 'tickets' } as const, TICKETS_EMPTY)
 const turnRuns = atom({ plugin: 'foreman', key: 'turnRuns' } as const, false)
 const quietLine = atom({ plugin: 'foreman', key: 'quietLine' } as const, null)
+
+// The spending builder publishes for the session it runs in, which ownSpend
+// reads. Builder writes it; foreman only reads it.
+const builderUsage = atom({ plugin: 'builder', key: 'usage' } as const, null)
 
 // How many lines the log keeps.
 export const LOG_KEPT = 20
@@ -459,19 +465,44 @@ async function ensureArmed($: $) {
   else await readNow($)
 }
 
-// The View the band and the pane draw from.
-async function view($: $): Promise<View> {
+// What this session spent, from the `usage` value builder publishes in its
+// state, because builder counts in every session where it runs. Only
+// `sessionId`, `models` and `usd` are read. The spending is unknown when there
+// is no value, when foreman cannot read it, and when it is stamped with
+// another session id, as builder's value still is after a /clear until builder
+// counts its first step.
+// Builder's contract types the value, but a build of builder that stored it in
+// another shape may have left one behind, so it is still parsed with usageIn.
+async function ownSpend($: $) {
+  const usage = await read($, builderUsage)
+  if (typeof usage !== 'object' || usage === null) return null
+  if (usage.sessionId !== (await $.session.id())) return null
+  return spendOf(usageIn(usage))
+}
+
+// The View the band and the pane draw from. The ledger is read and parsed
+// once per draw, for both the rows and the sum. The spending figures are
+// worked out only when `withSpending` is set, which only the pane sets,
+// because the band never shows them and is drawn every second and again
+// after each change to builder's usage value, which reading that value while
+// drawing subscribes the drawing to. They are also worked out only in a
+// parent, because only the parent's pane shows them.
+async function view($: $, withSpending: boolean): Promise<View> {
   const settings = parentIn(await read($, parent))
   const due = await read($, nextReadAt)
   const lines = await read($, log)
+  const ledger = settings.isOn ? ticketsIn(await read($, tickets)) : null
+  const isSpendingShown = withSpending && ledger !== null
   return {
     isOn: settings.isOn,
     slots: slotsOf(settings, currentOptions.slots),
-    rows: settings.isOn ? await shownNow($) : [],
+    rows: ledger === null ? [] : shownRows(await rowsNow($), ledger),
     now: await $.clock.now(),
     nextReadAt: typeof due === 'number' && Number.isFinite(due) ? due : null,
     log: Array.isArray(lines) ? lines : [],
     issueLink: settings.isOn ? issueAddress : null,
+    subsSpent: isSpendingShown ? spentSum(ledger) : null,
+    ownSpent: isSpendingShown ? await ownSpend($) : null,
   }
 }
 
@@ -882,6 +913,7 @@ export const register: Register = (on, options) => {
       await update($, tickets, heldRaw => {
         const held = ticketsIn(heldRaw)
         const isEmpty = held.pairings.length === 0 && !hasWork(held.outbox) && held.held.length === 0 && held.offRefusedFor === null && held.unwatched.length === 0
+          && held.spent.length === 0 && held.earlier === null
         return isEmpty ? storedTickets : held
       })
     }
@@ -995,14 +1027,14 @@ export const register: Register = (on, options) => {
         void releaseRow($, file).catch(() => undefined)
       },
     }
-    return paneTree(elementsOf($, e), await view($), presses, columnsOf(e.props.bodyColumns))
+    return paneTree(elementsOf($, e), await view($, true), presses, columnsOf(e.props.bodyColumns))
   })
 
   // The band gives way to Claude Code's survey, and to the host in a session
   // that is not a parent, which bandTree answers with null.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
-    const v = await view($)
+    const v = await view($, false)
     const presses = {
       open: (file: string) => {
         void openRow($, file).catch(() => undefined)

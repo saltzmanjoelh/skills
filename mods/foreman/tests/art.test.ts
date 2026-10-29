@@ -2,9 +2,10 @@ import { expect, test } from 'claude-code/testing'
 
 import { barCells, barSvg, BAR_SVG_HEIGHT, fitBar, hasSvg, isSvgSurface, svgWidth, xmlText, type Bar } from '../hooks/art'
 import { gitDirOf, ignoredLine, issueLinkIn, linkFactIn, linkOf, mainCheckoutOf, resolved, whyUnusable } from '../hooks/links'
+import { spendOf, spendWords } from '../hooks/spend'
 import { STAGES, stageLabel, type StageId } from '../hooks/stages'
 import { clockTime, printable, timeOfDay } from '../hooks/text'
-import { BUILDER_DRAWN, BUILDER_STAGE_IDS } from './builder-drawn'
+import { BUILDER_DRAWN, BUILDER_SPENT, BUILDER_STAGE_IDS } from './builder-drawn'
 
 // Foreman copies builder's drawing code and its issue link rules, because a
 // mod cannot import another plugin's files. These tests hold each copy to what
@@ -41,6 +42,15 @@ test('every copied function answers what builder\'s answered for the same input'
   for (const drawn of BUILDER_DRAWN) {
     const copy = COPIES[drawn.fn]!
     expect(copy(...(drawn.args as never[])), `${drawn.fn}(${JSON.stringify(drawn.args)})`).toEqual(drawn.out)
+  }
+})
+
+// Builder's pane starts its line with "Spent: ", which foreman's pane writes
+// beside its own label, so the words after it are compared.
+test('foreman words the spending as builder\'s pane worded the same models and dollars', () => {
+  for (const spent of BUILDER_SPENT) {
+    const words = spendWords(spendOf({ models: spent.models, usd: spent.usd }))
+    expect(`Spent: ${words}`, JSON.stringify({ models: spent.models, usd: spent.usd })).toBe(spent.out)
   }
 })
 

@@ -282,3 +282,26 @@ test('the start_session fallback logs a call that went on without a ticket, and 
   expect(fallbackOf(false, 're-entry', false, true)).toEqual({ log: noTicketLog('re-entry'), sentence: true })
   expect(fallbackOf(false, 'timeout', false, false)).toEqual({ log: noTicketLog('timeout', false), sentence: false })
 })
+
+test('the spent list and the earlier total read back when sound, and a damaged list reads as empty with no earlier total', () => {
+  const counts = { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 }
+  const spent = [{ ticket: 'ft-a', counts, usd: 1.5 }, { ticket: 'ft-b', counts, usd: null }]
+  const sound = ticketsIn({ spent, earlier: { counts, usd: 2 } })
+  expect(sound.spent).toEqual(spent)
+  expect(sound.earlier).toEqual({ counts, usd: 2 })
+  for (const damaged of [undefined, null, 'lots', 7, { ft: 'a' }]) {
+    const t = ticketsIn({ spent: damaged, earlier: damaged })
+    expect(t.spent).toEqual([])
+    expect(t.earlier).toBeNull()
+  }
+  // An entry that does not parse is dropped, and the rest are kept.
+  const mixed = ticketsIn({ spent: [spent[0], null, { ticket: '', counts, usd: 1 }, { ticket: 'ft-c', counts: { ...counts, input: -1 }, usd: 1 }, { ticket: 'ft-d', counts, usd: 'one' }, { ticket: 'ft-e' }, spent[1]] })
+  expect(mixed.spent).toEqual(spent)
+  for (const bad of [{ counts }, { counts, usd: -1 }, { counts: { ...counts, output: 2.5 }, usd: 1 }, { usd: 1 }]) expect(ticketsIn({ earlier: bad }).earlier).toBeNull()
+  // A ledger from before foreman kept spending reads with none.
+  const old = ticketsIn({ pairings: [], folderMissing: false })
+  expect(old.spent).toEqual([])
+  expect(old.earlier).toBeNull()
+  expect(TICKETS_EMPTY.spent).toEqual([])
+  expect(TICKETS_EMPTY.earlier).toBeNull()
+})

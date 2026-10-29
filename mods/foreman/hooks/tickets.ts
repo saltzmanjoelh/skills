@@ -3,8 +3,8 @@
 // answer, the ledger as the store keeps it, which record owns each ticket,
 // and which rows show. Every function is pure.
 
-import type { ForemanActs, ForemanEffect, ForemanOutbox, ForemanPairing, ForemanStanding, ForemanTickets } from '../types'
-import { isPullRequestNumber, isPullRequestState, verdictsIn } from './record'
+import type { ForemanActs, ForemanEffect, ForemanOutbox, ForemanPairing, ForemanSpend, ForemanSpent, ForemanStanding, ForemanTickets } from '../types'
+import { countsIn, isDollars, isPullRequestNumber, isPullRequestState, verdictsIn } from './record'
 import { byKeyThenFile, keyOf, nameOf, type SubRow } from './subs'
 import { byTicket, KEY } from './wake'
 
@@ -144,7 +144,7 @@ export const ticketsKey = (sessionId: string) => `tickets:${sessionId}`
 
 export const OUTBOX_EMPTY: ForemanOutbox = { logs: [], effects: [], lines: [] }
 
-export const TICKETS_EMPTY: ForemanTickets = { pairings: [], folderMissing: false, outbox: OUTBOX_EMPTY, held: [], offRefusedFor: null, unwatched: [] }
+export const TICKETS_EMPTY: ForemanTickets = { pairings: [], folderMissing: false, outbox: OUTBOX_EMPTY, held: [], offRefusedFor: null, unwatched: [], spent: [], earlier: null }
 
 // Whether the outbox holds anything to carry out.
 export const hasWork = (o: ForemanOutbox) => o.logs.length > 0 || o.effects.length > 0 || o.lines.length > 0
@@ -276,11 +276,32 @@ const UNWATCHED_SHAPE = new RegExp(`^${LOCAL_ID.source}$`)
 // reads as holding none.
 const unwatchedIn = (raw: unknown): string[] => [...new Set(strings(raw).filter(id => UNWATCHED_SHAPE.test(id)))].slice(-MAX_UNWATCHED)
 
+// Stored spending, or null unless its counts are sound and its dollars are a
+// dollar figure or null.
+function spendIn(raw: unknown): ForemanSpend | null {
+  const s = objectOf(raw)
+  if (s === null) return null
+  const counts = countsIn(s.counts)
+  if (counts === null || (s.usd !== null && !isDollars(s.usd))) return null
+  return { counts, usd: s.usd }
+}
+
+// The stored spent list read tolerantly: a value that is not a list reads as
+// empty, and an entry without a ticket or with unsound spending is dropped.
+const spentIn = (raw: unknown): ForemanSpent[] => (Array.isArray(raw)
+  ? raw.flatMap(e => {
+    const ticket = textOr(objectOf(e)?.ticket, null)
+    const spend = spendIn(e)
+    return ticket === null || spend === null ? [] : [{ ticket, ...spend }]
+  })
+  : [])
+
 // A stored ledger read tolerantly: a value in any other shape, such as none
 // at all from a parent of the read-only build, reads as empty, and a pairing
 // without a ticket is dropped while any other bad field takes its default.
 // A ledger from before the role-off facts were kept reads with no refusal
-// given and no unwatched sub sessions.
+// given and no unwatched sub sessions, and one from before foreman kept
+// spending reads with none.
 export function ticketsIn(raw: unknown): ForemanTickets {
   const t = objectOf(raw)
   if (t === null) return TICKETS_EMPTY
@@ -292,6 +313,8 @@ export function ticketsIn(raw: unknown): ForemanTickets {
     held: heldIn(t.held),
     offRefusedFor: textOr(t.offRefusedFor, null),
     unwatched: unwatchedIn(t.unwatched),
+    spent: spentIn(t.spent),
+    earlier: spendIn(t.earlier),
   }
 }
 

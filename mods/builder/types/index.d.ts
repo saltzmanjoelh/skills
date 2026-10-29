@@ -358,6 +358,10 @@ export type BuildStatus = {
   // that looks like a secret. A task's command is never written. An older
   // record has no such field.
   backgroundOnly?: { since: number; tasks: string[] }
+  // The tokens the session has spent, split by model, and its dollar total,
+  // as builder counted them up to the write. An older record has no such
+  // field, and a reader takes a missing one as spending that is unknown.
+  usage?: BuildUsage
   // Present whenever at least one background task is in flight, whatever the
   // state: the oldest task by its start time. `description` is cleaned and cut
   // short like those in `backgroundOnly`, or the withheld text in place of one
@@ -367,6 +371,43 @@ export type BuildStatus = {
   // plus builder's 15 minutes. The three stay fixed while the same task is the
   // oldest. An older record has no such field.
   oldestBackground?: { description: string; startedAt: number; hungAt: number }
+}
+
+// The tokens one model spent, in the four kinds the API reports: uncached
+// input, output, input read from the prompt cache and input written to it.
+// Each is a whole number of zero or more.
+export type TokenCounts = { input: number; output: number; cacheRead: number; cacheWrite: number }
+
+// One model's tokens, by the model name the API reported.
+export type ModelTokens = TokenCounts & { model: string }
+
+// What the session has spent, as the status file carries it and as the
+// foreman reads it, from the status file and from builder's `usage` state
+// value: the tokens of every model that answered a step, sorted by model
+// name, and the dollar total, or null while the engine has given no dollar
+// reading. The foreman type-checks its reader against this type.
+export type BuildUsage = { models: ModelTokens[]; usd: number | null }
+
+// One turn whose steps the session counted: the turn's id and the highest
+// step index added for it.
+export type CountedTurn = { turnId: string; index: number }
+
+// The one ledger builder keeps of the session's spending, in its state and in
+// the store under `usage:<session id>`. `sessionId` is the session it was
+// counted for, and a reader treats a ledger stamped with another session id
+// as absent, because a cleared session keeps the process alive under a new
+// session id. `models` and `usd` are the totals, as BuildUsage says.
+// `lastEngineUsd` is the engine's last dollar reading, or null before the
+// first, from which only an increase is added to `usd`. `turns` holds the
+// newest 50 turns counted, the one counted last at the end, so that a
+// repeated step adds nothing. `at` is when a step was last added, or when the
+// ledger was made, from which a stored ledger is pruned after 14 days. Read
+// through usageIn in hooks/usage.ts.
+export type UsageLedger = BuildUsage & {
+  sessionId: string
+  lastEngineUsd: number | null
+  turns: CountedTurn[]
+  at: number
 }
 
 // The permission prompts of one loop and one tool that are open: `loop` is
@@ -519,6 +560,14 @@ declare module 'claude-code' {
       // or null before the first prompt was looked at for a ticket and after
       // a /clear. Read through statusMemoIn in hooks/status.ts.
       statusMemo: StatusMemo | null
+      // What the session has spent, counted from every model step of the
+      // session's own loop and of its subagents, in every session, ticketed
+      // or not, or null before the first step or session start counted for
+      // this session. The foreman reads it in its parent session as that
+      // session's own spending, and reads only `sessionId`, `models` and
+      // `usd`; the other fields are builder's own bookkeeping. Read through
+      // usageIn in hooks/usage.ts.
+      usage: UsageLedger | null
     }
   }
 }

@@ -98,6 +98,20 @@ export type ForemanEffect = { kind: 'nudge'; to: string; name: string; about?: '
 // reload that drops the timer in between loses nothing.
 export type ForemanOutbox = { logs: string[]; effects: ForemanEffect[]; lines: string[] }
 
+// Tokens in the four kinds the API reports: uncached input, output, input
+// read from the prompt cache and input written to it. Each is a whole number
+// of zero or more. hooks/record.ts stops the type check when it differs from
+// builder's TokenCounts.
+export type ForemanCounts = { input: number; output: number; cacheRead: number; cacheWrite: number }
+
+// What some sessions spent: their tokens summed over every model, and their
+// dollar total, or null when no dollar figure is known.
+export type ForemanSpend = { counts: ForemanCounts; usd: number | null }
+
+// The last spending foreman read from the status file of the sub session that
+// owns `ticket`.
+export type ForemanSpent = ForemanSpend & { ticket: string }
+
 // Every pairing of this parent, and what is still to be carried out. `folderMissing` says the last read found no status folder, so
 // the log says so once. `held` lists the issue keys whose start the desktop
 // app refused because the person works over Remote Control, which foreman
@@ -106,7 +120,11 @@ export type ForemanOutbox = { logs: string[]; effects: ForemanEffect[]; lines: s
 // /implement start while the role was off, or null, so the refusal counts
 // only in the conversation that saw it. `unwatched` lists the `local_…` ids
 // of sub sessions started while the role was off, which foreman does not
-// watch, oldest first.
+// watch, oldest first. `spent` holds, for each ticket whose owner's file
+// foreman has read spending from, the last spending it read, oldest ticket
+// first. It outlives the pairing, so a sub session whose file is gone still
+// counts in the sum. `earlier` is the total of the entries folded out of
+// `spent` once it grew past its bound, or null while none was folded.
 export type ForemanTickets = {
   pairings: ForemanPairing[]
   folderMissing: boolean
@@ -114,6 +132,8 @@ export type ForemanTickets = {
   held: string[]
   offRefusedFor: string | null
   unwatched: string[]
+  spent: ForemanSpent[]
+  earlier: ForemanSpend | null
 }
 
 declare module 'claude-code' {

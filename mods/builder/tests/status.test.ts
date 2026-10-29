@@ -7,6 +7,7 @@ import {
   isProbablyHung, issueOf, newMemo, oldestTaskOf, recordOf, shownOrWithheld, startOf, startsBackgrounded, startsIn, startsPruned, startsSeen, startsWithout, STATE_RULES, stateOf,
   statusMemoIn, TASK_CHARS, taskKeyOf, taskKeyOfId, ticketIn, WITHHELD, type StatusFacts,
 } from '../hooks/status'
+import { afterCost, afterStep, emptyUsage } from '../hooks/usage'
 import type { AgentCard, BackgroundTask, StatusMemo } from '../types'
 
 const NOW = 1_000_000
@@ -29,7 +30,7 @@ function memo(over: Partial<StatusMemo> = {}): StatusMemo & { ticket: string } {
 function facts(over: Partial<StatusFacts> = {}): StatusFacts {
   return {
     memo: memo(), progress: null, run: null, pr: null, busy: false, agents: [], background: [], backgroundStarts: {}, calls: [], questions: [],
-    nextLook: null, usageHold: null, ...over,
+    nextLook: null, usageHold: null, usage: null, ...over,
   }
 }
 
@@ -540,4 +541,19 @@ test('the compared text stays the same as time passes while the same task is the
   expect(textAt(NOW + 20 * 60_000, { background: both })).toBe(textAt(NOW, { background: both }))
   // The oldest task ended, so the next one is named and the text changes.
   expect(textAt(NOW, { background: [task('b2', 'Build')], busy: true })).not.toBe(textAt(NOW, { background: both, busy: true }))
+})
+
+test('the record carries the session\'s spending, the tokens by model and the dollars or null, when the ledger exists, leaves it out when it does not, and stays version 1', () => {
+  const counted = afterStep(emptyUsage('session-1', NOW), 'turn-1', 0, {
+    model: 'example-model-large', input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4,
+  }, NOW)
+  const unpriced = recordOf(facts({ usage: counted }), NOW)
+  expect(unpriced.usage).toEqual({ models: [{ model: 'example-model-large', input: 1, output: 2, cacheRead: 3, cacheWrite: 4 }], usd: null })
+  expect(unpriced.version).toBe(1)
+  expect(recordOf(facts({ usage: afterCost(counted, 0.4) }), NOW).usage).toEqual({ models: unpriced.usage?.models, usd: 0.4 })
+  // Only the totals are written, never the remembered turns or the engine's last reading.
+  expect(Object.keys(unpriced.usage ?? {}).sort()).toEqual(['models', 'usd'])
+  const none = recordOf(facts(), NOW)
+  expect('usage' in none).toBe(false)
+  expect(none.version).toBe(1)
 })

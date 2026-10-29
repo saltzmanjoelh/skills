@@ -4,9 +4,10 @@
 
 import type { Elements as EngineElements } from 'claude-code'
 
-import type { ForemanLogLine } from '../types'
+import type { ForemanLogLine, ForemanSpend } from '../types'
 import { BAR_SVG_HEIGHT, barSvg, fitBar, hasSvg, svgWidth, type Bar } from './art'
 import { linkOf } from './links'
+import { spendOf, spendWords } from './spend'
 import { STAGES, stageLabel } from './stages'
 import {
   busyCount, chipParts, chipText, fitChips, isProbablyHung, keyOf, moreWords, SEPARATOR, STATE_LOOK, staleWords, untilWords, waitWords, type SubRow,
@@ -31,6 +32,11 @@ export type View = {
   // The project's usable issue address while the session is a parent, else
   // null, which draws every key as plain text.
   issueLink: string | null
+  // What every sub session this parent started spent, and what this session
+  // spent itself, or null for each while it is unknown. Only the pane's view
+  // works them out, so in the band's view both are always null.
+  subsSpent: ForemanSpend | null
+  ownSpent: ForemanSpend | null
 }
 
 // The elements the band and the pane draw with, as hooks/register.tsx builds
@@ -185,13 +191,21 @@ function issueRow(ui: Elements, row: SubRow, address: string | null, presses: Pa
   )
 }
 
-// One sub session in the pane: the issue row, the bar, the state, and the
-// Nudge and Release buttons. A released one shows `released`, dimmed, in
-// place of its state and has no Nudge or Release button; its issue button
-// still opens it. The state is drawn in its own tone, or in the warning tone
-// once the sub session's oldest background task is probably hung, unless its
-// own tone is red, so the mark never makes a row look less urgent. A stale
-// state stays dimmed and uncolored either way.
+// What a row's sub session spent, from its status file, dimmed. A file that
+// carries no spending shows it as unknown.
+function spentRow(ui: Elements, row: SubRow) {
+  const { Text } = ui
+  return <Text key={`spent-${row.file}`} dimColor>{`Spent: ${spendWords(spendOf(row.record.usage))}`}</Text>
+}
+
+// One sub session in the pane: the issue row, the bar, the state, what it
+// spent, and the Nudge and Release buttons. A released one shows `released`,
+// dimmed, in place of its state and has no Nudge or Release button; its issue
+// button still opens it, and it still shows what it spent. The state is
+// drawn in its own tone, or in the warning tone once the sub session's oldest
+// background task is probably hung, unless its own tone is red, so the mark
+// never makes a row look less urgent. A stale state stays dimmed and
+// uncolored either way.
 function subTree(ui: Elements, row: SubRow, now: number, address: string | null, columns: number | undefined, presses: PanePresses) {
   const { Box, Text, Button } = ui
   const own = STATE_LOOK[row.record.state].tone
@@ -203,6 +217,7 @@ function subTree(ui: Elements, row: SubRow, now: number, address: string | null,
       issue,
       bar,
       <Text key={`state-${row.file}`} dimColor>{RELEASED}</Text>,
+      spentRow(ui, row),
       <Text key={`gap-${row.file}`}> </Text>,
     ]
   }
@@ -212,6 +227,7 @@ function subTree(ui: Elements, row: SubRow, now: number, address: string | null,
     row.isStale
       ? <Text key={`state-${row.file}`} dimColor>{stateWords(row, now)}</Text>
       : <Text key={`state-${row.file}`} color={TONE_COLOR[tone]}>{stateWords(row, now)}</Text>,
+    spentRow(ui, row),
     <Box key={`actions-${row.file}`} flexDirection="row">
       <Button key={`nudge-${row.file}`} label="Nudge" onPress={() => presses.nudge(row.file)} />
       <Text> </Text>
@@ -224,8 +240,9 @@ function subTree(ui: Elements, row: SubRow, now: number, address: string | null,
 export const NOT_A_PARENT = 'This session is not a parent. Run /start-foreman to make it one.'
 export const NO_SUBS = 'No sub sessions are in the status folder.'
 
-// The pane: one row for each sub session, then the log, newest last, each
-// line with its time.
+// The pane: one row for each sub session, then what the sub sessions spent
+// together and what this session spent itself, then the log, newest last,
+// each line with its time.
 export function paneTree(ui: Elements, v: View, presses: PanePresses, columns?: number) {
   const { Box, Text } = ui
   if (!v.isOn) return <Box key="foreman-pane" flexDirection="column"><Text dimColor>{NOT_A_PARENT}</Text></Box>
@@ -233,6 +250,9 @@ export function paneTree(ui: Elements, v: View, presses: PanePresses, columns?: 
     <Box key="foreman-pane" flexDirection="column">
       {v.rows.length === 0 ? [<Text key="none" dimColor>{NO_SUBS}</Text>, <Text key="none-gap"> </Text>] : null}
       {v.rows.flatMap(row => subTree(ui, row, v.now, v.issueLink, columns, presses))}
+      <Text key="spent-subs">{`Sub sessions spent: ${spendWords(v.subsSpent)}`}</Text>
+      <Text key="spent-own">{`This session spent: ${spendWords(v.ownSpent)}`}</Text>
+      <Text key="spent-gap"> </Text>
       <Text key="log-head" bold>Log</Text>
       {v.log.length === 0
         ? <Text key="log-none" dimColor>Nothing yet.</Text>

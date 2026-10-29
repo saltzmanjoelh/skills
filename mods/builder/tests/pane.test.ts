@@ -6,6 +6,7 @@ import { snapshotOf } from '../hooks/github'
 import { abovePromptLine, agentCount, agentLines, agentRowOf, backgroundLines, contextLines, counselLines, messageLines, messagesReadOf, NAMED_AFTER_MS, nextStep, secondRow, STALE_WARNING, timeUntil, type View } from '../hooks/pane'
 import { RELOAD_LINE, resumePrompt, stuckPrompt } from '../hooks/prompts'
 import { clockTime, printable, timeOfDay } from '../hooks/text'
+import { afterCost, afterStep, emptyUsage, usageLines } from '../hooks/usage'
 import type { AgentCard, BackgroundTask, Compactions, ContextMeasure, CounselQuestion, CounselVote, ForegroundCall, NextLook, Progress, Question } from '../types'
 
 const C = 'c'.repeat(40)
@@ -52,6 +53,7 @@ function view(over: Partial<View> = {}): View {
     issueLink: null,
     context: null,
     compactions: null,
+    usage: null,
     ...over,
   }
 }
@@ -830,4 +832,43 @@ test('the settings hint is one line of the pane while the ceiling is the default
   expect(contextLines(view({ context: measure(), compactions: compacted(0, { last: null, failed }) })).at(-1)).toBe(SETTINGS_HINT)
   expect(abovePromptLine(view({ context: measure() }))).not.toContain('autoCompactWindow')
   expect(secondRow(view({ pr: null, nextLook: null, started: true, context: measure() }))).not.toContain('autoCompactWindow')
+})
+
+// A ledger of session-1 that counted one step of each model given, as
+// [model, input, output, cache read, cache write].
+function spent(...steps: [string, number, number, number, number][]) {
+  return steps.reduce((l, [model, input, output, cacheRead, cacheWrite], i) => afterStep(l, 'turn-1', i, {
+    model, input_tokens: input, output_tokens: output, cache_read_input_tokens: cacheRead, cache_creation_input_tokens: cacheWrite,
+  }, NOW), emptyUsage('session-1', NOW))
+}
+
+test('the pane\'s spending lines give the four kinds summed over the models and the dollars, then one line per model, in thousands below a million and in millions above it', () => {
+  const l = afterCost(spent(['example-model-large', 1_200_000, 3_400, 68_900_000, 2_160_000], ['example-model-small', 600, 120, 5_500, 900]), 12.346)
+  expect(usageLines(l)).toEqual([
+    'Spent: 1.2M in, 4K out, 68.9M cache read, 2.2M cache write · $12.35',
+    '  example-model-large: 1.2M in, 3K out, 68.9M cache read, 2.2M cache write',
+    '  example-model-small: 1K in, 0K out, 6K cache read, 1K cache write',
+  ])
+})
+
+test('with no dollar reading the pane says the cost is unknown and never shows $0, and before anything is counted it says so', () => {
+  const lines = usageLines(spent(['example-model-large', 10_000, 2_000, 0, 0]))
+  expect(lines[0]).toBe('Spent: 10K in, 2K out, 0K cache read, 0K cache write · cost unknown')
+  expect(lines.join('\n')).not.toContain('$0')
+  expect(usageLines(null)).toEqual(['Spent: nothing counted yet · cost unknown'])
+  expect(usageLines(null).join('\n')).not.toContain('$0')
+  // An empty ledger, as the session's start seeds, reads as foreman's pane
+  // reads one, with the dollars beside it. A known reading of nothing is
+  // shown, since it is not unknown.
+  expect(usageLines(emptyUsage('session-1', NOW))).toEqual(['Spent: nothing counted yet · cost unknown'])
+  expect(usageLines(afterCost(emptyUsage('session-1', NOW), 0))).toEqual(['Spent: nothing counted yet · $0.00'])
+  expect(usageLines(afterCost(emptyUsage('session-1', NOW), 1.25))).toEqual(['Spent: nothing counted yet · $1.25'])
+  // A ledger whose only step reported no counts has a model but no tokens,
+  // and foreman, which sees only the counts summed over the models, words it
+  // the same way.
+  expect(usageLines(spent(['example-model-large', 0, 0, 0, 0]))).toEqual(['Spent: nothing counted yet · cost unknown'])
+})
+
+test('a model name that holds control characters is cleaned before the pane shows it', () => {
+  expect(usageLines(spent(['bad\u001b[2Jname', 1_000, 0, 0, 0]))[1]).toBe('  badname: 1K in, 0K out, 0K cache read, 0K cache write')
 })

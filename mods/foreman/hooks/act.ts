@@ -7,6 +7,7 @@
 import type { Listed } from './desktop'
 import { releasedBy } from './held'
 import { prStateOf, type BuildState, type RecordVerdicts } from './record'
+import { folded, withReadings } from './spend'
 import type { ForemanActs, ForemanEffect, ForemanPairing, ForemanTickets } from '../types'
 import { busyCount, nameOf, type SubRow } from './subs'
 import { ANNOUNCED_NONE, capped, ownsTicket, shownRows } from './tickets'
@@ -368,6 +369,10 @@ export function slotsNeedList(t: ForemanTickets, rows: readonly SubRow[], now: n
 // milestones wake the parent after its other reasons. When a slot freed, the
 // parent is woken with the number of slots free, unless none is free. A list
 // that was read releases each held key that a session in it shows started.
+// The spending in each owner's file is taken into the ledger from the
+// pairings as the read found them, and the spent list is folded after the
+// pairings are decided, so an entry whose pairing this read forgot can fold
+// in the same ledger.
 export function decide(input: DecideInput): Decision {
   const { rows, now, limits, sessions, folderExists, listed } = input
   const byId = sessions.kind === 'read' ? new Map(sessions.sessions.map(x => [x.sessionId, x])) : null
@@ -410,7 +415,7 @@ export function decide(input: DecideInput): Decision {
     freed += s.freed
     return [s.p]
   })
-  let tickets: ForemanTickets = capped({ ...input.tickets, pairings })
+  let tickets: ForemanTickets = folded(capped({ ...withReadings(input.tickets, rows), pairings }))
   if (!folderExists && !tickets.folderMissing) logs.push('The status folder is missing, so foreman frees no slot until it is back.')
   tickets = { ...tickets, folderMissing: !folderExists }
   if (sessions.kind === 'read' && tickets.held.length > 0) {

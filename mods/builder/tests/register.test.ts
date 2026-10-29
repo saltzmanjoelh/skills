@@ -7870,15 +7870,15 @@ async function ownTurn($: Engine, turnId: string, reason: 'answer' | 'refusal' |
   await $.turn.complete({ answer: reason === 'error' ? '' : 'waiting', durationMs: 1, isAborted: reason === 'aborted', turnId, reason } as never)
 }
 
-// Answers `$.session.usage()` with the windows in `rateLimits` and the
-// context window's figures in `context`, which holds no figures until a test
-// gives it some, or throws when `fails` is set, as when the engine cannot
-// read the usage.
+// Answers `$.session.usage()` with the windows in `rateLimits`, the context
+// window's figures in `context`, which holds no figures until a test gives it
+// some, and the session's cost in `cost`, which is left out until a test sets
+// it, or throws when `fails` is set, as when the engine cannot read the usage.
 function usageAnswers(on: On) {
-  const usage = { rateLimits: [] as object[], fails: false, context: {} as object }
+  const usage = { rateLimits: [] as object[], fails: false, context: {} as object, cost: undefined as { usd: number } | undefined }
   on('session.usage', () => {
     if (usage.fails) throw new Error('the usage could not be read')
-    return { value: { startedAt: 0, context: usage.context, rateLimits: usage.rateLimits } } as never
+    return { value: { startedAt: 0, context: usage.context, rateLimits: usage.rateLimits, ...(usage.cost === undefined ? {} : { cost: usage.cost }) } } as never
   })
   return usage
 }
@@ -10483,13 +10483,14 @@ async function watchUntilMerged($: Engine, s: ReturnType<typeof foremanSession>)
   await s.clock.advance(10 * MINUTE)
 }
 
-test('a session whose first prompt holds a ticket writes its record under the configuration folder, idle, with its ticket, ids and folder', async ($, on) => {
+test('a session whose first prompt holds a ticket writes its record under the configuration folder, idle, with its ticket, ids and folder, and nothing spent yet', async ($, on) => {
   const s = foremanSession(on)
   await firstPrompt($, s.clock)
 
   expect(s.statusAt()).toEqual({
     version: 1, sessionId: 'session-1', ticket: 'slot-1', desktopSessionId: 'desk-1', cwd: '/repo', issueKey: null, issueTitle: '',
     stage: null, stageDone: 0, pr: null, state: 'idle', reason: 'Nothing runs and nothing is waiting.', stateSince: S0, writtenAt: S0,
+    usage: { models: [], usd: null },
   })
 })
 
@@ -11989,4 +11990,332 @@ test('the pane shows the context with the settings hint as one dim line, and onc
   expect(after).toContain('Context: 255K of 300K (default)')
   expect(after).toContain('Compacted once, 3m ago (manual), 115K to 16K.')
   expect(after).not.toContain(SETTINGS_HINT)
+})
+
+// A store in memory that records every write of a ledger of the session's
+// spending, under a key starting usage:, in `writes`, and refuses every write
+// while `refuses` is set, as the engine does past 4 MiB. A refused write is
+// recorded too, with `refused` set. While `hold` is set, the next read of a
+// ledger waits until that promise resolves, and `hold` is cleared, so only
+// that one read is slow. `holdWrite` does the same for the next write of a
+// ledger, which is recorded when it starts and lands when the promise resolves.
+function usageStore(on: On, entries: [string, unknown][] = []) {
+  const stored = new Map<string, unknown>(entries)
+  const seen = { stored, refuses: false, hold: null as Promise<void> | null, holdWrite: null as Promise<void> | null, writes: [] as { key: string; value: unknown; refused: boolean }[] }
+  on('store.keys', () => ({ value: [...stored.keys()] }))
+  on('store.get', async ($, e) => {
+    const hold = e.key.startsWith('usage:') ? seen.hold : null
+    if (hold !== null) {
+      seen.hold = null
+      await hold
+    }
+    return { value: stored.get(e.key) }
+  })
+  on('store.set', async ($, e) => {
+    if (e.key.startsWith('usage:')) seen.writes.push({ key: e.key, value: e.value, refused: seen.refuses })
+    const hold = e.key.startsWith('usage:') ? seen.holdWrite : null
+    if (hold !== null) {
+      seen.holdWrite = null
+      await hold
+    }
+    if (seen.refuses) return { deny: 'the store is full' }
+    stored.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('store.delete', ($, e) => {
+    stored.delete(e.key)
+    return { value: undefined }
+  })
+  return seen
+}
+
+// The usage a model step reports: `n` tokens of each kind, from one model.
+const stepUsage = (n: number, model = 'example-model-large') => ({
+  model, input_tokens: n, output_tokens: n, cache_read_input_tokens: n, cache_creation_input_tokens: n,
+})
+
+// Answers every model step at the bottom of the chain with `answer.usage`.
+function modelSteps(on: On) {
+  const answer = { usage: stepUsage(1) as ReturnType<typeof stepUsage> | null }
+  on('turn.step', async function* ($, e) {
+    yield { kind: 'stop', stopReason: 'end_turn', usage: null }
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: answer.usage }
+  })
+  return answer
+}
+
+// Runs one model step of the session's own loop to its end.
+async function modelStep($: Engine, turnId: string, index: number) {
+  const stream = $.turn.step({ turnId, index, model: 'example-model-large', messageCount: 2 })
+  for (;;) if ((await stream.next()).done) return
+}
+
+const spentOf = (value: unknown) => value as { models: { model: string; input: number; output: number; cacheRead: number; cacheWrite: number }[]; usd: number | null; turns: { turnId: string; index: number }[] }
+
+test('one counted step writes the ledger to the store once, holding both the turn\'s entry and the added counts, and the same step again writes nothing', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const store = usageStore(on)
+  engine(on)
+  fakeGitHub(on)
+  modelSteps(on)
+  await startOnly($)
+  await clock.settle()
+  expect(store.writes).toEqual([])
+
+  await modelStep($, 'turn-1', 0)
+  await clock.settle()
+  expect(store.writes.length).toBe(1)
+  expect(store.writes[0]?.key).toBe('usage:session-1')
+  const written = spentOf(store.writes[0]?.value)
+  expect(written.turns).toEqual([{ turnId: 'turn-1', index: 0 }])
+  expect(written.models).toEqual([{ model: 'example-model-large', input: 1, output: 1, cacheRead: 1, cacheWrite: 1 }])
+
+  await modelStep($, 'turn-1', 0)
+  await clock.settle()
+  expect(store.writes.length).toBe(1)
+})
+
+test('a step whose usage is null, and a step from a subagent\'s loop, are counted as the spec says: the first adds nothing and the second adds its tokens', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const store = usageStore(on)
+  engine(on)
+  fakeGitHub(on)
+  const answer = modelSteps(on)
+  await startOnly($)
+  answer.usage = null
+  await modelStep($, 'turn-1', 0)
+  await clock.settle()
+  expect(store.writes).toEqual([])
+
+  answer.usage = stepUsage(4, 'example-model-small')
+  const stream = $.turn.step({ turnId: 'turn-agent', index: 0, model: 'example-model-small', messageCount: 2, agentId: 'agent-1' })
+  for (;;) if ((await stream.next()).done) break
+  await clock.settle()
+  expect(spentOf(store.stored.get('usage:session-1')).models).toEqual([{ model: 'example-model-small', input: 4, output: 4, cacheRead: 4, cacheWrite: 4 }])
+})
+
+test('a refused write leaves the pane\'s totals right, and the next step\'s write carries both steps', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const store = usageStore(on)
+  engine(on)
+  fakeGitHub(on)
+  const answer = modelSteps(on)
+  const pane = await $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'Pane', requestId: 'builder', props: {} as never })
+  await startOnly($)
+  const spent = async () => {
+    await pane.redraw()
+    return (await pane.find({ type: 'Text', text: /^Spent: / }))?.text ?? ''
+  }
+  expect(await spent()).toBe('Spent: nothing counted yet · cost unknown')
+
+  store.refuses = true
+  answer.usage = stepUsage(2_000)
+  await modelStep($, 'turn-1', 0)
+  await clock.settle()
+  expect(store.writes.map(w => w.refused)).toEqual([true])
+  expect(store.stored.has('usage:session-1')).toBe(false)
+  expect(await spent()).toBe('Spent: 2K in, 2K out, 2K cache read, 2K cache write · cost unknown')
+
+  store.refuses = false
+  answer.usage = stepUsage(3_000)
+  await modelStep($, 'turn-1', 1)
+  await clock.settle()
+  const stored = spentOf(store.stored.get('usage:session-1'))
+  expect(stored.models).toEqual([{ model: 'example-model-large', input: 5_000, output: 5_000, cacheRead: 5_000, cacheWrite: 5_000 }])
+  expect(stored.turns).toEqual([{ turnId: 'turn-1', index: 1 }])
+  expect(await spent()).toBe('Spent: 5K in, 5K out, 5K cache read, 5K cache write · cost unknown')
+})
+
+// Reading a value while drawing subscribes the drawing to it, so a band that
+// read the usage would be drawn again after every counted model step, though
+// it never shows the spending. The read of the watched pull request shows that
+// the band's draw did read its own values.
+test('the band\'s draw never reads the usage value, which only the pane shows, and the pane\'s draw does', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  usageStore(on)
+  engine(on)
+  fakeGitHub(on)
+  const answer = modelSteps(on)
+  answer.usage = stepUsage(1_000)
+  const reads = new Map<string, number>()
+  on('state.get', ($, e, next) => {
+    if (e.plugin === 'builder') reads.set(e.key, (reads.get(e.key) ?? 0) + 1)
+    return next(e)
+  })
+  const { band } = await liveBand($, on)
+  await startOnly($)
+  await modelStep($, 'turn-1', 0)
+  await clock.settle()
+  reads.clear()
+  await band.redraw()
+  expect(reads.get('pr') ?? 0).toBeGreaterThan(0)
+  expect(reads.get('usage') ?? 0).toBe(0)
+
+  const pane = await $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'Pane', requestId: 'builder', props: {} as never })
+  await pane.redraw()
+  expect(reads.get('usage') ?? 0).toBeGreaterThan(0)
+  expect((await pane.find({ type: 'Text', text: /^Spent: / }))?.text).toBe('Spent: 1K in, 1K out, 1K cache read, 1K cache write · cost unknown')
+})
+
+test('the totals come back from the store after a restart, and a step counted before it is not counted again', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const earlier = {
+    sessionId: 'session-1', models: [{ model: 'example-model-large', input: 10, output: 10, cacheRead: 10, cacheWrite: 10 }],
+    usd: 1.25, lastEngineUsd: 1.25, turns: [{ turnId: 'turn-1', index: 3 }], at: T0 - HOUR,
+  }
+  const store = usageStore(on, [['usage:session-1', earlier]])
+  engine(on)
+  fakeGitHub(on)
+  modelSteps(on)
+  const pane = await $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'Pane', requestId: 'builder', props: {} as never })
+  await startOnly($)
+  await clock.settle()
+  await pane.redraw()
+  expect((await pane.find({ type: 'Text', text: /^Spent: / }))?.text).toBe('Spent: 0K in, 0K out, 0K cache read, 0K cache write · $1.25')
+
+  await modelStep($, 'turn-1', 3)
+  await clock.settle()
+  expect(store.writes).toEqual([])
+  await modelStep($, 'turn-1', 4)
+  await clock.settle()
+  expect(spentOf(store.stored.get('usage:session-1')).models[0]?.input).toBe(11)
+})
+
+test('a damaged ledger stored under the session\'s key reads as none, and the counting starts again from zero', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const store = usageStore(on, [['usage:session-1', { sessionId: 'session-1', models: 'garbage', usd: 99, turns: [], at: T0 }]])
+  engine(on)
+  fakeGitHub(on)
+  modelSteps(on)
+  await startOnly($)
+  await clock.settle()
+  await modelStep($, 'turn-1', 0)
+  await clock.settle()
+  const stored = spentOf(store.stored.get('usage:session-1'))
+  expect(stored.models).toEqual([{ model: 'example-model-large', input: 1, output: 1, cacheRead: 1, cacheWrite: 1 }])
+  expect(stored.usd).toBeNull()
+})
+
+test('a session that starts with a lower engine dollar figure than the stored one keeps a growing total, read at the start, at each measure and at a turn\'s end', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const earlier = { sessionId: 'session-1', models: [], usd: 5, lastEngineUsd: 5, turns: [], at: T0 - HOUR }
+  const store = usageStore(on, [['usage:session-1', earlier]])
+  engine(on)
+  fakeGitHub(on)
+  sessionTurns(on)
+  const usage = usageAnswers(on)
+  on('session.measure', ($, e) => ({ changed: e.changed }))
+  usage.cost = { usd: 0.5 }
+  await startOnly($)
+  await clock.settle()
+  expect(spentOf(store.stored.get('usage:session-1')).usd).toBe(5.5)
+
+  await $.session.measure({ context: { window: 200_000 }, rateLimits: [], cost: { usd: 0.75 }, changed: ['cost'] })
+  await clock.settle()
+  expect(spentOf(store.stored.get('usage:session-1')).usd).toBe(5.75)
+
+  usage.cost = { usd: 1 }
+  await ownTurn($, 't1')
+  await clock.settle()
+  expect(spentOf(store.stored.get('usage:session-1')).usd).toBe(6)
+
+  // A measure without a cost leaves the total as it was.
+  await $.session.measure({ context: { window: 200_000 }, rateLimits: [], changed: ['context'] })
+  await clock.settle()
+  expect(spentOf(store.stored.get('usage:session-1')).usd).toBe(6)
+})
+
+test('two dollar readings taken in order apply in that order, so a slow first one is not taken for a fresh start and added on top of the second', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const store = usageStore(on)
+  // No ledger is held in state, so the first reading's change reads the
+  // stored one for its seed, and that read waits until the test lets it go.
+  let release = () => {}
+  store.hold = new Promise<void>(resolve => {
+    release = resolve
+  })
+  engine(on)
+  fakeGitHub(on)
+  on('session.measure', ($, e) => ({ changed: e.changed }))
+
+  await $.session.measure({ context: { window: 200_000 }, rateLimits: [], cost: { usd: 1 }, changed: ['cost'] })
+  await $.session.measure({ context: { window: 200_000 }, rateLimits: [], cost: { usd: 1.5 }, changed: ['cost'] })
+  await clock.settle()
+  release()
+  await clock.settle()
+  const stored = spentOf(store.stored.get('usage:session-1'))
+  expect(stored.usd).toBe(1.5)
+})
+
+test('two writes queued behind a slow one both read the newest ledger, so only the first of them stores it and the second stores nothing', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const store = usageStore(on)
+  engine(on)
+  fakeGitHub(on)
+  modelSteps(on)
+  await startOnly($)
+  await clock.settle()
+  let release = () => {}
+  store.holdWrite = new Promise<void>(resolve => {
+    release = resolve
+  })
+
+  // The first step's write waits in the store, so the second and third
+  // steps' writes queue behind it, and both read the ledger holding all
+  // three steps when their turn comes.
+  await modelStep($, 'turn-1', 0)
+  await clock.settle()
+  await modelStep($, 'turn-1', 1)
+  await clock.settle()
+  await modelStep($, 'turn-1', 2)
+  await clock.settle()
+  expect(store.writes.length).toBe(1)
+  release()
+  await clock.settle()
+  expect(store.writes.map(w => spentOf(w.value).models[0]?.input)).toEqual([1, 3])
+  expect(spentOf(store.stored.get('usage:session-1')).models[0]?.input).toBe(3)
+})
+
+test('a stored ledger untouched for more than 14 days is pruned at the session\'s start, and a fresher one is kept', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const ledgerAt = (sessionId: string, at: number) => ({ sessionId, models: [], usd: null, lastEngineUsd: null, turns: [], at })
+  const store = usageStore(on, [
+    ['usage:old-session', ledgerAt('old-session', T0 - 15 * DAY)],
+    ['usage:fresh-session', ledgerAt('fresh-session', T0 - 13 * DAY)],
+    ['usage:damaged-session', 'garbage'],
+  ])
+  engine(on)
+  fakeGitHub(on)
+  await startOnly($)
+  await clock.settle()
+  expect([...store.stored.keys()].filter(key => key.startsWith('usage:')).sort()).toEqual(['usage:fresh-session'])
+})
+
+test('a stored ledger that counting reads as damaged is pruned at the session\'s start even with a fresh time, and a sound fresh one is kept', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const store = usageStore(on, [
+    ['usage:sound-session', { sessionId: 'sound-session', models: [], usd: null, lastEngineUsd: null, turns: [], at: T0 - HOUR }],
+    ['usage:damaged-session', { sessionId: 'damaged-session', models: 'garbage', usd: 99, turns: [], at: T0 - HOUR }],
+  ])
+  engine(on)
+  fakeGitHub(on)
+  await startOnly($)
+  await clock.settle()
+  expect([...store.stored.keys()].filter(key => key.startsWith('usage:')).sort()).toEqual(['usage:sound-session'])
+})
+
+test('a counted step never asks for the status file to be written, and the minute\'s write carries the totals', async ($, on) => {
+  const s = foremanSession(on)
+  modelSteps(on)
+  await firstPrompt($, s.clock)
+  expect(s.statusAt()?.usage).toEqual({ models: [], usd: null })
+  const before = s.writesOf()
+
+  await modelStep($, 'turn-1', 0)
+  await s.clock.settle()
+  expect(s.writesOf()).toBe(before)
+
+  await s.clock.advance(MINUTE)
+  expect(s.writesOf()).toBe(before + 1)
+  expect(s.statusAt()?.usage).toEqual({ models: [{ model: 'example-model-large', input: 1, output: 1, cacheRead: 1, cacheWrite: 1 }], usd: null })
 })
