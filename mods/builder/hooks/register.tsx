@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Next, PromptOrigin, Register, ResolveInput, ToolCallInput, ToolCallResult } from 'claude-code'
+import type { EngineInterface, Next, PromptOrigin, Register, ResolveInput, ToolCallInput, ToolCallResult, TurnStepResult } from 'claude-code'
 
-import type { AgentCard, BackgroundTask, BuilderRun, Compactions, ContextMeasure, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, StatusMemo, Wake } from '../types'
+import type { AgentCard, BackgroundTask, BuilderRun, Compactions, ContextMeasure, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, StatusMemo, UsageLedger, Wake } from '../types'
 import { isSvgSurface } from './art'
 import { checkoutSentence, worktreeWithBranch, type Checkout } from './checkout'
 // The context module's `told` is the compaction record after a reload was
@@ -19,6 +19,7 @@ import { changedKinds, commitRecordsOf, decidedItems, factIn, INSTRUCTION_PATHSP
 import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
 import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, newMemo, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
 import { timeOfDay } from './text'
+import { afterCost, afterStep, emptyUsage, usageIn } from './usage'
 
 type $ = EngineInterface
 
@@ -74,6 +75,15 @@ const loadBegun = atom({ plugin: 'builder', key: 'loadBegun' } as const, null)
 // `register` leaves its writes out, so writing it never asks for another
 // write of the status file.
 const statusMemo = atom({ plugin: 'builder', key: 'statusMemo' } as const, null)
+// What the session has spent (see hooks/usage.ts), the one ledger builder
+// keeps of it, which the store keeps a copy of under the session's id. It
+// survives a hot reload, and it is stamped with the session id it was counted
+// for, so a ledger an earlier conversation of the process left behind, before
+// a /clear, is read as absent. The state.set hook in `register` leaves its
+// writes out too, so a counted step never asks for a write of the status
+// file; the minute's write carries the totals. The atom is named for the
+// ledger, because the hooks name the engine's usage figures `usage`.
+const usageLedger = atom({ plugin: 'builder', key: 'usage' } as const, null)
 
 // The builder mod: it watches the pull request the session works on, shows that
 // pull request and the session's agents in a pane, and starts a turn when the
@@ -87,6 +97,10 @@ const statusMemo = atom({ plugin: 'builder', key: 'statusMemo' } as const, null)
 // Module variables reset on every hot reload, which drops the timers too.
 // `armed` going false is how the next hook knows to start polling again.
 let armed = false
+// The chain the ledger's store writes go through, one after another, and the
+// text of the ledger last stored, so a ledger equal to it is not written again.
+let usageWrites: Promise<void> = Promise.resolve()
+let lastStoredUsage: string | undefined
 let timer: { cancel: () => void } | undefined
 // The time `timer` is due to fire, so that a look which only observes can
 // keep that timer when it is sooner than the one it would set.
@@ -1177,6 +1191,10 @@ async function measureContext($: $): Promise<ContextMeasure | null> {
     }
     const measure = measureOf(usage, await $.clock.now(), await $.session.id())
     await update($, context, () => measure).catch(() => undefined)
+    // The same read carries the session's dollar figure, which is counted
+    // without waiting, so a slow store never holds up the compaction below.
+    const cost = usage?.cost?.usd
+    void recordCost($, cost).catch(() => undefined)
     return measure
   } catch {
     return null
@@ -1189,6 +1207,125 @@ async function measureContext($: $): Promise<ContextMeasure | null> {
 async function storedMeasure($: $): Promise<ContextMeasure | null> {
   try {
     return measureIn(await read($, context), await $.session.id())
+  } catch {
+    return null
+  }
+}
+
+// What the session spends (see hooks/usage.ts). The ledger lives in $.state
+// and is copied whole to the store under `usage:<session id>`, so a restart
+// or a resumed session carries on counting where it stopped. Because the
+// remembered turns and the totals are in that one value, a step's key and
+// its addition always land in the store together.
+const USAGE_PREFIX = 'usage:'
+const usageKey = (sessionId: string) => `${USAGE_PREFIX}${sessionId}`
+// A stored ledger no step has touched for two weeks is dropped, so the store
+// (refused past 4 MiB) does not fill up with ledgers of sessions long over.
+const USAGE_KEPT_MS = 14 * 24 * 60 * 60_000
+
+// The ledger a change of this session's spending builds on: the one held in
+// state, else the one stored, else an empty one. A refused store read throws,
+// so the change is dropped rather than an empty ledger stored over the
+// session's totals.
+async function usageSeed($: $, sessionId: string): Promise<UsageLedger> {
+  const held = usageIn(await read($, usageLedger), sessionId)
+  if (held !== null) return held
+  return usageIn(await $.store.get(usageKey(sessionId)), sessionId) ?? emptyUsage(sessionId, await $.clock.now())
+}
+
+// Changes this session's ledger and then asks for it to be stored. The change
+// runs inside `update`, which may run it again when another write got in
+// first, as a subagent's step or the copy of the module from before a hot
+// reload may, so it must not have side effects. Inside it a ledger already
+// held for this session wins over the seed, so two first steps after a
+// restart both build on the first one's result. A change that adds nothing
+// to the seed writes nothing at all.
+async function changeUsage($: $, change: (ledger: UsageLedger) => UsageLedger) {
+  const sessionId = await $.session.id()
+  const seed = await usageSeed($, sessionId)
+  if (change(seed) === seed) return
+  let changed = false
+  await update($, usageLedger, raw => {
+    const held = usageIn(raw, sessionId) ?? seed
+    const next = change(held)
+    changed = next !== held
+    return next
+  })
+  if (changed) await persistUsage($)
+}
+
+// Writes the ledger $.state holds to the store, under the session id the
+// ledger itself carries, so the totals of a conversation that a /clear ended
+// are never stored under the next conversation's key. The writes go one
+// after another, and each reads the newest ledger when its turn comes, so the
+// last write to land carries the newest totals. A refused write leaves the
+// totals in state, and the next change writes them again.
+async function persistUsage($: $) {
+  const next = usageWrites.then(async () => {
+    const raw = await read($, usageLedger)
+    const ledger = raw === null ? null : usageIn(raw, raw.sessionId)
+    if (ledger === null) return
+    const text = JSON.stringify(ledger)
+    if (text === lastStoredUsage) return
+    await $.store.set(usageKey(ledger.sessionId), ledger)
+    lastStoredUsage = text
+  })
+  usageWrites = next.catch(() => undefined)
+  await next
+}
+
+// Adds one model step's usage, the main loop's or a subagent's. A step that
+// carried no usage adds nothing and reads nothing.
+async function countStep($: $, r: TurnStepResult) {
+  const used = r.usage
+  if (used === null) return
+  const now = await $.clock.now()
+  await changeUsage($, ledger => afterStep(ledger, r.turnId, r.index, used, now))
+}
+
+// Takes one reading of the engine's dollar figure for the session, as
+// afterCost reads it.
+async function recordCost($: $, usd: unknown) {
+  await changeUsage($, ledger => afterCost(ledger, usd))
+}
+
+// Drops every stored ledger that no step has touched for two weeks, and one
+// stored in a shape that has no time, whichever session wrote it.
+async function pruneUsage($: $) {
+  const now = await $.clock.now()
+  for (const key of await $.store.keys()) {
+    if (!key.startsWith(USAGE_PREFIX)) continue
+    const stored = await $.store.get(key)
+    const at = typeof stored === 'object' && stored !== null ? (stored as { at?: unknown }).at : undefined
+    if (typeof at !== 'number' || !Number.isFinite(at) || now - at > USAGE_KEPT_MS) await $.store.delete(key)
+  }
+}
+
+// At the session's start: the old ledgers are pruned first, so a session
+// resumed after two weeks starts again from zero rather than from a ledger
+// about to go; then the ledger is put in state, so the pane shows the totals
+// after a restart before any step; then the engine's dollar figure is read,
+// so that a resumed session whose figure starts again from zero is seen near
+// zero, before it can grow past the reading stored.
+async function startUsage($: $) {
+  await pruneUsage($).catch(() => undefined)
+  const sessionId = await $.session.id()
+  const seed = await usageSeed($, sessionId)
+  await update($, usageLedger, raw => usageIn(raw, sessionId) ?? seed)
+  let cost: unknown
+  try {
+    cost = (await $.session.usage()).cost?.usd
+  } catch {
+    return
+  }
+  await recordCost($, cost)
+}
+
+// This session's ledger as the pane draws it, or null when there is none, the
+// held one is another session's, or it cannot be read.
+async function storedUsage($: $): Promise<UsageLedger | null> {
+  try {
+    return usageIn(await read($, usageLedger), await $.session.id())
   } catch {
     return null
   }
@@ -2984,6 +3121,7 @@ async function view($: $): Promise<View> {
     issueLink: issueAddress,
     context: await storedMeasure($),
     compactions: await storedCompactions($),
+    usage: await storedUsage($),
   }
 }
 
@@ -3319,6 +3457,7 @@ async function statusFacts($: $): Promise<StatusFacts | null> {
     questions: await read($, questions),
     nextLook: await read($, nextLook),
     usageHold: holdIn(await read($, usageHold)),
+    usage: usageIn(await read($, usageLedger), memo.sessionId),
   }
 }
 
@@ -3525,13 +3664,16 @@ export const register: Register = on => {
   // around `update` cannot do this, because the engine reads which values a
   // module writes from each call's atom at the call site, and refuses a call
   // whose atom is a parameter. The memo's own writes are left out, so writing
-  // it never asks for another write. They are told apart by the key the memo's
-  // atom holds, so the hook and the atom cannot come to name different keys.
-  // In a session with no ticket the ask returns at once, so such a session
-  // does what it did before the file existed.
+  // it never asks for another write, and so are the spending ledger's, which
+  // change at nearly every model step: the foreman reads the folder at most
+  // every 30 seconds, so a write after each step would reach no reader, and
+  // the minute's write carries the totals instead. They are told apart by the
+  // keys the atoms hold, so the hook and the atoms cannot come to name
+  // different keys. In a session with no ticket the ask returns at once, so
+  // such a session does what it did before the file existed.
   on('state.set', async ($, e, next) => {
     const set = await next(e)
-    if (e.plugin === 'builder' && e.key !== statusMemo.ref.key) statusChanged($)
+    if (e.plugin === 'builder' && e.key !== statusMemo.ref.key && e.key !== usageLedger.ref.key) statusChanged($)
     return set
   })
 
@@ -3705,6 +3847,7 @@ export const register: Register = on => {
     ensureLive($)
     void pruneTold($).catch(() => undefined)
     void pruneOwed($).catch(() => undefined)
+    void startUsage($).catch(() => undefined)
     // Watching starts only when asked (the watch tool or /builder watch), so a
     // session that has not named a pull request is never handed one.
     void ensureArmed($)
@@ -4056,6 +4199,27 @@ export const register: Register = on => {
 
   // The session's end stops the status file, and deletes it after a merge,
   // within the engine's short budget for ending a session.
+  // Every model step, the main loop's and each subagent's, is passed through
+  // untouched, and its usage is then counted without waiting, so a failure in
+  // the counting or a slow store can never hold up or change the model's
+  // response. The hook yields nothing of its own. It has no .catch, for the
+  // reason the foreman's own turn.step hook gives: a .catch that called next
+  // again after the step had streamed would ask the model a second time.
+  on('turn.step', async function* ($, e, next) {
+    const r = yield* next(e)
+    void countStep($, r).catch(() => undefined)
+    return r
+  })
+
+  // The engine measures the session after each turn of its own loop, with the
+  // session's dollar figure when it keeps one, which is counted without
+  // waiting.
+  on('session.measure', async ($, e, next) => {
+    const measured = await next(e)
+    void recordCost($, e.cost?.usd).catch(() => undefined)
+    return measured
+  })
+
   on('session.end', async ($, e, next) => {
     await endStatus($, e.reason, e.sessionId, next.budget).catch(() => undefined)
     return next(e)

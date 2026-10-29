@@ -38,9 +38,11 @@ export type CeilingSource = ContextMeasure['source']
 // fields they use, each unknown, because a figure that is not the number the
 // engine promises is read as missing rather than trusted. The engine's own
 // SessionUsage fits this shape, so the hooks module passes it in as it came.
+// `cost` is the session's dollar figure, which the context rules do not read;
+// hooks/register.tsx hands it to the spending ledger (see hooks/usage.ts).
 export type WindowRead = { rawMaxTokens?: unknown; autocompactSource?: unknown; totalTokens?: unknown }
 export type ContextRead = { tokens?: unknown; breakdown?: WindowRead | null }
-export type UsageRead = { context?: ContextRead | null }
+export type UsageRead = { context?: ContextRead | null; cost?: { usd?: unknown } | null }
 
 const isFiniteNumber = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n)
 const isPositiveFinite = (n: unknown): n is number => isFiniteNumber(n) && n > 0

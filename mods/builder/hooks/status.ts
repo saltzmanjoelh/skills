@@ -10,7 +10,7 @@
 
 import type { SessionMessage } from 'claude-code'
 
-import type { AgentCard, BackgroundTask, BuilderRun, BuildState, BuildStatus, ForegroundCall, NextLook, OpenPrompt, Progress, Question, StatusMemo, UsageHold, Verdicts } from '../types'
+import type { AgentCard, BackgroundTask, BuilderRun, BuildState, BuildStatus, ForegroundCall, NextLook, OpenPrompt, Progress, Question, StatusMemo, UsageHold, UsageLedger, Verdicts } from '../types'
 import { ciOf, type Snapshot } from './github'
 import { barOf } from './progress'
 import { secretIn } from './review'
@@ -150,6 +150,9 @@ export type StatusFacts = {
   questions: readonly Question[]
   nextLook: NextLook | null
   usageHold: UsageHold | null
+  // What the session has spent, read through usageIn in hooks/usage.ts, or
+  // null before anything was counted for this session.
+  usage: UsageLedger | null
 }
 
 // The snapshot of the pull request the watch follows, or null when nothing
@@ -460,6 +463,9 @@ export function recordOf(f: StatusFacts, writtenAt: number): BuildStatus {
     record.oldestBackground = { description: shownOrWithheld(oldest.task.description, TASK_CHARS), startedAt: oldest.startedAt, hungAt: hungAtOf(oldest.startedAt) }
   }
   if (f.memo.cleanup !== null) record.cleanup = { failedCalls: f.memo.cleanup.failedCalls, lastError: f.memo.cleanup.lastError }
+  // Only the totals are written; the remembered turns and the engine's last
+  // reading are the ledger's own bookkeeping.
+  if (f.usage !== null) record.usage = { models: f.usage.models, usd: f.usage.usd }
   return record
 }
 
