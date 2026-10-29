@@ -37,8 +37,9 @@ Non-goals.
    paragraph, the line about a streak of 3 or a limit, stays word for word
    as it is.
 3. The same paragraph says that a question for the person never goes to the
-   parent: it goes through the skill's Questions section, to the counsel and
-   then to the person inside the sub session itself.
+   parent: it goes as the skill's Questions section says, to the counsel and
+   then to the person, or straight to the person where that section says so,
+   inside the sub session itself.
 4. In mods/foreman/skills/wake/SKILL.md, under "When the parent speaks", the
    bullet "A question to the person that this skill asks for, or one a sub
    session asks the person, which the parent relays" is reworded so that, for
@@ -50,6 +51,14 @@ Non-goals.
    lets the parent reply with more than "Noted." when a note asks the person
    a question, so a person-directed message that arrives anyway is still
    handled, now by pointing the person at the sub session's question.
+6. The same rule answers a sub session's question to the parent. A sub
+   session is reached only through the desktop app's `send_message`, so a
+   reply in the parent's own turn never reaches it. When the parent can
+   answer the question from the brief it started that sub session with, or
+   from the wake skill, it sends the answer to that sub session in one
+   `send_message`. When neither settles it, it sends one `send_message`
+   saying so, and the sub session then treats it as a question for the
+   person.
 
 ## Edge cases
 
@@ -96,7 +105,8 @@ Non-goals.
 - mods/foreman/skills/wake/SKILL.md no longer says the parent relays a
   question a sub session asks the person, and says instead that it points the
   person at the sub session's open question; the rest of "When the parent
-  speaks" and the "Noted." rule are unchanged apart from that.
+  speaks" is unchanged apart from that, and the "Noted." rule changes only
+  as Behavior 6 says.
 - The repository's four gates pass. None of them reads skills/, and the wake
   skill is read only as part of the foreman mod's plugin checks, so the
   gates do not check this wording.
