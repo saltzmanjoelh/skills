@@ -1305,15 +1305,15 @@ async function recordCost($: $, usd: unknown) {
   await next
 }
 
-// Drops every stored ledger that no step has touched for two weeks, and one
-// stored in a shape that has no time, whichever session wrote it.
+// Drops every stored ledger that no step has touched for two weeks, whichever
+// session wrote it, and at once one that counting would read as damaged or as
+// another session's, because it reads each ledger the way counting does.
 async function pruneUsage($: $) {
   const now = await $.clock.now()
   for (const key of await $.store.keys()) {
     if (!key.startsWith(USAGE_PREFIX)) continue
-    const stored = await $.store.get(key)
-    const at = typeof stored === 'object' && stored !== null ? (stored as { at?: unknown }).at : undefined
-    if (typeof at !== 'number' || !Number.isFinite(at) || now - at > USAGE_KEPT_MS) await $.store.delete(key)
+    const ledger = usageIn(await $.store.get(key), key.slice(USAGE_PREFIX.length))
+    if (ledger === null || now - ledger.at > USAGE_KEPT_MS) await $.store.delete(key)
   }
 }
 

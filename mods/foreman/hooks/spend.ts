@@ -51,25 +51,35 @@ const sameSpend = (a: ForemanSpend, b: ForemanSpend) =>
 // entry never falls; a ticket with no entry yet gets one at the end, so the
 // list stays in the order the tickets were first read. A row that carries no
 // spending changes nothing.
+// Each ticket is looked up once in a map from ticket to its entry's place,
+// and the list is copied only at the first change or addition, so a read of
+// many pairings costs one pass rather than one search and one copy each.
 export function withReadings(t: ForemanTickets, rows: readonly SubRow[]): ForemanTickets {
   const byFile = new Map(rows.map(r => [r.file, r]))
-  let spent = t.spent
+  const place = new Map<string, number>()
+  t.spent.forEach((e, i) => {
+    if (!place.has(e.ticket)) place.set(e.ticket, i)
+  })
+  let spent: ForemanSpent[] | null = null
   for (const p of t.pairings) {
     const row = p.ownerFile === null ? undefined : byFile.get(p.ownerFile)
     if (row === undefined || !ownsTicket(p, row)) continue
     const reading = spendOf(row.record.usage)
     if (reading === null) continue
-    const at = spent.findIndex(e => e.ticket === p.ticket)
-    if (at === -1) {
-      spent = [...spent, { ticket: p.ticket, ...reading }]
+    const at = place.get(p.ticket)
+    if (at === undefined) {
+      spent ??= [...t.spent]
+      place.set(p.ticket, spent.length)
+      spent.push({ ticket: p.ticket, ...reading })
       continue
     }
-    const stored = spent[at]!
+    const stored = (spent ?? t.spent)[at]!
     const next: ForemanSpent = { ticket: p.ticket, counts: larger(stored.counts, reading.counts), usd: largerUsd(stored.usd, reading.usd) }
     if (sameSpend(next, stored)) continue
-    spent = spent.map((e, i) => (i === at ? next : e))
+    spent ??= [...t.spent]
+    spent[at] = next
   }
-  return spent === t.spent ? t : { ...t, spent }
+  return spent === null ? t : { ...t, spent }
 }
 
 // The ledger with the spent list brought back to MAX_SPENT entries where it

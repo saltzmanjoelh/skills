@@ -49,6 +49,24 @@ test('a newer read replaces the ticket\'s entry in place, keeping the larger val
   expect(unknown.spent[0]!.counts.input).toBe(5000)
 })
 
+test('several readings in one read change their entries in place and add new ones at the end, and leave the ledger read from as it was', () => {
+  const t = ledger(
+    [owned('ft-a', 's-a', 'a.json'), owned('ft-b', 's-b', 'b.json'), owned('ft-c', 's-c', 'c.json'), owned('ft-d', 's-d', 'd.json')],
+    [entry('ft-a', 10), entry('ft-b', 20), entry('ft-c', 30)],
+  )
+  const before = structuredClone(t.spent)
+  const reading = (input: number) => ({ models: [model('m', { input, output: 0, cacheRead: 0, cacheWrite: 0 })], usd: null })
+  const after = withReadings(t, [
+    row('a.json', 's-a', 'ft-a', reading(15)),
+    row('b.json', 's-b', 'ft-b', reading(20)),
+    row('c.json', 's-c', 'ft-c', reading(35)),
+    row('d.json', 's-d', 'ft-d', reading(40)),
+  ])
+  expect(after.spent).toEqual([entry('ft-a', 15), entry('ft-b', 20), entry('ft-c', 35), entry('ft-d', 40)])
+  expect(after.spent[1]).toBe(t.spent[1])
+  expect(t.spent).toEqual(before)
+})
+
 test('a fork\'s file, a file other than the owner\'s and a file with no spending leave the entries as they were', () => {
   const t = ledger([owned('ft-a', 's-a', 'a.json')], [entry('ft-a', 1000)])
   const usage = { models: [model('model-a', { input: 9000 })], usd: 9 }

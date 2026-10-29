@@ -11997,10 +11997,11 @@ test('the pane shows the context with the settings hint as one dim line, and onc
 // while `refuses` is set, as the engine does past 4 MiB. A refused write is
 // recorded too, with `refused` set. While `hold` is set, the next read of a
 // ledger waits until that promise resolves, and `hold` is cleared, so only
-// that one read is slow.
+// that one read is slow. `holdWrite` does the same for the next write of a
+// ledger, which is recorded when it starts and lands when the promise resolves.
 function usageStore(on: On, entries: [string, unknown][] = []) {
   const stored = new Map<string, unknown>(entries)
-  const seen = { stored, refuses: false, hold: null as Promise<void> | null, writes: [] as { key: string; value: unknown; refused: boolean }[] }
+  const seen = { stored, refuses: false, hold: null as Promise<void> | null, holdWrite: null as Promise<void> | null, writes: [] as { key: string; value: unknown; refused: boolean }[] }
   on('store.keys', () => ({ value: [...stored.keys()] }))
   on('store.get', async ($, e) => {
     const hold = e.key.startsWith('usage:') ? seen.hold : null
@@ -12010,8 +12011,13 @@ function usageStore(on: On, entries: [string, unknown][] = []) {
     }
     return { value: stored.get(e.key) }
   })
-  on('store.set', ($, e) => {
+  on('store.set', async ($, e) => {
     if (e.key.startsWith('usage:')) seen.writes.push({ key: e.key, value: e.value, refused: seen.refuses })
+    const hold = e.key.startsWith('usage:') ? seen.holdWrite : null
+    if (hold !== null) {
+      seen.holdWrite = null
+      await hold
+    }
     if (seen.refuses) return { deny: 'the store is full' }
     stored.set(e.key, e.value)
     return { value: undefined }
@@ -12210,6 +12216,35 @@ test('two dollar readings taken in order apply in that order, so a slow first on
   expect(stored.usd).toBe(1.5)
 })
 
+test('two writes queued behind a slow one both read the newest ledger, so only the first of them stores it and the second stores nothing', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const store = usageStore(on)
+  engine(on)
+  fakeGitHub(on)
+  modelSteps(on)
+  await startOnly($)
+  await clock.settle()
+  let release = () => {}
+  store.holdWrite = new Promise<void>(resolve => {
+    release = resolve
+  })
+
+  // The first step's write waits in the store, so the second and third
+  // steps' writes queue behind it, and both read the ledger holding all
+  // three steps when their turn comes.
+  await modelStep($, 'turn-1', 0)
+  await clock.settle()
+  await modelStep($, 'turn-1', 1)
+  await clock.settle()
+  await modelStep($, 'turn-1', 2)
+  await clock.settle()
+  expect(store.writes.length).toBe(1)
+  release()
+  await clock.settle()
+  expect(store.writes.map(w => spentOf(w.value).models[0]?.input)).toEqual([1, 3])
+  expect(spentOf(store.stored.get('usage:session-1')).models[0]?.input).toBe(3)
+})
+
 test('a stored ledger untouched for more than 14 days is pruned at the session\'s start, and a fresher one is kept', async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
   const ledgerAt = (sessionId: string, at: number) => ({ sessionId, models: [], usd: null, lastEngineUsd: null, turns: [], at })
@@ -12223,6 +12258,19 @@ test('a stored ledger untouched for more than 14 days is pruned at the session\'
   await startOnly($)
   await clock.settle()
   expect([...store.stored.keys()].filter(key => key.startsWith('usage:')).sort()).toEqual(['usage:fresh-session'])
+})
+
+test('a stored ledger that counting reads as damaged is pruned at the session\'s start even with a fresh time, and a sound fresh one is kept', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const store = usageStore(on, [
+    ['usage:sound-session', { sessionId: 'sound-session', models: [], usd: null, lastEngineUsd: null, turns: [], at: T0 - HOUR }],
+    ['usage:damaged-session', { sessionId: 'damaged-session', models: 'garbage', usd: 99, turns: [], at: T0 - HOUR }],
+  ])
+  engine(on)
+  fakeGitHub(on)
+  await startOnly($)
+  await clock.settle()
+  expect([...store.stored.keys()].filter(key => key.startsWith('usage:')).sort()).toEqual(['usage:sound-session'])
 })
 
 test('a counted step never asks for the status file to be written, and the minute\'s write carries the totals', async ($, on) => {
