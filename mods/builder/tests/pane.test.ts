@@ -863,6 +863,10 @@ test('with no dollar reading the pane says the cost is unknown and never shows $
   expect(usageLines(emptyUsage('session-1', NOW))).toEqual(['Spent: nothing counted yet · cost unknown'])
   expect(usageLines(afterCost(emptyUsage('session-1', NOW), 0))).toEqual(['Spent: nothing counted yet · $0.00'])
   expect(usageLines(afterCost(emptyUsage('session-1', NOW), 1.25))).toEqual(['Spent: nothing counted yet · $1.25'])
+  // A ledger whose only step reported no counts has a model but no tokens,
+  // and foreman, which sees only the counts summed over the models, words it
+  // the same way.
+  expect(usageLines(spent(['example-model-large', 0, 0, 0, 0]))).toEqual(['Spent: nothing counted yet · cost unknown'])
 })
 
 test('a model name that holds control characters is cleaned before the pane shows it', () => {

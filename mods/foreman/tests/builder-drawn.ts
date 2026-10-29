@@ -259,6 +259,7 @@ export type Spent = { models: { model: string; input: number; output: number; ca
 export const BUILDER_SPENT: Spent[] = [
   { models: [], usd: null, out: "Spent: nothing counted yet · cost unknown" },
   { models: [], usd: 0, out: "Spent: nothing counted yet · $0.00" },
+  { models: [{ model: "model-a", input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }], usd: 0.5, out: "Spent: nothing counted yet · $0.50" },
   { models: [{ model: "model-a", input: 999600, output: 999400, cacheRead: 400, cacheWrite: 1500000 }], usd: null, out: "Spent: 1000K in, 999K out, 0K cache read, 1.5M cache write · cost unknown" },
   { models: [{ model: "model-a", input: 1500000, output: 499, cacheRead: 500, cacheWrite: 999999 }], usd: 0, out: "Spent: 1.5M in, 0K out, 1K cache read, 1000K cache write · $0.00" },
   { models: [{ model: "model-a", input: 600000, output: 1200, cacheRead: 750000, cacheWrite: 3000 }, { model: "model-b", input: 900000, output: 800, cacheRead: 250000, cacheWrite: 0 }], usd: 3.456, out: "Spent: 1.5M in, 2K out, 1.0M cache read, 3K cache write · $3.46" },

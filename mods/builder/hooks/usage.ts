@@ -126,18 +126,19 @@ const dollarsWords = (usd: number | null) => (usd === null ? 'cost unknown' : `$
 // The pane's lines for what the session spent: the four kinds summed over
 // the models and the dollar total, or the words "cost unknown" while the
 // engine has given no reading, never $0; then one line per model with its
-// four counts. While no model step has been counted, which is the case for
-// the empty ledger the session's start seeds as well as when there is no
-// ledger at all, it says "nothing counted yet" in place of the counts, with
-// the dollars beside it, as foreman's pane words an empty ledger. The model
-// names came from the API, so they are cleaned.
+// four counts. While no token has been counted, which is the case for the
+// empty ledger the session's start seeds, for a ledger whose only steps
+// reported no counts, and when there is no ledger at all, it says "nothing
+// counted yet" in place of the counts, with the dollars beside it. Foreman's
+// pane only has the counts summed over the models, so it decides the same way,
+// from the sum. The model names came from the API, so they are cleaned.
 export function usageLines(usage: UsageLedger | null): string[] {
   if (usage === null) return [`Spent: nothing counted yet · ${dollarsWords(null)}`]
-  if (usage.models.length === 0) return [`Spent: nothing counted yet · ${dollarsWords(usage.usd)}`]
   const total = usage.models.reduce<TokenCounts>(
     (sum, m) => ({ input: sum.input + m.input, output: sum.output + m.output, cacheRead: sum.cacheRead + m.cacheRead, cacheWrite: sum.cacheWrite + m.cacheWrite }),
     { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   )
+  if (total.input + total.output + total.cacheRead + total.cacheWrite === 0) return [`Spent: nothing counted yet · ${dollarsWords(usage.usd)}`]
   return [
     `Spent: ${kindsWords(total)} · ${dollarsWords(usage.usd)}`,
     ...usage.models.map(m => `  ${printable(m.model, 60)}: ${kindsWords(m)}`),

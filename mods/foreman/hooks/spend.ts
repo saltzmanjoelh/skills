@@ -117,8 +117,8 @@ const countWords = (n: number) => (n < 1_000_000 ? `${Math.round(n / 1000)}K` : 
 // own: the four kinds and the dollar total, or "cost unknown" while no dollar
 // figure is known. Spending whose tokens sum to zero reads "nothing counted
 // yet" in place of the counts, with the dollars beside it, as builder's pane
-// reads a ledger with no model counted, which is what an empty ledger gives
-// here. Spending that is missing altogether is "unknown". Neither reads as
+// reads a ledger whose counts sum to zero. Spending that is missing
+// altogether is "unknown". Neither reads as
 // zero tokens, and only a known dollar figure of zero reads as $0.00.
 export function spendWords(spend: ForemanSpend | null): string {
   if (spend === null) return 'unknown'
