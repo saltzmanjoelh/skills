@@ -7,7 +7,7 @@ import type { ForemanActs, ForemanEffect, ForemanOutbox, ForemanPairing, Foreman
 import { BEGIN_TEXT } from './desktop'
 import { countsIn, isDollars, isPullRequestNumber, isPullRequestState, verdictsIn } from './record'
 import { byKeyThenFile, keyOf, nameOf, type SubRow } from './subs'
-import { byTicket, KEY } from './wake'
+import { byTicket, isTicket, isWholeKey, isWhoName, KEY } from './wake'
 
 // The line builder looks for in a sub session's first prompt.
 export const TICKET_LINE = 'foreman-ticket:'
@@ -172,22 +172,18 @@ export const addWork = (o: ForemanOutbox, more: ForemanOutbox): ForemanOutbox =>
 
 const strings = (raw: unknown): string[] => (Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : [])
 
-// A whole ticket, as foreman issues them.
-const TICKET_SHAPE = /^ft-[A-Za-z0-9-]+$/
-
 // Whether `raw` is null or a whole issue key.
-const isKeyOrNull = (raw: unknown): raw is string | null => raw === null || (typeof raw === 'string' && HELD_SHAPE.test(raw))
+const isKeyOrNull = (raw: unknown): raw is string | null => raw === null || (typeof raw === 'string' && isWholeKey(raw))
 
 function effectIn(raw: unknown): ForemanEffect | null {
   const e = objectOf(raw)
   if (e?.kind === 'notify' && typeof e.text === 'string') return { kind: 'notify', text: e.text }
-  // A begin goes only to a whole desktop session id, and the names it puts in
-  // the wake line are an issue key or the name whoOf gives a ticket.
+  // A begin goes only to a whole desktop session id for a whole ticket, and
+  // the names it puts in the wake line are an issue key or a name whoOf gives.
   if (e?.kind === 'begin') {
     const { to, ticket, key, by } = e
-    if (typeof to !== 'string' || !UNWATCHED_SHAPE.test(to) || typeof ticket !== 'string' || ticket === '' || !isKeyOrNull(key)) return null
-    const isName = isKeyOrNull(by) || (typeof by === 'string' && by.startsWith(byTicket('')) && TICKET_SHAPE.test(by.slice(byTicket('').length)))
-    return isName ? { kind: 'begin', to, ticket, key, by: by as string | null } : null
+    if (typeof to !== 'string' || !UNWATCHED_SHAPE.test(to) || typeof ticket !== 'string' || !isTicket(ticket) || !isKeyOrNull(key)) return null
+    return by === null || (typeof by === 'string' && isWhoName(by)) ? { kind: 'begin', to, ticket, key, by } : null
   }
   if (e?.kind === 'nudge' && typeof e.to === 'string' && typeof e.name === 'string') {
     // A nudge stored before a reload keeps its kind, so it is still sent with
@@ -312,6 +308,11 @@ export function queueOf(t: ForemanTickets): ForemanPairing[] {
     .sort((a, b) => a.queue!.place - b.queue!.place || a.pairedAt - b.pairedAt || (a.ticket < b.ticket ? -1 : a.ticket > b.ticket ? 1 : 0))
 }
 
+// The sub sessions that wait in the queue and are not yet claimed for a
+// slot, in the queue's order. Each of them is owed a slot before any new
+// start goes ahead.
+export const waitingUnclaimed = (t: ForemanTickets) => queueOf(t).filter(p => p.queue!.claim === null)
+
 // The place a start that waits now takes: one after the last place in the
 // queue, or 1 when nobody waits.
 export const nextPlace = (t: ForemanTickets) => Math.max(0, ...queueOf(t).map(p => p.queue!.place)) + 1
@@ -323,12 +324,9 @@ function withPlaces(pairings: ForemanPairing[]): ForemanPairing[] {
   return pairings.map(p => (p.queue === null || Number.isFinite(p.queue.place) ? p : { ...p, queue: { ...p.queue, place: (last += 1) } }))
 }
 
-// A whole issue key, which is all a held entry may be.
-const HELD_SHAPE = new RegExp(`^${KEY}$`)
-
 // The held keys read tolerantly: only strings of the issue-key shape, each
 // once, so a ledger from before holds existed reads as holding none.
-const heldIn = (raw: unknown): string[] => [...new Set(strings(raw).filter(key => HELD_SHAPE.test(key)))]
+const heldIn = (raw: unknown): string[] => [...new Set(strings(raw).filter(isWholeKey))]
 
 // The most unwatched sub sessions kept, the newest ones.
 export const MAX_UNWATCHED = 50

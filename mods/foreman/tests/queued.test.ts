@@ -3,6 +3,7 @@ import type { Engine } from 'claude-code/testing'
 
 import { BEGIN_TEXT, REASONS } from '../hooks/desktop'
 import { newPairing, ticketsIn, ticketsKey, WAIT_LINE, WAITING_SENTENCE } from '../hooks/tickets'
+import type { ForemanTickets } from '../types'
 import { foreman, MINUTE, mountBoth, record, SECOND, start, T0, world } from './world'
 
 // The queue as the person meets it: starts beyond the free slots wait, and
@@ -112,6 +113,36 @@ test('a start whose call throws or answers an error leaves no pairing behind, wa
   await startSession($, keyed('ABC-2')).catch(() => undefined)
   await w.clock.settle()
   expect(ledger(w).pairings).toEqual([])
+})
+
+test('a start whose answer comes after the ledger lost its reservation is paired again with its session id, at the back of the queue', async ($, on) => {
+  // While `losing` is set, every write of the ledger loses ABC-3's
+  // reservation, standing in for any way the ledger can lose it while the
+  // call is out.
+  let losing = false
+  on('state.set', ($, e, next) => {
+    if (!losing || e.plugin !== 'foreman' || e.key !== 'tickets') return next(e)
+    const t = e.value as ForemanTickets
+    return next({ ...e, value: { ...t, pairings: t.pairings.filter(p => p.issueKey !== 'ABC-3') } } as never)
+  })
+  const { w } = await parent($, on, 1)
+  w.engine.startAnswers = [answer(1), answer(2), answer(3)]
+  await startSession($, keyed('ABC-1'))
+  await startSession($, keyed('ABC-2'))
+  losing = true
+  w.engine.onStart = async () => {
+    losing = false
+    await w.clock.settle()
+    expect(ledger(w).pairings.map(p => p.issueKey)).toEqual(['ABC-1', 'ABC-2'])
+  }
+  const out = await startSession($, keyed('ABC-3'))
+  expect(out.context).toEqual([WAITING_SENTENCE('ABC-3')])
+  await w.clock.settle()
+  expect(ledger(w).pairings.map(p => [p.ticket, p.issueKey, p.localId, p.queue])).toEqual([
+    [ticketOf(w, 0), 'ABC-1', 'local_new1', null],
+    [ticketOf(w, 1), 'ABC-2', 'local_new2', { place: 1, claim: null }],
+    [ticketOf(w, 2), 'ABC-3', 'local_new3', { place: 2, claim: null }],
+  ])
 })
 
 test('a waiting sub session is not shown, not nudged and raises no wake, and a merge begins it with the fixed message and one line', async ($, on) => {

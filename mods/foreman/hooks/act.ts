@@ -11,9 +11,9 @@ import { prStateOf, type BuildState, type RecordVerdicts } from './record'
 import { folded, withReadings } from './spend'
 import type { ForemanActs, ForemanEffect, ForemanPairing, ForemanTickets } from '../types'
 import { busyCount, nameOf, type SubRow } from './subs'
-import { ANNOUNCED_NONE, capped, ownsTicket, queueOf, shownRows } from './tickets'
+import { ANNOUNCED_NONE, capped, ownsTicket, queueOf, shownRows, waitingUnclaimed } from './tickets'
 import { printable } from './text'
-import { byTicket, KEY, whoOf, type Reason } from './wake'
+import { byTicket, isWholeKey, whoOf, type Reason } from './wake'
 
 // How long an idle stretch and a cleanup may last before foreman acts, in
 // milliseconds, from the `idleMinutes` and `cleanupMinutes` options.
@@ -377,6 +377,16 @@ export function needsList(t: ForemanTickets, rows: readonly SubRow[], now: numbe
   return t.held.length > 0 || queueOf(t).length > 0 || slotsNeedList(t, rows, now)
 }
 
+// What a list that could not be read kept from happening, for the log: a
+// freed slot when a slot rule needed the list, else a released hold when a
+// key is held, and otherwise a queued issue begun or dropped. needsList asks
+// the same three things.
+export function keptByUnreadList(t: ForemanTickets, rows: readonly SubRow[], now: number): string {
+  if (slotsNeedList(t, rows, now)) return 'no slot was freed'
+  if (t.held.length > 0) return 'no held issue was released'
+  return 'no queued issue was begun or dropped'
+}
+
 // Whether a slot rule needs the desktop app's list: some active owned record
 // that does not wait is done, or may be gone, as mayBeGone says.
 export function slotsNeedList(t: ForemanTickets, rows: readonly SubRow[], now: number): boolean {
@@ -405,12 +415,9 @@ export function freeSlots(t: ForemanTickets, rows: readonly SubRow[], now: numbe
 // the sub sessions already waiting unclaimed have taken theirs, so a new
 // start never goes ahead of one that waits.
 export function startWaits(t: ForemanTickets, rows: readonly SubRow[], now: number, slots: number): boolean {
-  const owed = queueOf(t).filter(p => p.queue!.claim === null).length
+  const owed = waitingUnclaimed(t).length
   return freeSlots(t, rows, now, slots) - owed <= 0
 }
-
-// A whole issue key, which is all a held entry may be.
-const KEY_SHAPE = new RegExp(`^${KEY}$`)
 
 // Whether a waiting sub session's record shows that /implement began in it:
 // an issue key, a stage or a pull request. Builder writes a file for a sub
@@ -419,11 +426,11 @@ const showsProgress = (row: SubRow) => row.record.issueKey !== null || row.recor
 
 // What the queue leads to on one read, after every pairing's own rules:
 // - a waiting sub session whose record shows progress counts as begun;
-// - when the list was read, an unclaimed waiting sub session that it shows
-//   archived leaves the queue, and its issue is dropped, while a claimed one
-//   that it shows archived, or that is missing from a complete list, leaves
-//   the queue and its key is held, with a notification only when no failed
-//   begin was told for it already;
+// - when the list was read, a waiting sub session that it shows archived, or
+//   that is missing from a complete list, leaves the queue: an unclaimed one
+//   has its issue dropped, as the app can delete an inactive session without
+//   archiving it, while a claimed one has its key held, with a notification
+//   only when no failed begin was told for it already;
 // - each free slot claims the first waiting sub session that the list shows
 //   unarchived, in the queue's order, naming the sub session whose slot this
 //   read freed, in order, when there is one;
@@ -433,10 +440,16 @@ const showsProgress = (row: SubRow) => row.record.issueKey !== null || row.recor
 // It answers the ledger and whether anyone is left waiting unclaimed.
 function queueStep(
   t: ForemanTickets,
-  q: { rows: readonly SubRow[]; now: number; slots: number; byId: ReadonlyMap<string, Listed> | null; complete: boolean; freedBy: string[]; effects: ForemanEffect[]; logs: string[] },
+  q: {
+    rows: readonly SubRow[]; byFile: ReadonlyMap<string, SubRow>; now: number; slots: number; byId: ReadonlyMap<string, Listed> | null; complete: boolean
+    freedBy: string[]; effects: ForemanEffect[]; logs: string[]
+  },
 ): { tickets: ForemanTickets; waits: boolean } {
   const { rows, now, byId, effects, logs } = q
-  const ownerRow = (p: ForemanPairing) => rows.find(r => r.file === p.ownerFile && ownsTicket(p, r))
+  const ownerRow = (p: ForemanPairing) => {
+    const row = p.ownerFile === null ? undefined : q.byFile.get(p.ownerFile)
+    return row !== undefined && ownsTicket(p, row) ? row : undefined
+  }
   let held = t.held
   let pairings = t.pairings.flatMap(p => {
     if (p.queue === null || p.standing !== 'active') return [p]
@@ -448,14 +461,13 @@ function queueStep(
     }
     const entry = byId === null || p.localId === null ? undefined : byId.get(p.localId)
     const isArchived = entry?.isArchived === true
-    if (p.queue.claim === null) {
-      if (!isArchived) return [p]
-      logs.push(`Dropped ${who} from the queue, because its waiting session is archived.`)
-      return []
-    }
     const isGone = byId !== null && p.localId !== null && entry === undefined && q.complete
     if (!isArchived && !isGone) return [p]
-    const key = p.issueKey !== null && KEY_SHAPE.test(p.issueKey) ? p.issueKey : null
+    if (p.queue.claim === null) {
+      logs.push(`Dropped ${who} from the queue, because its waiting session is ${isArchived ? 'archived' : 'no longer listed'}.`)
+      return []
+    }
+    const key = p.issueKey !== null && isWholeKey(p.issueKey) ? p.issueKey : null
     if (key === null) {
       logs.push(`Dropped ${who} from the queue, because its waiting session is archived or no longer listed.`)
       return []
@@ -485,7 +497,7 @@ function queueStep(
     return { ...p, queue: { ...p.queue, claim: { attemptAt: now, notified: p.queue.claim?.notified ?? false } } }
   })
   const next = { ...t, pairings, held }
-  return { tickets: next, waits: queueOf(next).some(p => p.queue!.claim === null) }
+  return { tickets: next, waits: waitingUnclaimed(next).length > 0 }
 }
 
 // Decides everything one read leads to. A pairing whose owner's file left the
@@ -561,7 +573,7 @@ export function decide(input: DecideInput): Decision {
     logs.push(...released.logs)
   }
   const complete = sessions.kind === 'read' && sessions.complete === true
-  const queued = queueStep(tickets, { rows, now, slots: input.slots, byId, complete, freedBy, effects, logs })
+  const queued = queueStep(tickets, { rows, byFile, now, slots: input.slots, byId, complete, freedBy, effects, logs })
   tickets = queued.tickets
   if (freed > 0 && !queued.waits) {
     const outcome = slotOutcome(freeSlots(tickets, rows, now, input.slots))

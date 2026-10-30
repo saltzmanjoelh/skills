@@ -159,6 +159,28 @@ test('an archived waiting sub session that was not claimed leaves the queue and 
   expect(d.logs).toContain('Dropped ABC-2 from the queue, because its waiting session is archived.')
 })
 
+test('an unclaimed waiting sub session missing from a whole list leaves the queue and its issue is dropped, while one missing from a list that may have left it out stays', () => {
+  const t = ledger(waiting('ft-b', 'ABC-2', 1), waiting('ft-c', 'ABC-3', 2))
+  const kept = read(t, [row('ft-b'), row('ft-c')], T0, { sessions: list([listed('local_ft-c')], false), slots: 0 })
+  expect(kept.tickets.pairings.map(p => p.ticket)).toEqual(['ft-b', 'ft-c'])
+  expect(kept.logs).toEqual([])
+  const gone = read(t, [row('ft-b'), row('ft-c')], T0, { sessions: list([listed('local_ft-c')], true), slots: 0 })
+  expect(gone.tickets.pairings.map(p => p.ticket)).toEqual(['ft-c'])
+  expect(gone.tickets.held).toEqual([])
+  expect(gone.effects).toEqual([])
+  expect(gone.logs).toContain('Dropped ABC-2 from the queue, because its waiting session is no longer listed.')
+})
+
+test('a claimed sub session with no well-formed issue key that the list shows archived leaves the queue, and nothing is held', () => {
+  const t = ledger(waiting('ft-b', 'not a key', 1, { attemptAt: T0, notified: false }))
+  const sessions = list([listed('local_ft-b', { isArchived: true, surelyUnarchived: false })])
+  const d = read(t, [row('ft-b')], T0 + MINUTE, { sessions })
+  expect(d.tickets.pairings).toEqual([])
+  expect(d.tickets.held).toEqual([])
+  expect(d.effects).toEqual([])
+  expect(d.logs).toContain('Dropped the sub session with ticket ft-b from the queue, because its waiting session is archived or no longer listed.')
+})
+
 test('a claimed sub session missing from a list that may have left it out stays, and one missing from a whole list is held', () => {
   const t = ledger(waiting('ft-b', 'ABC-2', 1, { attemptAt: T0, notified: false }))
   const kept = read(t, [row('ft-b')], T0 + MINUTE, { sessions: list([listed('local_other')], false) })

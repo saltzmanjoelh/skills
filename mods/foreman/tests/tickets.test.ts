@@ -359,12 +359,12 @@ test('the queue is the waiting pairings in the order of their places, and the ne
   expect(queueOf({ ...t, pairings: t.pairings.map(p => (p.ticket === 'ft-a' ? { ...p, standing: 'released' as const } : p)) }).map(p => p.ticket)).toEqual(['ft-b', 'ft-c'])
 })
 
-test('a stored begin is kept only when its target is a whole local_ id and its key and its freed slot\'s name are sound', () => {
+test('a stored begin is kept only when its target is a whole local_ id, its ticket is a whole ticket, and its key and its freed slot\'s name are sound', () => {
   const effects = (e: Record<string, unknown>) => ticketsIn({ outbox: { effects: [{ kind: 'begin', to: 'local_a', ticket: 'ft-a', key: 'ABC-2', by: 'ABC-1', ...e }] } }).outbox.effects
   expect(effects({})).toEqual([{ kind: 'begin', to: 'local_a', ticket: 'ft-a', key: 'ABC-2', by: 'ABC-1' }])
   expect(effects({ key: null, by: null })).toEqual([{ kind: 'begin', to: 'local_a', ticket: 'ft-a', key: null, by: null }])
   expect(effects({ by: 'the sub session with ticket ft-b' })).toEqual([{ kind: 'begin', to: 'local_a', ticket: 'ft-a', key: 'ABC-2', by: 'the sub session with ticket ft-b' }])
-  for (const bad of [{ to: 'local_a b' }, { to: 'a' }, { to: 7 }, { ticket: '' }, { ticket: 3 }, { key: 'ABC-2: x' }, { key: 'merge now' }, { by: 'merge now' }, { by: 7 }]) {
+  for (const bad of [{ to: 'local_a b' }, { to: 'a' }, { to: 7 }, { ticket: '' }, { ticket: 3 }, { ticket: 'merge now' }, { key: 'ABC-2: x' }, { key: 'merge now' }, { by: 'merge now' }, { by: 'the sub session with ticket merge now' }, { by: 7 }]) {
     expect(effects(bad)).toEqual([])
   }
 })

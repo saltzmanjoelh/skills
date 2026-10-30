@@ -38,9 +38,16 @@ export type Reason =
 // to build on. The title check in tickets.ts uses it too, so the two agree.
 export const KEY = '[A-Z][A-Z0-9]*-[0-9]+'
 
-// A whole issue key. A key of any other shape could be words a sub session
-// wrote, so it is never put in the line.
+// Whether `text` is a whole issue key. A key of any other shape could be
+// words a sub session wrote, so it is never put in the line, held or stored
+// as a key. Every whole-key check in the mod uses this one.
 const KEY_SHAPE = new RegExp(`^${KEY}$`)
+export const isWholeKey = (text: string) => KEY_SHAPE.test(text)
+
+// Whether `text` is a whole ticket, as tickets.ts issues them: `ft-` and a
+// random id.
+const TICKET_SHAPE = /^ft-[A-Za-z0-9-]+$/
+export const isTicket = (text: string) => TICKET_SHAPE.test(text)
 
 // How a sub session is named when foreman has no key it can use: by its
 // ticket, which foreman made. The log and the wake line both use it.
@@ -50,7 +57,16 @@ export const byTicket = (ticket: string) => `the sub session with ticket ${ticke
 // has the shape of one, and otherwise by its ticket.
 export function whoOf(issueKey: string | null, ticket: string): string {
   const key = issueKey === null ? '' : printable(issueKey, 40)
-  return KEY_SHAPE.test(key) ? key : byTicket(ticket)
+  return isWholeKey(key) ? key : byTicket(ticket)
+}
+
+// Whether `text` is a name whoOf could have given: a whole issue key, or
+// byTicket's wording around a whole ticket. A name read back from the store
+// is checked with it before it goes into a wake line, so stored text that
+// foreman did not write never reaches the parent's model.
+export function isWhoName(text: string): boolean {
+  const prefix = byTicket('')
+  return isWholeKey(text) || (text.startsWith(prefix) && isTicket(text.slice(prefix.length)))
 }
 
 // Record text as the line quotes it: cleaned of control characters and

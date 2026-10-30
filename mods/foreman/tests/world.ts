@@ -117,6 +117,8 @@ export function desktopApp(on: On) {
 // `startAnswer` is the text start_session answers, unless `startAnswers`
 // holds a text for this start, which each start takes in turn, with
 // `startFails` making it answer an error and `startThrows` making it throw.
+// `onStart` is awaited as each start runs, before it answers, so a test can
+// look at the ledger, or change what happens, while the call is out.
 export function engine(on: On) {
   const toasts: string[] = []
   const panes: string[] = []
@@ -136,6 +138,7 @@ export function engine(on: On) {
     onSubmit: (() => undefined) as () => void,
     startAnswer: 'Started the session local_new1 (name: example).',
     startAnswers: [] as string[],
+    onStart: (async () => undefined) as () => Promise<void>,
     // Whether start_session's answer leaves out the text, giving the result alone.
     startResultOnly: false,
     startFails: false,
@@ -164,8 +167,9 @@ export function engine(on: On) {
     answers.appended.push(a.message.content.map(b => (b as { text?: string }).text ?? '').join(''))
     return next(a)
   })
-  on('tool.call', { tool: 'mcp__ccd_session__start_session' }, ($, call) => {
+  on('tool.call', { tool: 'mcp__ccd_session__start_session' }, async ($, call) => {
     answers.started.push({ ...call })
+    await answers.onStart()
     if (answers.startThrows) throw new Error('the desktop app fell over')
     const text = answers.startAnswers.shift() ?? answers.startAnswer
     const result = { content: [{ type: 'text', text }], isError: answers.startFails }
