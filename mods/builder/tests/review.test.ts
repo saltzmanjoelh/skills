@@ -682,7 +682,9 @@ test('the verdict head is the newest verdict review not at the head, and none wh
 })
 
 // The two openings skills/implement/SKILL.md gives a review carried over to a
-// new head, word for word, so a change to either wording fails here.
+// new head, copied word for word. No test can read the skill to catch the
+// drift, so a change to either opening has to be made in the skill, in this
+// copy and in CARRIED_OVER together.
 const CARRIED_OPENINGS = [
   (from: string) => `Both verdicts are carried over from ${from}, which both verdict reviewers read.`,
   (from: string) => `Both verdicts are carried over from ${from}, which both verdict reviewers read; the adversarial reviewer read the change since then and found nothing that blocks.`,
