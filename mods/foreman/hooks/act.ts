@@ -42,7 +42,11 @@ export const CALL_TIMEOUT_MS = 30_000
 // needed it, failed, or read. `complete` says the list came back shorter than
 // the most foreman asks for, so a session missing from it is surely gone. A
 // list without it may have left out a session that was quiet a while.
-export type SessionsLook = { kind: 'unread' } | { kind: 'failed' } | { kind: 'read'; sessions: Listed[]; complete?: boolean }
+// `known` holds the desktop session ids the ledger held when the list was
+// asked for: a session whose id the ledger learned while the list call was
+// out may have started after the list was made, so its absence from the list
+// says nothing. Without `known`, every id counts as held then.
+export type SessionsLook = { kind: 'unread' } | { kind: 'failed' } | { kind: 'read'; sessions: Listed[]; complete?: boolean; known?: readonly string[] }
 
 export type DecideInput = {
   tickets: ForemanTickets
@@ -427,7 +431,8 @@ const showsProgress = (row: SubRow) => row.record.issueKey !== null || row.recor
 // What the queue leads to on one read, after every pairing's own rules:
 // - a waiting sub session whose record shows progress counts as begun;
 // - when the list was read, a waiting sub session that it shows archived, or
-//   that is missing from a complete list, leaves the queue: an unclaimed one
+//   that is missing from a complete list asked for once the ledger held its
+//   desktop session id, leaves the queue: an unclaimed one
 //   has its issue dropped, as the app can delete an inactive session without
 //   archiving it, while a claimed one has its key held, with a notification
 //   only when no failed begin was told for it already;
@@ -441,7 +446,7 @@ const showsProgress = (row: SubRow) => row.record.issueKey !== null || row.recor
 function queueStep(
   t: ForemanTickets,
   q: {
-    rows: readonly SubRow[]; byFile: ReadonlyMap<string, SubRow>; now: number; slots: number; byId: ReadonlyMap<string, Listed> | null; complete: boolean
+    rows: readonly SubRow[]; byFile: ReadonlyMap<string, SubRow>; now: number; slots: number; byId: ReadonlyMap<string, Listed> | null; complete: boolean; known: ReadonlySet<string> | null
     freedBy: string[]; effects: ForemanEffect[]; logs: string[]
   },
 ): { tickets: ForemanTickets; waits: boolean } {
@@ -461,7 +466,7 @@ function queueStep(
     }
     const entry = byId === null || p.localId === null ? undefined : byId.get(p.localId)
     const isArchived = entry?.isArchived === true
-    const isGone = byId !== null && p.localId !== null && entry === undefined && q.complete
+    const isGone = byId !== null && p.localId !== null && entry === undefined && q.complete && (q.known === null || q.known.has(p.localId))
     if (!isArchived && !isGone) return [p]
     if (p.queue.claim === null) {
       logs.push(`Dropped ${who} from the queue, because its waiting session is ${isArchived ? 'archived' : 'no longer listed'}.`)
@@ -469,7 +474,7 @@ function queueStep(
     }
     const key = p.issueKey !== null && isWholeKey(p.issueKey) ? p.issueKey : null
     if (key === null) {
-      logs.push(`Dropped ${who} from the queue, because its waiting session is archived or no longer listed.`)
+      logs.push(`Dropped ${who} from the queue, because its waiting session is ${isArchived ? 'archived' : 'no longer listed'}.`)
       return []
     }
     logs.push(beginHeldLog(key))
@@ -573,7 +578,8 @@ export function decide(input: DecideInput): Decision {
     logs.push(...released.logs)
   }
   const complete = sessions.kind === 'read' && sessions.complete === true
-  const queued = queueStep(tickets, { rows, byFile, now, slots: input.slots, byId, complete, freedBy, effects, logs })
+  const known = sessions.kind === 'read' && sessions.known !== undefined ? new Set(sessions.known) : null
+  const queued = queueStep(tickets, { rows, byFile, now, slots: input.slots, byId, complete, known, freedBy, effects, logs })
   tickets = queued.tickets
   if (freed > 0 && !queued.waits) {
     const outcome = slotOutcome(freeSlots(tickets, rows, now, input.slots))

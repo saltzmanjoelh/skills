@@ -39,7 +39,7 @@ const ledger = (...pairings: ForemanPairing[]): ForemanTickets => ({ ...TICKETS_
 // A session as the desktop app lists it, unarchived and running unless `over`
 // says otherwise.
 const listed = (id: string, over: Partial<Listed> = {}): Listed => ({ sessionId: id, isArchived: false, isRunning: true, title: null, surelyUnarchived: true, ...over })
-const list = (sessions: Listed[], complete = false): SessionsLook => ({ kind: 'read', sessions, complete })
+const list = (sessions: Listed[], complete = false, known?: string[]): SessionsLook => ({ kind: 'read', sessions, complete, ...(known === undefined ? {} : { known }) })
 
 // One read: the rows joined to the ledger, then the decision, with one slot.
 function read(tickets: ForemanTickets, rows: SubRow[], now: number, over: Partial<DecideInput> = {}): Decision {
@@ -171,6 +171,13 @@ test('an unclaimed waiting sub session missing from a whole list leaves the queu
   expect(gone.logs).toContain('Dropped ABC-2 from the queue, because its waiting session is no longer listed.')
 })
 
+test('a waiting sub session whose desktop session id the ledger did not hold when the list was asked for stays, even when the list is whole', () => {
+  const t = ledger(waiting('ft-b', 'ABC-2', 1), waiting('ft-c', 'ABC-3', 2))
+  const d = read(t, [row('ft-b'), row('ft-c')], T0, { sessions: list([], true, ['local_ft-c']), slots: 0 })
+  expect(d.tickets.pairings.map(p => p.ticket)).toEqual(['ft-b'])
+  expect(d.logs).toEqual(['Dropped ABC-3 from the queue, because its waiting session is no longer listed.'])
+})
+
 test('a claimed sub session with no well-formed issue key that the list shows archived leaves the queue, and nothing is held', () => {
   const t = ledger(waiting('ft-b', 'not a key', 1, { attemptAt: T0, notified: false }))
   const sessions = list([listed('local_ft-b', { isArchived: true, surelyUnarchived: false })])
@@ -178,7 +185,7 @@ test('a claimed sub session with no well-formed issue key that the list shows ar
   expect(d.tickets.pairings).toEqual([])
   expect(d.tickets.held).toEqual([])
   expect(d.effects).toEqual([])
-  expect(d.logs).toContain('Dropped the sub session with ticket ft-b from the queue, because its waiting session is archived or no longer listed.')
+  expect(d.logs).toContain('Dropped the sub session with ticket ft-b from the queue, because its waiting session is archived.')
 })
 
 test('a claimed sub session missing from a list that may have left it out stays, and one missing from a whole list is held', () => {

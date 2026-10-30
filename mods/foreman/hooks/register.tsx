@@ -340,7 +340,8 @@ async function decideNow($: $, folderExists: boolean, listed: boolean, now: numb
       sessions = { kind: 'failed' }
       await addLog($, `Could not read the desktop app's list of sessions, so ${keptByUnreadList(before, rows, now)}: ${why}.`)
     } else {
-      sessions = { kind: 'read', sessions: sessionList.sessions, complete: sessionList.complete }
+      const known = before.pairings.flatMap(p => (p.localId === null ? [] : [p.localId]))
+      sessions = { kind: 'read', sessions: sessionList.sessions, complete: sessionList.complete, known }
     }
   }
   const settings = parentIn(await read($, parent))
@@ -680,8 +681,11 @@ async function startSession<E extends Record<string, unknown>>($: $, e: E, next:
       return { ...t, pairings: [...t.pairings, newPairing(ticket, null, now, key, waits ? { place: nextPlace(t), claim: null } : null)] }
     })
   }
-  const prompt = brief.kind === 'add' ? (waits && key !== null ? waitingBrief(key, brief.prompt) : brief.prompt) : null
-  const sent = brief.kind === 'pass' ? e : { ...e, prompt, ...(brief.title === undefined ? {} : { title: brief.title }) }
+  let sent: E = e
+  if (brief.kind === 'add') {
+    const prompt = waits ? waitingBrief(key!, brief.prompt) : brief.prompt
+    sent = { ...e, prompt, ...(brief.title === undefined ? {} : { title: brief.title }) }
+  }
   let out: ToolCallResult
   try {
     out = await next(sent)
