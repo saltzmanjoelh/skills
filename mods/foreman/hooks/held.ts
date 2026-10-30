@@ -1,12 +1,13 @@
-// Holding a start the desktop app refused because the person works over
-// Remote Control: which refusal counts, which key a start is for, the words
-// the model and the person read, which list entries release a hold, and which
-// prompts are the person's. register.tsx wires these into its hooks. Every
-// function is pure.
+// Holding a start the desktop app refused: which refusals count, which key a
+// start is for, the words the model and the person read, which list entries
+// release a hold, and which prompts are the person's. register.tsx wires
+// these into its hooks. Every function is pure.
 //
 // The skill at skills/wake/SKILL.md uses heldLine's sentence as a heading and
-// quotes heldSentence, and the README quotes all three texts, so they are
-// pinned by tests/held.test.ts. Change them together.
+// quotes heldSentence, and the README quotes all four texts, so they are
+// pinned by tests/held.test.ts. Change them together. None of them says where
+// the person is, because the app gives both refusals for reasons foreman
+// cannot see.
 
 import type { PromptSubmitInput, ToolCallResult } from 'claude-code'
 
@@ -14,12 +15,20 @@ import type { Listed } from './desktop'
 import { listOf } from './text'
 import { KEYED_TITLE, LOCAL_ID } from './tickets'
 
-// The words foreman recognises the refusal by. The desktop app refuses
-// start_session with: "The user is working over Remote Control, and for now
-// you can start a session only on a message typed in the desktop app. If they
-// asked for one, tell them so in one line." A refusal in other words holds
-// nothing, so the parent falls back to its card and its one line.
+// The words foreman recognises the two refusals by, in the app's own wording.
+// The desktop app refuses start_session with: "The user is working over
+// Remote Control, and for now you can start a session only on a message typed
+// in the desktop app. If they asked for one, tell them so in one line." while
+// its Remote Control setting is on, and with words that begin "Start sessions
+// only on the user's own words to you here" on a turn that no person typed,
+// such as one that a wake line began. A refusal in other words holds nothing,
+// so the parent falls back to its card and its one line.
 export const REMOTE_REFUSAL = 'working over Remote Control'
+export const AUTOMATED_REFUSAL = 'Start sessions only on the user\'s own words to you here'
+
+// Text with each curly apostrophe made a straight one, so a refusal the app
+// writes with either kind is recognised.
+const straight = (text: string) => text.replace(/[\u2018\u2019]/g, '\'')
 
 // The issue key at the start of a title, when a space or a colon follows it,
 // or null for any other title, a "No issue: " one included.
@@ -28,34 +37,36 @@ export function keyOfTitle(title: unknown): string | null {
   return KEYED_TITLE.exec(title)?.[1] ?? null
 }
 
-// Whether a start_session answer is the app's Remote Control refusal: not a
-// deny, naming no started session, with the words in its text, or in its
-// result when it has no text, whether or not it is marked as an error. The
-// app repeats the call's `title` in its answers, so the words count only
-// outside that title, and a title of the person's own that holds them never
-// makes an accepted start look refused.
-export function isRemoteRefusal(out: ToolCallResult, title?: unknown): boolean {
+// Whether a start_session answer is one of the two refusals foreman holds a
+// key for: not a deny, naming no started session, with the words of either
+// in its text, or in its result when it has no text, whether or not it is
+// marked as an error. The app repeats the call's `title` in its answers, so
+// the words count only outside that title, and a title of the person's own
+// that holds them never makes an accepted start look refused.
+export function isHeldRefusal(out: ToolCallResult, title?: unknown): boolean {
   if (out.deny !== undefined) return false
-  const text = typeof out.text === 'string' ? out.text : JSON.stringify(out.result ?? '')
+  const text = straight(typeof out.text === 'string' ? out.text : JSON.stringify(out.result ?? ''))
   if (LOCAL_ID.test(text)) return false
-  const rest = typeof title === 'string' && title !== '' ? text.split(title).join('') : text
-  return rest.includes(REMOTE_REFUSAL)
+  const rest = typeof title === 'string' && title !== '' ? text.split(straight(title)).join('') : text
+  return rest.includes(REMOTE_REFUSAL) || rest.includes(AUTOMATED_REFUSAL)
 }
 
 // The sentence added after the refusal, as context the model reads with it.
-export const heldSentence = (key: string) => `foreman holds ${key} and offers it again on the person's next message, so do not propose a card for it; tell the person in one line that ${key} starts on their next message typed in the desktop app.`
+export const heldSentence = (key: string) => `foreman holds ${key} and offers it again on the person's next message, so do not propose a card for it; tell the person in one line that the desktop app refused to start ${key} and that it starts on their next message.`
 
 // The context line added to each of the person's prompts while keys are held.
+// It says only that the key did not start, which is also true of a key held
+// because foreman could not begin its waiting sub session.
 export function heldLine(keys: readonly string[]): string {
   const them = keys.length === 1 ? 'it' : 'them'
-  return `foreman: the desktop app refused to start ${listOf(keys)} over Remote Control, and foreman holds ${them}; start ${them} first, before anything else, as "Starting a session" says.`
+  return `foreman: ${listOf(keys)} did not start, and foreman holds ${them}; start ${them} first, before anything else, as "Starting a session" says.`
 }
 
 // The notification raised once when a key is newly held.
-export const heldNotice = (key: string) => `${key} waits to start: the desktop app starts sessions over Remote Control only on a message typed in the desktop app, so type one there to start it.`
+export const heldNotice = (key: string) => `${key} waits to start: the desktop app refused to start it, and it starts on your next message.`
 
 // The log line for each hold and each release.
-export const heldLog = (key: string) => `Held ${key}, because the desktop app refused to start it over Remote Control.`
+export const heldLog = (key: string) => `Held ${key}, because the desktop app refused to start it.`
 export const acceptedLog = (key: string) => `Stopped holding ${key}, because the desktop app accepted its start.`
 const listedLog = (key: string) => `Stopped holding ${key}, because the desktop app's list shows a session for it.`
 

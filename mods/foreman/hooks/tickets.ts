@@ -4,6 +4,7 @@
 // and which rows show. Every function is pure.
 
 import type { ForemanActs, ForemanEffect, ForemanOutbox, ForemanPairing, ForemanSpend, ForemanSpent, ForemanStanding, ForemanTickets } from '../types'
+import { BEGIN_TEXT } from './desktop'
 import { countsIn, isDollars, isPullRequestNumber, isPullRequestState, verdictsIn } from './record'
 import { byKeyThenFile, keyOf, nameOf, type SubRow } from './subs'
 import { byTicket, KEY } from './wake'
@@ -121,6 +122,21 @@ export function briefFor(args: Record<string, unknown>, uuid: string): Brief {
   if (title === null || !isMarked) return { kind: 'add', ticket, prompt }
   return { kind: 'add', ticket, prompt, title: `${ticket}: ${title.slice(NO_ISSUE_MARKER.length)}` }
 }
+
+// The line put first in the brief of a start that waits, before the parent's
+// own text, so that a brief which begins with /implement is never run as a
+// command before the session reads it. It quotes the begin message exactly,
+// so the sub session knows that message when it arrives. It does not begin
+// with a slash or with "foreman: ".
+export const WAIT_LINE = (key: string) => `Wait for foreman before you begin: run /implement ${key} only once foreman's begin message arrives, which reads exactly "${BEGIN_TEXT}" Until then, reply only that you wait, and make no change to any file, branch or issue.`
+
+// The brief a waiting start goes on with: the wait line, a blank line, and
+// the prompt briefFor made, which already ends with the ticket line.
+export const waitingBrief = (key: string, prompt: string) => `${WAIT_LINE(key)}\n\n${prompt}`
+
+// The sentence added to the answer of a start that waits, so the parent does
+// not tell the person that the issue started.
+export const WAITING_SENTENCE = (key: string) => `${key} waits in foreman's queue: its sub session begins by itself once a slot frees, so tell the person that ${key} is queued, not that it started.`
 
 // The shape of a desktop session id, such as local_ab-12_c. The turn-end
 // notes in hooks/notes.ts read ids with it too, so the two cannot drift.

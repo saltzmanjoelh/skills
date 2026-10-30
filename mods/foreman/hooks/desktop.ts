@@ -20,6 +20,13 @@ export const NUDGE_TEXT = 'what\'s next?'
 // The nudge foreman sends a sub session that waits only on background work,
 // which asks about that work rather than what is next.
 export const BACKGROUND_NUDGE_TEXT = 'could you check that your background work is still making progress, and stop it if it hangs?'
+// The message that tells a waiting sub session to begin. It is a constant, so
+// no text from an issue or a status file ever reaches a sub session through
+// it, and it does not begin with "foreman: ", which would read as a wake line
+// to a sub session that loads foreman's wake skill. Its last sentence makes a
+// begin that arrives twice harmless. The wait line in tickets.ts quotes it, so
+// the sub session knows it when it comes.
+export const BEGIN_TEXT = 'foreman begins this session now: first bring your branch up to date with the base branch, with the desktop app\'s sync_with_base_branch tool, and then run the /implement command your brief gives. If you have already begun it, ignore this message.'
 // How many sessions to ask the list for. The list answers the most recently
 // active ones, twenty when not told otherwise, and a sub session that has been
 // quiet a while could fall outside twenty.

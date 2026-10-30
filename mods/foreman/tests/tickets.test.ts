@@ -5,8 +5,9 @@ import type { SubRow } from '../hooks/subs'
 import {
   carriesTicket, fallbackOf, noTicketLog,
   briefFor, capped, FORK_REFUSAL, isOffRefused, joinOwners, localIdIn, MAX_PAIRINGS, newPairing, NO_TICKET_SENTENCE, OFF_REFUSAL, runsImplement, shownRows, ticketsIn,
-  TICKETS_EMPTY, TITLE_REFUSAL, withOffRefusal, withUnwatched,
+  TICKETS_EMPTY, TITLE_REFUSAL, WAIT_LINE, waitingBrief, WAITING_SENTENCE, withOffRefusal, withUnwatched,
 } from '../hooks/tickets'
+import { BEGIN_TEXT } from '../hooks/desktop'
 import type { ForemanTickets } from '../types'
 
 const T0 = Date.UTC(2026, 9, 20, 12, 0, 0)
@@ -304,4 +305,28 @@ test('the spent list and the earlier total read back when sound, and a damaged l
   expect(old.earlier).toBeNull()
   expect(TICKETS_EMPTY.spent).toEqual([])
   expect(TICKETS_EMPTY.earlier).toBeNull()
+})
+
+// The wait line and the begin message are the whole of what a waiting sub
+// session is told, so both are pinned word for word.
+test('the begin message is a fixed text that names no issue and does not begin as foreman\'s wake lines do', () => {
+  expect(BEGIN_TEXT).toBe('foreman begins this session now: first bring your branch up to date with the base branch, with the desktop app\'s sync_with_base_branch tool, and then run the /implement command your brief gives. If you have already begun it, ignore this message.')
+  expect(BEGIN_TEXT.startsWith('foreman: ')).toBe(false)
+})
+
+test('the wait line says to run /implement only once the begin message arrives, quotes that message, and does not begin with a slash', () => {
+  expect(WAIT_LINE('ABC-2')).toBe(`Wait for foreman before you begin: run /implement ABC-2 only once foreman's begin message arrives, which reads exactly "${BEGIN_TEXT}" Until then, reply only that you wait, and make no change to any file, branch or issue.`)
+  expect(WAIT_LINE('ABC-2').startsWith('/')).toBe(false)
+  expect(WAIT_LINE('ABC-2').startsWith('foreman: ')).toBe(false)
+})
+
+test('a waiting brief puts the wait line first, before a brief that begins with /implement and before its ticket line', () => {
+  const brief = briefFor({ prompt: '/implement ABC-2', context: 'fresh', title: 'ABC-2: x' }, 'u-1')
+  if (brief.kind !== 'add') throw new Error('the brief should get a ticket')
+  expect(waitingBrief('ABC-2', brief.prompt)).toBe(`${WAIT_LINE('ABC-2')}\n\n/implement ABC-2\n\nforeman-ticket: ft-u-1`)
+  expect(carriesTicket({ prompt: waitingBrief('ABC-2', brief.prompt) })).toBe(true)
+})
+
+test('the sentence on a waiting start\'s answer says the issue is queued, not started', () => {
+  expect(WAITING_SENTENCE('ABC-2')).toBe('ABC-2 waits in foreman\'s queue: its sub session begins by itself once a slot frees, so tell the person that ABC-2 is queued, not that it started.')
 })

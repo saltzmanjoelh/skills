@@ -5,7 +5,7 @@ import { decide, desktopOf, needsList, slotOutcome, slotsNeedList, type Decision
 import { isSvgSurface } from './art'
 import { becameParentAnswer, COMMAND, commandOf, PASSED_ON, PASTED_LINE, pastedCommandIn, slotsAnswer, type Command } from './commands'
 import { BACKGROUND_NUDGE_TEXT, failureLine, listSessions, NUDGE_TEXT, openSession, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
-import { acceptedLog, heldLine, heldLog, heldNotice, heldSentence, isPersonPrompt, isRemoteRefusal, keyOfTitle } from './held'
+import { acceptedLog, heldLine, heldLog, heldNotice, heldSentence, isHeldRefusal, isPersonPrompt, keyOfTitle } from './held'
 import { ignoredLine, readIssueLink } from './links'
 import { checkLine, FOREMAN_REPORTS, isAppParts, keptLine, keptNames, NOTED, NOTED_REPLY, notesIn } from './notes'
 import { bandTree, PANE, paneTree, type Elements, type View } from './pane'
@@ -681,15 +681,15 @@ const withNoTicket = (out: Extract<ToolCallResult, { result: unknown }>): ToolCa
 
 // What foreman does with start_session's answer, for a call whose title
 // began with `key`, or null, that went on with `title`, which the app repeats
-// in its answers, and that carried `ticket`, or null. The app's
-// Remote Control refusal holds the key, in one update with its log line and
+// in its answers, and that carried `ticket`, or null. Either refusal that
+// isHeldRefusal knows holds the key, in one update with its log line and
 // one notification, raised only when the key is newly held, and the answer
 // goes back with the holding sentence as context; it pairs no ticket. Any
 // other answer that is not a deny and not an error is accepted: its ticket is
 // paired with the desktop session id it names, or with none for a proposal
 // card, and its key is released. Every other answer goes back as it came.
 async function afterStart($: $, key: string | null, title: unknown, ticket: string | null, out: ToolCallResult): Promise<ToolCallResult> {
-  if (out.deny === undefined && isRemoteRefusal(out, title)) {
+  if (out.deny === undefined && isHeldRefusal(out, title)) {
     if (key === null) return out
     await writeTickets($, t => (t.held.includes(key)
       ? t

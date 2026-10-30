@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { DATA_NOTE, quoted, REASON_WORDS, slotWords, wakeLine, whoOf } from '../hooks/wake'
+import { DATA_NOTE, quoted, REASON_WORDS, slotWords, wakeLine, whoOf, withSentences } from '../hooks/wake'
 
 const TICKET = 'ft-1234'
 
@@ -103,4 +103,21 @@ test('a background sentence with no task, or one that is empty once cleaned, end
   const line = wakeLine([{ kind: 'background', who: 'ABC-1', nudged: true, minutes: 15, task: 'run the tests' }])!
   expect(line.endsWith(` ${DATA_NOTE}`)).toBe(true)
   expect(wakeLine([{ kind: 'unseen', who: 'ABC-1', minutes: 5, mismatch: true }])).not.toContain(DATA_NOTE)
+})
+
+// The wake skill quotes both forms of the began sentence, so they are pinned.
+test('the began sentence names the slot that freed, or says the slot was free', () => {
+  expect(REASON_WORDS.began({ kind: 'began', who: 'ABC-2', by: 'ABC-1' }))
+    .toBe('foreman began ABC-2, the next issue in the queue, in the slot ABC-1 freed; tell the person so in one line.')
+  expect(REASON_WORDS.began({ kind: 'began', who: 'ABC-2', by: null }))
+    .toBe('foreman began ABC-2, the next issue in the queue, in a free slot; tell the person so in one line.')
+})
+
+test('sentences added after a send go at the end of the last wake line, or make a line of their own when there is none', () => {
+  const began = REASON_WORDS.began({ kind: 'began', who: 'ABC-2', by: 'ABC-1' })
+  expect(withSentences([], [])).toEqual([])
+  expect(withSentences(['foreman: ABC-1\'s pull request #7 merged.'], [])).toEqual(['foreman: ABC-1\'s pull request #7 merged.'])
+  expect(withSentences(['foreman: ABC-1\'s pull request #7 merged.'], [began])).toEqual([`foreman: ABC-1's pull request #7 merged. ${began}`])
+  expect(withSentences(['foreman: a.', 'foreman: b.'], [began, began])).toEqual(['foreman: a.', `foreman: b. ${began} ${began}`])
+  expect(withSentences([], [began])).toEqual([`foreman: ${began}`])
 })

@@ -32,6 +32,7 @@ export type Reason =
   | { kind: 'merged'; who: string; number: number }
   | { kind: 'closed'; who: string; number: number }
   | { kind: 'slot-free'; free: number }
+  | { kind: 'began'; who: string; by: string | null }
 
 // The shape of an issue key, such as ABC-123, as a pattern for other patterns
 // to build on. The title check in tickets.ts uses it too, so the two agree.
@@ -103,6 +104,7 @@ export const REASON_WORDS: { [K in Reason['kind']]: (r: Extract<Reason, { kind: 
   'merged': r => `${r.who}'s pull request #${r.number} merged.`,
   'closed': r => `${r.who}'s pull request #${r.number} was closed without merging.`,
   'slot-free': r => slotWords(r.free),
+  'began': r => `foreman began ${r.who}, the next issue in the queue, ${r.by === null ? 'in a free slot' : `in the slot ${r.by} freed`}; tell the person so in one line.`,
 }
 
 const sentenceOf = (r: Reason) => (REASON_WORDS[r.kind] as (r: Reason) => string)(r)
@@ -112,4 +114,14 @@ export function wakeLine(reasons: readonly Reason[]): string | null {
   if (reasons.length === 0) return null
   const line = `foreman: ${reasons.map(sentenceOf).join(' ')}`
   return reasons.some(quotesText) ? `${line} ${DATA_NOTE}` : line
+}
+
+// The wake lines with `sentences` added at the end of the last one, or as a
+// line of their own when there is none. The began sentence is added this way
+// once its begin message went, so the parent hears it in the same wake that
+// reports the merge that freed the slot.
+export function withSentences(lines: readonly string[], sentences: readonly string[]): string[] {
+  if (sentences.length === 0) return [...lines]
+  if (lines.length === 0) return [`foreman: ${sentences.join(' ')}`]
+  return [...lines.slice(0, -1), `${lines.at(-1)} ${sentences.join(' ')}`]
 }

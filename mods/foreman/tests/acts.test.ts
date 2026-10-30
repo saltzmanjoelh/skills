@@ -714,13 +714,15 @@ test('a wake waits at most 30 seconds for the words after /start-foreman, and lo
 })
 
 
-// The desktop app's refusal of start_session while the person works over
-// Remote Control, word for word, and the same refusal in other words.
+// The desktop app's refusal of start_session while its Remote Control setting
+// is on, word for word, the opening of its refusal on a turn no person typed,
+// and the same refusal in other words.
 const REMOTE = 'The user is working over Remote Control, and for now you can start a session only on a message typed in the desktop app. If they asked for one, tell them so in one line.'
+const AUTOMATED = 'Start sessions only on the user\'s own words to you here; this turn runs an automated event, another session\'s message, or the task another session gave you.'
 const REWORDED = 'The user is on their phone, so you can start a session only from the desktop app.'
 
-const HELD_SENTENCE = 'foreman holds ABC-7 and offers it again on the person\'s next message, so do not propose a card for it; tell the person in one line that ABC-7 starts on their next message typed in the desktop app.'
-const HELD_NOTICE = 'ABC-7 waits to start: the desktop app starts sessions over Remote Control only on a message typed in the desktop app, so type one there to start it.'
+const HELD_SENTENCE = 'foreman holds ABC-7 and offers it again on the person\'s next message, so do not propose a card for it; tell the person in one line that the desktop app refused to start ABC-7 and that it starts on their next message.'
+const HELD_NOTICE = 'ABC-7 waits to start: the desktop app refused to start it, and it starts on your next message.'
 
 // A start whose answer the test reads whole, context included.
 const startFull = ($: Engine, args: Record<string, unknown>) => $.tool.call({ tool: START, ...args } as never) as Promise<{ deny?: string; text?: string; isError?: true; context?: readonly string[] }>
@@ -748,8 +750,21 @@ test('the app\'s Remote Control refusal of a keyed start holds the key, adds the
   expect(ledger(w).pairings).toEqual([])
   expect(w.engine.notices).toEqual([HELD_NOTICE])
   const logs = await ui.paneText()
-  expect(logs).toContain('Held ABC-7, because the desktop app refused to start it over Remote Control.')
+  expect(logs).toContain('Held ABC-7, because the desktop app refused to start it.')
   expect(logs).toContain(`Raised a notification: ${HELD_NOTICE}`)
+})
+
+test('the app\'s refusal on a turn no person typed holds the key the same way, with one notification', async ($, on) => {
+  const { w, ui } = await refusingParent($, on, AUTOMATED)
+  const out = await startFull($, KEYED_START)
+  expect(out.context).toEqual([HELD_SENTENCE])
+  await w.clock.settle()
+  await startFull($, KEYED_START)
+  await w.clock.settle()
+  expect(ledger(w).held).toEqual(['ABC-7'])
+  expect(ledger(w).pairings).toEqual([])
+  expect(w.engine.notices).toEqual([HELD_NOTICE])
+  expect(await ui.paneText()).toContain('Held ABC-7, because the desktop app refused to start it.')
 })
 
 test('a refusal in other words leaves the answer, the ledger and the notifications as they were', async ($, on) => {
