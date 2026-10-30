@@ -231,6 +231,23 @@ task, and is shown as one already.
   a record without the field draws as today.
 - Once, against the real engine: a Bash call started with `run_in_background`
   returns a background task id equal to the id the turn-end report gives.
+  Checked on 2026-10-30, on Claude Code 2.1.314, with a throwaway probe mod
+  that is not kept in the repository: a hook on `tool.call` logged the result
+  of each of the session's calls, and a hook on `classic.Stop` logged the
+  `background_tasks` list, in a session run with `claude -p`. A Bash call
+  started with `run_in_background` returned the `backgroundTaskId`
+  `b4bwbq10z`, and the turn-end list held the same command, a `shell` task
+  with status `running`, under the `id` `b4bwbq10z`. A command the person
+  moves to the background part way through cannot be started by an
+  unattended session, so for that path the engine's own code was read
+  instead. It was found by running `strings` on the installed Claude Code
+  executable, the file the `claude` command resolves to, and searching the
+  output for the result fields `backgroundTaskId` and `backgroundedByUser`.
+  The code there registers the task under the task id of the shell's output
+  and returns that same value in the result as `backgroundTaskId`, together
+  with `backgroundedByUser: true`. The two ids are the same on both paths, so
+  builder's lookup needed no change. The check covered only the session's own
+  Bash calls, which are the only calls whose start builder records.
 - The issue's own check, by hand: in a session with a watched pull request,
   start a background `sleep 1200` (the `sleep 600` the issue names ends before
   the 15-minute mark), end the turn, and see the line, the pane and the
