@@ -134,7 +134,7 @@ function earlierLines(facts: PackageFacts): string[] {
   const index = at === -1 ? facts.earlier.length - 1 : at
   const inFull = (round: EarlierRound, i: number) =>
     i === index || (i > index && round.sha !== facts.head && CARRIED_OVER.test(round.body))
-  const older = facts.earlier.filter((round, i) => !inFull(round, i)).map(round => {
+  const oneLine = facts.earlier.filter((round, i) => !inFull(round, i)).map(round => {
     const verdicts = verdictsOf({ body: round.body, commit: { oid: round.sha } })
     const said = verdicts === null ? 'verdicts unreadable' : `spec=${verdicts.spec}, adversarial=${verdicts.adversarial}`
     return `- At ${round.sha.slice(0, 8)}: ${said}`
@@ -143,7 +143,7 @@ function earlierLines(facts: PackageFacts): string[] {
     '## Earlier rounds',
     '',
     'Each other verdict review in one line, then in full the newest one at the head `diff.patch` starts from and every review carried over after it. Check that what they asked for was done, and do not raise a settled point again.',
-    ...(older.length > 0 ? ['', ...older] : []),
+    ...(oneLine.length > 0 ? ['', ...oneLine] : []),
     ...facts.earlier.filter(inFull).flatMap(full),
   ]
 }
