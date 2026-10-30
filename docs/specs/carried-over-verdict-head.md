@@ -98,7 +98,9 @@ verdict head when it builds a later package.
 
 - If the opening is not recognised, the mod behaves as before this change
   for that review: the package starts after the cheap-fix commit. Nothing
-  reports it; the test of the skill's two openings is what guards against it.
+  reports it, and no test can catch it, because the tests hold a copy of the
+  skill's two openings rather than reading the skill. So the skill, that copy
+  and the mod's pattern have to be changed together.
 - If a normal review is wrongly recognised, the package starts at an older
   head or falls back to a first package. Reviewers read more, never less.
 
