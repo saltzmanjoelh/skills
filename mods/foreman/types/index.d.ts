@@ -36,7 +36,8 @@ export type ForemanActs = {
   // background-only wait for a stretch of a working record that waits only
   // on background work, so a change from one wait to another starts a fresh
   // stretch. `countFrom` is the read that progress started a background
-  // stretch afresh at, inside the same wait, so the count runs from that read
+  // stretch afresh at, inside the same wait, whether that read found the
+  // wait or a turn of the sub session's own, so the count runs from that read
   // rather than from the wait's start; it is null for an idle stretch and for
   // a stretch that began with its wait.
   stretch: { progress: string; nudges: number; lastNudgeAt: number | null; countFrom: number | null; woke: boolean; wait: number | null } | null

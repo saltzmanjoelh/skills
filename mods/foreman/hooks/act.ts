@@ -122,15 +122,24 @@ const STATE_RULES: Record<BuildState, (s: Step) => void> = {
       idleRule(s, wait.since, { task: wait.tasks[0] ?? null })
       return
     }
-    // A working episode inside an idle stretch keeps the stretch, unless the
-    // record made progress or the work lasted a whole threshold. A stretch of
-    // a background wait ends only on progress, because the short turn that
-    // answers a nudge is working without the field, and its episode began
-    // with the wait.
     const { stretch } = s.p.acts
     if (stretch === null) return
-    if (stretch.progress !== progressOf(s.row)) setActs(s, { stretch: null })
-    else if (stretch.wait === null && s.now - s.episode.since >= s.limits.idleMs) setActs(s, { stretch: null })
+    const progress = progressOf(s.row)
+    // A working episode inside an idle stretch keeps the stretch, unless the
+    // record made progress or the work lasted a whole threshold.
+    if (stretch.wait === null) {
+      if (stretch.progress !== progress || s.now - s.episode.since >= s.limits.idleMs) setActs(s, { stretch: null })
+      return
+    }
+    // A stretch of a background wait is kept through the short turn that
+    // answers a nudge, which is working without the field and whose episode
+    // began with the wait. Progress in a turn of the sub session's own starts
+    // that stretch afresh for the same wait, counted from this read, because
+    // the wait's `since` does not move with progress, and a stretch counted
+    // from it would nudge as soon as the turn ended.
+    if (stretch.progress !== progress) {
+      setActs(s, { stretch: { progress, nudges: 0, lastNudgeAt: null, countFrom: s.now, woke: false, wait: stretch.wait } })
+    }
   },
   'waiting-on-builder': s => setActs(s, { stretch: null }),
   'idle': s => idleRule(s, s.episode.since, null),
@@ -179,7 +188,9 @@ const setActs = (s: Step, change: Partial<ForemanActs>) => {
 // stretch keeps which wait it counts, null for idleness and the background
 // wait's `since` otherwise, and a stretch of another wait starts afresh, so a
 // stretch that already woke for one wait cannot silence the next. Progress
-// inside the same wait also starts the stretch afresh. An idle stretch then
+// inside the same wait also starts the stretch afresh, and the working rule
+// does the same for progress it sees in a turn of the sub session's own, so
+// that stretch counts from its read too. An idle stretch then
 // counts from the idle episode's start, as it always has. A background
 // stretch counts from that read instead, because a background wait's `since`
 // does not move with progress, so counting from it would nudge at once. A
@@ -256,8 +267,10 @@ function goneRule(s: Step) {
 // wakes the parent once, with the mismatch sentence when some file carries
 // its ticket but names another desktop session or none. A pairing with no
 // desktop session id, from a proposal card that may never have started, is
-// left out. The caller runs it only when this read listed a folder that
-// exists, so a missing folder never makes every pairing look unseen.
+// left out. The caller runs it on every read whose listing succeeded,
+// including one that found the status folder missing, which holds no status
+// file, as on first use before builder has written one, and never on a read
+// whose listing failed, which may have missed files.
 function unseenRule(p: ForemanPairing, rows: readonly SubRow[], now: number, reasons: Reason[], due: number[]): ForemanPairing {
   if (p.standing !== 'active' || p.localId === null || p.acts.unseenWoke) return p
   const at = p.pairedAt + GONE_MS
@@ -362,9 +375,9 @@ export function slotsNeedList(t: ForemanTickets, rows: readonly SubRow[], now: n
 // folder is forgotten, freeing its slot when it was active and announcing a
 // merge when its pull request was last told open, and a pairing
 // that no status file has carried for a day is forgotten and logged; neither
-// happens unless this read listed a folder that exists. On such a read, a
-// younger pairing with no owner may wake the parent once, as unseenRule
-// says. A released or
+// happens unless this read listed a folder that exists. On any read whose
+// listing succeeded, even one that found the folder missing, a pairing with
+// no owner may wake the parent once, as unseenRule says. A released or
 // freed pairing gets no action. An active pairing's pull request
 // milestones wake the parent after its other reasons. When a slot freed, the
 // parent is woken with the number of slots free, unless none is free. A list
@@ -384,8 +397,8 @@ export function decide(input: DecideInput): Decision {
   const byFile = new Map(rows.map(r => [r.file, r]))
   const pairings = input.tickets.pairings.flatMap(p => {
     if (p.owner === null || p.ownerFile === null) {
-      if (!folderExists || !listed) return [p]
-      if (now - p.pairedAt > UNOWNED_FOR_MS) {
+      if (!listed) return [p]
+      if (folderExists && now - p.pairedAt > UNOWNED_FOR_MS) {
         logs.push(`Forgot ticket ${p.ticket}, because no status file carried it for a day.`)
         return []
       }
