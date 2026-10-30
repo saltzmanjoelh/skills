@@ -37,8 +37,10 @@ slot frees.
 ## Behavior
 
 1. **Which starts wait.** When the parent makes a keyed `start_session` call
-   while no slot is free, foreman adds a wait line to the brief beside the
-   ticket, and the session it starts is a waiting session. The order of those
+   while no slot is free, foreman puts a wait line first in the brief, before
+   the parent's text and the ticket line, so a brief that begins with
+   `/implement` is never run as a command before the wait line is read, and
+   the session it starts is a waiting session. The order of those
    calls is the queue's order. The count of free slots for this decision
    includes the sessions paired in the ledger that have no status file yet,
    so several starts in one turn see each other, and the count and the
