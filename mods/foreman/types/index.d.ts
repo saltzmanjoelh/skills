@@ -85,13 +85,26 @@ export type ForemanPairing = {
   // The session ids of other records with the same ticket, already logged.
   forks: string[]
   acts: ForemanActs
+  // Null for a pairing that does not wait. A pairing whose start went on with
+  // the wait line waits in the queue at `place`, lower places first, until
+  // foreman begins it. `claim` is null until foreman claims it for a free
+  // slot, and then says when foreman last tried to send it the begin message
+  // and whether the person was told that a try failed. A begin that went
+  // clears the whole field.
+  queue: { place: number; claim: { attemptAt: number; notified: boolean } | null } | null
 }
 
 // Something to do outside the ledger: a nudge to a desktop session, naming
-// the sub session for the log, or a notification with its text. A nudge's
-// `about` is 'background' for a sub session that waits only on background
-// work, which gets its own text, and is absent for an idle one.
-export type ForemanEffect = { kind: 'nudge'; to: string; name: string; about?: 'background' } | { kind: 'notify'; text: string }
+// the sub session for the log, a notification with its text, or the begin
+// message to the waiting sub session of `ticket`, whose desktop session is
+// `to`. A nudge's `about` is 'background' for a sub session that waits only
+// on background work, which gets its own text, and is absent for an idle one.
+// A begin's `key` is its issue key, or null, and `by` names the sub session
+// whose slot it takes, or is null when the slot was free already.
+export type ForemanEffect =
+  | { kind: 'nudge'; to: string; name: string; about?: 'background' }
+  | { kind: 'notify'; text: string }
+  | { kind: 'begin'; to: string; ticket: string; key: string | null; by: string | null }
 
 // What foreman decided and has not yet carried out: log lines, effects, and
 // lines that wake the parent. A read puts its decision here in the same
@@ -115,8 +128,9 @@ export type ForemanSpent = ForemanSpend & { ticket: string }
 
 // Every pairing of this parent, and what is still to be carried out. `folderMissing` says the last read found no status folder, so
 // the log says so once. `held` lists the issue keys whose start the desktop
-// app refused because the person works over Remote Control, which foreman
-// offers again on the person's next prompt until a sign that they started.
+// app refused, or whose waiting sub session closed before foreman could begin
+// it, which foreman offers again on the person's next prompt until a sign
+// that they started.
 // `offRefusedFor` is the session id for which foreman refused the first
 // /implement start while the role was off, or null, so the refusal counts
 // only in the conversation that saw it. `unwatched` lists the `local_…` ids

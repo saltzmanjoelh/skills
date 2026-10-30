@@ -435,7 +435,7 @@ test('a marker that cannot be written lets the note pass unchanged, with no line
 })
 
 // The line every prompt of the person's carries while ABC-7 is held.
-const HELD = 'foreman: the desktop app refused to start ABC-7 over Remote Control, and foreman holds it; start it first, before anything else, as "Starting a session" says.'
+const HELD = 'foreman: ABC-7 did not start, and foreman holds it; start it first, before anything else, as "Starting a session" says.'
 
 // A parent like parentWith's whose ledger holds `held`.
 async function holdingParent($: Engine, on: Parameters<typeof world>[0], held: readonly string[] = ['ABC-7'], isOn = true) {

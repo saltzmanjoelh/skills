@@ -20,6 +20,13 @@ export const NUDGE_TEXT = 'what\'s next?'
 // The nudge foreman sends a sub session that waits only on background work,
 // which asks about that work rather than what is next.
 export const BACKGROUND_NUDGE_TEXT = 'could you check that your background work is still making progress, and stop it if it hangs?'
+// The message that tells a waiting sub session to begin. It is a constant, so
+// no text from an issue or a status file ever reaches a sub session through
+// it, and it does not begin with "foreman: ", which would read as a wake line
+// to a sub session that loads foreman's wake skill. Its last sentence makes a
+// begin that arrives twice harmless. The wait line in tickets.ts quotes it, so
+// the sub session knows it when it comes.
+export const BEGIN_TEXT = 'foreman begins this session now: first bring your branch up to date with the base branch, with the desktop app\'s sync_with_base_branch tool, and then run the /implement command your brief gives. If you have already begun it, ignore this message.'
 // How many sessions to ask the list for. The list answers the most recently
 // active ones, twenty when not told otherwise, and a sub session that has been
 // quiet a while could fall outside twenty.
@@ -130,11 +137,14 @@ export async function sendMessage(call: DesktopCall, sessionId: string, text: st
 export type Listed = { sessionId: string; isArchived: boolean; isRunning: boolean; title: string | null; surelyUnarchived: boolean }
 
 // The desktop app's sessions, archived ones included, each with whether it
-// is archived and whether it runs, or why they could not be read. An entry
+// is archived and whether it runs, and whether the list is complete, or why
+// they could not be read. The list holds only the most recently active
+// sessions, so it is complete only when it came back shorter than
+// LIST_LIMIT, entries foreman could not read included. An entry
 // whose flags are not true or false reads as not archived and running, so a
 // doubtful entry frees no slot and wakes no one. The same doubtful entry is
 // not sure to be unarchived, so it releases no hold either.
-export async function listSessions(call: DesktopCall): Promise<{ sessions: Listed[] } | { reason: string }> {
+export async function listSessions(call: DesktopCall): Promise<{ sessions: Listed[]; complete: boolean } | { reason: string }> {
   const answer = await answerOf(call, SESSIONS_SERVER, LIST_TOOL, { limit: LIST_LIMIT, include_archived: true })
   if (answer === 'not-connected') return { reason: REASONS.notConnected }
   if (answer === 'refused') return { reason: REASONS.listRefused }
@@ -147,5 +157,6 @@ export async function listSessions(call: DesktopCall): Promise<{ sessions: Liste
       const title = typeof s.title === 'string' ? s.title : null
       return [{ sessionId: s.sessionId, isArchived: s.isArchived === true, isRunning: s.isRunning !== false, title, surelyUnarchived: s.isArchived === false }]
     }),
+    complete: raw.length < LIST_LIMIT,
   }
 }

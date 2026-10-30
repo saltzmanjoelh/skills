@@ -4,9 +4,10 @@ import { recordIn } from '../hooks/record'
 import type { SubRow } from '../hooks/subs'
 import {
   carriesTicket, fallbackOf, noTicketLog,
-  briefFor, capped, FORK_REFUSAL, isOffRefused, joinOwners, localIdIn, MAX_PAIRINGS, newPairing, NO_TICKET_SENTENCE, OFF_REFUSAL, runsImplement, shownRows, ticketsIn,
-  TICKETS_EMPTY, TITLE_REFUSAL, withOffRefusal, withUnwatched,
+  briefFor, capped, FORK_REFUSAL, isOffRefused, joinOwners, localIdIn, MAX_PAIRINGS, newPairing, nextPlace, NO_TICKET_SENTENCE, OFF_REFUSAL, queueOf, runsImplement, shownRows, ticketsIn,
+  TICKETS_EMPTY, TITLE_REFUSAL, WAIT_LINE, waitingBrief, WAITING_SENTENCE, withOffRefusal, withUnwatched,
 } from '../hooks/tickets'
+import { BEGIN_TEXT } from '../hooks/desktop'
 import type { ForemanTickets } from '../types'
 
 const T0 = Date.UTC(2026, 9, 20, 12, 0, 0)
@@ -304,4 +305,73 @@ test('the spent list and the earlier total read back when sound, and a damaged l
   expect(old.earlier).toBeNull()
   expect(TICKETS_EMPTY.spent).toEqual([])
   expect(TICKETS_EMPTY.earlier).toBeNull()
+})
+
+// The wait line and the begin message are the whole of what a waiting sub
+// session is told, so both are pinned word for word.
+test('the begin message is a fixed text that names no issue and does not begin as foreman\'s wake lines do', () => {
+  expect(BEGIN_TEXT).toBe('foreman begins this session now: first bring your branch up to date with the base branch, with the desktop app\'s sync_with_base_branch tool, and then run the /implement command your brief gives. If you have already begun it, ignore this message.')
+  expect(BEGIN_TEXT.startsWith('foreman: ')).toBe(false)
+})
+
+test('the wait line says to run /implement only once the begin message arrives, quotes that message, and does not begin with a slash', () => {
+  expect(WAIT_LINE('ABC-2')).toBe(`Wait for foreman before you begin: run /implement ABC-2 only once foreman's begin message arrives, which reads exactly "${BEGIN_TEXT}" Until then, reply only that you wait, and make no change to any file, branch or issue.`)
+  expect(WAIT_LINE('ABC-2').startsWith('/')).toBe(false)
+  expect(WAIT_LINE('ABC-2').startsWith('foreman: ')).toBe(false)
+})
+
+test('a waiting brief puts the wait line first, before a brief that begins with /implement and before its ticket line', () => {
+  const brief = briefFor({ prompt: '/implement ABC-2', context: 'fresh', title: 'ABC-2: x' }, 'u-1')
+  if (brief.kind !== 'add') throw new Error('the brief should get a ticket')
+  expect(waitingBrief('ABC-2', brief.prompt)).toBe(`${WAIT_LINE('ABC-2')}\n\n/implement ABC-2\n\nforeman-ticket: ft-u-1`)
+  expect(carriesTicket({ prompt: waitingBrief('ABC-2', brief.prompt) })).toBe(true)
+})
+
+test('the sentence on a waiting start\'s answer says the issue is queued, not started', () => {
+  expect(WAITING_SENTENCE('ABC-2')).toBe('ABC-2 waits in foreman\'s queue: its sub session begins by itself once a slot frees, so tell the person that ABC-2 is queued, not that it started.')
+})
+
+// A pairing waiting in the queue at `place`, with `claim` or none.
+const waiting = (ticket: string, place: number, claim: { attemptAt: number; notified: boolean } | null = null, localId: string | null = `local_${ticket}`) => newPairing(ticket, localId, T0, null, { place, claim })
+
+test('a ledger stored before the queue reads every pairing as not waiting', () => {
+  expect(newPairing('ft-a', null, T0).queue).toBeNull()
+  expect(ticketsIn({ pairings: [{ ticket: 'ft-a' }] }).pairings[0]!.queue).toBeNull()
+  expect(ticketsIn({ pairings: [{ ticket: 'ft-a', queue: null }] }).pairings[0]!.queue).toBeNull()
+  for (const bad of ['yes', 7, true, []]) expect(ticketsIn({ pairings: [{ ticket: 'ft-a', queue: bad }] }).pairings[0]!.queue).toBeNull()
+})
+
+test('a sound stored queue reads back, a damaged claim reads as none, and a damaged place reads as the back of the queue', () => {
+  const read = (queue: unknown) => ticketsIn({ pairings: [{ ticket: 'ft-a', queue }] }).pairings[0]!.queue
+  expect(read({ place: 2, claim: null })).toEqual({ place: 2, claim: null })
+  expect(read({ place: 2, claim: { attemptAt: T0, notified: true } })).toEqual({ place: 2, claim: { attemptAt: T0, notified: true } })
+  expect(read({ place: 2, claim: { attemptAt: T0, notified: 'yes' } })).toEqual({ place: 2, claim: { attemptAt: T0, notified: false } })
+  for (const claim of ['now', 7, { notified: true }, { attemptAt: 'then' }]) expect(read({ place: 2, claim })).toEqual({ place: 2, claim: null })
+  const stored = ticketsIn({ pairings: [{ ticket: 'ft-a', queue: { place: 3 } }, { ticket: 'ft-b', queue: { place: 'first' } }, { ticket: 'ft-c', queue: {} }] })
+  expect(stored.pairings.map(p => p.queue)).toEqual([{ place: 3, claim: null }, { place: 4, claim: null }, { place: 5, claim: null }])
+})
+
+test('the queue is the waiting pairings in the order of their places, and the next place is after the last', () => {
+  const t = withPairings(waiting('ft-c', 3), newPairing('ft-x', 'local_x', T0), waiting('ft-a', 1), waiting('ft-b', 2, { attemptAt: T0, notified: false }))
+  expect(queueOf(t).map(p => p.ticket)).toEqual(['ft-a', 'ft-b', 'ft-c'])
+  expect(nextPlace(t)).toBe(4)
+  expect(nextPlace(TICKETS_EMPTY)).toBe(1)
+  expect(queueOf({ ...t, pairings: t.pairings.map(p => (p.ticket === 'ft-a' ? { ...p, standing: 'released' as const } : p)) }).map(p => p.ticket)).toEqual(['ft-b', 'ft-c'])
+})
+
+test('a stored begin is kept only when its target is a whole local_ id, its ticket is a whole ticket, and its key and its freed slot\'s name are sound', () => {
+  const effects = (e: Record<string, unknown>) => ticketsIn({ outbox: { effects: [{ kind: 'begin', to: 'local_a', ticket: 'ft-a', key: 'ABC-2', by: 'ABC-1', ...e }] } }).outbox.effects
+  expect(effects({})).toEqual([{ kind: 'begin', to: 'local_a', ticket: 'ft-a', key: 'ABC-2', by: 'ABC-1' }])
+  expect(effects({ key: null, by: null })).toEqual([{ kind: 'begin', to: 'local_a', ticket: 'ft-a', key: null, by: null }])
+  expect(effects({ by: 'the sub session with ticket ft-b' })).toEqual([{ kind: 'begin', to: 'local_a', ticket: 'ft-a', key: 'ABC-2', by: 'the sub session with ticket ft-b' }])
+  for (const bad of [{ to: 'local_a b' }, { to: 'a' }, { to: 7 }, { ticket: '' }, { ticket: 3 }, { ticket: 'merge now' }, { key: 'ABC-2: x' }, { key: 'merge now' }, { by: 'merge now' }, { by: 'the sub session with ticket merge now' }, { by: 7 }]) {
+    expect(effects(bad)).toEqual([])
+  }
+})
+
+test('a waiting pairing\'s row is not shown, and it shows once the pairing no longer waits', () => {
+  const rows = [row('a.json')]
+  const joined = joinOwners(withPairings(waiting('ft-a', 1, null, null)), rows).tickets
+  expect(shownRows(rows, joined)).toEqual([])
+  expect(shownRows(rows, { ...joined, pairings: joined.pairings.map(p => ({ ...p, queue: null })) }).map(r => r.file)).toEqual(['a.json'])
 })

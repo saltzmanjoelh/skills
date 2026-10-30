@@ -32,14 +32,26 @@ export type Reason =
   | { kind: 'merged'; who: string; number: number }
   | { kind: 'closed'; who: string; number: number }
   | { kind: 'slot-free'; free: number }
+  | { kind: 'began'; who: string; by: string | null }
 
 // The shape of an issue key, such as ABC-123, as a pattern for other patterns
 // to build on. The title check in tickets.ts uses it too, so the two agree.
 export const KEY = '[A-Z][A-Z0-9]*-[0-9]+'
 
-// A whole issue key. A key of any other shape could be words a sub session
-// wrote, so it is never put in the line.
+// Whether `text` is a whole issue key. A key of any other shape could be
+// words a sub session wrote, so it is never put in the line, held or stored
+// as a key. Every whole-key check in the mod uses this one.
 const KEY_SHAPE = new RegExp(`^${KEY}$`)
+export const isWholeKey = (text: string) => KEY_SHAPE.test(text)
+
+// How every ticket begins. briefFor in tickets.ts issues a ticket as this
+// and a random id.
+export const TICKET_PREFIX = 'ft-'
+
+// Whether `text` is a whole ticket, as tickets.ts issues them: the prefix
+// and a random id.
+const TICKET_SHAPE = new RegExp(`^${TICKET_PREFIX}[A-Za-z0-9-]+$`)
+export const isTicket = (text: string) => TICKET_SHAPE.test(text)
 
 // How a sub session is named when foreman has no key it can use: by its
 // ticket, which foreman made. The log and the wake line both use it.
@@ -49,7 +61,16 @@ export const byTicket = (ticket: string) => `the sub session with ticket ${ticke
 // has the shape of one, and otherwise by its ticket.
 export function whoOf(issueKey: string | null, ticket: string): string {
   const key = issueKey === null ? '' : printable(issueKey, 40)
-  return KEY_SHAPE.test(key) ? key : byTicket(ticket)
+  return isWholeKey(key) ? key : byTicket(ticket)
+}
+
+// Whether `text` is a name whoOf could have given: a whole issue key, or
+// byTicket's wording around a whole ticket. A name read back from the store
+// is checked with it before it goes into a wake line, so stored text that
+// foreman did not write never reaches the parent's model.
+export function isWhoName(text: string): boolean {
+  const prefix = byTicket('')
+  return isWholeKey(text) || (text.startsWith(prefix) && isTicket(text.slice(prefix.length)))
 }
 
 // Record text as the line quotes it: cleaned of control characters and
@@ -103,6 +124,7 @@ export const REASON_WORDS: { [K in Reason['kind']]: (r: Extract<Reason, { kind: 
   'merged': r => `${r.who}'s pull request #${r.number} merged.`,
   'closed': r => `${r.who}'s pull request #${r.number} was closed without merging.`,
   'slot-free': r => slotWords(r.free),
+  'began': r => `foreman began ${r.who}, the next issue in the queue, ${r.by === null ? 'in a free slot' : `in the slot ${r.by} freed`}; tell the person so in one line.`,
 }
 
 const sentenceOf = (r: Reason) => (REASON_WORDS[r.kind] as (r: Reason) => string)(r)
@@ -112,4 +134,14 @@ export function wakeLine(reasons: readonly Reason[]): string | null {
   if (reasons.length === 0) return null
   const line = `foreman: ${reasons.map(sentenceOf).join(' ')}`
   return reasons.some(quotesText) ? `${line} ${DATA_NOTE}` : line
+}
+
+// The wake lines with `sentences` added at the end of the last one, or as a
+// line of their own when there is none. The began sentence is added this way
+// once its begin message went, so the parent hears it in the same wake that
+// reports the merge that freed the slot.
+export function withSentences(lines: readonly string[], sentences: readonly string[]): string[] {
+  if (sentences.length === 0) return [...lines]
+  if (lines.length === 0) return [`foreman: ${sentences.join(' ')}`]
+  return [...lines.slice(0, -1), `${lines.at(-1)} ${sentences.join(' ')}`]
 }

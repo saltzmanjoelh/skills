@@ -4,9 +4,10 @@
 // and which rows show. Every function is pure.
 
 import type { ForemanActs, ForemanEffect, ForemanOutbox, ForemanPairing, ForemanSpend, ForemanSpent, ForemanStanding, ForemanTickets } from '../types'
+import { BEGIN_TEXT } from './desktop'
 import { countsIn, isDollars, isPullRequestNumber, isPullRequestState, verdictsIn } from './record'
 import { byKeyThenFile, keyOf, nameOf, type SubRow } from './subs'
-import { byTicket, KEY } from './wake'
+import { byTicket, isTicket, isWholeKey, isWhoName, KEY, TICKET_PREFIX } from './wake'
 
 // The line builder looks for in a sub session's first prompt.
 export const TICKET_LINE = 'foreman-ticket:'
@@ -116,11 +117,26 @@ export function briefFor(args: Record<string, unknown>, uuid: string): Brief {
     if (isMarked && brief === null) return { kind: 'deny', text: TITLE_REFUSAL, log: TITLE_LOG }
   }
   if (brief === null) return { kind: 'pass' }
-  const ticket = `ft-${uuid}`
+  const ticket = `${TICKET_PREFIX}${uuid}`
   const prompt = `${brief.replace(/\s+$/, '')}\n\n${TICKET_LINE} ${ticket}`
   if (title === null || !isMarked) return { kind: 'add', ticket, prompt }
   return { kind: 'add', ticket, prompt, title: `${ticket}: ${title.slice(NO_ISSUE_MARKER.length)}` }
 }
+
+// The line put first in the brief of a start that waits, before the parent's
+// own text, so that a brief which begins with /implement is never run as a
+// command before the session reads it. It quotes the begin message exactly,
+// so the sub session knows that message when it arrives. It does not begin
+// with a slash or with "foreman: ".
+export const WAIT_LINE = (key: string) => `Wait for foreman before you begin: run /implement ${key} only once foreman's begin message arrives, which reads exactly "${BEGIN_TEXT}" Until then, reply only that you wait, and make no change to any file, branch or issue.`
+
+// The brief a waiting start goes on with: the wait line, a blank line, and
+// the prompt briefFor made, which already ends with the ticket line.
+export const waitingBrief = (key: string, prompt: string) => `${WAIT_LINE(key)}\n\n${prompt}`
+
+// The sentence added to the answer of a start that waits, so the parent does
+// not tell the person that the issue started.
+export const WAITING_SENTENCE = (key: string) => `${key} waits in foreman's queue: its sub session begins by itself once a slot frees, so tell the person that ${key} is queued, not that it started.`
 
 // The shape of a desktop session id, such as local_ab-12_c. The turn-end
 // notes in hooks/notes.ts read ids with it too, so the two cannot drift.
@@ -156,9 +172,19 @@ export const addWork = (o: ForemanOutbox, more: ForemanOutbox): ForemanOutbox =>
 
 const strings = (raw: unknown): string[] => (Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : [])
 
+// Whether `raw` is null or a whole issue key.
+const isKeyOrNull = (raw: unknown): raw is string | null => raw === null || (typeof raw === 'string' && isWholeKey(raw))
+
 function effectIn(raw: unknown): ForemanEffect | null {
   const e = objectOf(raw)
   if (e?.kind === 'notify' && typeof e.text === 'string') return { kind: 'notify', text: e.text }
+  // A begin goes only to a whole desktop session id for a whole ticket, and
+  // the names it puts in the wake line are an issue key or a name whoOf gives.
+  if (e?.kind === 'begin') {
+    const { to, ticket, key, by } = e
+    if (typeof to !== 'string' || !UNWATCHED_SHAPE.test(to) || typeof ticket !== 'string' || !isTicket(ticket) || !isKeyOrNull(key)) return null
+    return by === null || (typeof by === 'string' && isWhoName(by)) ? { kind: 'begin', to, ticket, key, by } : null
+  }
   if (e?.kind === 'nudge' && typeof e.to === 'string' && typeof e.name === 'string') {
     // A nudge stored before a reload keeps its kind, so it is still sent with
     // the background text.
@@ -190,8 +216,9 @@ export const MAX_PAIRINGS = 200
 // action memory. `issueKey` is the key the start's title began with, if any,
 // so a wake about a sub session that never wrote a status file names
 // something the parent can find. An owner record's key replaces it.
-export function newPairing(ticket: string, localId: string | null, at: number, issueKey: string | null = null): ForemanPairing {
-  return { ticket, localId, pairedAt: at, owner: null, ownerFile: null, issueKey, standing: 'active', forks: [], acts: ACTS_FRESH }
+// `queue` is where it waits, or null for a start that went ahead.
+export function newPairing(ticket: string, localId: string | null, at: number, issueKey: string | null = null, queue: ForemanPairing['queue'] = null): ForemanPairing {
+  return { ticket, localId, pairedAt: at, owner: null, ownerFile: null, issueKey, standing: 'active', forks: [], acts: ACTS_FRESH, queue }
 }
 
 const STANDINGS: readonly ForemanStanding[] = ['active', 'freed', 'released']
@@ -242,6 +269,20 @@ function actsIn(raw: unknown): ForemanActs {
   }
 }
 
+// A stored place in the queue read tolerantly. A queue that is still an
+// object is kept as waiting, because the start's brief really carried the
+// wait line, and a place in it that is not a number reads as NaN, which
+// ticketsIn moves to the back of the queue. A claim without an attempt time
+// reads as none, so the session is claimed afresh, which the begin message's
+// last sentence makes harmless.
+function queueIn(raw: unknown): ForemanPairing['queue'] {
+  const q = objectOf(raw)
+  if (q === null) return null
+  const c = objectOf(q.claim)
+  const attemptAt = numberOr(c?.attemptAt, null)
+  return { place: numberOr(q.place, Number.NaN), claim: attemptAt === null ? null : { attemptAt, notified: c?.notified === true } }
+}
+
 function pairingIn(raw: unknown): ForemanPairing | null {
   const p = objectOf(raw)
   if (p === null || typeof p.ticket !== 'string' || p.ticket === '') return null
@@ -255,15 +296,43 @@ function pairingIn(raw: unknown): ForemanPairing | null {
     standing: STANDINGS.includes(p.standing as ForemanStanding) ? p.standing as ForemanStanding : 'active',
     forks: strings(p.forks),
     acts: actsIn(p.acts),
+    queue: queueIn(p.queue),
   }
 }
 
-// A whole issue key, which is all a held entry may be.
-const HELD_SHAPE = new RegExp(`^${KEY}$`)
+// The pairings that wait in the queue, in its order: by place, then by when
+// they were paired, then by ticket. Only an active pairing waits.
+export function queueOf(t: ForemanTickets): ForemanPairing[] {
+  return t.pairings
+    .filter(p => p.queue !== null && p.standing === 'active')
+    .sort((a, b) => a.queue!.place - b.queue!.place || a.pairedAt - b.pairedAt || (a.ticket < b.ticket ? -1 : a.ticket > b.ticket ? 1 : 0))
+}
+
+// The sub sessions that wait in the queue and are not yet claimed for a
+// slot, in the queue's order. Each of them is owed a slot before any new
+// start goes ahead. One with no desktop session id is owed one only for
+// `goneMs` after it was paired, while its start call may still be out: a
+// start answered with a proposal card the person never starts would
+// otherwise hold back a slot, and the slot wake, until it is forgotten a day
+// later. Once its session starts, its status file gives it the id, and it is
+// owed its slot again at its place.
+export const waitingUnclaimed = (t: ForemanTickets, now: number, goneMs: number) =>
+  queueOf(t).filter(p => p.queue!.claim === null && (p.localId !== null || now - p.pairedAt <= goneMs))
+
+// The place a start that waits now takes: one after the last place in the
+// queue, or 1 when nobody waits.
+export const nextPlace = (t: ForemanTickets) => Math.max(0, ...queueOf(t).map(p => p.queue!.place)) + 1
+
+// The pairings with each damaged place moved to the back of the queue, in
+// the order they were stored.
+function withPlaces(pairings: ForemanPairing[]): ForemanPairing[] {
+  let last = Math.max(0, ...pairings.flatMap(p => (p.queue !== null && Number.isFinite(p.queue.place) ? [p.queue.place] : [])))
+  return pairings.map(p => (p.queue === null || Number.isFinite(p.queue.place) ? p : { ...p, queue: { ...p.queue, place: (last += 1) } }))
+}
 
 // The held keys read tolerantly: only strings of the issue-key shape, each
 // once, so a ledger from before holds existed reads as holding none.
-const heldIn = (raw: unknown): string[] => [...new Set(strings(raw).filter(key => HELD_SHAPE.test(key)))]
+const heldIn = (raw: unknown): string[] => [...new Set(strings(raw).filter(isWholeKey))]
 
 // The most unwatched sub sessions kept, the newest ones.
 export const MAX_UNWATCHED = 50
@@ -305,7 +374,7 @@ const spentIn = (raw: unknown): ForemanSpent[] => (Array.isArray(raw)
 export function ticketsIn(raw: unknown): ForemanTickets {
   const t = objectOf(raw)
   if (t === null) return TICKETS_EMPTY
-  const pairings = Array.isArray(t.pairings) ? t.pairings.flatMap(p => pairingIn(p) ?? []) : []
+  const pairings = withPlaces(Array.isArray(t.pairings) ? t.pairings.flatMap(p => pairingIn(p) ?? []) : [])
   return {
     pairings,
     folderMissing: t.folderMissing === true,
@@ -389,14 +458,14 @@ export function joinOwners(t: ForemanTickets, rows: readonly SubRow[]): { ticket
 }
 
 // The rows the band and the pane show: each row that owns a ticket of this
-// parent that was not freed, with a released one marked. A row with another
-// parent's ticket, or none, is not shown.
+// parent that was not freed and does not wait in the queue, with a released
+// one marked. A row with another parent's ticket, or none, is not shown.
 export function shownRows(rows: readonly SubRow[], t: ForemanTickets): SubRow[] {
   const byOwner = new Map(t.pairings.flatMap(p => (p.owner === null ? [] : [[p.owner, p] as const])))
   return rows.flatMap(row => {
     const owned = byOwner.get(row.record.sessionId)
     const p = owned !== undefined && ownsTicket(owned, row) ? owned : undefined
-    if (p === undefined || p.standing === 'freed') return []
+    if (p === undefined || p.standing === 'freed' || p.queue !== null) return []
     return [p.standing === 'released' ? { ...row, isReleased: true } : row]
   })
 }

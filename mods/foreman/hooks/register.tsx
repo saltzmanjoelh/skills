@@ -1,25 +1,25 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PromptSubmitInput, Register, ResolveInput, ToolCallResult } from 'claude-code'
 
-import { decide, desktopOf, needsList, slotOutcome, slotsNeedList, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
+import { CALL_TIMEOUT_MS, decide, desktopOf, freeSlots, GONE_MS, keptByUnreadList, needsList, slotOutcome, startWaits, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
 import { isSvgSurface } from './art'
 import { becameParentAnswer, COMMAND, commandOf, PASSED_ON, PASTED_LINE, pastedCommandIn, slotsAnswer, type Command } from './commands'
-import { BACKGROUND_NUDGE_TEXT, failureLine, listSessions, NUDGE_TEXT, openSession, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
-import { acceptedLog, heldLine, heldLog, heldNotice, heldSentence, isPersonPrompt, isRemoteRefusal, keyOfTitle } from './held'
+import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, failureLine, listSessions, NUDGE_TEXT, openSession, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
+import { acceptedLog, beginFailedNotice, heldLine, heldLog, heldNotice, heldSentence, isHeldRefusal, isPersonPrompt, keyOfTitle } from './held'
 import { ignoredLine, readIssueLink } from './links'
 import { checkLine, FOREMAN_REPORTS, isAppParts, keptLine, keptNames, NOTED, NOTED_REPLY, notesIn } from './notes'
 import { bandTree, PANE, paneTree, type Elements, type View } from './pane'
-import type { ForemanParent, ForemanTickets } from '../types'
+import type { ForemanEffect, ForemanParent, ForemanTickets } from '../types'
 import { PARENT_OFF, parentIn, slotsOf, storeKey } from './parent'
 import { usageIn } from './record'
 import { spendOf, spentSum } from './spend'
-import { afterRead, busyCount, nameOf, nextReadDelay, READ_LATER_MS, rowsOf, type FileRead, type SubRow } from './subs'
+import { afterRead, nameOf, nextReadDelay, READ_LATER_MS, rowsOf, type FileRead, type SubRow } from './subs'
 import { printable } from './text'
 import {
-  addWork, briefFor, carriesTicket, fallbackOf, hasWork, isOffRefused, joinOwners, localIdIn, newPairing, NO_TICKET_SENTENCE, OFF_LOG, OFF_REFUSAL, OUTBOX_EMPTY, ownsTicket,
-  runsImplement, shownRows, ticketsIn, ticketsKey, TICKETS_EMPTY, withOffRefusal, withUnwatched,
+  addWork, briefFor, carriesTicket, fallbackOf, hasWork, isOffRefused, joinOwners, localIdIn, newPairing, nextPlace, NO_TICKET_SENTENCE, OFF_LOG, OFF_REFUSAL, OUTBOX_EMPTY, ownsTicket,
+  runsImplement, shownRows, ticketsIn, ticketsKey, TICKETS_EMPTY, waitingBrief, waitingUnclaimed, WAITING_SENTENCE, withOffRefusal, withUnwatched,
 } from './tickets'
-import { wakeLine } from './wake'
+import { REASON_WORDS, wakeLine, whoOf, withSentences } from './wake'
 
 type $ = EngineInterface
 
@@ -45,11 +45,6 @@ export const LOG_KEPT = 20
 // How often the band is drawn again while the role is on, so the time until
 // the next read and a stale file's age stay true.
 const REDRAW_MS = 1_000
-
-// How long foreman waits for a desktop tool or a notification before it gives
-// up and counts the call as failed, so a call that never answers cannot stop
-// the reads.
-export const CALL_TIMEOUT_MS = 30_000
 
 // The words for a call that did not answer in time.
 const NO_ANSWER = `the desktop app did not answer within ${CALL_TIMEOUT_MS / 1000} seconds`
@@ -328,11 +323,12 @@ function later($: $, work: () => Promise<unknown>) {
 }
 
 // Joins the rows to the ledger, reads the desktop app's list of sessions when
-// a rule or a held key needs it, and decides what the read leads to, inside
-// the ledger's update, so the decision and the ledger it was made on are
-// written together and no other writer can claim the same nudge or wake. A
-// list that could not be read is logged with what it kept from happening: a
-// freed slot when a slot rule needed it, and otherwise a released hold.
+// a rule, a held key or the queue needs it, and decides what the read leads
+// to, inside the ledger's update, so the decision and the ledger it was made
+// on are written together and no other writer can claim the same nudge, wake
+// or begin. A list that could not be read is logged with what it kept from
+// happening: a freed slot when a slot rule needed it, else a released hold
+// when a key is held, and otherwise a queued issue begun or dropped.
 async function decideNow($: $, folderExists: boolean, listed: boolean, now: number): Promise<{ decision: Decision; rows: SubRow[] }> {
   const rows = await rowsNow($)
   const before = joinOwners(ticketsIn(await read($, tickets)), rows).tickets
@@ -342,10 +338,10 @@ async function decideNow($: $, folderExists: boolean, listed: boolean, now: numb
     if (sessionList === TIMED_OUT || 'reason' in sessionList) {
       const why = sessionList === TIMED_OUT ? NO_ANSWER : sessionList.reason
       sessions = { kind: 'failed' }
-      const kept = slotsNeedList(before, rows, now) ? 'no slot was freed' : 'no held issue was released'
-      await addLog($, `Could not read the desktop app's list of sessions, so ${kept}: ${why}.`)
+      await addLog($, `Could not read the desktop app's list of sessions, so ${keptByUnreadList(before, rows, now)}: ${why}.`)
     } else {
-      sessions = { kind: 'read', sessions: sessionList.sessions }
+      const known = before.pairings.flatMap(p => (p.localId === null ? [] : [p.localId]))
+      sessions = { kind: 'read', sessions: sessionList.sessions, complete: sessionList.complete, known }
     }
   }
   const settings = parentIn(await read($, parent))
@@ -403,11 +399,53 @@ async function notify($: $, text: string) {
   }
 }
 
-// Carries out what the ledger's outbox holds: its log lines, then its nudges
-// and notifications, then the lines that wake the parent, each logged with
-// how it went. A nudge for a sub session that waits only on background work
-// asks about that work, and its log line says so. The outbox is emptied first, in one update, so two callers
-// never carry out the same work.
+// Sends one waiting sub session its begin message and records how it went,
+// in one ledger update. A begin that went takes the pairing out of the queue
+// and sets its pairing time to now, so it counts as busy and is watched like
+// any other from here, and answers the began sentence for the wake. A begin
+// that did not go keeps the claim, records the time of this try, and raises
+// the notification only when this update is the one that first marked the
+// failure as told, so two tries at once raise one. It answers null then, and
+// also when the pairing no longer waits, as when its record showed it began.
+async function beginOne($: $, effect: Extract<ForemanEffect, { kind: 'begin' }>): Promise<string | null> {
+  const result = await within($, sendMessage(desktopCall($), effect.to, BEGIN_TEXT)).catch((): SendResult => 'not-connected')
+  const now = await $.clock.now()
+  const who = whoOf(effect.key, effect.ticket)
+  const waits = (p: ForemanTickets['pairings'][number]) => p.ticket === effect.ticket && p.localId === effect.to && p.queue !== null
+  if (result === 'sent') {
+    let began = false
+    await writeTickets($, t => {
+      began = t.pairings.some(waits)
+      return began ? { ...t, pairings: t.pairings.map(p => (waits(p) ? { ...p, queue: null, pairedAt: now } : p)) } : t
+    })
+    await addLog($, `Began ${who} with foreman's begin message.`)
+    return began ? REASON_WORDS.began({ kind: 'began', who, by: effect.by }) : null
+  }
+  let tells = false
+  await writeTickets($, t => {
+    tells = false
+    return {
+      ...t,
+      pairings: t.pairings.map(p => {
+        if (!waits(p)) return p
+        tells = p.queue!.claim?.notified !== true
+        return { ...p, queue: { ...p.queue!, claim: { attemptAt: now, notified: true } } }
+      }),
+    }
+  })
+  await addLog($, `Could not begin ${who}: ${sendFailure(result)}.`)
+  if (tells) await notify($, beginFailedNotice(who))
+  return null
+}
+
+// Carries out what the ledger's outbox holds: its log lines, then its nudges,
+// notifications and begin messages, then the lines that wake the parent, each
+// logged with how it went. A nudge for a sub session that waits only on
+// background work asks about that work, and its log line says so. The began
+// sentence of each begin that went is added to the wake, after the line's own
+// sentences, so the parent hears it in the same wake as the merge that freed
+// the slot. The outbox is emptied first, in one update, so two callers never
+// carry out the same work.
 async function carryOut($: $) {
   let work = OUTBOX_EMPTY
   await writeTickets($, t => {
@@ -416,13 +454,18 @@ async function carryOut($: $) {
   })
   if (!hasWork(work)) return
   await addLogs($, work.logs)
-  await Promise.all(work.effects.map(effect => {
-    if (effect.kind === 'notify') return notify($, effect.text).catch(() => undefined)
-    return (effect.about === 'background'
-      ? nudge($, effect.to, effect.name, ', because it has waited only on background work', BACKGROUND_NUDGE_TEXT)
-      : nudge($, effect.to, effect.name, ', because it has been idle')).catch(() => undefined)
+  const done = await Promise.all(work.effects.map(async (effect): Promise<string | null> => {
+    if (effect.kind === 'notify') await notify($, effect.text).catch(() => undefined)
+    else if (effect.kind === 'begin') return beginOne($, effect).catch(() => null)
+    else {
+      await (effect.about === 'background'
+        ? nudge($, effect.to, effect.name, ', because it has waited only on background work', BACKGROUND_NUDGE_TEXT)
+        : nudge($, effect.to, effect.name, ', because it has been idle')).catch(() => undefined)
+    }
+    return null
   }))
-  for (const line of work.lines) await wake($, line)
+  const began = done.flatMap(sentence => (sentence === null ? [] : [sentence]))
+  for (const line of withSentences(work.lines, began)) await wake($, line)
 }
 
 // Wakes the parent's model with one line: appended to the turn that runs, or
@@ -560,7 +603,7 @@ async function nudgeRow($: $, file: string) {
 // What a freed slot leads to now, from the slots free.
 async function slotOutcomeNow($: $) {
   const settings = parentIn(await read($, parent))
-  return slotOutcome(slotsOf(settings, currentOptions.slots) - busyCount(await shownNow($)))
+  return slotOutcome(freeSlots(ticketsIn(await read($, tickets)), await rowsNow($), await $.clock.now(), slotsOf(settings, currentOptions.slots)))
 }
 
 // The ledger with a freed slot's outcome applied: the slot wake put in the
@@ -571,9 +614,14 @@ function withSlotOutcome(t: ForemanTickets, outcome: SlotOutcome): ForemanTicket
   return { ...t, outbox: addWork(t.outbox, { logs: [], effects: [], lines: [wakeLine([outcome.reason])!] }) }
 }
 
-// After Release freed a slot: the parent is woken with the number of slots
-// free. Nothing happens when no slot is free.
+// After Release freed a slot: a read begins the first waiting sub session
+// when one waits unclaimed, and otherwise the parent is woken with the number
+// of slots free. Nothing happens when no slot is free.
 async function slotFreed($: $) {
+  if (waitingUnclaimed(ticketsIn(await read($, tickets)), await $.clock.now(), GONE_MS).length > 0) {
+    later($, () => readNow($))
+    return
+  }
   const outcome = await slotOutcomeNow($)
   await writeTickets($, t => withSlotOutcome(t, outcome))
   later($, () => carryOut($))
@@ -605,8 +653,13 @@ async function releaseRow($: $, file: string) {
 // The tool.call hook on start_session, in a parent: a forked start and a
 // title of the wrong shape are refused, a call with a brief gets the ticket
 // line, and a "No issue: " title gets the ticket in place of its marker. A
-// call with no brief goes on unchanged. Every call that went on has its
-// answer read by afterStart.
+// call with no brief goes on unchanged. A call with a ticket reserves its
+// pairing before it goes on, and a keyed one decides in the same ledger update
+// whether it waits, as startWaits says, so several starts in one turn see each
+// other and exactly as many go ahead as there are free slots. A start that
+// waits goes on with the wait line first in its brief and takes the next place
+// in the queue. A call that throws beneath the hook takes its reservation
+// back out. Every call that went on has its answer read by afterStart.
 // The call is typed as the engine gives an MCP tool's, with the tool's
 // arguments spread on it, so briefFor can read `prompt`, `context`, `title`
 // and `proposal_id`.
@@ -616,16 +669,44 @@ async function startSession<E extends Record<string, unknown>>($: $, e: E, next:
     await addLog($, brief.log).catch(() => undefined)
     return { deny: brief.text }
   }
-  const sent = brief.kind === 'pass' ? e : { ...e, prompt: brief.prompt, ...(brief.title === undefined ? {} : { title: brief.title }) }
-  const out = await next(sent)
+  const key = keyOfTitle(e.title)
+  const ticket = brief.kind === 'add' ? brief.ticket : null
+  let waits = false
+  if (ticket !== null) {
+    const now = await $.clock.now()
+    const rows = await rowsNow($)
+    const slots = slotsOf(parentIn(await read($, parent)), currentOptions.slots)
+    await writeTickets($, t => {
+      waits = key !== null && startWaits(t, rows, now, slots)
+      return { ...t, pairings: [...t.pairings, newPairing(ticket, null, now, key, waits ? { place: nextPlace(t), claim: null } : null)] }
+    })
+  }
+  let sent: E = e
+  if (brief.kind === 'add') {
+    const prompt = waits ? waitingBrief(key!, brief.prompt) : brief.prompt
+    sent = { ...e, prompt, ...(brief.title === undefined ? {} : { title: brief.title }) }
+  }
+  let out: ToolCallResult
   try {
-    return await afterStart($, keyOfTitle(e.title), sent.title, brief.kind === 'add' ? brief.ticket : null, out)
+    out = await next(sent)
+  } catch (error) {
+    if (ticket !== null) await writeTickets($, t => withoutPairing(t, ticket)).catch(() => undefined)
+    throw error
+  }
+  try {
+    return await afterStart($, key, sent.title, ticket, waits, out)
   } catch {
     // The call has run; its answer goes back to the model as it came,
     // whatever happened to the pairing or the hold.
     return out
   }
 }
+
+// The ledger without the pairing of `ticket`, as a start that did not go on
+// leaves it.
+const withoutPairing = (t: ForemanTickets, ticket: string): ForemanTickets => (t.pairings.some(p => p.ticket === ticket)
+  ? { ...t, pairings: t.pairings.filter(p => p.ticket !== ticket) }
+  : t)
 
 // Whether start_session's answer is a start that went on: neither refused
 // nor an error.
@@ -681,27 +762,40 @@ const withNoTicket = (out: Extract<ToolCallResult, { result: unknown }>): ToolCa
 
 // What foreman does with start_session's answer, for a call whose title
 // began with `key`, or null, that went on with `title`, which the app repeats
-// in its answers, and that carried `ticket`, or null. The app's
-// Remote Control refusal holds the key, in one update with its log line and
-// one notification, raised only when the key is newly held, and the answer
-// goes back with the holding sentence as context; it pairs no ticket. Any
-// other answer that is not a deny and not an error is accepted: its ticket is
-// paired with the desktop session id it names, or with none for a proposal
-// card, and its key is released. Every other answer goes back as it came.
-async function afterStart($: $, key: string | null, title: unknown, ticket: string | null, out: ToolCallResult): Promise<ToolCallResult> {
-  if (out.deny === undefined && isRemoteRefusal(out, title)) {
-    if (key === null) return out
-    await writeTickets($, t => (t.held.includes(key)
-      ? t
-      : { ...t, held: [...t.held, key], outbox: addWork(t.outbox, { logs: [heldLog(key)], effects: [{ kind: 'notify', text: heldNotice(key) }], lines: [] }) }))
+// in its answers, that carried `ticket`, or null, and that `waits` in the
+// queue or not. Either refusal that isHeldRefusal knows takes the start's
+// reservation out and holds the key, in one update with its log line and one
+// notification, raised only when the key is newly held, and the answer goes
+// back with the holding sentence as context. Any other answer that is not a
+// deny and not an error is accepted: its reservation takes the desktop session
+// id it names, or none for a proposal card, or is added again when it is gone,
+// so a hot reload in between loses nothing, and its key is released. A start
+// that waits gets the sentence that says its issue is queued. Every other
+// answer takes the reservation out and goes back as it came.
+async function afterStart($: $, key: string | null, title: unknown, ticket: string | null, waits: boolean, out: ToolCallResult): Promise<ToolCallResult> {
+  const unreserved = (t: ForemanTickets) => (ticket === null ? t : withoutPairing(t, ticket))
+  if (out.deny === undefined && isHeldRefusal(out, title)) {
+    if (key === null) {
+      await writeTickets($, unreserved)
+      return out
+    }
+    await writeTickets($, raw => {
+      const t = unreserved(raw)
+      return t.held.includes(key)
+        ? t
+        : { ...t, held: [...t.held, key], outbox: addWork(t.outbox, { logs: [heldLog(key)], effects: [{ kind: 'notify', text: heldNotice(key) }], lines: [] }) }
+    })
     later($, () => carryOut($))
     return { ...out, context: [...(out.context ?? []), heldSentence(key)] }
   }
-  if (!wentOn(out)) return out
+  if (!wentOn(out)) {
+    await writeTickets($, unreserved)
+    return out
+  }
   const localId = localIdOf(out)
   const at = await $.clock.now()
   await writeTickets($, t => {
-    const paired = ticket === null ? t : { ...t, pairings: [...t.pairings, newPairing(ticket, localId, at, key)] }
+    const paired = ticket === null ? t : withAnswer(t, ticket, localId, at, key, waits)
     if (key === null || !paired.held.includes(key)) return paired
     return { ...paired, held: paired.held.filter(k => k !== key), outbox: addWork(paired.outbox, { logs: [acceptedLog(key)], effects: [], lines: [] }) }
   })
@@ -711,7 +805,15 @@ async function afterStart($: $, key: string | null, title: unknown, ticket: stri
       ? `Gave ticket ${ticket} to a sub session that has not started yet.`
       : `Paired ticket ${ticket} with ${localId}.`)
   }
-  return out
+  return waits && key !== null ? { ...out, context: [...(out.context ?? []), WAITING_SENTENCE(key)] } : out
+}
+
+// The ledger with the reservation of `ticket` given the desktop session id
+// the start's answer named, or with the pairing added again, at the back of
+// the queue when it waits, when the reservation is gone.
+function withAnswer(t: ForemanTickets, ticket: string, localId: string | null, at: number, key: string | null, waits: boolean): ForemanTickets {
+  if (t.pairings.some(p => p.ticket === ticket)) return { ...t, pairings: t.pairings.map(p => (p.ticket === ticket ? { ...p, localId } : p)) }
+  return { ...t, pairings: [...t.pairings, newPairing(ticket, localId, at, key, waits ? { place: nextPlace(t), claim: null } : null)] }
 }
 
 // Whether a prompt is only its text: a slash command, attachments or context
@@ -860,7 +962,11 @@ async function applyCommand($: $, command: Exclude<Command, { kind: 'refused' }>
   if (command.kind === 'slots') {
     const wasOn = await isOn($)
     await writeParent($, p => ({ ...p, slots: command.count }))
-    if (wasOn) return slotsAnswer(command.count)
+    // A read begins waiting sub sessions in any slots the new count frees.
+    if (wasOn) {
+      later($, () => readNow($))
+      return slotsAnswer(command.count)
+    }
     await becomeParent($)
     return becameParentAnswer(command.count)
   }
