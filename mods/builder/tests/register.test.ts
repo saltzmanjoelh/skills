@@ -109,6 +109,10 @@ function fakeGitHub(on: On) {
   // answers for pull request n; a number not listed answers the state of
   // `pr`. `stateRead`, when set, makes every such read exit with an error,
   // throw, answer with its output cut off, or answer text that is not JSON.
+  // `reposIn` gives the repository that `gh repo view` names in a folder other
+  // than one of o/r's, and `worktreesIn` what `git worktree list` lists in a
+  // folder of another repository, so a session can start in one repository
+  // and watch a pull request in another.
   const world = {
     pr: openPullRequest(), calls: [] as string[], removalsToFail: 0, labelMissing: false, head: C,
     hold: null as Promise<void> | null, cutDiff: false, otherNumber: 0, readsToFail: 0,
@@ -118,6 +122,7 @@ function fakeGitHub(on: On) {
     ran: [] as { argv: string; cwd: string | undefined }[],
     heads: {} as Record<string, string>, gitDirs: {} as Record<string, string>,
     worktrees: [{ path: '/repo', branch: 'feature' }] as Worktree[],
+    reposIn: {} as Record<string, string>, worktreesIn: {} as Record<string, Worktree[]>,
     worktreesFail: null as null | 'exit' | 'throw' | 'cut', throwsIn: [] as string[],
     changed: {} as Record<string, string[]>, diffExit: null as number | null, notCheckouts: [] as string[],
     onQuietDiff: null as (() => void) | null, afterQuietDiff: null as (() => void) | null, headHolds: {} as Record<string, Promise<void>>,
@@ -135,7 +140,8 @@ function fakeGitHub(on: On) {
     const exit = (exitCode: number) => ({ value: { exitCode, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
     if (argv.startsWith('git ') && cwd !== undefined && world.notCheckouts.includes(cwd)) return exit(128)
     if (argv === 'git worktree list --porcelain -z') {
-      const listing = world.worktrees.map(w => worktreeRecord(w, world.heads[w.path] ?? world.head)).join('')
+      const listed = (cwd === undefined ? undefined : world.worktreesIn[cwd]) ?? world.worktrees
+      const listing = listed.map(w => worktreeRecord(w, world.heads[w.path] ?? world.head)).join('')
       if (world.worktreesFail === 'throw') throw new Error('the process could not be started')
       if (world.worktreesFail === 'exit') {
         return { value: { exitCode: 128, stdout: listing, stderr: 'fatal', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -229,7 +235,7 @@ function fakeGitHub(on: On) {
       }
       return out(world.stateRead === 'text' ? 'state: OPEN\n' : `${answer}\n`)
     }
-    if (argv.startsWith('gh repo view')) return out('o/r\n')
+    if (argv.startsWith('gh repo view')) return out(`${(cwd === undefined ? undefined : world.reposIn[cwd]) ?? 'o/r'}\n`)
     if (argv.startsWith('gh api user') && world.loginThrows) throw new Error('the process could not be started')
     if (argv.startsWith('gh api user')) return out('owner\n')
     if (argv.startsWith('gh pr view 7') && argv.includes('--json labels ')) {
@@ -1585,6 +1591,120 @@ test('a prunable worktree whose folder is gone still has the head branch, and th
   const ran = await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
 
   expect(String(ran.result)).toContain(`The checkout is at an unknown commit but the pull request's head is ${C.slice(0, 8)}; push or pull first. It compared /gone, the worktree that has feature checked out.`)
+})
+
+// A session that started in /api, the only checkout of o/api, and watches #7
+// of o/r. The pull request's head branch is checked out in /web-wt, a
+// worktree of the checkout of o/r at /web, and stands at the head there.
+function sessionInAnotherRepository(world: ReturnType<typeof fakeGitHub>, files: ReturnType<typeof fakeFiles>) {
+  world.head = D
+  world.reposIn['/api'] = 'o/api'
+  world.worktreesIn['/api'] = [{ path: '/api', branch: 'main' }]
+  world.worktreesIn['/web'] = [{ path: '/web', branch: 'main' }, { path: '/web-wt', branch: 'feature' }]
+  world.worktreesIn['/web-wt'] = world.worktreesIn['/web']
+  world.heads['/web-wt'] = C
+  world.gitDirs['/web-wt'] = '/web/.git/worktrees/web-wt'
+  files.dirs.add('/web-wt')
+  files.set('/web-wt/CLAUDE.md', 'Architecture document: docs/web.md\n')
+  files.set('/web-wt/docs/web.md', 'x')
+}
+
+async function watchFromApi($: Engine, input: object) {
+  await $.session.start({ cwd: '/api', surface: null, isInteractive: true })
+  return await loose($)({ tool: 'mcp__builder__watch', number: 7, ...input })
+}
+
+test('a session in one repository that watches a pull request in another, given a checkout of it, builds the package in the worktree there that has the head branch', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  sessionInAnotherRepository(world, files)
+  await watchFromApi($, { repo: 'o/r', checkout: '/web' })
+
+  const ran = await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
+
+  // Before the fix the worktrees were listed from /api, which has no worktree
+  // on the head branch, and the tool refused after comparing /api.
+  expect(String(ran.result)).toContain(`Head: ${C}`)
+  expect(files.get('/web/.git/worktrees/web-wt/builder/cccccccc/package.md') ?? '').toContain('- Architecture document: docs/web.md')
+  const folderOf = (prefix: string) => world.ran.filter(r => r.argv.startsWith(prefix)).map(r => r.cwd)
+  expect(folderOf('git worktree list')).toEqual(['/web'])
+  expect(folderOf('git rev-parse HEAD')).toEqual(['/web-wt'])
+})
+
+test('the review tool stages its body in the worktree of the checkout given to the watch tool', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  sessionInAnotherRepository(world, files)
+  await watchFromApi($, { repo: 'o/r', checkout: '/web' })
+
+  await loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
+
+  const post = world.calls.find(call => call.startsWith('gh api repos/o/r/pulls/7/reviews')) ?? ''
+  expect(post).toContain('-F body=@/web/.git/worktrees/web-wt/builder/cccccccc/review.md')
+})
+
+test('the watch tool reads the repository from the checkout it is given when no repository is named', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  sessionInAnotherRepository(world, files)
+
+  const watched = await watchFromApi($, { checkout: '/web' })
+
+  expect(String(watched.result)).toContain('Watching this pull request.')
+  expect(world.calls.some(c => c.startsWith('gh pr view 7 --repo o/r '))).toBe(true)
+  expect(world.calls.some(c => c.includes('--repo o/api'))).toBe(false)
+})
+
+test('the watch tool refuses a checkout of a different repository from the one named, and keeps what was watched', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  sessionInAnotherRepository(world, files)
+
+  const watched = await watchFromApi($, { repo: 'o/r', checkout: '/api' })
+
+  expect(String(watched.result)).toContain('/api is a checkout of o/api, not of o/r')
+  expect(world.calls.some(c => c.startsWith('gh pr view 7'))).toBe(false)
+})
+
+test('when the session\'s folder is a checkout of another repository and no checkout was given, the refusal says to give the watch tool one', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  sessionInAnotherRepository(world, files)
+  await watchFromApi($, { repo: 'o/r' })
+
+  const ran = await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
+
+  expect(String(ran.result)).toContain(`${NOT_AT_HEAD} It compared /api, the session's folder, because no worktree has feature checked out. The session's folder is a checkout of o/api, not of o/r, so call the watch tool again with checkout set to a folder inside a checkout of o/r.`)
+})
+
+test('when no worktree of the given checkout has the head branch, the refusal names the given checkout', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  sessionInAnotherRepository(world, files)
+  world.worktreesIn['/web'] = [{ path: '/web', branch: 'main' }]
+  await watchFromApi($, { repo: 'o/r', checkout: '/web' })
+
+  const ran = await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
+
+  expect(String(ran.result)).toContain(`${NOT_AT_HEAD} It compared /web, the checkout given to the watch tool, because no worktree has feature checked out.`)
 })
 
 test('a subagent cannot build a package or post a review', async ($, on) => {

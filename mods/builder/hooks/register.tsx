@@ -3,7 +3,7 @@ import type { EngineInterface, Next, PromptOrigin, Register, ResolveInput, ToolC
 
 import type { AgentCard, BackgroundTask, BuilderRun, Compactions, ContextMeasure, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, StatusMemo, UsageLedger, Wake } from '../types'
 import { isSvgSurface } from './art'
-import { checkoutSentence, worktreeWithBranch, type Checkout } from './checkout'
+import { checkoutSentence, otherRepositorySentence, worktreeWithBranch, type Checkout } from './checkout'
 // The context module's `told` is the compaction record after a reload was
 // announced; it is renamed here because `told` below is the snapshot last
 // handed to the session.
@@ -1880,17 +1880,37 @@ async function watch($: $, target: Omit<BuilderRun, 'since'>): Promise<Snapshot 
   return s
 }
 
-type WatchInput = { number: number; repo?: string }
+type WatchInput = { number: number; repo?: string; checkout?: string }
+
+// The repository a folder is a checkout of, as gh names it, or null when gh
+// cannot say.
+async function repoOf($: $, dir: string | null): Promise<string | null> {
+  return (await gh($, dir, ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner']))?.trim() || null
+}
 
 async function serveWatch($: $, input: WatchInput): Promise<string> {
   if (!Number.isInteger(input.number) || input.number <= 0) return `${String(input.number)} is not a pull request number.`
   const dir = await read($, cwd)
+  // A checkout is given only when the session's folder belongs to another
+  // repository. It is read before anything is watched, so a wrong folder
+  // leaves the pull request already watched in place.
+  const given = input.checkout
+  let checkoutRepo: string | null = null
+  if (given !== undefined) {
+    if (!given.startsWith('/')) return `The checkout must be an absolute path, and ${given} is not.`
+    checkoutRepo = await repoOf($, given)
+    if (checkoutRepo === null) return `Could not read the repository of ${given}; is it a checkout?`
+    if (input.repo !== undefined && input.repo.toLowerCase() !== checkoutRepo.toLowerCase()) {
+      return `${given} is a checkout of ${checkoutRepo}, not of ${input.repo}; still watching what was watched before.`
+    }
+  }
   const [repo, login] = await Promise.all([
-    input.repo ?? gh($, dir, ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner']),
+    input.repo ?? checkoutRepo ?? repoOf($, dir),
     gh($, dir, ['api', 'user', '--jq', '.login']),
   ])
   if (!repo || !login) return 'Could not read the repository or the gh login from this folder.'
-  const s = await watch($, { repo, number: input.number, cwd: dir ?? '.', login })
+  const target = { repo, number: input.number, cwd: dir ?? '.', login }
+  const s = await watch($, given === undefined ? target : { ...target, checkout: given })
   if (s === null) return `gh could not read ${repo}#${input.number}; still watching what was watched before.`
   const lines = ['Watching this pull request.', ...stateLines(s)]
   // A pull request that merged or closed gets no further review, so the
@@ -2073,14 +2093,22 @@ async function gitDirOf($: $, dir: string): Promise<string | null> {
 // The list includes the main checkout, so a main checkout that has the branch
 // out is found too. A null from git covers an error exit, a throw and cut-off
 // output, and all three fall back to `from`. The package and review tools find
-// the folder by this same rule from the same field, so they agree whenever the
-// worktrees have not changed in between.
-async function checkoutOf($: $, from: string, branch: string): Promise<Checkout> {
+// the folder by this same rule from the same fields, so they agree whenever
+// the worktrees have not changed in between. `isGiven` says that `from` is the
+// checkout given to the watch tool rather than the session's folder.
+async function checkoutOf($: $, from: string, branch: string, isGiven = false): Promise<Checkout> {
+  const given = isGiven ? { given: true as const } : {}
   const listing = await git($, from, ['worktree', 'list', '--porcelain', '-z'])
-  if (listing === null) return { dir: from, branch, how: 'unlisted' }
+  if (listing === null) return { dir: from, branch, how: 'unlisted', ...given }
   const dir = worktreeWithBranch(listing, branch)
-  return dir === null ? { dir: from, branch, how: 'no-worktree' } : { dir, branch, how: 'worktree' }
+  return dir === null ? { dir: from, branch, how: 'no-worktree', ...given } : { dir, branch, how: 'worktree', ...given }
 }
+
+// The folder the package and review tools ask git for the worktrees from: the
+// checkout given to the watch tool, for a session whose folder belongs to
+// another repository and so lists only that repository's worktrees, else the
+// session's folder.
+const listingFolder = (r: BuilderRun) => r.checkout ?? r.cwd
 
 // Derived files for one head, kept inside the checkout's git folder so they
 // are never committed and go away with the worktree. Writing a file creates
@@ -2231,12 +2259,16 @@ async function servePackage($: $, input: PackageInput): Promise<string> {
   if (live === null) return `gh could not read ${r.repo}#${r.number}.`
   // Every git command and the project's documents use the folder found here,
   // and a refusal names it, so a wrong folder is never compared in silence.
-  const checkout = await checkoutOf($, r.cwd, live.headRefName)
+  const checkout = await checkoutOf($, listingFolder(r), live.headRefName, r.checkout !== undefined)
   await recordCheckout($, r.number, checkout)
   const checkoutDir = checkout.dir
   const local = (await git($, checkoutDir, ['rev-parse', 'HEAD']))?.trim()
   if (local !== live.headRefOid) {
-    return `The checkout is at ${local?.slice(0, 8) ?? 'an unknown commit'} but the pull request's head is ${live.headRefOid.slice(0, 8)}; push or pull first. ${checkoutSentence(checkout)}`
+    const refusal = `The checkout is at ${local?.slice(0, 8) ?? 'an unknown commit'} but the pull request's head is ${live.headRefOid.slice(0, 8)}; push or pull first. ${checkoutSentence(checkout)}`
+    // Only when the session's folder was the fallback is its repository read,
+    // so a refusal that names a worktree costs no gh call.
+    const other = checkout.how === 'worktree' || checkout.given ? null : otherRepositorySentence(await repoOf($, r.cwd), r.repo)
+    return other === null ? refusal : `${refusal} ${other}`
   }
   if ((await git($, checkoutDir, ['fetch', '-q', 'origin', live.baseRefName])) === null) {
     return `git could not fetch the base, ${live.baseRefName}, so the diff against it would be stale.`
@@ -2342,7 +2374,7 @@ async function serveReview($: $, input: ReviewInput): Promise<string> {
   // The body is staged beside the package, in the git folder of the checkout
   // found as the package tool finds it. The post itself works from any
   // checkout, so it keeps the session's folder.
-  const checkout = await checkoutOf($, r.cwd, live.headRefName)
+  const checkout = await checkoutOf($, listingFolder(r), live.headRefName, r.checkout !== undefined)
   await recordCheckout($, r.number, checkout)
   const dir = await packageDir($, checkout.dir, input.head)
   if (dir === null) return 'Could not find the checkout\'s git folder to stage the review body.'
@@ -3713,14 +3745,15 @@ export const register: Register = on => {
         type: 'object',
         properties: {
           number: { type: 'integer', description: 'The pull request number.' },
-          repo: { type: 'string', description: 'owner/name; defaults to the repository of the session folder.' },
+          repo: { type: 'string', description: 'owner/name; defaults to the repository of checkout when it is given, else of the session folder.' },
+          checkout: { type: 'string', description: 'An absolute path inside a checkout of the pull request\'s repository. Give it only when the session folder belongs to another repository; the package and review tools then look for the head branch among that checkout\'s worktrees.' },
         },
         required: ['number'],
       },
     })
     await $.tool.register({
       name: 'package',
-      description: 'Build the review package for the watched pull request at its current head: package.md (the issue, spec and plan paths, changed files, earlier rounds, the findings already decided, read from the Dropped: and Outside the spec: lists of the fix commits and earlier reviews, and the areas fixed so far, read from the fix commits\' Reviewed:, Area:, Tidied:, Retag: and Trend: lines, where a Tidied: fix counts toward no streak) and diff.patch. A first package, for a pull request with no verdict review by the session\'s login before this head, has the whole pull request against the base as diff.patch and every earlier review in full. A later package has the change from the verdict head, the newest head before this one with a verdict review by the session\'s login, to this head as diff.patch with 15 lines of context, the whole pull request as full.patch, and only the newest earlier review in full; its answer gives the verdict head on a Since: line and full.patch on a Whole pull request: line. When the verdict head is not an ancestor of the head or a merge commit follows it, the package is a first package and its answer says why on a First package because line. Answers with the folder to hand every reviewer, and names the focused reviewers to launch on its last line: all four, or only the maintainability reviewer when every file changed since the reviewed head is a test or documentation. At a head whose only commit since a head both verdicts approved is the cheap-fix commit, it says instead that the head is up for the check after approval, that only the adversarial reviewer runs, and which focused reviewers to run if the check leaves a blocking finding; called again with after_check true at that head, it packages the head for a normal later round and names those focused reviewers instead. When an area was fixed at 3 reviewed heads in a row, the answer\'s first line says the rounds stop, whatever the findings behind the streak were, and the session puts the area to the counsel before launching any reviewer. The checkout used is the worktree that has the pull request\'s head branch checked out, or the session\'s folder when no worktree has it, and it must be at the pull request\'s head.',
+      description: 'Build the review package for the watched pull request at its current head: package.md (the issue, spec and plan paths, changed files, earlier rounds, the findings already decided, read from the Dropped: and Outside the spec: lists of the fix commits and earlier reviews, and the areas fixed so far, read from the fix commits\' Reviewed:, Area:, Tidied:, Retag: and Trend: lines, where a Tidied: fix counts toward no streak) and diff.patch. A first package, for a pull request with no verdict review by the session\'s login before this head, has the whole pull request against the base as diff.patch and every earlier review in full. A later package has the change from the verdict head, the newest head before this one with a verdict review by the session\'s login, to this head as diff.patch with 15 lines of context, the whole pull request as full.patch, and only the newest earlier review in full; its answer gives the verdict head on a Since: line and full.patch on a Whole pull request: line. When the verdict head is not an ancestor of the head or a merge commit follows it, the package is a first package and its answer says why on a First package because line. Answers with the folder to hand every reviewer, and names the focused reviewers to launch on its last line: all four, or only the maintainability reviewer when every file changed since the reviewed head is a test or documentation. At a head whose only commit since a head both verdicts approved is the cheap-fix commit, it says instead that the head is up for the check after approval, that only the adversarial reviewer runs, and which focused reviewers to run if the check leaves a blocking finding; called again with after_check true at that head, it packages the head for a normal later round and names those focused reviewers instead. When an area was fixed at 3 reviewed heads in a row, the answer\'s first line says the rounds stop, whatever the findings behind the streak were, and the session puts the area to the counsel before launching any reviewer. The checkout used is the worktree that has the pull request\'s head branch checked out, or the session\'s folder when no worktree has it, and it must be at the pull request\'s head. When the watch tool was given a checkout, the worktrees are those of that checkout, and it takes the session\'s folder\'s place.',
       inputSchema: {
         type: 'object',
         properties: {
