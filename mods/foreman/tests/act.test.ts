@@ -221,7 +221,9 @@ test('a pairing that no status file carried for a day is forgotten, and a younge
   expect(old.tickets.pairings).toEqual([])
   expect(old.logs).toEqual(['Forgot ticket ft-a, because no status file carried it for a day.'])
   expect(old.reasons).toEqual([])
-  expect(read(paired(), [], T0 + 25 * 60 * MINUTE, { folderExists: false }).tickets.pairings).toHaveLength(1)
+  const missing = read(paired(), [], T0 + 25 * 60 * MINUTE, { folderExists: false })
+  expect(missing.tickets.pairings).toHaveLength(1)
+  expect(missing.logs).not.toContain('Forgot ticket ft-a, because no status file carried it for a day.')
   expect(read(paired(), [], T0 + 25 * 60 * MINUTE, { listed: false }).tickets.pairings).toHaveLength(1)
 })
 
@@ -418,12 +420,35 @@ test('a status file that carries the ticket under another desktop session, or no
   }
 })
 
-test('a pairing with no desktop session id, or read while the folder is missing or could not be listed, never wakes for a missing file', () => {
+test('a pairing with no desktop session id, or a released one, whether or not the folder exists, or one read while the folder could not be listed, never wakes for a missing file', () => {
   expect(readEvery(paired(null), () => [], T0 + 30 * MINUTE)).toEqual([])
-  expect(readEvery(paired(), () => [], T0 + 30 * MINUTE, { folderExists: false })).toEqual([])
+  expect(readEvery(paired(null), () => [], T0 + 30 * MINUTE, { folderExists: false })).toEqual([])
   expect(readEvery(paired(), () => [], T0 + 30 * MINUTE, { listed: false })).toEqual([])
   const released: ForemanTickets = { ...TICKETS_EMPTY, pairings: [{ ...newPairing('ft-a', 'local_a', T0), standing: 'released' }] }
   expect(readEvery(released, () => [], T0 + 30 * MINUTE)).toEqual([])
+  expect(readEvery(released, () => [], T0 + 30 * MINUTE, { folderExists: false })).toEqual([])
+})
+
+test('a started sub session read while the status folder is missing wakes the parent once at five minutes, as for an empty folder', () => {
+  expect(readEvery(paired(), () => [], T0 + 30 * MINUTE, { folderExists: false })).toEqual([{ at: 5, nudges: 0, reasons: ['unseen'] }])
+  const early = read(paired(), [], T0 + 4 * MINUTE, { folderExists: false })
+  expect(early.reasons).toEqual([])
+  expect(early.nextDueAt).toBe(T0 + GONE_MS)
+  const woke = read(paired(), [], T0 + GONE_MS, { folderExists: false })
+  expect(wakeLine(woke.reasons)).toBe('foreman: the sub session with ticket ft-a has written no status file 5 minutes after it started, so foreman cannot watch it.')
+  expect(woke.tickets.pairings[0]!.acts.unseenWoke).toBe(true)
+})
+
+test('a status folder that is missing, then empty, then holds the sub session\'s file wakes the parent once', () => {
+  let d = read(paired(), [], T0 + GONE_MS, { folderExists: false })
+  expect(d.reasons.map(r => r.kind)).toEqual(['unseen'])
+  d = read(d.tickets, [], T0 + 6 * MINUTE, { folderExists: false })
+  expect(d.reasons).toEqual([])
+  d = read(d.tickets, [], T0 + 8 * MINUTE)
+  expect(d.reasons).toEqual([])
+  d = read(d.tickets, [row({ state: 'working' })], T0 + 12 * MINUTE)
+  expect(d.reasons).toEqual([])
+  expect(d.tickets.pairings[0]!.owner).toBe('s-a')
 })
 
 // A working record whose only running work is background tasks, waiting since
@@ -496,6 +521,90 @@ test('progress inside a background wait counts from that read and leaves lastNud
   expect(nudged.pairings[0]!.acts.stretch).toMatchObject({ nudges: 1, lastNudgeAt: T0 + 5 * MINUTE, countFrom: null })
   const progressed = read(nudged, waiting(T0, ['run the tests'], { stage: 'verify' }), T0 + 7 * MINUTE).tickets
   expect(progressed.pairings[0]!.acts.stretch).toMatchObject({ nudges: 0, lastNudgeAt: null, countFrom: T0 + 7 * MINUTE })
+})
+
+test('progress in a turn of its own during a background wait counts the next nudges and the wake from the read that saw it', () => {
+  // Nudged at 5 minutes, the sub session answers with a turn of its own that
+  // reaches the next stage at 9 minutes, and from 10 minutes it waits on the
+  // same background work again.
+  const rowAt = (now: number) => {
+    const m = (now - T0) / MINUTE
+    if (m < 9) return waiting(T0)
+    if (m === 9) return [row({ state: 'working', stage: 'verify' })]
+    return waiting(T0, ['run the tests'], { stage: 'verify' })
+  }
+  expect(readEvery(paired(), rowAt, T0 + 30 * MINUTE)).toEqual([
+    { at: 5, nudges: 1, reasons: [] },
+    { at: 14, nudges: 1, reasons: [] },
+    { at: 19, nudges: 1, reasons: [] },
+    { at: 24, nudges: 0, reasons: ['background'] },
+  ])
+})
+
+test('progress in a turn of its own keeps the stretch for the same wait, with no nudges, counted from that read', () => {
+  const nudged = read(paired(), waiting(T0), T0 + 5 * MINUTE).tickets
+  const turned = read(nudged, [row({ state: 'working', stage: 'verify' })], T0 + 9 * MINUTE)
+  expect(turned.effects).toEqual([])
+  expect(turned.tickets.pairings[0]!.acts.stretch).toMatchObject({ nudges: 0, lastNudgeAt: null, countFrom: T0 + 9 * MINUTE, woke: false, wait: T0 })
+  // A later turn with more progress counts from its own read, and a turn
+  // without progress leaves the stretch as it is.
+  const further = read(turned.tickets, [row({ state: 'working', stage: 'verify', stageDone: 5 })], T0 + 11 * MINUTE).tickets
+  expect(further.pairings[0]!.acts.stretch).toMatchObject({ nudges: 0, countFrom: T0 + 11 * MINUTE, wait: T0 })
+  const still = read(further, [row({ state: 'working', stage: 'verify', stageDone: 5 })], T0 + 12 * MINUTE).tickets
+  expect(still.pairings[0]!.acts.stretch).toEqual(further.pairings[0]!.acts.stretch)
+})
+
+test('progress in a turn of its own after the stretch woke the parent starts the count again for the same wait', () => {
+  const rowAt = (now: number) => {
+    const m = (now - T0) / MINUTE
+    if (m < 17) return waiting(T0)
+    if (m === 17) return [row({ state: 'working', stage: 'verify' })]
+    return waiting(T0, ['run the tests'], { stage: 'verify' })
+  }
+  expect(readEvery(paired(), rowAt, T0 + 40 * MINUTE)).toEqual([
+    { at: 5, nudges: 1, reasons: [] },
+    { at: 10, nudges: 1, reasons: [] },
+    { at: 15, nudges: 0, reasons: ['background'] },
+    { at: 22, nudges: 1, reasons: [] },
+    { at: 27, nudges: 1, reasons: [] },
+    { at: 32, nudges: 0, reasons: ['background'] },
+  ])
+})
+
+test('a background wait with a new since after a turn of its own with progress starts a fresh stretch', () => {
+  const rowAt = (now: number) => {
+    const m = (now - T0) / MINUTE
+    if (m < 9) return waiting(T0)
+    if (m < 12) return [row({ state: 'working', stage: 'verify' })]
+    return waiting(T0 + 12 * MINUTE, ['run the linter'], { stage: 'verify' })
+  }
+  expect(readEvery(paired(), rowAt, T0 + 40 * MINUTE)).toEqual([
+    { at: 5, nudges: 1, reasons: [] },
+    { at: 17, nudges: 1, reasons: [] },
+    { at: 22, nudges: 1, reasons: [] },
+    { at: 27, nudges: 0, reasons: ['background'] },
+  ])
+  const nudged = read(paired(), waiting(T0), T0 + 5 * MINUTE).tickets
+  const turned = read(nudged, [row({ state: 'working', stage: 'verify' })], T0 + 9 * MINUTE).tickets
+  const renewed = read(turned, waiting(T0 + 12 * MINUTE, ['run the linter'], { stage: 'verify' }), T0 + 12 * MINUTE).tickets
+  expect(renewed.pairings[0]!.acts.stretch).toMatchObject({ wait: T0 + 12 * MINUTE, countFrom: null, nudges: 0 })
+})
+
+test('progress in a working turn still ends an idle stretch, and the next idle episode counts from its own start', () => {
+  const rowAt = (now: number) => {
+    const m = (now - T0) / MINUTE
+    if (m < 6) return [row()]
+    if (m < 8) return [row({ state: 'working', stage: 'verify', stateSince: T0 + 6 * MINUTE })]
+    return [row({ stage: 'verify', stateSince: T0 + 8 * MINUTE })]
+  }
+  expect(readEvery(paired(), rowAt, T0 + 30 * MINUTE)).toEqual([
+    { at: 5, nudges: 1, reasons: [] },
+    { at: 13, nudges: 1, reasons: [] },
+    { at: 18, nudges: 1, reasons: [] },
+    { at: 23, nudges: 0, reasons: ['idle'] },
+  ])
+  const nudged = read(paired(), [row()], T0 + 5 * MINUTE).tickets
+  expect(read(nudged, [row({ state: 'working', stage: 'verify', stateSince: T0 + 6 * MINUTE })], T0 + 6 * MINUTE).tickets.pairings[0]!.acts.stretch).toBeNull()
 })
 
 test('a background wait with a new since starts a fresh stretch', () => {

@@ -1036,3 +1036,17 @@ test('a sub session that waits only on background work is nudged with the backgr
   expect(w.desktop.sent).toEqual([['local_a', BACKGROUND_NUDGE_TEXT]])
   expect(await ui.newestLog()).toBe(`Nudged ABC-1 with "${BACKGROUND_NUDGE_TEXT}", because it has waited only on background work.`)
 })
+
+test('on first use, with no status folder, a started sub session that writes nothing wakes the parent once at five minutes', async ($, on) => {
+  const w = world(on)
+  w.folder.exists = false
+  await start($)
+  await foreman($)
+  await startSession($, IMPLEMENT)
+  await minutesPass(w, 4)
+  expect(w.engine.prompts).toEqual([])
+  await minutesPass(w, 1)
+  expect(w.engine.prompts).toEqual(['foreman: ABC-7 has written no status file 5 minutes after it started, so foreman cannot watch it.'])
+  await minutesPass(w, 10)
+  expect(w.engine.prompts).toHaveLength(1)
+})
