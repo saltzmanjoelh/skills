@@ -122,20 +122,24 @@ const STATE_RULES: Record<BuildState, (s: Step) => void> = {
       idleRule(s, wait.since, { task: wait.tasks[0] ?? null })
       return
     }
-    // A working episode inside an idle stretch keeps the stretch, unless the
-    // record made progress or the work lasted a whole threshold. A stretch of
-    // a background wait is kept through the short turn that answers a nudge,
-    // which is working without the field and whose episode began with the
-    // wait. Progress in a turn of the sub session's own starts that stretch
-    // afresh for the same wait, counted from this read, because the wait's
-    // `since` does not move with progress, and a stretch counted from it
-    // would nudge as soon as the turn ended.
     const { stretch } = s.p.acts
     if (stretch === null) return
     const progress = progressOf(s.row)
+    // A working episode inside an idle stretch keeps the stretch, unless the
+    // record made progress or the work lasted a whole threshold.
+    if (stretch.wait === null) {
+      if (stretch.progress !== progress || s.now - s.episode.since >= s.limits.idleMs) setActs(s, { stretch: null })
+      return
+    }
+    // A stretch of a background wait is kept through the short turn that
+    // answers a nudge, which is working without the field and whose episode
+    // began with the wait. Progress in a turn of the sub session's own starts
+    // that stretch afresh for the same wait, counted from this read, because
+    // the wait's `since` does not move with progress, and a stretch counted
+    // from it would nudge as soon as the turn ended.
     if (stretch.progress !== progress) {
-      setActs(s, { stretch: stretch.wait === null ? null : { progress, nudges: 0, lastNudgeAt: null, countFrom: s.now, woke: false, wait: stretch.wait } })
-    } else if (stretch.wait === null && s.now - s.episode.since >= s.limits.idleMs) setActs(s, { stretch: null })
+      setActs(s, { stretch: { progress, nudges: 0, lastNudgeAt: null, countFrom: s.now, woke: false, wait: stretch.wait } })
+    }
   },
   'waiting-on-builder': s => setActs(s, { stretch: null }),
   'idle': s => idleRule(s, s.episode.since, null),
