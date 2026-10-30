@@ -100,7 +100,7 @@ function readingLines(facts: PackageFacts): string[] {
     return lines
   }
   const lines = [
-    `This is a later package. \`diff.patch\` beside this file is the change from ${facts.since}, the newest head with a verdict review, to the head, with ${LATER_CONTEXT_LINES} lines of context around each hunk. \`full.patch\` beside it is the whole pull request against the base.`,
+    `This is a later package. \`diff.patch\` beside this file is the change from ${facts.since}, the newest head both verdict reviewers read, to the head, with ${LATER_CONTEXT_LINES} lines of context around each hunk. \`full.patch\` beside it is the whole pull request against the base.`,
     'Read `diff.patch` first, and `full.patch` or any source file only when a hunk needs it.',
   ]
   if (facts.check === true) {
@@ -110,11 +110,13 @@ function readingLines(facts: PackageFacts): string[] {
 }
 
 // The earlier verdict reviews. A first package repeats each in full, newest
-// last. A later package repeats the newest review at the verdict head in full
-// and every other one as one line with its head and its two verdicts, because
-// the reviewers of that review already checked the older ones. A review at the
-// head itself, which a head packaged again can have, is one of the one-line
-// ones, because `diff.patch` starts at the verdict head, not at it.
+// last. A later package repeats in full the newest review at the verdict head
+// that was not carried over, and every carried-over review after it, because
+// those hold the newest Follow-ups decisions. Every other one is one line with
+// its head and its two verdicts, because the reviewers of those reviews already
+// checked the older ones. A review at the head itself, which a head packaged
+// again can have, is one of the one-line ones whether or not it was carried
+// over, because `diff.patch` starts at the verdict head, not at it.
 function earlierLines(facts: PackageFacts): string[] {
   const full = (round: EarlierRound) => ['', `### At ${round.sha.slice(0, 8)}`, '', round.body.trim()]
   if (facts.since === undefined) {
@@ -125,13 +127,14 @@ function earlierLines(facts: PackageFacts): string[] {
       ...facts.earlier.flatMap(full),
     ]
   }
-  // The verdict head is always the commit of one of the earlier reviews,
-  // because verdictHeadOf picks it from the same list. Should it ever not be,
-  // the newest review of all is the one repeated in full.
-  const at = facts.earlier.map(round => round.sha).lastIndexOf(facts.since)
+  // The verdict head is always the commit of an earlier review that was not
+  // carried over, because verdictHeadOf picks it from the same list. Should it
+  // ever not be, the newest review of all is the one repeated in full.
+  const at = facts.earlier.findLastIndex(round => round.sha === facts.since && !CARRIED_OVER.test(round.body))
   const index = at === -1 ? facts.earlier.length - 1 : at
-  const newest = facts.earlier[index]!
-  const older = facts.earlier.filter((_, i) => i !== index).map(round => {
+  const inFull = (round: EarlierRound, i: number) =>
+    i === index || (i > index && round.sha !== facts.head && CARRIED_OVER.test(round.body))
+  const oneLine = facts.earlier.filter((round, i) => !inFull(round, i)).map(round => {
     const verdicts = verdictsOf({ body: round.body, commit: { oid: round.sha } })
     const said = verdicts === null ? 'verdicts unreadable' : `spec=${verdicts.spec}, adversarial=${verdicts.adversarial}`
     return `- At ${round.sha.slice(0, 8)}: ${said}`
@@ -139,9 +142,9 @@ function earlierLines(facts: PackageFacts): string[] {
   return [
     '## Earlier rounds',
     '',
-    'Each other verdict review in one line, then the newest one at the head `diff.patch` starts from in full. Check that what it asked for was done, and do not raise a settled point again.',
-    ...(older.length > 0 ? ['', ...older] : []),
-    ...full(newest),
+    'Each other verdict review in one line, then in full the newest one at the head `diff.patch` starts from and every review carried over after it. Check that what they asked for was done, and do not raise a settled point again.',
+    ...(oneLine.length > 0 ? ['', ...oneLine] : []),
+    ...facts.earlier.filter(inFull).flatMap(full),
   ]
 }
 
@@ -744,11 +747,21 @@ export function changedKinds(raw: string, specDir: string, isInstructions: (path
 // characters, and so safe to pass to git as an argument.
 export const isFullSha = (sha: string) => /^[0-9a-f]{40}$/.test(sha)
 
-// The verdict head: the commit of the newest earlier verdict review that is
-// not at `head`, or null when there is none. A review at the head itself is
-// skipped, because the change from a head to itself is empty.
+// Whether a verdict review was carried over to its head from an earlier one:
+// some line of its body begins with the phrase both openings that
+// skills/implement/SKILL.md gives such a review start with. A bullet, a quoted
+// line or a phrase inside a sentence does not begin a line, so it does not
+// count. With the m flag, ^ also matches after a \r\n or a lone \r.
+export const CARRIED_OVER = /^Both verdicts are carried over from /m
+
+// The verdict head, the newest head both verdict reviewers read: the commit of
+// the newest earlier verdict review that is not at `head` and was not carried
+// over, or null when there is none. A review at the head itself is skipped,
+// because the change from a head to itself is empty. A carried-over review is
+// skipped wherever it sits, because the spec reviewer never read the code of
+// its head, and the sha it names is never read.
 export function verdictHeadOf(earlier: readonly EarlierRound[], head: string): string | null {
-  return earlier.filter(round => round.sha !== head).at(-1)?.sha ?? null
+  return earlier.filter(round => round.sha !== head && !CARRIED_OVER.test(round.body)).at(-1)?.sha ?? null
 }
 
 // The reviewed head, where the focused reviewers last ran: the newest commit

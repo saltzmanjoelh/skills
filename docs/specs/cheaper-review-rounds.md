@@ -56,9 +56,14 @@ reviewers to launch; the skill says what the session does with that.
 ### Words used below
 
 - **The verdict head** is the newest commit of the pull request that has a
-  verdict review posted by the session's login, read from the pull request's
-  reviews, as the package's earlier rounds already are. A carried-over
-  review counts.
+  verdict review posted by the session's login that was not carried over,
+  read from the pull request's reviews, as the package's earlier rounds
+  already are. A review was carried over when any line of its body begins
+  with `Both verdicts are carried over from `, and it is skipped wherever it
+  sits, because only the adversarial reviewer read its head's code, or
+  nobody did. So the verdict head is always a head both verdict reviewers
+  read. When every earlier verdict review was carried over, there is no
+  verdict head (see `docs/specs/carried-over-verdict-head.md`).
 - **The reviewed head** is the newest of the verdict head and every head that
   a fix commit's `Reviewed:` line names. Those are the heads where the
   focused reviewers last ran, because the first half writes `Reviewed:` on
@@ -87,8 +92,10 @@ A later package differs in four ways:
 - `package.md` names the verdict head the change starts from, and tells
   reviewers to read `diff.patch` first and `full.patch` or any source file
   only when a hunk needs it.
-- The newest earlier review is repeated in full, and each older one as one
-  line naming its head and its two verdicts. The `## Already decided` list
+- The newest earlier review at the verdict head is repeated in full, and so
+  is every carried-over review after it, because those hold the newest
+  **Follow-ups** decisions. Every other review is one line naming its head
+  and its two verdicts. The `## Already decided` list
   and the `## Areas fixed so far` section stay whole, so the rule for repeats
   works as before.
 
