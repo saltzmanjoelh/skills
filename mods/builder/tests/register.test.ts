@@ -1066,6 +1066,33 @@ test('a later package diffs from the verdict head with wider context, writes the
   expect(written.at(-1)).toBe(`${PACKAGE_DIR}/package.md`)
 })
 
+test('a later package after a review carried over to a cheap-fix head diffs from the approved head before it, and that head is not up for the check', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  await watch($)
+  world.messages = [{ sha: A, message: 'Build it' }, { sha: D, message: "Fix this round's cheap follow-ups" }, { sha: C, message: "Fix this round's cheap follow-ups" }]
+  world.nameStatus = 'M\0hooks/a.ts\0'
+  world.pr = openPullRequest({
+    commits: [{ oid: A }, { oid: D }, { oid: C }],
+    reviews: [
+      verdictReview(A, 'APPROVE', 'APPROVE'),
+      { ...verdictReview(D, 'APPROVE', 'APPROVE'), body: `VERDICTS dddddddd spec=APPROVE adversarial=APPROVE\n\nBoth verdicts are carried over from ${A}, which both verdict reviewers read; the adversarial reviewer read the change since then and found nothing that blocks.` },
+    ],
+  })
+
+  const answer = await packageAnswer($)
+
+  expect(world.calls).toContain(`git diff --unified=15 --no-ext-diff ${A} HEAD`)
+  expect(world.calls).toContain(`git diff --name-status -z -M --no-ext-diff ${A} HEAD`)
+  expect(answer).toContain(`\nSince: ${A}\n`)
+  expect(answer).not.toContain('Up for the check')
+  expect(answer.split('\n').at(-1)).toBe(FOUR_FOCUSED)
+  expect(files.get(`${PACKAGE_DIR}/package.md`)).toContain(`the change from ${A}, the newest head both verdict reviewers read`)
+})
+
 test('a later package whose changes since the reviewed head are only tests and documentation names only the maintainability reviewer', async ($, on) => {
   mock.clock(on)
   mock.store(on)

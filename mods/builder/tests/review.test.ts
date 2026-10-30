@@ -681,6 +681,37 @@ test('the verdict head is the newest verdict review not at the head, and none wh
   expect(verdictHeadOf([review('c', 'APPROVE', 'APPROVE')], head)).toBe(null)
 })
 
+// The two openings skills/implement/SKILL.md gives a review carried over to a
+// new head, word for word, so a change to either wording fails here.
+const CARRIED_OPENINGS = [
+  (from: string) => `Both verdicts are carried over from ${from}, which both verdict reviewers read.`,
+  (from: string) => `Both verdicts are carried over from ${from}, which both verdict reviewers read; the adversarial reviewer read the change since then and found nothing that blocks.`,
+]
+const carried = (c: string, from: string, opening = CARRIED_OPENINGS[0]!) => ({
+  sha: sha(c),
+  body: `VERDICTS ${sha(c).slice(0, 8)} spec=APPROVE adversarial=APPROVE\n\n${opening(sha(from))}\n\nNotes at ${c}.`,
+})
+
+test('the verdict head skips a review carried over to its head, and none is left when every other review was carried over', () => {
+  const head = sha('c')
+  const approved = review('a', 'APPROVE', 'APPROVE')
+  for (const opening of CARRIED_OPENINGS) {
+    expect(verdictHeadOf([approved, carried('d', 'a', opening)], head)).toBe(sha('a'))
+  }
+  const crlf = { sha: sha('d'), body: carried('d', 'a').body.replace(/\n/g, '\r\n') }
+  expect(verdictHeadOf([approved, crlf], head)).toBe(sha('a'))
+  const underHeading = { sha: sha('d'), body: `VERDICTS dddddddd spec=APPROVE adversarial=APPROVE\n\n## Carried over\n${CARRIED_OPENINGS[0]!(sha('a'))}` }
+  expect(verdictHeadOf([approved, underHeading], head)).toBe(sha('a'))
+  // A bullet, a quoted line or a sentence that holds the phrase does not
+  // begin a line with it, so the review is a normal one.
+  for (const line of [`- ${CARRIED_OPENINGS[0]!(sha('a'))}`, `> ${CARRIED_OPENINGS[0]!(sha('a'))}`, `The session wrote: ${CARRIED_OPENINGS[0]!(sha('a'))}`]) {
+    const normal = { sha: sha('d'), body: `VERDICTS dddddddd spec=APPROVE adversarial=APPROVE\n\n${line}` }
+    expect(verdictHeadOf([approved, normal], head)).toBe(sha('d'))
+  }
+  expect(verdictHeadOf([carried('d', 'a')], head)).toBe(null)
+  expect(verdictHeadOf([carried('d', 'a'), carried('c', 'd')], head)).toBe(null)
+})
+
 test('a full sha is 40 lowercase hexadecimal characters', () => {
   expect(isFullSha(sha('a'))).toBe(true)
   expect(isFullSha('A'.repeat(40))).toBe(false)
@@ -744,6 +775,27 @@ test('a later package built at a head that already has its own verdict review re
   })
   expect(text).toContain('### At bbbbbbbb')
   expect(text).toContain('Notes at b.')
+  expect(text.split('\n')).toContain('- At cccccccc: spec=APPROVE, adversarial=APPROVE')
+  expect(text).not.toContain('### At cccccccc')
+  expect(text).not.toContain('Notes at c.')
+})
+
+test('a later package repeats the review at the verdict head and each carried-over review after it in full, and names the verdict head as the newest head both verdict reviewers read', () => {
+  const text = packageText({ issue: 'x' }, {
+    ...facts,
+    round: 4,
+    earlier: [review('a', 'REQUEST_CHANGES', 'APPROVE'), review('b', 'APPROVE', 'APPROVE'), carried('d', 'b', CARRIED_OPENINGS[1]), carried('c', 'd')],
+    since: sha('b'),
+  })
+  expect(text).toContain(`\`diff.patch\` beside this file is the change from ${sha('b')}, the newest head both verdict reviewers read, to the head`)
+  expect(text.split('\n')).toContain('- At aaaaaaaa: spec=REQUEST_CHANGES, adversarial=APPROVE')
+  expect(text).not.toContain('Notes at a.')
+  expect(text).toContain('### At bbbbbbbb')
+  expect(text).toContain('Notes at b.')
+  expect(text).toContain('### At dddddddd')
+  expect(text).toContain('Notes at d.')
+  expect(text.indexOf('### At bbbbbbbb')).toBeLessThan(text.indexOf('### At dddddddd'))
+  // The review at the head itself stays one line, carried over or not.
   expect(text.split('\n')).toContain('- At cccccccc: spec=APPROVE, adversarial=APPROVE')
   expect(text).not.toContain('### At cccccccc')
   expect(text).not.toContain('Notes at c.')
