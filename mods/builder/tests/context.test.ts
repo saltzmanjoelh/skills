@@ -309,6 +309,11 @@ test('with nothing recorded the facts say no stage was reported, nothing is watc
   expect(withRun.at(-1)).toBe(GITHUB_NAMES_LINE)
 })
 
+test('with no checkout recorded yet, the facts name the checkout given to the watch tool beside the session\'s folder', () => {
+  const facts = compactionFacts({ ...nothing, run: { ...run, cwd: '/api', checkout: '/web' } })
+  expect(facts).toContain('Worktree: the session\'s folder is /api, and the pull request\'s repository is checked out at /web, the checkout given to the watch tool. Keep the branch the session has been working on there.')
+})
+
 test('a checkout record for another pull request, and a package at another head, are not this pull request\'s', () => {
   const pr = pullRequest()
   const facts = compactionFacts({ ...nothing, run, pr, checkout: { ...checkout, number: 8 }, packaged: { head: D, at: NOW - 60_000 } })

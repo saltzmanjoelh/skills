@@ -7,10 +7,12 @@
 import { printable } from './text'
 
 // The folder the tools work in, the head branch they looked for, and how they
-// chose the folder: the worktree that has the branch, the session's folder
-// because no worktree has it, or the session's folder because git could not
-// list the worktrees.
-export type Checkout = { dir: string; branch: string; how: 'worktree' | 'no-worktree' | 'unlisted' }
+// chose the folder: the worktree that has the branch, the folder the listing
+// started from because no worktree has it, or that folder because git could
+// not list the worktrees. The listing starts from the checkout given to the
+// watch tool when there is one, and `given` is then true, else from the
+// session's folder.
+export type Checkout = { dir: string; branch: string; how: 'worktree' | 'no-worktree' | 'unlisted'; given?: true }
 
 // The path of the first worktree that has `branch` checked out, read from the
 // output of `git worktree list --porcelain -z`, or null when none has it. Each
@@ -46,6 +48,16 @@ export function worktreeWithBranch(listing: string, branch: string): string | nu
 export function checkoutSentence(c: Checkout): string {
   const name = printable(c.branch, 100)
   if (c.how === 'worktree') return `It compared ${c.dir}, the worktree that has ${name} checked out.`
-  if (c.how === 'no-worktree') return `It compared ${c.dir}, the session's folder, because no worktree has ${name} checked out.`
-  return `It compared ${c.dir}, the session's folder, because git could not list the worktrees.`
+  const which = c.given ? 'the checkout given to the watch tool' : 'the session\'s folder'
+  if (c.how === 'no-worktree') return `It compared ${c.dir}, ${which}, because no worktree has ${name} checked out.`
+  return `It compared ${c.dir}, ${which}, because git could not list the worktrees.`
+}
+
+// The sentence a refusal adds when the session's folder is a checkout of a
+// different repository from the watched one, so its worktrees can never hold
+// the pull request's head branch, or null when it is the same repository or
+// gh could not say. GitHub names are compared without regard to case.
+export function otherRepositorySentence(folderRepo: string | null, watched: string): string | null {
+  if (folderRepo === null || folderRepo.toLowerCase() === watched.toLowerCase()) return null
+  return `The session's folder is a checkout of ${folderRepo}, not of ${watched}, so call the watch tool again with checkout set to a folder inside a checkout of ${watched}.`
 }

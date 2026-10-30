@@ -159,7 +159,10 @@ write them. Set the state label to `in-review` (see "State labels"), then
 call `mcp__builder__watch` with the number, and go straight on into the list
 below, from the top, in the same turn: the watch records the state at
 opening as already told, so no turn may come for it. From here the pull
-request drives the session.
+request drives the session. When the pull request is in a different
+repository from the session's folder, also give the watch tool `repo` and
+`checkout`, a folder inside a checkout of that repository, so the package and
+review tools can find the worktree of its head branch.
 
 ## With the pull request open
 

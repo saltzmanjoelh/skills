@@ -41,8 +41,11 @@ export type Snapshot = {
 // The pull request the session works on. Set only when asked: by the watch
 // tool, or by /builder watch.
 // `since` is when this watch began, so work begun under an earlier watch of
-// the same pull request can tell it is stale.
-export type BuilderRun = { repo: string; number: number; cwd: string; login: string; since: number }
+// the same pull request can tell it is stale. `checkout` is the folder the
+// watch tool was given inside a checkout of the pull request's repository,
+// for a session whose folder belongs to another repository; the package and
+// review tools list the worktrees from it instead of from `cwd`.
+export type BuilderRun = { repo: string; number: number; cwd: string; login: string; since: number; checkout?: string }
 
 // The engine's words for where an agent's loop stands, as `$.agent.list()`
 // gives them. A card an older build saved may still hold 'done' or 'aborted';

@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { checkoutSentence, worktreeWithBranch } from '../hooks/checkout'
+import { checkoutSentence, otherRepositorySentence, worktreeWithBranch } from '../hooks/checkout'
 
 const HEAD = 'c'.repeat(40)
 
@@ -67,6 +67,20 @@ test('each way of finding the checkout has its own sentence', () => {
     .toBe('It compared /repo, the session\'s folder, because no worktree has feature checked out.')
   expect(checkoutSentence({ dir: '/repo', branch: 'feature', how: 'unlisted' }))
     .toBe('It compared /repo, the session\'s folder, because git could not list the worktrees.')
+})
+
+test('a checkout given to the watch tool is named as that, not as the session\'s folder', () => {
+  expect(checkoutSentence({ dir: '/web', branch: 'feature', how: 'no-worktree', given: true }))
+    .toBe('It compared /web, the checkout given to the watch tool, because no worktree has feature checked out.')
+  expect(checkoutSentence({ dir: '/web', branch: 'feature', how: 'unlisted', given: true }))
+    .toBe('It compared /web, the checkout given to the watch tool, because git could not list the worktrees.')
+})
+
+test('a session\'s folder of another repository is named, and one of the watched repository, in any case, or unread, is not', () => {
+  expect(otherRepositorySentence('o/api', 'o/r'))
+    .toBe('The session\'s folder is a checkout of o/api, not of o/r, so call the watch tool again with checkout set to a folder inside a checkout of o/r.')
+  expect(otherRepositorySentence('O/R', 'o/r')).toBeNull()
+  expect(otherRepositorySentence(null, 'o/r')).toBeNull()
 })
 
 test('a branch name with control characters is printed without them', () => {
