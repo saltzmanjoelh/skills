@@ -1337,3 +1337,24 @@ nothing to watch, so carry on the stage the summary names.
   that names the limit, and is never rerun silently. The alarm stops only
   the command it runs, so when that command started a helper process that
   may still be running, the session says so.
+- **Take fewer, larger steps in the session's own context.** Every tool
+  call ends with the whole conversation sent to the model again, so a
+  one-line lookup costs as much as reading the entire context once, and a
+  long session pays that on every step. When the session already knows
+  several things it needs to look at and none depends on another's
+  result, it requests them as separate tool calls in one response,
+  preferring Read and Grep over shell commands.
+- **An investigation that needs more than a few lookups goes to an
+  agent.** The agent runs its searches in its own small context, where a
+  wrong command and its retry are cheap, and the session keeps only the
+  agent's answer. A single lookup stays in the session, because starting
+  an agent costs more than one step does. The brief asks for the specific
+  facts the session needs, such as file paths, line numbers and the exact
+  text that matters, so that the session does not have to repeat the
+  search to recover a detail the report left out. The report is a map of
+  where to look, not proof of what is there: before the session changes
+  code, or settles a finding, a test failure or a claim such as "nothing
+  else calls this" because of an agent's answer, it reads the lines that
+  answer names, in one batched step. When the answer leaves out something
+  the decision depends on, the session reads it directly rather than
+  guessing.
