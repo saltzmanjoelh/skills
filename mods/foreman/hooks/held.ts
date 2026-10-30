@@ -67,6 +67,11 @@ export const heldNotice = (key: string) => `${key} waits to start: the desktop a
 
 // The log line for each hold and each release.
 export const heldLog = (key: string) => `Held ${key}, because the desktop app refused to start it.`
+// The notification and the log line for a key held because its waiting sub
+// session was archived, or left the desktop app's list, after foreman claimed
+// it for a slot and before its begin message went.
+export const beginHeldNotice = (key: string) => `${key} waits to start: foreman could not begin its waiting session, and it starts on your next message.`
+export const beginHeldLog = (key: string) => `Held ${key}, because its waiting session is archived or no longer listed and foreman could not begin it.`
 export const acceptedLog = (key: string) => `Stopped holding ${key}, because the desktop app accepted its start.`
 const listedLog = (key: string) => `Stopped holding ${key}, because the desktop app's list shows a session for it.`
 

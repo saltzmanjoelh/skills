@@ -137,11 +137,14 @@ export async function sendMessage(call: DesktopCall, sessionId: string, text: st
 export type Listed = { sessionId: string; isArchived: boolean; isRunning: boolean; title: string | null; surelyUnarchived: boolean }
 
 // The desktop app's sessions, archived ones included, each with whether it
-// is archived and whether it runs, or why they could not be read. An entry
+// is archived and whether it runs, and whether the list is complete, or why
+// they could not be read. The list holds only the most recently active
+// sessions, so it is complete only when it came back shorter than
+// LIST_LIMIT, entries foreman could not read included. An entry
 // whose flags are not true or false reads as not archived and running, so a
 // doubtful entry frees no slot and wakes no one. The same doubtful entry is
 // not sure to be unarchived, so it releases no hold either.
-export async function listSessions(call: DesktopCall): Promise<{ sessions: Listed[] } | { reason: string }> {
+export async function listSessions(call: DesktopCall): Promise<{ sessions: Listed[]; complete: boolean } | { reason: string }> {
   const answer = await answerOf(call, SESSIONS_SERVER, LIST_TOOL, { limit: LIST_LIMIT, include_archived: true })
   if (answer === 'not-connected') return { reason: REASONS.notConnected }
   if (answer === 'refused') return { reason: REASONS.listRefused }
@@ -154,5 +157,6 @@ export async function listSessions(call: DesktopCall): Promise<{ sessions: Liste
       const title = typeof s.title === 'string' ? s.title : null
       return [{ sessionId: s.sessionId, isArchived: s.isArchived === true, isRunning: s.isRunning !== false, title, surelyUnarchived: s.isArchived === false }]
     }),
+    complete: raw.length < LIST_LIMIT,
   }
 }

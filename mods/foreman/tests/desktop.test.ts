@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { McpToolResult } from 'claude-code'
 
-import { failureLine, listSessions, openSession, REASONS, type DesktopCall } from '../hooks/desktop'
+import { failureLine, LIST_LIMIT, listSessions, openSession, REASONS, type DesktopCall } from '../hooks/desktop'
 
 const SECRET = 'SECRET-ERROR-TEXT'
 
@@ -75,6 +75,7 @@ test('the list of sessions asks for archived ones too, and reads an entry withou
       { sessionId: 'local_a', isArchived: true, isRunning: false, title: null, surelyUnarchived: false },
       { sessionId: 'local_b', isArchived: false, isRunning: true, title: null, surelyUnarchived: false },
     ],
+    complete: true,
   })
   expect(d.calls[0]!.args).toEqual({ limit: 100, include_archived: true })
 })
@@ -102,4 +103,14 @@ test('a list that is refused, not connected or not a list answers its own reason
   expect(await listSessions(gone.call)).toEqual({ reason: REASONS.notConnected })
   const garbage = desktop({ list: async () => text(SECRET) })
   expect(await listSessions(garbage.call)).toEqual({ reason: REASONS.listUnreadable })
+})
+
+test('a list is complete only when it came back shorter than the most foreman asks for, counting entries it could not read', async () => {
+  const of = async (n: number, entry = (i: number) => ({ sessionId: `local_${i}` })) => {
+    const got = await listSessions(desktop({ list: async () => sessions(Array.from({ length: n }, (_, i) => entry(i))) }).call)
+    return 'complete' in got ? got.complete : got
+  }
+  expect(await of(LIST_LIMIT - 1)).toBe(true)
+  expect(await of(LIST_LIMIT)).toBe(false)
+  expect(await of(LIST_LIMIT, i => (i === 0 ? { sessionId: 7 } : { sessionId: `local_${i}` }) as never)).toBe(false)
 })

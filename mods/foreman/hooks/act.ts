@@ -1,18 +1,19 @@
 // What foreman does after each read of the status folder, decided without
 // the engine: which sub sessions to nudge, which to raise a notification
-// for, which slots to free, and why to wake the parent's model. `decide`
+// for, which slots to free, which waiting sub sessions to begin, and why to
+// wake the parent's model. `decide`
 // answers the next ledger together with those effects, and
 // hooks/register.tsx carries them out. Every function is pure.
 
 import type { Listed } from './desktop'
-import { releasedBy } from './held'
+import { beginHeldLog, beginHeldNotice, releasedBy } from './held'
 import { prStateOf, type BuildState, type RecordVerdicts } from './record'
 import { folded, withReadings } from './spend'
 import type { ForemanActs, ForemanEffect, ForemanPairing, ForemanTickets } from '../types'
 import { busyCount, nameOf, type SubRow } from './subs'
-import { ANNOUNCED_NONE, capped, ownsTicket, shownRows } from './tickets'
+import { ANNOUNCED_NONE, capped, ownsTicket, queueOf, shownRows } from './tickets'
 import { printable } from './text'
-import { byTicket, whoOf, type Reason } from './wake'
+import { byTicket, KEY, whoOf, type Reason } from './wake'
 
 // How long an idle stretch and a cleanup may last before foreman acts, in
 // milliseconds, from the `idleMinutes` and `cleanupMinutes` options.
@@ -31,9 +32,17 @@ export const CLEANUP_FAILED_CALLS = 3
 // it, so forgetting it changes nothing a person sees.
 export const UNOWNED_FOR_MS = 24 * 60 * 60_000
 
+// How long foreman waits for a desktop tool or a notification before it gives
+// up and counts the call as failed, so a call that never answers cannot stop
+// the reads. A begin message that did not go is tried again only once its
+// last try is this old, so a try still waiting on its answer is not doubled.
+export const CALL_TIMEOUT_MS = 30_000
+
 // The desktop app's list of sessions for this read: not read because no rule
-// needed it, failed, or read.
-export type SessionsLook = { kind: 'unread' } | { kind: 'failed' } | { kind: 'read'; sessions: Listed[] }
+// needed it, failed, or read. `complete` says the list came back shorter than
+// the most foreman asks for, so a session missing from it is surely gone. A
+// list without it may have left out a session that was quiet a while.
+export type SessionsLook = { kind: 'unread' } | { kind: 'failed' } | { kind: 'read'; sessions: Listed[]; complete?: boolean }
 
 export type DecideInput = {
   tickets: ForemanTickets
@@ -109,6 +118,9 @@ type Step = {
   logs: string[]
   due: number[]
   freed: number
+  // The names of the sub sessions whose slots this read freed, in order, so
+  // a waiting sub session begun in one can say whose it was.
+  freedBy: string[]
 }
 
 // The rule for each state. It is typed over every state, so a state added to
@@ -171,6 +183,7 @@ const STATE_RULES: Record<BuildState, (s: Step) => void> = {
     if (ended === null) return
     s.p = { ...s.p, standing: 'freed' }
     s.freed += 1
+    s.freedBy.push(whoOf(s.row.record.issueKey, s.p.ticket))
     s.logs.push(`${nameOf(s.row)} is done and its session ${ended}, so its slot is free.`)
   },
 }
@@ -183,7 +196,9 @@ const setActs = (s: Step, change: Partial<ForemanActs>) => {
 // Idle, and a working record that waits only on background work: a nudge
 // once the wait has lasted the threshold since `since`, a second one
 // threshold after the first, and the wake one threshold after that, counted
-// over a stretch without progress. `background` is null for an idle record
+// over a stretch without progress, and never from before the pairing time, so
+// a sub session that sat idle while it waited in the queue counts from its
+// begin. `background` is null for an idle record
 // and holds the background wait's first task, or null, otherwise. The
 // stretch keeps which wait it counts, null for idleness and the background
 // wait's `since` otherwise, and a stretch of another wait starts afresh, so a
@@ -211,7 +226,7 @@ function idleRule(s: Step, since: number, background: { task: string | null } | 
   else if (stretch.progress !== progress) stretch = { progress, nudges: 0, lastNudgeAt: null, countFrom: wait === null ? null : s.now, woke: false, wait }
   setActs(s, { stretch })
   if (stretch.woke) return
-  const from = Math.max(since, stretch.countFrom ?? since, stretch.lastNudgeAt ?? since)
+  const from = Math.max(since, s.p.pairedAt, stretch.countFrom ?? since, stretch.lastNudgeAt ?? since)
   const to = desktopOf(s.p, s.row)
   const who = whoOf(s.row.record.issueKey, s.p.ticket)
   const minutes = minutesOf(s.now - since)
@@ -356,19 +371,121 @@ export function slotOutcome(free: number): SlotOutcome {
 }
 
 // Whether this read needs the desktop app's list: a slot rule needs it, as
-// slotsNeedList says, or a key is held, which a session in the list releases.
+// slotsNeedList says, a key is held, which a session in the list releases, or
+// a sub session waits in the queue, which the list shows archived or open.
 export function needsList(t: ForemanTickets, rows: readonly SubRow[], now: number): boolean {
-  return t.held.length > 0 || slotsNeedList(t, rows, now)
+  return t.held.length > 0 || queueOf(t).length > 0 || slotsNeedList(t, rows, now)
 }
 
 // Whether a slot rule needs the desktop app's list: some active owned record
-// is done, or may be gone, as mayBeGone says.
+// that does not wait is done, or may be gone, as mayBeGone says.
 export function slotsNeedList(t: ForemanTickets, rows: readonly SubRow[], now: number): boolean {
-  const active = new Map(t.pairings.flatMap(p => (p.owner !== null && p.standing === 'active' ? [[p.owner, p] as const] : [])))
+  const active = new Map(t.pairings.flatMap(p => (p.owner !== null && p.standing === 'active' && p.queue === null ? [[p.owner, p] as const] : [])))
   return rows.some(r => {
     const p = active.get(r.record.sessionId)
     return p !== undefined && ownsTicket(p, r) && (r.record.state === 'done' || mayBeGone(p, r, now))
   })
+}
+
+// How many slots are free: the slot count less the busy ones. A slot is busy
+// for each row the band shows that is not released and not done, for each
+// start that went ahead and has no status file yet, for GONE_MS after it was
+// paired or begun, so several starts in one turn see each other, and for each
+// waiting sub session claimed for a slot whose begin message has not gone. A
+// sub session that waits unclaimed is not busy.
+export function freeSlots(t: ForemanTickets, rows: readonly SubRow[], now: number, slots: number): number {
+  const shown = busyCount(shownRows(rows, t))
+  const active = t.pairings.filter(p => p.standing === 'active')
+  const unseen = active.filter(p => p.queue === null && p.owner === null && now - p.pairedAt <= GONE_MS).length
+  const claimed = active.filter(p => p.queue?.claim != null).length
+  return slots - shown - unseen - claimed
+}
+
+// Whether a keyed start made now waits in the queue: no slot is free once
+// the sub sessions already waiting unclaimed have taken theirs, so a new
+// start never goes ahead of one that waits.
+export function startWaits(t: ForemanTickets, rows: readonly SubRow[], now: number, slots: number): boolean {
+  const owed = queueOf(t).filter(p => p.queue!.claim === null).length
+  return freeSlots(t, rows, now, slots) - owed <= 0
+}
+
+// A whole issue key, which is all a held entry may be.
+const KEY_SHAPE = new RegExp(`^${KEY}$`)
+
+// Whether a waiting sub session's record shows that /implement began in it:
+// an issue key, a stage or a pull request. Builder writes a file for a sub
+// session that waits too, which shows none of them.
+const showsProgress = (row: SubRow) => row.record.issueKey !== null || row.record.stage !== null || row.record.pr !== null
+
+// What the queue leads to on one read, after every pairing's own rules:
+// - a waiting sub session whose record shows progress counts as begun;
+// - when the list was read, an unclaimed waiting sub session that it shows
+//   archived leaves the queue, and its issue is dropped, while a claimed one
+//   that it shows archived, or that is missing from a complete list, leaves
+//   the queue and its key is held, with a notification only when no failed
+//   begin was told for it already;
+// - each free slot claims the first waiting sub session that the list shows
+//   unarchived, in the queue's order, naming the sub session whose slot this
+//   read freed, in order, when there is one;
+// - a claim whose begin did not go is tried again once its last try is
+//   CALL_TIMEOUT_MS old and the list shows its session unarchived.
+// A claim and a try add a begin effect and record the try's time.
+// It answers the ledger and whether anyone is left waiting unclaimed.
+function queueStep(
+  t: ForemanTickets,
+  q: { rows: readonly SubRow[]; now: number; slots: number; byId: ReadonlyMap<string, Listed> | null; complete: boolean; freedBy: string[]; effects: ForemanEffect[]; logs: string[] },
+): { tickets: ForemanTickets; waits: boolean } {
+  const { rows, now, byId, effects, logs } = q
+  const ownerRow = (p: ForemanPairing) => rows.find(r => r.file === p.ownerFile && ownsTicket(p, r))
+  let held = t.held
+  let pairings = t.pairings.flatMap(p => {
+    if (p.queue === null || p.standing !== 'active') return [p]
+    const row = ownerRow(p)
+    const who = whoOf(p.issueKey, p.ticket)
+    if (row !== undefined && showsProgress(row)) {
+      logs.push(`${who} began before foreman's begin message, so foreman counts it as busy.`)
+      return [{ ...p, queue: null }]
+    }
+    const entry = byId === null || p.localId === null ? undefined : byId.get(p.localId)
+    const isArchived = entry?.isArchived === true
+    if (p.queue.claim === null) {
+      if (!isArchived) return [p]
+      logs.push(`Dropped ${who} from the queue, because its waiting session is archived.`)
+      return []
+    }
+    const isGone = byId !== null && p.localId !== null && entry === undefined && q.complete
+    if (!isArchived && !isGone) return [p]
+    const key = p.issueKey !== null && KEY_SHAPE.test(p.issueKey) ? p.issueKey : null
+    if (key === null) {
+      logs.push(`Dropped ${who} from the queue, because its waiting session is archived or no longer listed.`)
+      return []
+    }
+    logs.push(beginHeldLog(key))
+    if (!held.includes(key)) {
+      held = [...held, key]
+      if (!p.queue.claim.notified) effects.push({ kind: 'notify', text: beginHeldNotice(key) })
+    }
+    return []
+  })
+  const isShown = (p: ForemanPairing) => p.localId !== null && byId?.get(p.localId)?.surelyUnarchived === true
+  let free = freeSlots({ ...t, pairings }, rows, now, q.slots)
+  const claims = new Map<string, string | null>()
+  for (const p of queueOf({ ...t, pairings })) {
+    if (free <= 0) break
+    if (p.queue!.claim !== null || !isShown(p)) continue
+    claims.set(p.ticket, q.freedBy.shift() ?? null)
+    free -= 1
+  }
+  pairings = pairings.map(p => {
+    if (p.queue === null || p.standing !== 'active' || p.localId === null) return p
+    const claimed = claims.has(p.ticket)
+    const retried = !claimed && p.queue.claim !== null && isShown(p) && now - p.queue.claim.attemptAt >= CALL_TIMEOUT_MS
+    if (!claimed && !retried) return p
+    effects.push({ kind: 'begin', to: p.localId, ticket: p.ticket, key: p.issueKey, by: claimed ? claims.get(p.ticket)! : null })
+    return { ...p, queue: { ...p.queue, claim: { attemptAt: now, notified: p.queue.claim?.notified ?? false } } }
+  })
+  const next = { ...t, pairings, held }
+  return { tickets: next, waits: queueOf(next).some(p => p.queue!.claim === null) }
 }
 
 // Decides everything one read leads to. A pairing whose owner's file left the
@@ -378,10 +495,12 @@ export function slotsNeedList(t: ForemanTickets, rows: readonly SubRow[], now: n
 // happens unless this read listed a folder that exists. On any read whose
 // listing succeeded, even one that found the folder missing, a pairing with
 // no owner may wake the parent once, as unseenRule says. A released or
-// freed pairing gets no action. An active pairing's pull request
-// milestones wake the parent after its other reasons. When a slot freed, the
-// parent is woken with the number of slots free, unless none is free. A list
+// freed pairing gets no action, and neither does one that waits in the queue,
+// which queueStep decides for. An active pairing's pull request
+// milestones wake the parent after its other reasons. A list
 // that was read releases each held key that a session in it shows started.
+// When a slot freed and nobody is left waiting unclaimed, the parent is woken
+// with the number of slots free, unless none is free.
 // The spending in each owner's file is taken into the ledger from the
 // pairings as the read found them, and the spent list is folded after the
 // pairings are decided, so an entry whose pairing this read forgot can fold
@@ -394,21 +513,26 @@ export function decide(input: DecideInput): Decision {
   const logs: string[] = []
   const due: number[] = []
   let freed = 0
+  const freedBy: string[] = []
   const byFile = new Map(rows.map(r => [r.file, r]))
   const pairings = input.tickets.pairings.flatMap(p => {
+    // A waiting sub session needs no file of its own, so it is forgotten
+    // only when it has no desktop session either, as from a proposal card.
+    const waits = p.queue !== null
     if (p.owner === null || p.ownerFile === null) {
       if (!listed) return [p]
-      if (folderExists && now - p.pairedAt > UNOWNED_FOR_MS) {
+      if (folderExists && now - p.pairedAt > UNOWNED_FOR_MS && !(waits && p.localId !== null)) {
         logs.push(`Forgot ticket ${p.ticket}, because no status file carried it for a day.`)
         return []
       }
-      return [unseenRule(p, rows, now, reasons, due)]
+      return [waits ? p : unseenRule(p, rows, now, reasons, due)]
     }
     const row = byFile.get(p.ownerFile)
     if (row === undefined) {
-      if (!folderExists || !listed) return [p]
+      if (!folderExists || !listed || waits) return [p]
       if (p.standing === 'active') {
         freed += 1
+        freedBy.push(whoOf(p.issueKey, p.ticket))
         logs.push(`The slot of ${p.issueKey ?? byTicket(p.ticket)} is free, because its file left the status folder.`)
         // The merge comes before the slot-free sentence, which is added
         // after every pairing.
@@ -416,9 +540,9 @@ export function decide(input: DecideInput): Decision {
       }
       return []
     }
-    if (!ownsTicket(p, row) || p.standing !== 'active') return [p]
+    if (!ownsTicket(p, row) || p.standing !== 'active' || waits) return [p]
     const episode = episodeOf(p.acts.episode, row, now)
-    const s: Step = { p: { ...p, acts: { ...p.acts, episode } }, episode, row, now, limits, sessionsById: byId, effects, reasons, logs, due, freed: 0 }
+    const s: Step = { p: { ...p, acts: { ...p.acts, episode } }, episode, row, now, limits, sessionsById: byId, effects, reasons, logs, due, freed: 0, freedBy }
     // The milestone sentences follow this pairing's other sentences, so that
     // the slot-free sentence, added after every pairing, stays last.
     const milestones = milestoneRule(s)
@@ -436,8 +560,11 @@ export function decide(input: DecideInput): Decision {
     if (released.logs.length > 0) tickets = { ...tickets, held: released.held }
     logs.push(...released.logs)
   }
-  if (freed > 0) {
-    const outcome = slotOutcome(input.slots - busyCount(shownRows(rows, tickets)))
+  const complete = sessions.kind === 'read' && sessions.complete === true
+  const queued = queueStep(tickets, { rows, now, slots: input.slots, byId, complete, freedBy, effects, logs })
+  tickets = queued.tickets
+  if (freed > 0 && !queued.waits) {
+    const outcome = slotOutcome(freeSlots(tickets, rows, now, input.slots))
     if (outcome.kind === 'wake') reasons.push(outcome.reason)
   }
   return { tickets, effects, reasons, logs, nextDueAt: due.length === 0 ? null : Math.min(...due) }
