@@ -51,7 +51,11 @@ slot frees.
 3. **The queue.** Foreman records each waiting session in the ledger with its
    ticket, its `local_` id, its issue key and its place in the queue. A
    waiting session is not busy: it does not count against a slot, foreman
-   does not nudge it, and its missing status file raises no wake.
+   does not nudge it, and its missing status file raises no wake. The
+   builder mod starts a status file for every session whose first prompt
+   holds a ticket, so a waiting session soon has one that shows it idle with
+   no issue, no stage and no pull request; foreman ignores that file while
+   the session waits.
 4. **Beginning.** When a slot frees, foreman takes the first waiting session,
    records in the ledger that it claimed it, and only then sends it the begin
    message through `send_message`. The begin message is a fixed constant,
@@ -93,8 +97,9 @@ slot frees.
 - **Several queued issues in one turn.** The parent starts them one call at
   a time, in the person's order, and each call sees the pairings the earlier
   ones recorded, so exactly as many start at once as there are free slots.
-- **A waiting session that does not wait.** If a waiting session writes a
-  status file before its begin message, foreman treats it as begun: it takes
+- **A waiting session that does not wait.** If a waiting session's status
+  file shows `/implement`'s progress before its begin message, that is an
+  issue key, a stage or a pull request, foreman treats it as begun: it takes
   it out of the queue and counts it as busy. The person can see this, because
   more sessions then run than there are slots.
 - **The person archives a waiting session.** It leaves the queue on the next
@@ -153,8 +158,9 @@ slot frees.
   automated-turn refusal is held with one notification and texts that make
   no claim about where the person is; a failed begin is retried while the
   target is unarchived and, once it is archived, its key is held without a
-  second notification and the next session begins; a waiting session that
-  writes a status file counts as begun; a restart keeps the queue.
+  second notification and the next session begins; a waiting session whose
+  status file shows `/implement`'s progress counts as begun, while one whose
+  file shows it idle with no issue does not; a restart keeps the queue.
 - The README, the wake skill and `tests/held.test.ts` quote the hold's texts
   and are updated together with them. The wake skill's "When the parent
   speaks" section gains a bullet for the begin line.
