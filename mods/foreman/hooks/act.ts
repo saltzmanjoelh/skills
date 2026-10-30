@@ -415,7 +415,7 @@ export function freeSlots(t: ForemanTickets, rows: readonly SubRow[], now: numbe
 // the sub sessions already waiting unclaimed have taken theirs, so a new
 // start never goes ahead of one that waits.
 export function startWaits(t: ForemanTickets, rows: readonly SubRow[], now: number, slots: number): boolean {
-  const owed = waitingUnclaimed(t).length
+  const owed = waitingUnclaimed(t, now, GONE_MS).length
   return freeSlots(t, rows, now, slots) - owed <= 0
 }
 
@@ -497,7 +497,7 @@ function queueStep(
     return { ...p, queue: { ...p.queue, claim: { attemptAt: now, notified: p.queue.claim?.notified ?? false } } }
   })
   const next = { ...t, pairings, held }
-  return { tickets: next, waits: waitingUnclaimed(next).length > 0 }
+  return { tickets: next, waits: waitingUnclaimed(next, now, GONE_MS).length > 0 }
 }
 
 // Decides everything one read leads to. A pairing whose owner's file left the

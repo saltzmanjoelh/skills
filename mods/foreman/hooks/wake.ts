@@ -44,9 +44,13 @@ export const KEY = '[A-Z][A-Z0-9]*-[0-9]+'
 const KEY_SHAPE = new RegExp(`^${KEY}$`)
 export const isWholeKey = (text: string) => KEY_SHAPE.test(text)
 
-// Whether `text` is a whole ticket, as tickets.ts issues them: `ft-` and a
-// random id.
-const TICKET_SHAPE = /^ft-[A-Za-z0-9-]+$/
+// How every ticket begins. briefFor in tickets.ts issues a ticket as this
+// and a random id.
+export const TICKET_PREFIX = 'ft-'
+
+// Whether `text` is a whole ticket, as tickets.ts issues them: the prefix
+// and a random id.
+const TICKET_SHAPE = new RegExp(`^${TICKET_PREFIX}[A-Za-z0-9-]+$`)
 export const isTicket = (text: string) => TICKET_SHAPE.test(text)
 
 // How a sub session is named when foreman has no key it can use: by its

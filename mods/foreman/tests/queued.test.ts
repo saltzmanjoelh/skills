@@ -184,6 +184,27 @@ test('with the queue empty, a freed slot wakes the parent to pick the next issue
   expect(w.engine.prompts).toEqual(['foreman: one slot free; pick the next issue and start it.'])
 })
 
+test('a waiting start answered with a proposal card holds back no slot once its call is long over, and begins once its session starts', async ($, on) => {
+  const { w } = await parent($, on, 1)
+  w.engine.startAnswers = [answer(1), 'Proposed the session as a card for the person to start.']
+  await startSession($, keyed('ABC-1'))
+  await startSession($, keyed('ABC-2'))
+  const card = ticketOf(w, 1)
+  expect(ledger(w).pairings.find(p => p.ticket === card)).toMatchObject({ localId: null, queue: { place: 1, claim: null } })
+  const live = { 'a.json': busyFile('ABC-1', ticketOf(w, 0), 'local_new1') }
+  w.desktop.sessions = [listed('local_new1', 'ABC-1')]
+  await minutesPass(w, 6, live)
+  const done = busyFile('ABC-1', ticketOf(w, 0), 'local_new1', { state: 'done' })
+  w.desktop.sessions = [listed('local_new1', 'ABC-1', { isArchived: true, isRunning: false })]
+  await minutesPass(w, 2, { 'a.json': done })
+  expect(w.engine.prompts).toEqual(['foreman: one slot free; pick the next issue and start it.'])
+  // The person starts the card later: its session writes its file with the
+  // ticket, foreman learns its id from it, and begins it in the free slot.
+  w.desktop.sessions.push(listed('local_card', 'ABC-2'))
+  await minutesPass(w, 2, { 'a.json': done, 'b.json': waitingFile(card, 'local_card') })
+  expect(begins(w)).toEqual(['local_card'])
+})
+
 test('raising the slot count begins the waiting sub sessions in the new slots', async ($, on) => {
   const { w, live } = await queueOfTwo($, on)
   expect(begins(w)).toEqual([])

@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PromptSubmitInput, Register, ResolveInput, ToolCallResult } from 'claude-code'
 
-import { CALL_TIMEOUT_MS, decide, desktopOf, freeSlots, keptByUnreadList, needsList, slotOutcome, startWaits, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
+import { CALL_TIMEOUT_MS, decide, desktopOf, freeSlots, GONE_MS, keptByUnreadList, needsList, slotOutcome, startWaits, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
 import { isSvgSurface } from './art'
 import { becameParentAnswer, COMMAND, commandOf, PASSED_ON, PASTED_LINE, pastedCommandIn, slotsAnswer, type Command } from './commands'
 import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, failureLine, listSessions, NUDGE_TEXT, openSession, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
@@ -617,7 +617,7 @@ function withSlotOutcome(t: ForemanTickets, outcome: SlotOutcome): ForemanTicket
 // when one waits unclaimed, and otherwise the parent is woken with the number
 // of slots free. Nothing happens when no slot is free.
 async function slotFreed($: $) {
-  if (waitingUnclaimed(ticketsIn(await read($, tickets))).length > 0) {
+  if (waitingUnclaimed(ticketsIn(await read($, tickets)), await $.clock.now(), GONE_MS).length > 0) {
     later($, () => readNow($))
     return
   }

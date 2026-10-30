@@ -7,7 +7,7 @@ import type { ForemanActs, ForemanEffect, ForemanOutbox, ForemanPairing, Foreman
 import { BEGIN_TEXT } from './desktop'
 import { countsIn, isDollars, isPullRequestNumber, isPullRequestState, verdictsIn } from './record'
 import { byKeyThenFile, keyOf, nameOf, type SubRow } from './subs'
-import { byTicket, isTicket, isWholeKey, isWhoName, KEY } from './wake'
+import { byTicket, isTicket, isWholeKey, isWhoName, KEY, TICKET_PREFIX } from './wake'
 
 // The line builder looks for in a sub session's first prompt.
 export const TICKET_LINE = 'foreman-ticket:'
@@ -117,7 +117,7 @@ export function briefFor(args: Record<string, unknown>, uuid: string): Brief {
     if (isMarked && brief === null) return { kind: 'deny', text: TITLE_REFUSAL, log: TITLE_LOG }
   }
   if (brief === null) return { kind: 'pass' }
-  const ticket = `ft-${uuid}`
+  const ticket = `${TICKET_PREFIX}${uuid}`
   const prompt = `${brief.replace(/\s+$/, '')}\n\n${TICKET_LINE} ${ticket}`
   if (title === null || !isMarked) return { kind: 'add', ticket, prompt }
   return { kind: 'add', ticket, prompt, title: `${ticket}: ${title.slice(NO_ISSUE_MARKER.length)}` }
@@ -310,8 +310,14 @@ export function queueOf(t: ForemanTickets): ForemanPairing[] {
 
 // The sub sessions that wait in the queue and are not yet claimed for a
 // slot, in the queue's order. Each of them is owed a slot before any new
-// start goes ahead.
-export const waitingUnclaimed = (t: ForemanTickets) => queueOf(t).filter(p => p.queue!.claim === null)
+// start goes ahead. One with no desktop session id is owed one only for
+// `goneMs` after it was paired, while its start call may still be out: a
+// start answered with a proposal card the person never starts would
+// otherwise hold back a slot, and the slot wake, until it is forgotten a day
+// later. Once its session starts, its status file gives it the id, and it is
+// owed its slot again at its place.
+export const waitingUnclaimed = (t: ForemanTickets, now: number, goneMs: number) =>
+  queueOf(t).filter(p => p.queue!.claim === null && (p.localId !== null || now - p.pairedAt <= goneMs))
 
 // The place a start that waits now takes: one after the last place in the
 // queue, or 1 when nobody waits.
