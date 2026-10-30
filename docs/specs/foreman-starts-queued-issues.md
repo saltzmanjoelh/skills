@@ -89,7 +89,9 @@ slot frees.
 9. **A begin that is not sent.** When `send_message` fails, foreman keeps the
    claim and tries again on each later read, but only while the session list
    shows the target unarchived, and raises one notification on the first
-   failure. Once the target is archived or missing from the list, foreman
+   failure. The app's list holds only the most recently active sessions, so
+   a target counts as missing only when the list came back shorter than its
+   limit. Once the target is archived or missing from the list, foreman
    takes it out of the queue, holds its key so the parent starts the issue
    again on the person's next prompt, raises no second notification for that
    key, and begins the next waiting session.
