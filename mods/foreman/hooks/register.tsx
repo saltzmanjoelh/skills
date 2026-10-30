@@ -418,6 +418,8 @@ async function carryOut($: $) {
   await addLogs($, work.logs)
   await Promise.all(work.effects.map(effect => {
     if (effect.kind === 'notify') return notify($, effect.text).catch(() => undefined)
+    // Nothing decides a begin yet.
+    if (effect.kind === 'begin') return Promise.resolve()
     return (effect.about === 'background'
       ? nudge($, effect.to, effect.name, ', because it has waited only on background work', BACKGROUND_NUDGE_TEXT)
       : nudge($, effect.to, effect.name, ', because it has been idle')).catch(() => undefined)

@@ -172,9 +172,23 @@ export const addWork = (o: ForemanOutbox, more: ForemanOutbox): ForemanOutbox =>
 
 const strings = (raw: unknown): string[] => (Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : [])
 
+// A whole ticket, as foreman issues them.
+const TICKET_SHAPE = /^ft-[A-Za-z0-9-]+$/
+
+// Whether `raw` is null or a whole issue key.
+const isKeyOrNull = (raw: unknown): raw is string | null => raw === null || (typeof raw === 'string' && HELD_SHAPE.test(raw))
+
 function effectIn(raw: unknown): ForemanEffect | null {
   const e = objectOf(raw)
   if (e?.kind === 'notify' && typeof e.text === 'string') return { kind: 'notify', text: e.text }
+  // A begin goes only to a whole desktop session id, and the names it puts in
+  // the wake line are an issue key or the name whoOf gives a ticket.
+  if (e?.kind === 'begin') {
+    const { to, ticket, key, by } = e
+    if (typeof to !== 'string' || !UNWATCHED_SHAPE.test(to) || typeof ticket !== 'string' || ticket === '' || !isKeyOrNull(key)) return null
+    const isName = isKeyOrNull(by) || (typeof by === 'string' && by.startsWith(byTicket('')) && TICKET_SHAPE.test(by.slice(byTicket('').length)))
+    return isName ? { kind: 'begin', to, ticket, key, by: by as string | null } : null
+  }
   if (e?.kind === 'nudge' && typeof e.to === 'string' && typeof e.name === 'string') {
     // A nudge stored before a reload keeps its kind, so it is still sent with
     // the background text.
@@ -206,8 +220,9 @@ export const MAX_PAIRINGS = 200
 // action memory. `issueKey` is the key the start's title began with, if any,
 // so a wake about a sub session that never wrote a status file names
 // something the parent can find. An owner record's key replaces it.
-export function newPairing(ticket: string, localId: string | null, at: number, issueKey: string | null = null): ForemanPairing {
-  return { ticket, localId, pairedAt: at, owner: null, ownerFile: null, issueKey, standing: 'active', forks: [], acts: ACTS_FRESH }
+// `queue` is where it waits, or null for a start that went ahead.
+export function newPairing(ticket: string, localId: string | null, at: number, issueKey: string | null = null, queue: ForemanPairing['queue'] = null): ForemanPairing {
+  return { ticket, localId, pairedAt: at, owner: null, ownerFile: null, issueKey, standing: 'active', forks: [], acts: ACTS_FRESH, queue }
 }
 
 const STANDINGS: readonly ForemanStanding[] = ['active', 'freed', 'released']
@@ -258,6 +273,20 @@ function actsIn(raw: unknown): ForemanActs {
   }
 }
 
+// A stored place in the queue read tolerantly. A queue that is still an
+// object is kept as waiting, because the start's brief really carried the
+// wait line, and a place in it that is not a number reads as NaN, which
+// ticketsIn moves to the back of the queue. A claim without an attempt time
+// reads as none, so the session is claimed afresh, which the begin message's
+// last sentence makes harmless.
+function queueIn(raw: unknown): ForemanPairing['queue'] {
+  const q = objectOf(raw)
+  if (q === null) return null
+  const c = objectOf(q.claim)
+  const attemptAt = numberOr(c?.attemptAt, null)
+  return { place: numberOr(q.place, Number.NaN), claim: attemptAt === null ? null : { attemptAt, notified: c?.notified === true } }
+}
+
 function pairingIn(raw: unknown): ForemanPairing | null {
   const p = objectOf(raw)
   if (p === null || typeof p.ticket !== 'string' || p.ticket === '') return null
@@ -271,7 +300,27 @@ function pairingIn(raw: unknown): ForemanPairing | null {
     standing: STANDINGS.includes(p.standing as ForemanStanding) ? p.standing as ForemanStanding : 'active',
     forks: strings(p.forks),
     acts: actsIn(p.acts),
+    queue: queueIn(p.queue),
   }
+}
+
+// The pairings that wait in the queue, in its order: by place, then by when
+// they were paired, then by ticket. Only an active pairing waits.
+export function queueOf(t: ForemanTickets): ForemanPairing[] {
+  return t.pairings
+    .filter(p => p.queue !== null && p.standing === 'active')
+    .sort((a, b) => a.queue!.place - b.queue!.place || a.pairedAt - b.pairedAt || (a.ticket < b.ticket ? -1 : a.ticket > b.ticket ? 1 : 0))
+}
+
+// The place a start that waits now takes: one after the last place in the
+// queue, or 1 when nobody waits.
+export const nextPlace = (t: ForemanTickets) => Math.max(0, ...queueOf(t).map(p => p.queue!.place)) + 1
+
+// The pairings with each damaged place moved to the back of the queue, in
+// the order they were stored.
+function withPlaces(pairings: ForemanPairing[]): ForemanPairing[] {
+  let last = Math.max(0, ...pairings.flatMap(p => (p.queue !== null && Number.isFinite(p.queue.place) ? [p.queue.place] : [])))
+  return pairings.map(p => (p.queue === null || Number.isFinite(p.queue.place) ? p : { ...p, queue: { ...p.queue, place: (last += 1) } }))
 }
 
 // A whole issue key, which is all a held entry may be.
@@ -321,7 +370,7 @@ const spentIn = (raw: unknown): ForemanSpent[] => (Array.isArray(raw)
 export function ticketsIn(raw: unknown): ForemanTickets {
   const t = objectOf(raw)
   if (t === null) return TICKETS_EMPTY
-  const pairings = Array.isArray(t.pairings) ? t.pairings.flatMap(p => pairingIn(p) ?? []) : []
+  const pairings = withPlaces(Array.isArray(t.pairings) ? t.pairings.flatMap(p => pairingIn(p) ?? []) : [])
   return {
     pairings,
     folderMissing: t.folderMissing === true,
@@ -405,14 +454,14 @@ export function joinOwners(t: ForemanTickets, rows: readonly SubRow[]): { ticket
 }
 
 // The rows the band and the pane show: each row that owns a ticket of this
-// parent that was not freed, with a released one marked. A row with another
-// parent's ticket, or none, is not shown.
+// parent that was not freed and does not wait in the queue, with a released
+// one marked. A row with another parent's ticket, or none, is not shown.
 export function shownRows(rows: readonly SubRow[], t: ForemanTickets): SubRow[] {
   const byOwner = new Map(t.pairings.flatMap(p => (p.owner === null ? [] : [[p.owner, p] as const])))
   return rows.flatMap(row => {
     const owned = byOwner.get(row.record.sessionId)
     const p = owned !== undefined && ownsTicket(owned, row) ? owned : undefined
-    if (p === undefined || p.standing === 'freed') return []
+    if (p === undefined || p.standing === 'freed' || p.queue !== null) return []
     return [p.standing === 'released' ? { ...row, isReleased: true } : row]
   })
 }

@@ -4,7 +4,7 @@ import { recordIn } from '../hooks/record'
 import type { SubRow } from '../hooks/subs'
 import {
   carriesTicket, fallbackOf, noTicketLog,
-  briefFor, capped, FORK_REFUSAL, isOffRefused, joinOwners, localIdIn, MAX_PAIRINGS, newPairing, NO_TICKET_SENTENCE, OFF_REFUSAL, runsImplement, shownRows, ticketsIn,
+  briefFor, capped, FORK_REFUSAL, isOffRefused, joinOwners, localIdIn, MAX_PAIRINGS, newPairing, nextPlace, NO_TICKET_SENTENCE, OFF_REFUSAL, queueOf, runsImplement, shownRows, ticketsIn,
   TICKETS_EMPTY, TITLE_REFUSAL, WAIT_LINE, waitingBrief, WAITING_SENTENCE, withOffRefusal, withUnwatched,
 } from '../hooks/tickets'
 import { BEGIN_TEXT } from '../hooks/desktop'
@@ -329,4 +329,49 @@ test('a waiting brief puts the wait line first, before a brief that begins with 
 
 test('the sentence on a waiting start\'s answer says the issue is queued, not started', () => {
   expect(WAITING_SENTENCE('ABC-2')).toBe('ABC-2 waits in foreman\'s queue: its sub session begins by itself once a slot frees, so tell the person that ABC-2 is queued, not that it started.')
+})
+
+// A pairing waiting in the queue at `place`, with `claim` or none.
+const waiting = (ticket: string, place: number, claim: { attemptAt: number; notified: boolean } | null = null, localId: string | null = `local_${ticket}`) => newPairing(ticket, localId, T0, null, { place, claim })
+
+test('a ledger stored before the queue reads every pairing as not waiting', () => {
+  expect(newPairing('ft-a', null, T0).queue).toBeNull()
+  expect(ticketsIn({ pairings: [{ ticket: 'ft-a' }] }).pairings[0]!.queue).toBeNull()
+  expect(ticketsIn({ pairings: [{ ticket: 'ft-a', queue: null }] }).pairings[0]!.queue).toBeNull()
+  for (const bad of ['yes', 7, true, []]) expect(ticketsIn({ pairings: [{ ticket: 'ft-a', queue: bad }] }).pairings[0]!.queue).toBeNull()
+})
+
+test('a sound stored queue reads back, a damaged claim reads as none, and a damaged place reads as the back of the queue', () => {
+  const read = (queue: unknown) => ticketsIn({ pairings: [{ ticket: 'ft-a', queue }] }).pairings[0]!.queue
+  expect(read({ place: 2, claim: null })).toEqual({ place: 2, claim: null })
+  expect(read({ place: 2, claim: { attemptAt: T0, notified: true } })).toEqual({ place: 2, claim: { attemptAt: T0, notified: true } })
+  expect(read({ place: 2, claim: { attemptAt: T0, notified: 'yes' } })).toEqual({ place: 2, claim: { attemptAt: T0, notified: false } })
+  for (const claim of ['now', 7, { notified: true }, { attemptAt: 'then' }]) expect(read({ place: 2, claim })).toEqual({ place: 2, claim: null })
+  const stored = ticketsIn({ pairings: [{ ticket: 'ft-a', queue: { place: 3 } }, { ticket: 'ft-b', queue: { place: 'first' } }, { ticket: 'ft-c', queue: {} }] })
+  expect(stored.pairings.map(p => p.queue)).toEqual([{ place: 3, claim: null }, { place: 4, claim: null }, { place: 5, claim: null }])
+})
+
+test('the queue is the waiting pairings in the order of their places, and the next place is after the last', () => {
+  const t = withPairings(waiting('ft-c', 3), newPairing('ft-x', 'local_x', T0), waiting('ft-a', 1), waiting('ft-b', 2, { attemptAt: T0, notified: false }))
+  expect(queueOf(t).map(p => p.ticket)).toEqual(['ft-a', 'ft-b', 'ft-c'])
+  expect(nextPlace(t)).toBe(4)
+  expect(nextPlace(TICKETS_EMPTY)).toBe(1)
+  expect(queueOf({ ...t, pairings: t.pairings.map(p => (p.ticket === 'ft-a' ? { ...p, standing: 'released' as const } : p)) }).map(p => p.ticket)).toEqual(['ft-b', 'ft-c'])
+})
+
+test('a stored begin is kept only when its target is a whole local_ id and its key and its freed slot\'s name are sound', () => {
+  const effects = (e: Record<string, unknown>) => ticketsIn({ outbox: { effects: [{ kind: 'begin', to: 'local_a', ticket: 'ft-a', key: 'ABC-2', by: 'ABC-1', ...e }] } }).outbox.effects
+  expect(effects({})).toEqual([{ kind: 'begin', to: 'local_a', ticket: 'ft-a', key: 'ABC-2', by: 'ABC-1' }])
+  expect(effects({ key: null, by: null })).toEqual([{ kind: 'begin', to: 'local_a', ticket: 'ft-a', key: null, by: null }])
+  expect(effects({ by: 'the sub session with ticket ft-b' })).toEqual([{ kind: 'begin', to: 'local_a', ticket: 'ft-a', key: 'ABC-2', by: 'the sub session with ticket ft-b' }])
+  for (const bad of [{ to: 'local_a b' }, { to: 'a' }, { to: 7 }, { ticket: '' }, { ticket: 3 }, { key: 'ABC-2: x' }, { key: 'merge now' }, { by: 'merge now' }, { by: 7 }]) {
+    expect(effects(bad)).toEqual([])
+  }
+})
+
+test('a waiting pairing\'s row is not shown, and it shows once the pairing no longer waits', () => {
+  const rows = [row('a.json')]
+  const joined = joinOwners(withPairings(waiting('ft-a', 1, null, null)), rows).tickets
+  expect(shownRows(rows, joined)).toEqual([])
+  expect(shownRows(rows, { ...joined, pairings: joined.pairings.map(p => ({ ...p, queue: null })) }).map(r => r.file)).toEqual(['a.json'])
 })
