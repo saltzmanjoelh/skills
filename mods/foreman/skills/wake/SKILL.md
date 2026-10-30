@@ -168,9 +168,12 @@ with the number in words.
    as "Starting a session" says. The check just before each start still runs
    for every slot.
 
-This line comes only when nobody waits in foreman's queue. While a waiting
-session is left, foreman begins it in the freed slot instead, and the line
-that wakes the parent says so, as the next section says.
+This line comes only when no session waiting in foreman's queue can take the
+freed slot. While a waiting session that foreman can begin is left, foreman
+begins it in the freed slot instead, and the line that wakes the parent says
+so, as the next section says. The line can still come while sessions wait,
+when the desktop app's list leaves them out or one is a proposal card nobody
+has started; follow it as above.
 
 ## foreman began <who>, the next issue in the queue, in the slot <who> freed; tell the person so in one line.
 

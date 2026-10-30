@@ -125,6 +125,15 @@ test('two freed slots and one waiting sub session begin it and wake the parent f
   expect(d.reasons).toEqual([{ kind: 'slot-free', free: 1 }])
 })
 
+test('a freed slot that no waiting sub session can take, because the list leaves it out, still wakes the parent', () => {
+  const t = ledger(ahead('ft-a', 'ABC-1'), waiting('ft-b', 'ABC-2', 1))
+  const sessions = list([listed('local_ft-a', { isArchived: true, isRunning: false, surelyUnarchived: false })], false)
+  const d = read(t, [row('ft-a', { issueKey: 'ABC-1', state: 'done' }), row('ft-b')], T0 + MINUTE, { sessions })
+  expect(begins(d)).toEqual([])
+  expect(d.reasons).toEqual([{ kind: 'slot-free', free: 1 }])
+  expect(d.tickets.pairings.find(p => p.ticket === 'ft-b')!.queue).toEqual({ place: 1, claim: null })
+})
+
 test('with the queue empty a freed slot wakes the parent as before', () => {
   const t = ledger(ahead('ft-a', 'ABC-1'))
   const sessions = list([listed('local_ft-a', { isArchived: true, isRunning: false, surelyUnarchived: false })])

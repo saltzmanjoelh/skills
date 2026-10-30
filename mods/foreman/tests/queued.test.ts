@@ -205,6 +205,17 @@ test('a waiting start answered with a proposal card holds back no slot once its 
   expect(begins(w)).toEqual(['local_card'])
 })
 
+test('a slot that frees soon after a waiting start was answered with a proposal card still wakes the parent', async ($, on) => {
+  const { w } = await parent($, on, 1)
+  w.engine.startAnswers = [answer(1), 'Proposed the session as a card for the person to start.']
+  await startSession($, keyed('ABC-1'))
+  await startSession($, keyed('ABC-2'))
+  const done = busyFile('ABC-1', ticketOf(w, 0), 'local_new1', { state: 'done' })
+  w.desktop.sessions = [listed('local_new1', 'ABC-1', { isArchived: true, isRunning: false })]
+  await minutesPass(w, 2, { 'a.json': done })
+  expect(w.engine.prompts).toEqual(['foreman: one slot free; pick the next issue and start it.'])
+})
+
 test('raising the slot count begins the waiting sub sessions in the new slots', async ($, on) => {
   const { w, live } = await queueOfTwo($, on)
   expect(begins(w)).toEqual([])

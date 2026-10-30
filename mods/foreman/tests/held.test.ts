@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import type { PromptOrigin, ToolCallResult } from 'claude-code'
 
 import type { Listed } from '../hooks/desktop'
-import { AUTOMATED_REFUSAL, heldLine, heldLog, heldNotice, heldSentence, isHeldRefusal, isPersonPrompt, keyOfTitle, releasedBy, REMOTE_REFUSAL } from '../hooks/held'
+import { AUTOMATED_REFUSAL, beginFailedNotice, beginHeldLog, beginHeldNotice, heldLine, heldLog, heldNotice, heldSentence, isHeldRefusal, isPersonPrompt, keyOfTitle, releasedBy, REMOTE_REFUSAL } from '../hooks/held'
 
 // The desktop app's two refusals of start_session that foreman holds a key
 // for: the one it gives while its Remote Control setting is on, word for word,
@@ -104,6 +104,7 @@ test('the sentence, the context line, the notification and the log line are pinn
 // The hold covers a refusal on a turn no person typed as much as the Remote
 // Control one, so no text may claim to know where the person is.
 test('no hold text says where the person is', () => {
-  const texts = [heldSentence('ABC-1'), heldLine(['ABC-1']), heldLine(['ABC-1', 'ABC-2']), heldNotice('ABC-1'), heldLog('ABC-1')]
+  const texts = [heldSentence('ABC-1'), heldLine(['ABC-1']), heldLine(['ABC-1', 'ABC-2']), heldNotice('ABC-1'), heldLog('ABC-1'),
+    beginHeldNotice('ABC-1'), beginHeldLog('ABC-1'), beginFailedNotice('ABC-1')]
   for (const text of texts) expect([text, /remote|away|typed/i.test(text)]).toEqual([text, false])
 })

@@ -442,14 +442,15 @@ const showsProgress = (row: SubRow) => row.record.issueKey !== null || row.recor
 // - a claim whose begin did not go is tried again once its last try is
 //   CALL_TIMEOUT_MS old and the list shows its session unarchived.
 // A claim and a try add a begin effect and record the try's time.
-// It answers the ledger and whether anyone is left waiting unclaimed.
+// It answers the ledger, and takes out of `freedBy` the name of each freed
+// slot that a claim filled.
 function queueStep(
   t: ForemanTickets,
   q: {
     rows: readonly SubRow[]; byFile: ReadonlyMap<string, SubRow>; now: number; slots: number; byId: ReadonlyMap<string, Listed> | null; complete: boolean; known: ReadonlySet<string> | null
     freedBy: string[]; effects: ForemanEffect[]; logs: string[]
   },
-): { tickets: ForemanTickets; waits: boolean } {
+): ForemanTickets {
   const { rows, now, byId, effects, logs } = q
   const ownerRow = (p: ForemanPairing) => {
     const row = p.ownerFile === null ? undefined : q.byFile.get(p.ownerFile)
@@ -502,7 +503,7 @@ function queueStep(
     return { ...p, queue: { ...p.queue, claim: { attemptAt: now, notified: p.queue.claim?.notified ?? false } } }
   })
   const next = { ...t, pairings, held }
-  return { tickets: next, waits: waitingUnclaimed(next, now, GONE_MS).length > 0 }
+  return next
 }
 
 // Decides everything one read leads to. A pairing whose owner's file left the
@@ -579,9 +580,12 @@ export function decide(input: DecideInput): Decision {
   }
   const complete = sessions.kind === 'read' && sessions.complete === true
   const known = sessions.kind === 'read' && sessions.known !== undefined ? new Set(sessions.known) : null
-  const queued = queueStep(tickets, { rows, byFile, now, slots: input.slots, byId, complete, known, freedBy, effects, logs })
-  tickets = queued.tickets
-  if (freed > 0 && !queued.waits) {
+  tickets = queueStep(tickets, { rows, byFile, now, slots: input.slots, byId, complete, known, freedBy, effects, logs })
+  // Each claim took the name of a slot this read freed, so a name left over
+  // is a freed slot that no waiting sub session could take: one the list
+  // does not show surely unarchived, or a proposal card that has not started.
+  // The parent is woken for it as before, so a freed slot is never lost.
+  if (freed > 0 && freedBy.length > 0) {
     const outcome = slotOutcome(freeSlots(tickets, rows, now, input.slots))
     if (outcome.kind === 'wake') reasons.push(outcome.reason)
   }
