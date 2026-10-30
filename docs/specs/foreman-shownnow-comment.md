@@ -25,9 +25,10 @@ A maintainer reading or changing foreman's buttons or the pane's rows.
 
 1. The comment says that `shownNow` gives the rows that the open, nudge and
    release buttons act on, and that the count of busy slots reads.
-2. The comment says that these rows must stay the same as the rows the pane
-   shows, which `view` works out on its own, because a button pressed on a
-   row the pane shows does nothing when `shownNow` lacks that row.
+2. The comment says that these rows must stay the same as the rows the band
+   and the pane show, which `view` works out on its own, because a button
+   pressed on a row either of them shows does nothing when `shownNow` lacks
+   that row. The band's chips are open buttons too.
 
 ## Edge cases
 
