@@ -232,8 +232,14 @@ async function rowsNow($: $): Promise<SubRow[]> {
   return rowsOf(list, typeof at === 'number' ? at : await $.clock.now())
 }
 
-// The rows the band and the pane show: those that own a ticket of this
-// parent that was not freed.
+// The rows that the open, nudge and release buttons act on, and that the
+// count of busy slots reads when a slot is freed. They are the rows that own
+// a ticket of this parent that was not freed. Each button looks up the row
+// that was pressed in this result, and the band's chips are open buttons
+// too. Neither the band nor the pane reads this result: `view` works out
+// their rows on its own. These rows must stay the same as the rows the band
+// and the pane show, because a button pressed on a row that either shows
+// does nothing when this result lacks that row.
 async function shownNow($: $): Promise<SubRow[]> {
   return shownRows(await rowsNow($), ticketsIn(await read($, tickets)))
 }
