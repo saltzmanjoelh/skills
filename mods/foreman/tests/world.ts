@@ -78,7 +78,8 @@ export function statusFolder(on: On, at = FOLDER, stored = new Map<string, unkno
 // `list`, `send` and `open` say how list_sessions, send_message and
 // open_session_in answer: normally, with an error that has text or none,
 // with text that is not a list, not at all, as a server that is not
-// connected does, or never, for a call that hangs.
+// connected does, or never, for a call that hangs. `sendTo` says how
+// send_message answers for one target, in place of `send`.
 export function desktopApp(on: On) {
   const d = {
     calls: [] as { server: string; tool: string; args: Record<string, unknown> }[],
@@ -86,13 +87,14 @@ export function desktopApp(on: On) {
     list: 'ok' as 'ok' | 'error' | 'garbage' | 'not-connected' | 'hang',
     send: 'ok' as 'ok' | 'error' | 'not-connected' | 'hang',
     open: 'ok' as 'ok' | 'error' | 'error-empty' | 'not-connected',
+    sendTo: new Map<string, 'ok' | 'error' | 'not-connected' | 'hang'>(),
     // The messages send_message delivered, as [session id, text].
     sent: [] as [string, string][],
   }
   const answer = (result: McpToolResult) => ({ value: result })
   on('mcp.call', ($, e) => {
     d.calls.push({ server: e.server, tool: e.tool, args: e.args })
-    const how = e.tool === 'list_sessions' ? d.list : e.tool === 'send_message' ? d.send : d.open
+    const how = e.tool === 'list_sessions' ? d.list : e.tool === 'send_message' ? d.sendTo.get(String(e.args.session_id)) ?? d.send : d.open
     if (how === 'hang') return new Promise<never>(() => {})
     if (how === 'ok' && e.tool === 'send_message') {
       d.sent.push([String(e.args.session_id), String(e.args.message)])
@@ -112,8 +114,9 @@ export function desktopApp(on: On) {
 // toasts, the panes opened, the notifications, the prompts submitted, the
 // rows appended and the start_session calls. `notify` and `submit` say how a
 // notification and a prompt fare, `toastThrows` makes every toast throw, and
-// `startAnswer` is the text start_session answers, with `startFails` making
-// it answer an error and `startThrows` making it throw.
+// `startAnswer` is the text start_session answers, unless `startAnswers`
+// holds a text for this start, which each start takes in turn, with
+// `startFails` making it answer an error and `startThrows` making it throw.
 export function engine(on: On) {
   const toasts: string[] = []
   const panes: string[] = []
@@ -132,6 +135,7 @@ export function engine(on: On) {
     // Called as each prompt is submitted, so a test can see what held then.
     onSubmit: (() => undefined) as () => void,
     startAnswer: 'Started the session local_new1 (name: example).',
+    startAnswers: [] as string[],
     // Whether start_session's answer leaves out the text, giving the result alone.
     startResultOnly: false,
     startFails: false,
@@ -163,9 +167,10 @@ export function engine(on: On) {
   on('tool.call', { tool: 'mcp__ccd_session__start_session' }, ($, call) => {
     answers.started.push({ ...call })
     if (answers.startThrows) throw new Error('the desktop app fell over')
-    const result = { content: [{ type: 'text', text: answers.startAnswer }], isError: answers.startFails }
+    const text = answers.startAnswers.shift() ?? answers.startAnswer
+    const result = { content: [{ type: 'text', text }], isError: answers.startFails }
     if (answers.startResultOnly) return { result } as never
-    return { result, text: answers.startAnswer, ...(answers.startFails ? { isError: true } : {}) } as never
+    return { result, text, ...(answers.startFails ? { isError: true } : {}) } as never
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.id', () => ({ value: answers.sessionId }))

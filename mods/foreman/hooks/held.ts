@@ -72,6 +72,9 @@ export const heldLog = (key: string) => `Held ${key}, because the desktop app re
 // it for a slot and before its begin message went.
 export const beginHeldNotice = (key: string) => `${key} waits to start: foreman could not begin its waiting session, and it starts on your next message.`
 export const beginHeldLog = (key: string) => `Held ${key}, because its waiting session is archived or no longer listed and foreman could not begin it.`
+// The notification raised the first time a waiting sub session's begin
+// message does not go.
+export const beginFailedNotice = (who: string) => `foreman could not send ${who}'s waiting session its begin message, and tries again while that session stays open.`
 export const acceptedLog = (key: string) => `Stopped holding ${key}, because the desktop app accepted its start.`
 const listedLog = (key: string) => `Stopped holding ${key}, because the desktop app's list shows a session for it.`
 
