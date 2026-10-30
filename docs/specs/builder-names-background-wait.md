@@ -240,9 +240,12 @@ task, and is shown as one already.
   with status `running`, under the `id` `b4bwbq10z`. A command the person
   moves to the background part way through cannot be started by an
   unattended session, so for that path the engine's own code was read
-  instead: it registers the task under the task id of the shell's output and
-  returns that same value in the result as `backgroundTaskId`, together with
-  `backgroundedByUser: true`. The two ids are the same on both paths, so
+  instead. It was found by running `strings` on the installed Claude Code
+  executable, the file the `claude` command resolves to, and searching the
+  output for the result fields `backgroundTaskId` and `backgroundedByUser`.
+  The code there registers the task under the task id of the shell's output
+  and returns that same value in the result as `backgroundTaskId`, together
+  with `backgroundedByUser: true`. The two ids are the same on both paths, so
   builder's lookup needed no change. The check covered only the session's own
   Bash calls, which are the only calls whose start builder records.
 - The issue's own check, by hand: in a session with a watched pull request,
