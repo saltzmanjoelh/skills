@@ -296,6 +296,11 @@ function worktreeLine(run: BuilderRun | null, pr: Snapshot | null, checkout: Che
   if (checkout !== null && pr !== null && checkout.number === pr.number) {
     return `Worktree: ${printable(checkout.dir, PATH_CHARS)}, branch ${printable(checkout.branch, BRANCH_CHARS)}.`
   }
+  // A checkout given to the watch tool is named, because the session's
+  // folder then belongs to another repository from the pull request's.
+  if (run?.checkout !== undefined) {
+    return `Worktree: the session's folder is ${printable(run.cwd, PATH_CHARS)}, and the pull request's repository is checked out at ${printable(run.checkout, PATH_CHARS)}, the checkout given to the watch tool. Keep the branch the session has been working on there.`
+  }
   if (run !== null) return `Worktree: the session's folder is ${printable(run.cwd, PATH_CHARS)}. Keep the branch the session has been working on.`
   return 'Worktree: the session\'s folder is not recorded. Keep the folder and the branch the session has been working on.'
 }

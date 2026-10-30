@@ -1671,11 +1671,48 @@ test('the watch tool refuses a checkout of a different repository from the one n
   const world = fakeGitHub(on)
   const files = fakeFiles(on)
   sessionInAnotherRepository(world, files)
+  await watchFromApi($, { repo: 'o/r', checkout: '/web' })
+  const callsBefore = world.calls.length
 
-  const watched = await watchFromApi($, { repo: 'o/r', checkout: '/api' })
+  const watched = await loose($)({ tool: 'mcp__builder__watch', number: 7, repo: 'o/r', checkout: '/api' })
 
   expect(String(watched.result)).toContain('/api is a checkout of o/api, not of o/r')
-  expect(world.calls.some(c => c.startsWith('gh pr view 7'))).toBe(false)
+  expect(world.calls.slice(callsBefore).some(c => c.startsWith('gh pr view 7'))).toBe(false)
+  // The earlier watch, with its checkout, is still the one the package uses.
+  const ran = await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
+  expect(String(ran.result)).toContain(`Head: ${C}`)
+})
+
+test('watching the same pull request again by number alone, as /builder watch does, keeps the checkout given before', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  sessionInAnotherRepository(world, files)
+  await watchFromApi($, { repo: 'o/r', checkout: '/web' })
+
+  const shown = await $.command.run({ command: 'builder', args: 'watch 7' } as never)
+
+  expect(JSON.stringify(shown)).toContain('Watching this pull request.')
+  const ran = await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
+  expect(String(ran.result)).toContain(`Head: ${C}`)
+  expect(world.calls.some(c => c.includes('--repo o/api'))).toBe(false)
+})
+
+test('watching the same number in another repository does not keep the checkout given before', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  sessionInAnotherRepository(world, files)
+  await watchFromApi($, { repo: 'o/r', checkout: '/web' })
+
+  await loose($)({ tool: 'mcp__builder__watch', number: 7, repo: 'o/other' })
+  const ran = await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
+
+  expect(String(ran.result)).toContain(`${NOT_AT_HEAD} It compared /api, the session's folder, because no worktree has feature checked out.`)
 })
 
 test('when the session\'s folder is a checkout of another repository and no checkout was given, the refusal says to give the watch tool one', async ($, on) => {

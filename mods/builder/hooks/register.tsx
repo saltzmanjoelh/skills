@@ -1888,8 +1888,20 @@ async function repoOf($: $, dir: string | null): Promise<string | null> {
   return (await gh($, dir, ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner']))?.trim() || null
 }
 
-async function serveWatch($: $, input: WatchInput): Promise<string> {
-  if (!Number.isInteger(input.number) || input.number <= 0) return `${String(input.number)} is not a pull request number.`
+// A watch of the pull request already watched, with no checkout and either no
+// repository or the same one, keeps the repository and the checkout that the
+// earlier watch was given. Without this, `/builder watch <n>`, which can pass
+// only a number, would drop the checkout, and the package tool would list the
+// session's folder's worktrees again.
+function keepingCheckout(input: WatchInput, previous: BuilderRun | null): WatchInput {
+  if (input.checkout !== undefined || previous?.checkout === undefined || previous.number !== input.number) return input
+  if (input.repo !== undefined && input.repo.toLowerCase() !== previous.repo.toLowerCase()) return input
+  return { ...input, repo: previous.repo, checkout: previous.checkout }
+}
+
+async function serveWatch($: $, asked: WatchInput): Promise<string> {
+  if (!Number.isInteger(asked.number) || asked.number <= 0) return `${String(asked.number)} is not a pull request number.`
+  const input = keepingCheckout(asked, await read($, run))
   const dir = await read($, cwd)
   // A checkout is given only when the session's folder belongs to another
   // repository. It is read before anything is watched, so a wrong folder
