@@ -181,7 +181,10 @@ because foreman has already left out the slot it used for the queued
 session, so do not subtract that slot again, and do not skip this line
 because the other one came with it. The line can also come while sessions
 wait, when the desktop app's list leaves them out or one is a proposal card
-nobody has started; follow it as above.
+nobody has started; follow it as above. It can come a read or more after the
+slot freed, when the read that freed it could not read the desktop app's list
+while a session waited, because foreman keeps such a slot for the queue
+until a read can decide it; follow it as above then too.
 
 ## foreman began <who>, the next issue in the queue, in the slot <who> freed; tell the person so in one line.
 

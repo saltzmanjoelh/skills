@@ -11,9 +11,9 @@ import { prStateOf, type BuildState, type RecordVerdicts } from './record'
 import { folded, withReadings } from './spend'
 import type { ForemanActs, ForemanEffect, ForemanPairing, ForemanTickets } from '../types'
 import { busyCount, nameOf, type SubRow } from './subs'
-import { ANNOUNCED_NONE, capped, ownsTicket, queueOf, shownRows, waitingUnclaimed } from './tickets'
+import { ANNOUNCED_NONE, capped, MAX_PAIRINGS, ownsTicket, queueOf, shownRows, waitingUnclaimed } from './tickets'
 import { printable } from './text'
-import { byTicket, isWholeKey, whoOf, type Reason } from './wake'
+import { byTicket, isWholeKey, isWhoName, whoOf, type Reason } from './wake'
 
 // How long an idle stretch and a cleanup may last before foreman acts, in
 // milliseconds, from the `idleMinutes` and `cleanupMinutes` options.
@@ -437,8 +437,8 @@ const showsProgress = (row: SubRow) => row.record.issueKey !== null || row.recor
 //   archiving it, while a claimed one has its key held, with a notification
 //   only when no failed begin was told for it already;
 // - each free slot claims the first waiting sub session that the list shows
-//   unarchived, in the queue's order, naming the sub session whose slot this
-//   read freed, in order, when there is one;
+//   unarchived, in the queue's order, naming, in order, the sub session whose
+//   slot this read freed or an earlier read kept, when there is one;
 // - a claim whose begin did not go is tried again once its last try is
 //   CALL_TIMEOUT_MS old and the list shows its session unarchived.
 // A claim and a try add a begin effect and record the try's time.
@@ -522,6 +522,12 @@ function queueStep(
 // none is free once the claims are counted. Each claim counts against one
 // freed slot, whichever slot it actually takes. The number counts every free
 // slot, not only the freed ones, and leaves out each slot a claim took.
+// A read that could not read the desktop app's list cannot claim, so while a
+// sub session waits unclaimed it keeps its freed slots in `keptSlots` instead
+// of waking the parent for them. The slots kept count as freed by the next
+// read that reads the list, or by the next read on which nobody waits
+// unclaimed, ahead of that read's own, so the slot-free line can come on a
+// later read than the one that freed the slot.
 // The spending in each owner's file is taken into the ledger from the
 // pairings as the read found them, and the spent list is folded after the
 // pairings are decided, so an entry whose pairing this read forgot can fold
@@ -533,8 +539,9 @@ export function decide(input: DecideInput): Decision {
   const reasons: Reason[] = []
   const logs: string[] = []
   const due: number[] = []
-  let freed = 0
-  const freedBy: string[] = []
+  const kept = input.tickets.keptSlots
+  let freed = kept.length
+  const freedBy: string[] = [...kept]
   const byFile = new Map(rows.map(r => [r.file, r]))
   const pairings = input.tickets.pairings.flatMap(p => {
     // A waiting sub session needs no file of its own, so it is forgotten
@@ -573,7 +580,7 @@ export function decide(input: DecideInput): Decision {
     freed += s.freed
     return [s.p]
   })
-  let tickets: ForemanTickets = folded(capped({ ...withReadings(input.tickets, rows), pairings }))
+  let tickets: ForemanTickets = folded(capped({ ...withReadings(input.tickets, rows), pairings, keptSlots: [] }))
   if (!folderExists && !tickets.folderMissing) logs.push('The status folder is missing, so foreman frees no slot until it is back.')
   tickets = { ...tickets, folderMissing: !folderExists }
   if (sessions.kind === 'read' && tickets.held.length > 0) {
@@ -583,12 +590,23 @@ export function decide(input: DecideInput): Decision {
   }
   const complete = sessions.kind === 'read' && sessions.complete === true
   const known = sessions.kind === 'read' && sessions.known !== undefined ? new Set(sessions.known) : null
+  const freedNow = freedBy.slice(kept.length)
   tickets = queueStep(tickets, { rows, byFile, now, slots: input.slots, byId, complete, known, freedBy, effects, logs })
-  // Each claim took the name of a slot this read freed, so a name left over
-  // is a freed slot that no waiting sub session could take: one the list
-  // does not show surely unarchived, or a proposal card that has not started.
-  // The parent is woken for it as before, so a freed slot is never lost.
-  if (freed > 0 && freedBy.length > 0) {
+  // A read without the list claims nothing, so while a sub session waits
+  // unclaimed every freed slot is kept for it. A name the ledger's reader
+  // would drop, from a damaged ticket, is not kept, so its slot still wakes.
+  const keeps = byId === null && waitingUnclaimed(tickets, now, GONE_MS).length > 0
+  const left = keeps ? freedBy.filter(who => !isWhoName(who)) : freedBy
+  if (keeps) {
+    for (const who of freedNow.filter(isWhoName)) logs.push(`Kept the slot of ${who} for the queue, because the desktop app's list of sessions could not be read.`)
+    tickets = { ...tickets, keptSlots: freedBy.filter(isWhoName).slice(-MAX_PAIRINGS) }
+  }
+  // Each claim took the name of a slot this read freed, or of one an earlier
+  // read kept, so a name left over is a freed slot that no waiting sub
+  // session could take: one the list does not show surely unarchived, or a
+  // proposal card that has not started. The parent is woken for it as
+  // before, so a freed slot is never lost.
+  if (freed > 0 && left.length > 0) {
     const outcome = slotOutcome(freeSlots(tickets, rows, now, input.slots))
     if (outcome.kind === 'wake') reasons.push(outcome.reason)
   }

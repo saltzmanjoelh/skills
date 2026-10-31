@@ -959,6 +959,14 @@ test('a ledger left in $.state that holds only unwatched ids outweighs an older 
   expect(ledger(w).unwatched).toEqual(['local_old'])
 })
 
+test('a ledger left in $.state that holds only kept slots outweighs an older stored one', async ($, on) => {
+  const w = world(on, { store: { [ticketsKey('session-1')]: { ...TICKETS_EMPTY, offRefusedFor: 'session-1' } } })
+  leftInState(on, { tickets: { ...TICKETS_EMPTY, keptSlots: ['ABC-1'] } })
+  await start($)
+  expect((await startSession($, IMPLEMENT)).deny).toBe(OFF_REFUSAL)
+  expect(ledger(w).keptSlots).toEqual(['ABC-1'])
+})
+
 test('two /implement starts at once while off give exactly one refusal', async ($, on) => {
   const w = world(on)
   await start($)
