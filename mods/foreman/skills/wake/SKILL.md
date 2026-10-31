@@ -168,12 +168,19 @@ with the number in words.
    as "Starting a session" says. The check just before each start still runs
    for every slot.
 
-This line comes only when no session waiting in foreman's queue can take the
-freed slot. While a waiting session that foreman can begin is left, foreman
-begins it in the freed slot instead, and the line that wakes the parent says
-so, as the next section says. The line can still come while sessions wait,
-when the desktop app's list leaves them out or one is a proposal card nobody
-has started; follow it as above.
+This line comes for each freed slot that no waiting session in foreman's
+queue claimed. While a waiting session that foreman can begin is left,
+foreman begins it in a freed slot instead and says so in the line of the
+next section. So when two slots free and only one waiting session claims
+one, the same wake carries both lines: this one first, naming the one slot
+left over, and then the line saying foreman began the queued session. That
+second line comes only once the begin message went; if it failed, this line
+comes alone. Follow this line for exactly the number of slots it names,
+because foreman has already left out the slot it used for the queued
+session, so do not subtract that slot again, and do not skip this line
+because the other one came with it. The line can also come while sessions
+wait, when the desktop app's list leaves them out or one is a proposal card
+nobody has started; follow it as above.
 
 ## foreman began <who>, the next issue in the queue, in the slot <who> freed; tell the person so in one line.
 

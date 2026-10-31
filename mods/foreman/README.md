@@ -135,7 +135,7 @@ A sub session whose file leaves the folder, as builder deletes it at the end of 
 
 ## Slots, Release and Nudge
 
-The slots busy are the shown sub sessions that are not released and not done. When a slot frees and no session waiting in the queue can take it (see **The queue** below), foreman wakes the parent's model with the number of slots free, such as `one slot free; pick the next issue and start it.` A slot that frees while every slot is still busy, because the slot count went down, wakes nothing.
+The slots busy are the shown sub sessions that are not released and not done. When a read frees a slot that no session waiting in the queue claims (see **The queue** below), foreman wakes the parent's model once, with the number of slots free, such as `one slot free; pick the next issue and start it.` When two slots free and only one waiting session claims one, foreman begins that session and wakes the parent for the slot left over, so one wake carries both the slot-free sentence and the sentence saying foreman began the queued session. A slot that frees while every slot is still busy, because the slot count went down, wakes nothing.
 
 ## The queue
 

@@ -517,8 +517,11 @@ function queueStep(
 // which queueStep decides for. An active pairing's pull request
 // milestones wake the parent after its other reasons. A list
 // that was read releases each held key that a session in it shows started.
-// When a slot freed and nobody is left waiting unclaimed, the parent is woken
-// with the number of slots free, unless none is free.
+// When this read freed a slot and a freed slot is left that no claim of
+// queueStep filled, the parent is woken with the number of slots free, unless
+// none is free once the claims are counted. Each claim counts against one
+// freed slot, whichever slot it actually takes. The number counts every free
+// slot, not only the freed ones, and leaves out each slot a claim took.
 // The spending in each owner's file is taken into the ledger from the
 // pairings as the read found them, and the spent list is folded after the
 // pairings are decided, so an entry whose pairing this read forgot can fold
