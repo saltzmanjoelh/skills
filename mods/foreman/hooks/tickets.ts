@@ -246,7 +246,8 @@ function announcedIn(raw: unknown): ForemanActs['announced'] {
 // Stored acts read tolerantly. A pairing stored before foreman kept a
 // milestone memory has none, and reads with none, which is not the same as a
 // memory that has announced nothing. A stretch stored before stretches kept
-// their wait reads as an idle one, and acts stored before the unseen wake
+// their wait reads as an idle one, one stored before stretches kept
+// `turnProgress` reads as unmarked, and acts stored before the unseen wake
 // read as not having given it.
 function actsIn(raw: unknown): ForemanActs {
   const a = objectOf(raw)
@@ -258,7 +259,7 @@ function actsIn(raw: unknown): ForemanActs {
     stretch: s !== null && typeof s.progress === 'string'
       ? {
         progress: s.progress, nudges: Math.max(Math.floor(numberOr(s.nudges, 0)), 0), lastNudgeAt: numberOr(s.lastNudgeAt, null), woke: s.woke === true,
-        countFrom: numberOr(s.countFrom, null), wait: numberOr(s.wait, null),
+        countFrom: numberOr(s.countFrom, null), wait: numberOr(s.wait, null), turnProgress: s.turnProgress === true,
       }
       : null,
     notifiedFor: textOr(a.notifiedFor, null),

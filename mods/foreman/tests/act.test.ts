@@ -590,6 +590,110 @@ test('a background wait with a new since after a turn of its own with progress s
   expect(renewed.pairings[0]!.acts.stretch).toMatchObject({ wait: T0 + 12 * MINUTE, countFrom: null, nudges: 0 })
 })
 
+// The end of a turn of the sub session's own, as builder writes it, `m`
+// minutes after T0.
+const ended = (m: number, answeredNudge: boolean) => ({ lastTurn: { endedAt: T0 + m * MINUTE, answeredNudge } })
+
+// A background wait from T0 whose first turn ended as the wait began. Foreman
+// nudges it at 5 minutes and a short answer ends at 6. A long turn then runs
+// from 9 to 20 minutes, started by a nudge or not, and with progress at 9 or
+// none, and from 20 minutes the sub session waits on the same background
+// work again.
+function longTurn(answeredNudge: boolean, progress: boolean) {
+  return (now: number) => {
+    const m = (now - T0) / MINUTE
+    const stage = progress && m >= 9 ? { stage: 'verify' } : {}
+    if (m < 6) return waiting(T0, ['run the tests'], ended(0, false))
+    if (m < 9) return waiting(T0, ['run the tests'], ended(6, true))
+    if (m < 20) return [row({ state: 'working', ...ended(6, true), ...stage })]
+    return waiting(T0, ['run the tests'], { ...ended(20, answeredNudge), ...stage })
+  }
+}
+
+test('a long turn of its own with progress restarts the background count from the end of the turn', () => {
+  // The follow-up's timeline: before this change the nudges came at 5, 20 and
+  // 25 and the wake at 30.
+  expect(readEvery(paired(), longTurn(false, true), T0 + 40 * MINUTE)).toEqual([
+    { at: 5, nudges: 1, reasons: [] },
+    { at: 25, nudges: 1, reasons: [] },
+    { at: 30, nudges: 1, reasons: [] },
+    { at: 35, nudges: 0, reasons: ['background'] },
+  ])
+})
+
+test('a long turn of its own that foreman sees no progress in still restarts the count from its end', () => {
+  expect(readEvery(paired(), longTurn(false, false), T0 + 40 * MINUTE)).toEqual([
+    { at: 5, nudges: 1, reasons: [] },
+    { at: 25, nudges: 1, reasons: [] },
+    { at: 30, nudges: 1, reasons: [] },
+    { at: 35, nudges: 0, reasons: ['background'] },
+  ])
+})
+
+test('a long answer to a nudge restarts the count from its end only when foreman saw progress during it', () => {
+  expect(readEvery(paired(), longTurn(true, true), T0 + 40 * MINUTE)).toEqual([
+    { at: 5, nudges: 1, reasons: [] },
+    { at: 25, nudges: 1, reasons: [] },
+    { at: 30, nudges: 1, reasons: [] },
+    { at: 35, nudges: 0, reasons: ['background'] },
+  ])
+  // Without progress, the answer is counted through: the second nudge is
+  // overdue when it ends, and the wake comes one threshold later.
+  expect(readEvery(paired(), longTurn(true, false), T0 + 40 * MINUTE)).toEqual([
+    { at: 5, nudges: 1, reasons: [] },
+    { at: 20, nudges: 1, reasons: [] },
+    { at: 25, nudges: 0, reasons: ['background'] },
+  ])
+})
+
+test('a sub session that only answers nudges with short turns still reaches the parent when builder writes its turns', () => {
+  const rowAt = (now: number) => {
+    const m = (now - T0) / MINUTE
+    return waiting(T0, ['run the tests'], m < 6 ? ended(0, false) : m < 11 ? ended(6, true) : ended(11, true))
+  }
+  expect(readEvery(paired(), rowAt, T0 + 30 * MINUTE)).toEqual([
+    { at: 5, nudges: 1, reasons: [] },
+    { at: 10, nudges: 1, reasons: [] },
+    { at: 15, nudges: 0, reasons: ['background'] },
+  ])
+})
+
+test('a turn end restarts a background stretch once, never moves it back, and is ignored when it lies in the future', () => {
+  const nudged = read(paired(), waiting(T0, ['run the tests'], ended(0, false)), T0 + 5 * MINUTE).tickets
+  expect(nudged.pairings[0]!.acts.stretch).toMatchObject({ nudges: 1, countFrom: null })
+  const restarted = read(nudged, waiting(T0, ['run the tests'], ended(7, false)), T0 + 8 * MINUTE).tickets
+  expect(restarted.pairings[0]!.acts.stretch).toMatchObject({ nudges: 0, lastNudgeAt: null, countFrom: T0 + 7 * MINUTE, woke: false, wait: T0, turnProgress: false })
+  // The same end read again, and an earlier one, change nothing.
+  const again = read(restarted, waiting(T0, ['run the tests'], ended(7, false)), T0 + 9 * MINUTE).tickets
+  expect(again.pairings[0]!.acts.stretch).toEqual(restarted.pairings[0]!.acts.stretch)
+  const earlier = read(restarted, waiting(T0, ['run the tests'], ended(6, false)), T0 + 9 * MINUTE).tickets
+  expect(earlier.pairings[0]!.acts.stretch).toEqual(restarted.pairings[0]!.acts.stretch)
+  // An end after the read, as a damaged file could hold, restarts nothing, so
+  // it cannot put the nudges off.
+  expect(readEvery(paired(), () => waiting(T0, ['run the tests'], ended(60, false)), T0 + 30 * MINUTE)).toEqual([
+    { at: 5, nudges: 1, reasons: [] },
+    { at: 10, nudges: 1, reasons: [] },
+    { at: 15, nudges: 0, reasons: ['background'] },
+  ])
+})
+
+test('progress in a turn of its own marks the stretch, and a damaged turn end reads as none', () => {
+  const nudged = read(paired(), waiting(T0), T0 + 5 * MINUTE).tickets
+  const turned = read(nudged, [row({ state: 'working', stage: 'verify' })], T0 + 9 * MINUTE).tickets
+  expect(turned.pairings[0]!.acts.stretch).toMatchObject({ countFrom: T0 + 9 * MINUTE, turnProgress: true })
+  expect(row({ lastTurn: { endedAt: 'then', answeredNudge: false } }).record.lastTurn).toBeUndefined()
+  expect(row({ lastTurn: { endedAt: T0, answeredNudge: 'no' } }).record.lastTurn).toBeUndefined()
+  expect(row(ended(3, true)).record.lastTurn).toEqual({ endedAt: T0 + 3 * MINUTE, answeredNudge: true })
+})
+
+test('a turn end on an idle record changes nothing', () => {
+  expect(readEvery(paired(), () => [row(ended(7, false))], T0 + 30 * MINUTE)).toEqual([
+    { at: 5, nudges: 1, reasons: [] },
+    { at: 10, nudges: 1, reasons: [] },
+    { at: 15, nudges: 0, reasons: ['idle'] },
+  ])
+})
+
 test('progress in a working turn still ends an idle stretch, and the next idle episode counts from its own start', () => {
   const rowAt = (now: number) => {
     const m = (now - T0) / MINUTE
