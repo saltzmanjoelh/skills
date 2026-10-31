@@ -11036,7 +11036,8 @@ test('a refused write does not move the background-only wait\'s start', async ($
 test('a turn of the session\'s own writes when it ended and that no nudge started it, and a turn a foreman nudge started, in either shape, writes that one did', async ($, on) => {
   const s = foremanSession(on)
   await firstPrompt($, s.clock)
-  expect(s.statusAt() !== undefined && 'lastTurn' in s.statusAt()!).toBe(false)
+  expect(s.statusAt()).toBeDefined()
+  expect('lastTurn' in s.statusAt()!).toBe(false)
 
   await s.clock.advance(MINUTE)
   await $.turn.start({ text: 'Carry on with the review findings.', turnId: 't1' } as never)
