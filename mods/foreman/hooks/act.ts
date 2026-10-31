@@ -5,6 +5,7 @@
 // answers the next ledger together with those effects, and
 // hooks/register.tsx carries them out. Every function is pure.
 
+import type { LastTurn } from 'builder'
 import type { Listed } from './desktop'
 import { beginHeldLog, beginHeldNotice, releasedBy } from './held'
 import { prStateOf, type BuildState, type RecordVerdicts } from './record'
@@ -203,6 +204,22 @@ const setActs = (s: Step, change: Partial<ForemanActs>) => {
   s.p = { ...s.p, acts: { ...s.p.acts, ...change } }
 }
 
+// Whether the end of the sub session's last turn restarts a background
+// stretch of the wait that began at `wait`, read at `now`.
+function turnEndRestarts(stretch: NonNullable<ForemanActs['stretch']>, wait: number, turn: LastTurn, now: number): boolean {
+  // A stretch never moves back, so an end at or before its current start,
+  // the read that last restarted it or else the wait's start, changes
+  // nothing, and the same end restarts it only once.
+  if (turn.endedAt <= (stretch.countFrom ?? wait)) return false
+  // An end after this read, as a damaged file could hold, would put the
+  // nudges off for ever.
+  if (turn.endedAt > now) return false
+  // A turn of the sub session's own restarts the stretch, and so does an
+  // answer to a nudge during which foreman saw progress in a turn. An answer
+  // to a nudge that made no progress is counted through.
+  return !turn.answeredNudge || stretch.turnProgress
+}
+
 // Idle, and a working record that waits only on background work: a nudge
 // once the wait has lasted the threshold since `since`, a second one
 // threshold after the first, and the wake one threshold after that, counted
@@ -241,9 +258,7 @@ function idleRule(s: Step, since: number, background: { task: string | null } | 
   if (stretch === null || stretch.wait !== wait) stretch = freshStretch(progress, wait, null)
   else if (stretch.progress !== progress) stretch = freshStretch(progress, wait, wait === null ? null : s.now)
   const turn = s.row.record.lastTurn
-  if (wait !== null && turn !== undefined && turn.endedAt > (stretch.countFrom ?? wait) && turn.endedAt <= s.now && (!turn.answeredNudge || stretch.turnProgress)) {
-    stretch = freshStretch(progress, wait, turn.endedAt)
-  }
+  if (wait !== null && turn !== undefined && turnEndRestarts(stretch, wait, turn, s.now)) stretch = freshStretch(progress, wait, turn.endedAt)
   setActs(s, { stretch })
   if (stretch.woke) return
   const from = Math.max(since, s.p.pairedAt, stretch.countFrom ?? since, stretch.lastNudgeAt ?? since)

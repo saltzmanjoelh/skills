@@ -9,6 +9,7 @@ import { RELOAD_LINE, REREAD_CLOSING } from '../hooks/prompts'
 import { INSTRUCTION_PATHSPECS } from '../hooks/review'
 import { FOREMAN_NUDGE_TEXTS } from '../hooks/status'
 import type { BuildStatus, Compactions } from '../types'
+import { CROSS_SESSION_SHAPES } from './cross-session-fixture'
 
 const A = 'a'.repeat(40)
 const C = 'c'.repeat(40)
@@ -11032,12 +11033,7 @@ test('a refused write does not move the background-only wait\'s start', async ($
   expect(s.statusAt()?.writtenAt).toBeGreaterThan(S0 + MINUTE / 2)
 })
 
-// A foreman nudge in the shape in which the desktop app delivers a message
-// from another session, as a measured transcript shows.
-const nudgePrompt = (text: string) =>
-  `<system-reminder>\nA message from another session follows.\n</system-reminder>\n<cross-session-message from="local_x" name="n">\n${text}\n</cross-session-message>`
-
-test('a turn of the session\'s own writes when it ended and that no nudge started it, and a turn a foreman nudge started writes that one did', async ($, on) => {
+test('a turn of the session\'s own writes when it ended and that no nudge started it, and a turn a foreman nudge started, in either shape, writes that one did', async ($, on) => {
   const s = foremanSession(on)
   await firstPrompt($, s.clock)
   expect(s.statusAt() !== undefined && 'lastTurn' in s.statusAt()!).toBe(false)
@@ -11050,14 +11046,17 @@ test('a turn of the session\'s own writes when it ended and that no nudge starte
   await s.clock.settle()
   expect(s.statusAt()?.lastTurn).toEqual({ endedAt: firstEnd, answeredNudge: false })
 
-  for (const text of FOREMAN_NUDGE_TEXTS) {
-    await s.clock.advance(MINUTE)
-    await $.turn.start({ text: nudgePrompt(text), turnId: `nudge ${text}` } as never)
-    await s.clock.advance(MINUTE / 2)
-    const nudgeEnd = await s.clock.now()
-    await turnEnds($, `nudge ${text}`)
-    await s.clock.settle()
-    expect(s.statusAt()?.lastTurn).toEqual({ endedAt: nudgeEnd, answeredNudge: true })
+  for (const shape of CROSS_SESSION_SHAPES) {
+    for (const text of FOREMAN_NUDGE_TEXTS) {
+      const turnId = `nudge ${shape.name} ${text}`
+      await s.clock.advance(MINUTE)
+      await $.turn.start({ text: shape(text), turnId } as never)
+      await s.clock.advance(MINUTE / 2)
+      const nudgeEnd = await s.clock.now()
+      await turnEnds($, turnId)
+      await s.clock.settle()
+      expect(s.statusAt()?.lastTurn).toEqual({ endedAt: nudgeEnd, answeredNudge: true })
+    }
   }
 
   // A plain turn after a nudge is not counted as one.
@@ -11079,12 +11078,17 @@ test('a turn that an error ended, and one that was aborted, write their end too'
   await s.clock.settle()
   expect(s.statusAt()?.lastTurn).toEqual({ endedAt: errorEnd, answeredNudge: false })
 
-  await s.clock.advance(MINUTE)
-  await $.turn.start({ text: nudgePrompt(FOREMAN_NUDGE_TEXTS[1]!), turnId: 't2' } as never)
-  const abortedEnd = await s.clock.now()
-  await $.turn.complete({ answer: '', durationMs: 1, isAborted: true, turnId: 't2', reason: 'aborted' } as never)
-  await s.clock.settle()
-  expect(s.statusAt()?.lastTurn).toEqual({ endedAt: abortedEnd, answeredNudge: true })
+  for (const shape of CROSS_SESSION_SHAPES) {
+    for (const text of FOREMAN_NUDGE_TEXTS) {
+      const turnId = `aborted ${shape.name} ${text}`
+      await s.clock.advance(MINUTE)
+      await $.turn.start({ text: shape(text), turnId } as never)
+      const abortedEnd = await s.clock.now()
+      await $.turn.complete({ answer: '', durationMs: 1, isAborted: true, turnId, reason: 'aborted' } as never)
+      await s.clock.settle()
+      expect(s.statusAt()?.lastTurn).toEqual({ endedAt: abortedEnd, answeredNudge: true })
+    }
+  }
 })
 
 test('a subagent\'s turn end writes no last turn and leaves the session\'s own as it was', async ($, on) => {
@@ -11141,6 +11145,34 @@ test('the first record that shows the background-only wait after a turn ends alr
   expect(firstWaiting?.backgroundOnly?.since).toBe(firstEnd)
   expect(firstWaiting?.lastTurn).toEqual({ endedAt: secondEnd, answeredNudge: false })
   expect(records.every(record => record.backgroundOnly === undefined || record.lastTurn?.endedAt === secondEnd)).toBe(true)
+})
+
+test('a newer turn of the session\'s own that starts while a turn\'s end is being recorded keeps the session working', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  await $.turn.start({ text: 'Fix the review findings.', turnId: 't1' } as never)
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('working')
+
+  // The turn's end records itself in the memo, which first reads the
+  // session's id, and that read is held. The turn is aborted, so nothing else
+  // at its end reads the id first. A newer turn starts while the read is
+  // held, so when the end goes on after it, a newer turn is running, and the
+  // end must leave busy and turnRunning set for that turn.
+  let release = () => {}
+  s.ids.hold = new Promise<void>(resolve => {
+    release = resolve
+  })
+  const ending = $.turn.complete({ answer: '', durationMs: 1, isAborted: true, turnId: 't1', reason: 'aborted' } as never)
+  await s.clock.settle()
+  await $.turn.start({ text: 'Carry on with the next finding.', turnId: 't2' } as never)
+  await s.clock.settle()
+  release()
+  await ending
+  await s.clock.advance(MINUTE)
+
+  expect(s.statusAt()?.state).toBe('working')
+  expect(s.statusAt()?.writtenAt).toBe(S0 + MINUTE)
 })
 
 test('a Bash call that went to the background is written as the oldest task, from when the call started, with the moment it counts as hung, and never by its command', async ($, on) => {

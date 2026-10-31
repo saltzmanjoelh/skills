@@ -9,6 +9,7 @@ import {
 } from '../hooks/status'
 import { afterCost, afterStep, emptyUsage } from '../hooks/usage'
 import type { AgentCard, BackgroundTask, StatusMemo } from '../types'
+import { CROSS_SESSION_SHAPES } from './cross-session-fixture'
 
 const NOW = 1_000_000
 const HEAD = 'a'.repeat(40)
@@ -63,17 +64,13 @@ test('the first prompt is the first user message with text, and the prompt being
   expect(firstPromptOf([null, 3, { role: 'user', text: '   ' }], 'the submitted prompt')).toBe('the submitted prompt')
 })
 
-// A prompt in the shape in which the desktop app delivers a message from
-// another session, as a measured transcript shows: a system reminder, then the
-// cross-session element, with the message's text on its own line.
-const crossSession = (text: string) =>
-  `<system-reminder>\nA message from another session follows.\n</system-reminder>\n<cross-session-message from="local_x" name="n">\n${text}\n</cross-session-message>`
-
-test('each foreman nudge, in the shape the desktop app delivers it, starts a nudge turn, and so does one whose apostrophe is escaped', () => {
+test('each foreman nudge, in either shape the desktop app delivers it, starts a nudge turn, and so does one whose apostrophe is escaped', () => {
   expect(FOREMAN_NUDGE_TEXTS.length).toBe(2)
-  for (const text of FOREMAN_NUDGE_TEXTS) {
-    expect(isForemanNudge(crossSession(text))).toBe(true)
-    expect(isForemanNudge(crossSession(text.replaceAll('\'', '&#39;')))).toBe(true)
+  for (const shape of CROSS_SESSION_SHAPES) {
+    for (const text of FOREMAN_NUDGE_TEXTS) {
+      expect(isForemanNudge(shape(text))).toBe(true)
+      expect(isForemanNudge(shape(text.replaceAll('\'', '&#39;')))).toBe(true)
+    }
   }
   // At least one of the texts holds the apostrophe that the escaped case
   // replaces, so the escaped prompts above differ from the plain ones.
@@ -81,12 +78,14 @@ test('each foreman nudge, in the shape the desktop app delivers it, starts a nud
 })
 
 test('a plain prompt equal to a nudge, a cross-session message with other text, and a nudge outside the element are not nudges', () => {
-  for (const text of FOREMAN_NUDGE_TEXTS) {
-    expect(isForemanNudge(text)).toBe(false)
-    expect(isForemanNudge(crossSession(`${text} Then rebase the branch.`))).toBe(false)
-    expect(isForemanNudge(`${crossSession('Please rebase the branch.')}\n${text}`)).toBe(false)
+  for (const shape of CROSS_SESSION_SHAPES) {
+    for (const text of FOREMAN_NUDGE_TEXTS) {
+      expect(isForemanNudge(text)).toBe(false)
+      expect(isForemanNudge(shape(`${text} Then rebase the branch.`))).toBe(false)
+      expect(isForemanNudge(`${shape('Please rebase the branch.')}\n${text}`)).toBe(false)
+    }
+    expect(isForemanNudge(shape('Please rebase the branch.'))).toBe(false)
   }
-  expect(isForemanNudge(crossSession('Please rebase the branch.'))).toBe(false)
   expect(isForemanNudge('')).toBe(false)
 })
 
