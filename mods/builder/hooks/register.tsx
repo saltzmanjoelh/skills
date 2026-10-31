@@ -17,7 +17,7 @@ import { ADVERSARIAL_REVIEWER, afterReport, endedOf, FOCUSED_REVIEWERS, focusedR
 import { changePrompt, ciEventContext, resumePrompt, stateLines, stuckPrompt } from './prompts'
 import { changedKinds, commitRecordsOf, decidedItems, factIn, INSTRUCTION_PATHSPECS, instructionFileIsLink, isFullSha, isUpForCheck, LATER_CONTEXT_LINES, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pluginRootsOf, reviewedHeadOf, secretIn, specDirOf, trendOf, trendStopLine, underRoot, verdictHeadOf, verdictsLine, type CommitRecord, type EarlierRound, type FileKind, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
-import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, newMemo, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
+import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isForemanNudge, newMemo, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
 import { timeOfDay } from './text'
 import { afterCost, afterStep, emptyUsage, usageIn } from './usage'
 
@@ -3529,8 +3529,8 @@ async function statusFacts($: $): Promise<StatusFacts | null> {
 // Applies an event's change to the memo and asks for a write. It does nothing
 // in a session that has no ticket, or none known yet. The changes return the
 // memo they were given when they change nothing, as after most calls and at
-// every turn's start and end; then the memo is left as it is and no write is
-// asked for. The memo is read first, because `update` writes even when its
+// most turns' starts; then the memo is left as it is and no write is asked
+// for. The memo is read first, because `update` writes even when its
 // change hands back the value it was given.
 async function changeMemo($: $, change: (memo: StatusMemo) => StatusMemo) {
   if (ticketKnown !== 'some') return
@@ -3984,8 +3984,11 @@ export const register: Register = on => {
     rateLimitSeen = false
     pendingErrorTurn = null
     // A new turn means the last one ended, so the session's own permission
-    // prompts are closed for the status file.
-    void changeMemo($, memo => afterLoopEnd(memo, '')).catch(() => undefined)
+    // prompts are closed for the status file. The memo also keeps whether a
+    // foreman nudge started this turn, which its end records. The change is
+    // not awaited, so busy is set as soon as before; the end's own change to
+    // the memo is queued after this one.
+    void changeMemo($, memo => afterTurnStart(afterLoopEnd(memo, ''), isForemanNudge(e.text))).catch(() => undefined)
     await update($, busy, () => true)
     refreshLater($)
     return next(e)
@@ -4141,15 +4144,26 @@ export const register: Register = on => {
         compacted = ownTurnsStarted === turnsStarted && await compactWhenDue($, measure, turnsStarted, countBefore)
       }
       if (ownTurnsStarted === turnsStarted) {
-        // Busy and turnRunning are cleared before the check of isHeld, the
-        // held handover, below. A handover that records a held change reads
-        // busy again afterwards, and deliver's last check before its submit
-        // reads turnRunning; both rely on this order: either that check sees
-        // the held change, or the handover sees the turn ended.
-        turnRunning = false
-        // The turn's end closes the session's own permission prompts.
-        void changeMemo($, memo => afterLoopEnd(memo, '')).catch(() => undefined)
-        await update($, busy, () => false)
+        // The turn's end closes the session's own permission prompts, and it
+        // becomes the last turn the status file reports, with whether a nudge
+        // started it. That change is stored before busy goes false, because
+        // busy going false asks for the first record that shows the
+        // background-only wait again, and that record must already carry the
+        // new last turn. Otherwise a foreman read at that moment would count
+        // the wait from before this turn and nudge at once. A newer turn that
+        // started during the await keeps its own flags, so the check is made
+        // again after it.
+        const at = await $.clock.now()
+        await changeMemo($, memo => afterTurnEnd(afterLoopEnd(memo, ''), at)).catch(() => undefined)
+        if (ownTurnsStarted === turnsStarted) {
+          // Busy and turnRunning are cleared back to back, before the check of
+          // isHeld, the held handover, below. A handover that records a held
+          // change reads busy again afterwards, and deliver's last check before
+          // its submit reads turnRunning; both rely on this order: either that
+          // check sees the held change, or the handover sees the turn ended.
+          turnRunning = false
+          await update($, busy, () => false)
+        }
       }
       refreshLater($)
       void ensureArmed($)

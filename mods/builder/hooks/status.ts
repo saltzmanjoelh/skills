@@ -10,7 +10,7 @@
 
 import type { SessionMessage } from 'claude-code'
 
-import type { AgentCard, BackgroundTask, BuilderRun, BuildState, BuildStatus, ForegroundCall, NextLook, OpenPrompt, Progress, Question, StatusMemo, UsageHold, UsageLedger, Verdicts } from '../types'
+import type { AgentCard, BackgroundTask, BuilderRun, BuildState, BuildStatus, ForegroundCall, ForemanNudgeText, LastTurn, NextLook, OpenPrompt, Progress, Question, StatusMemo, UsageHold, UsageLedger, Verdicts } from '../types'
 import { ciOf, type Snapshot } from './github'
 import { barOf } from './progress'
 import { secretIn } from './review'
@@ -40,6 +40,42 @@ export function ticketIn(text: string): string | null {
   const match = TICKET_LINE.exec(typeof text === 'string' ? text : '')
   const value = match?.[1]?.trim() ?? ''
   return value === '' ? null : value
+}
+
+// The nudges foreman sends a sub session, word for word. The type check
+// requires the object to name every text of ForemanNudgeText and nothing
+// else, so a nudge reworded in the state contract cannot be missed here.
+const NUDGES: Record<ForemanNudgeText, true> = {
+  'what\'s next?': true,
+  'could you check that your background work is still making progress, and stop it if it hangs?': true,
+}
+
+// The nudge texts as a list, which the tests build their prompts from.
+export const FOREMAN_NUDGE_TEXTS = Object.keys(NUDGES) as readonly ForemanNudgeText[]
+
+// A message from another session as the desktop app delivers it in a prompt:
+// the cross-session element, which may carry attributes, and its body, which
+// may run across lines.
+const CROSS_SESSION = /<cross-session-message(?:\s[^>]*)?>([\s\S]*?)<\/cross-session-message>/g
+
+// The few entities a body is decoded from before it is compared. The idle
+// nudge holds an apostrophe, and if the desktop app ever escaped it, no nudge
+// would be recognised. They are decoded in one pass, so an escaped entity
+// stays escaped once.
+const ENTITIES: Record<string, string> = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': '\'', '&apos;': '\'' }
+const ENTITY = /&(?:amp|lt|gt|quot|#39|apos);/g
+
+// Whether a prompt's text is a foreman nudge: some cross-session element in
+// it holds a body that, once decoded and with the white space around it
+// removed, is exactly one of the nudge texts. Text outside the elements is
+// not read, so a nudge text typed as a plain prompt is not a nudge.
+export function isForemanNudge(text: string): boolean {
+  if (typeof text !== 'string') return false
+  for (const match of text.matchAll(CROSS_SESSION)) {
+    const body = (match[1] ?? '').replace(ENTITY, entity => ENTITIES[entity] ?? entity).trim()
+    if ((FOREMAN_NUDGE_TEXTS as readonly string[]).includes(body)) return true
+  }
+  return false
 }
 
 // The text of the session's first prompt: the first user message of the
@@ -435,6 +471,8 @@ function verdictsAtHead(s: Snapshot): Verdicts | null {
 // built in one fixed order, so two records that hold the same values print
 // the same text. The background-only wait is the one the memo holds, which
 // the writer works out with backgroundWaitOf and stores before it calls this.
+// The session's own last turn is written, whatever the state, once one has
+// ended.
 // The oldest background task is named whenever one is in flight, whatever
 // the state, by its description as shownOrWithheld shows it, never by its
 // command, with its start and the moment it counts as probably hung. Those
@@ -462,6 +500,7 @@ export function recordOf(f: StatusFacts, writtenAt: number): BuildStatus {
   }
   const wait = f.memo.backgroundWait
   if (state === 'working' && isBackgroundOnly(f) && wait !== null) record.backgroundOnly = { since: wait.since, tasks: taskDescriptionsOf(f, wait.keys) }
+  if (f.memo.lastTurn !== null) record.lastTurn = { endedAt: f.memo.lastTurn.endedAt, answeredNudge: f.memo.lastTurn.answeredNudge }
   const oldest = oldestTaskOf(f.background, f.backgroundStarts, writtenAt)
   if (oldest !== null) {
     record.oldestBackground = { description: shownOrWithheld(oldest.task.description, TASK_CHARS), startedAt: oldest.startedAt, hungAt: hungAtOf(oldest.startedAt) }
@@ -519,11 +558,28 @@ function backgroundWaitIn(raw: unknown): StatusMemo['backgroundWait'] {
   return keys.every(key => typeof key === 'string' && key !== '') ? { since: w.since, keys: [...keys] as string[] } : null
 }
 
+// The memo's flag for a turn a nudge started. Only true reads as true, so a
+// memo an older build saved without it, or with another value, reads as
+// false and is kept.
+function nudgeTurnIn(raw: unknown): boolean {
+  return raw === true
+}
+
+// The memo's last turn, or null when the stored value is missing or not what
+// the mod writes: a finite end and a flag that is true or false. As with the
+// background-only wait, a value that cannot be read does not reject the memo.
+function lastTurnIn(raw: unknown): LastTurn | null {
+  const t = raw as { endedAt?: unknown; answeredNudge?: unknown } | null | undefined
+  if (typeof t !== 'object' || t === null || !isFiniteTime(t.endedAt) || typeof t.answeredNudge !== 'boolean') return null
+  return { endedAt: t.endedAt, answeredNudge: t.answeredNudge }
+}
+
 // A stored memo, or null when it belongs to another session than
 // `sessionId`, as after a /clear whose end was cut off, or when any field is
 // not what the mod writes, so a value an older build saved reads as none.
-// The background-only wait is the one exception: backgroundWaitIn reads a
-// value it cannot read as no wait and keeps the memo.
+// Three fields are the exceptions: the background-only wait, the flag for a
+// turn a nudge started and the last turn. Their readers read a value they
+// cannot read as none, or as false for the flag, and the memo is kept.
 export function statusMemoIn(raw: unknown, sessionId: string): StatusMemo | null {
   if (typeof raw !== 'object' || raw === null) return null
   const m = raw as Record<string, unknown>
@@ -550,6 +606,8 @@ export function statusMemoIn(raw: unknown, sessionId: string): StatusMemo | null
     prompts,
     cleanup,
     backgroundWait: backgroundWaitIn(m.backgroundWait),
+    nudgeTurn: nudgeTurnIn(m.nudgeTurn),
+    lastTurn: lastTurnIn(m.lastTurn),
     generation: m.generation,
   }
 }
@@ -579,6 +637,8 @@ export function newMemo(found: Pick<StatusMemo, 'sessionId' | 'ticket' | 'path' 
     prompts: [],
     cleanup: null,
     backgroundWait: null,
+    nudgeTurn: false,
+    lastTurn: null,
     generation: found.generation,
   }
 }
@@ -607,6 +667,19 @@ export function afterCallReturn(memo: StatusMemo, loop: string, tool: string): S
 export function afterLoopEnd(memo: StatusMemo, loop: string): StatusMemo {
   if (!memo.prompts.some(p => p.loop === loop)) return memo
   return { ...memo, prompts: memo.prompts.filter(p => p.loop !== loop) }
+}
+
+// A turn of the session's own began, and `nudged` says whether a foreman
+// nudge started it. The flag is kept in the memo, so a hot reload during the
+// turn still knows it at the turn's end.
+export function afterTurnStart(memo: StatusMemo, nudged: boolean): StatusMemo {
+  return memo.nudgeTurn === nudged ? memo : { ...memo, nudgeTurn: nudged }
+}
+
+// A turn of the session's own ended at `at`, whatever ended it. It becomes the
+// last turn, with whether a nudge started it.
+export function afterTurnEnd(memo: StatusMemo, at: number): StatusMemo {
+  return { ...memo, lastTurn: { endedAt: at, answeredNudge: memo.nudgeTurn } }
 }
 
 // The cleanup skill started. A record that already began is kept, so a second
