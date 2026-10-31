@@ -3977,7 +3977,8 @@ export const register: Register = on => {
     return { text: await openPane($, 'command') }
   })
 
-  // Only the session's own turn raises turn.start; a subagent's run does not.
+  // The session's own turn raises turn.start, and so can a subagent's run,
+  // which carries its agentId.
   on('turn.start', async ($, e, next) => {
     ownTurnsStarted += 1
     turnRunning = true
@@ -3985,10 +3986,15 @@ export const register: Register = on => {
     pendingErrorTurn = null
     // A new turn means the last one ended, so the session's own permission
     // prompts are closed for the status file. The memo also keeps whether a
-    // foreman nudge started this turn, which its end records. The change is
-    // not awaited, so busy is set as soon as before; the end's own change to
-    // the memo is queued after this one.
-    void changeMemo($, memo => afterTurnStart(afterLoopEnd(memo, ''), isForemanNudge(e.text))).catch(() => undefined)
+    // foreman nudge started this turn, which its end records. A subagent's
+    // start, which carries its agentId, leaves that alone, because its prompt
+    // is never a nudge and the session's own turn is still running. The
+    // change is not awaited, so busy is set as soon as before; the end's own
+    // change to the memo is queued after this one.
+    void changeMemo($, memo => {
+      const closed = afterLoopEnd(memo, '')
+      return e.agentId === undefined ? afterTurnStart(closed, isForemanNudge(e.text)) : closed
+    }).catch(() => undefined)
     await update($, busy, () => true)
     refreshLater($)
     return next(e)

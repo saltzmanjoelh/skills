@@ -11110,6 +11110,24 @@ test('a subagent\'s turn end writes no last turn and leaves the session\'s own a
   expect(s.statusAt()?.lastTurn).toEqual({ endedAt: ownEnd, answeredNudge: false })
 })
 
+test('a subagent that starts during an answer to a nudge leaves the answer recorded as one', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  for (const shape of CROSS_SESSION_SHAPES) {
+    for (const text of FOREMAN_NUDGE_TEXTS) {
+      const turnId = `spawning ${shape.name} ${text}`
+      await s.clock.advance(MINUTE)
+      await $.turn.start({ text: shape(text), turnId } as never)
+      await $.turn.start({ text: 'look at the log', turnId: `agent ${turnId}`, agentId: 'agent-1' } as never)
+      await s.clock.settle()
+      const nudgeEnd = await s.clock.now()
+      await turnEnds($, turnId)
+      await s.clock.settle()
+      expect(s.statusAt()?.lastTurn).toEqual({ endedAt: nudgeEnd, answeredNudge: true })
+    }
+  }
+})
+
 test('the first record that shows the background-only wait after a turn ends already carries that turn\'s end', async ($, on) => {
   const s = foremanSession(on)
   await firstPrompt($, s.clock)
