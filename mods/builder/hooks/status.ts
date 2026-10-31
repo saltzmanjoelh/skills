@@ -61,9 +61,11 @@ const CROSS_SESSION = /<cross-session-message(?:\s[^>]*)?>([\s\S]*?)<\/cross-ses
 // The few entities a body is decoded from before it is compared. The idle
 // nudge holds an apostrophe, and if the desktop app ever escaped it, no nudge
 // would be recognised. They are decoded in one pass, so an escaped entity
-// stays escaped once.
+// stays escaped once. The pattern is built from the table, so an entity
+// added to the table is decoded too; none of them holds a character that a
+// pattern treats specially.
 const ENTITIES: Record<string, string> = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': '\'', '&apos;': '\'' }
-const ENTITY = /&(?:amp|lt|gt|quot|#39|apos);/g
+const ENTITY = new RegExp(Object.keys(ENTITIES).join('|'), 'g')
 
 // Whether a prompt's text is a foreman nudge: some cross-session element in
 // it holds a body that, once decoded and with the white space around it

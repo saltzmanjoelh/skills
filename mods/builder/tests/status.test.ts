@@ -70,6 +70,9 @@ test('each foreman nudge, in either shape the desktop app delivers it, starts a 
     for (const text of FOREMAN_NUDGE_TEXTS) {
       expect(isForemanNudge(shape(text))).toBe(true)
       expect(isForemanNudge(shape(text.replaceAll('\'', '&#39;')))).toBe(true)
+      expect(isForemanNudge(shape(text.replaceAll('\'', '&apos;')))).toBe(true)
+      // An apostrophe escaped twice is decoded once, so it is not a nudge.
+      if (text.includes('\'')) expect(isForemanNudge(shape(text.replaceAll('\'', '&amp;#39;')))).toBe(false)
     }
   }
   // At least one of the texts holds the apostrophe that the escaped case
