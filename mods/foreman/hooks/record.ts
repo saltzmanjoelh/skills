@@ -7,7 +7,7 @@
 // loosened. SubRecord is derived from BuildStatus, so a field builder adds or
 // renames reaches foreman's type check.
 
-import type { BuildStage, BuildState, BuildStatus, BuildUsage, TokenCounts } from 'builder'
+import type { BuildStage, BuildState, BuildStatus, BuildUsage, LastTurn, TokenCounts } from 'builder'
 
 import type { ForemanCounts } from '../types'
 import { isStage, STAGES } from './stages'
@@ -182,6 +182,18 @@ export function oldestBackgroundIn(raw: unknown): RecordOldestBackground | undef
   return { description: textOr(o.description, ''), startedAt, hungAt: timeOr(o.hungAt) }
 }
 
+// The end of the sub session's last turn of its own, or undefined when the
+// value is missing, is not an object, is a list, has an end that is not a
+// finite number, or a nudge flag that is not a boolean, so a damaged one
+// counts as today's record without it.
+export function lastTurnIn(raw: unknown): LastTurn | undefined {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
+  const l = raw as Record<string, unknown>
+  const endedAt = timeOr(l.endedAt)
+  if (endedAt === null || typeof l.answeredNudge !== 'boolean') return undefined
+  return { endedAt, answeredNudge: l.answeredNudge }
+}
+
 // The spending a record carries, as foreman reads it: the tokens of each
 // model in the four kinds, and the dollar total, or null when the sub session
 // has no dollar reading yet. Foreman declares the shape itself, with its own
@@ -254,6 +266,7 @@ export function recordIn(text: string): SubRecord | null {
   const cleanup = cleanupIn(r.cleanup)
   const backgroundOnly = backgroundOnlyIn(r.backgroundOnly)
   const oldestBackground = oldestBackgroundIn(r.oldestBackground)
+  const lastTurn = lastTurnIn(r.lastTurn)
   const usage = usageIn(r.usage)
   return {
     sessionId: r.sessionId,
@@ -272,6 +285,7 @@ export function recordIn(text: string): SubRecord | null {
     ...(cleanup === undefined ? {} : { cleanup }),
     ...(backgroundOnly === undefined ? {} : { backgroundOnly }),
     ...(oldestBackground === undefined ? {} : { oldestBackground }),
+    ...(lastTurn === undefined ? {} : { lastTurn }),
     ...(usage === undefined ? {} : { usage }),
   }
 }

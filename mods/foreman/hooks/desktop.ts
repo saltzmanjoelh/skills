@@ -2,6 +2,7 @@
 // tools. Every call goes through a DesktopCall, which register.tsx makes from
 // $.mcp.call, so the tests can answer the calls without the engine.
 
+import type { ForemanNudgeText } from 'builder'
 import type { McpToolResult } from 'claude-code'
 
 import type { SubRecord } from './record'
@@ -15,11 +16,14 @@ export const SESSIONS_SERVER = 'ccd_session_mgmt'
 export const LIST_TOOL = 'list_sessions'
 export const SEND_TOOL = 'send_message'
 
-// The nudge foreman sends an idle sub session.
-export const NUDGE_TEXT = 'what\'s next?'
+// The nudge foreman sends an idle sub session. Both nudges are typed with
+// ForemanNudgeText from builder's state contract, which builder's recogniser
+// of a turn that answers a nudge is also checked against, so a nudge
+// reworded here alone fails the type check.
+export const NUDGE_TEXT: ForemanNudgeText = 'what\'s next?'
 // The nudge foreman sends a sub session that waits only on background work,
 // which asks about that work rather than what is next.
-export const BACKGROUND_NUDGE_TEXT = 'could you check that your background work is still making progress, and stop it if it hangs?'
+export const BACKGROUND_NUDGE_TEXT: ForemanNudgeText = 'could you check that your background work is still making progress, and stop it if it hangs?'
 // The message that tells a waiting sub session to begin. It is a constant, so
 // no text from an issue or a status file ever reaches a sub session through
 // it, and it does not begin with "foreman: ", which would read as a wake line

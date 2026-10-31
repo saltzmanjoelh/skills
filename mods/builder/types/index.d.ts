@@ -374,7 +374,24 @@ export type BuildStatus = {
   // plus builder's 15 minutes. The three stay fixed while the same task is the
   // oldest. An older record has no such field.
   oldestBackground?: { description: string; startedAt: number; hungAt: number }
+  // The session's own last turn that ended: when it ended, whatever ended it,
+  // and whether a foreman nudge started it. Foreman restarts a background
+  // wait's count from the end of a turn that did real work. A record written
+  // before any turn ended, or by an older build, has no such field.
+  lastTurn?: LastTurn
 }
+
+// The end of a turn of the session's own, as the status file and the memo
+// carry it: when it ended, and whether a foreman nudge started it.
+export type LastTurn = { endedAt: number; answeredNudge: boolean }
+
+// The two nudges foreman sends a sub session, word for word. Builder
+// recognises a turn that one of them started, and foreman's own constants are
+// typed with this, so rewording a nudge on one side alone fails the type
+// check.
+export type ForemanNudgeText =
+  | 'what\'s next?'
+  | 'could you check that your background work is still making progress, and stop it if it hangs?'
 
 // The tokens one model spent, in the four kinds the API reports: uncached
 // input, output, input read from the prompt cache and input written to it.
@@ -452,6 +469,14 @@ export type StatusMemo = {
   // is kept while one of those keys is in flight. A memo an older build saved
   // without it, or with a value in another shape, reads as none.
   backgroundWait: { since: number; keys: string[] } | null
+  // Whether a foreman nudge started the turn of the session's own that is
+  // running, or the last one when none is running. A memo an older build
+  // saved without it reads as false.
+  nudgeTurn: boolean
+  // The end of the session's own last turn, which the record's `lastTurn`
+  // reports, or null before a turn ended. A memo an older build saved
+  // without it, or with a value in another shape, reads as none.
+  lastTurn: LastTurn | null
   // The load stamp of the module's copy that owns the memo, which orders the
   // copies by when they loaded. Only a copy whose stamp is not below it may
   // take the memo up, and taking it up sets it to that copy's stamp, so a

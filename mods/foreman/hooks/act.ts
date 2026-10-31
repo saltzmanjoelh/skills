@@ -5,6 +5,7 @@
 // answers the next ledger together with those effects, and
 // hooks/register.tsx carries them out. Every function is pure.
 
+import type { LastTurn } from 'builder'
 import type { Listed } from './desktop'
 import { beginHeldLog, beginHeldNotice, releasedBy } from './held'
 import { prStateOf, type BuildState, type RecordVerdicts } from './record'
@@ -82,6 +83,12 @@ const progressOf = (row: SubRow) => {
   return JSON.stringify([issueKey, stage, stageDone, pr?.number ?? null, pr?.state ?? null])
 }
 
+// A stretch that starts afresh with `progress` for `wait`, counted from
+// `countFrom`: no nudges, no last nudge and not woken. `turnProgress` marks a
+// start from progress seen in a turn of the sub session's own.
+const freshStretch = (progress: string, wait: number | null, countFrom: number | null, turnProgress = false): NonNullable<ForemanActs['stretch']> =>
+  ({ progress, nudges: 0, lastNudgeAt: null, countFrom, woke: false, wait, turnProgress })
+
 // The episode the record is in now: its state and when that began, from the
 // record's stateSince, or from the read that first saw the state when the
 // record has none.
@@ -152,10 +159,10 @@ const STATE_RULES: Record<BuildState, (s: Step) => void> = {
     // began with the wait. Progress in a turn of the sub session's own starts
     // that stretch afresh for the same wait, counted from this read, because
     // the wait's `since` does not move with progress, and a stretch counted
-    // from it would nudge as soon as the turn ended.
-    if (stretch.progress !== progress) {
-      setActs(s, { stretch: { progress, nudges: 0, lastNudgeAt: null, countFrom: s.now, woke: false, wait: stretch.wait } })
-    }
+    // from it would nudge as soon as the turn ended. It also marks the
+    // stretch, so the end of this turn restarts it again even when a nudge
+    // started the turn (see idleRule).
+    if (stretch.progress !== progress) setActs(s, { stretch: freshStretch(progress, stretch.wait, s.now, true) })
   },
   'waiting-on-builder': s => setActs(s, { stretch: null }),
   'idle': s => idleRule(s, s.episode.since, null),
@@ -197,6 +204,22 @@ const setActs = (s: Step, change: Partial<ForemanActs>) => {
   s.p = { ...s.p, acts: { ...s.p.acts, ...change } }
 }
 
+// Whether the end of the sub session's last turn restarts a background
+// stretch of the wait that began at `wait`, read at `now`.
+function turnEndRestarts(stretch: NonNullable<ForemanActs['stretch']>, wait: number, turn: LastTurn, now: number): boolean {
+  // A stretch never moves back, so an end at or before its current start,
+  // the read that last restarted it or else the wait's start, changes
+  // nothing, and the same end restarts it only once.
+  if (turn.endedAt <= (stretch.countFrom ?? wait)) return false
+  // An end after this read, as a damaged file could hold, would put the
+  // nudges off for ever.
+  if (turn.endedAt > now) return false
+  // A turn of the sub session's own restarts the stretch, and so does an
+  // answer to a nudge during which foreman saw progress in a turn. An answer
+  // to a nudge that made no progress is counted through.
+  return !turn.answeredNudge || stretch.turnProgress
+}
+
 // Idle, and a working record that waits only on background work: a nudge
 // once the wait has lasted the threshold since `since`, a second one
 // threshold after the first, and the wake one threshold after that, counted
@@ -212,8 +235,14 @@ const setActs = (s: Step, change: Partial<ForemanActs>) => {
 // that stretch counts from its read too. An idle stretch then
 // counts from the idle episode's start, as it always has. A background
 // stretch counts from that read instead, because a background wait's `since`
-// does not move with progress, so counting from it would nudge at once. A
-// background wait's nudge and wake say so, and the wake quotes its first
+// does not move with progress, so counting from it would nudge at once. The
+// end of the sub session's last turn, from builder's `lastTurn`, restarts a
+// background stretch from that end when it is later than the stretch's
+// start and no later than this read, and either no nudge started the turn
+// or the stretch is marked by progress seen in a turn, so the count runs
+// from the end of real work. An answer to a nudge that made no progress is
+// counted through, and a stretch never moves back. A background wait's
+// nudge and wake say so, and the wake quotes its first
 // task when there is one. A record with no desktop session wakes the
 // parent at two thresholds instead. A record whose pull request was closed
 // without merging has stopped on purpose, so the rule ends any stretch and
@@ -226,8 +255,10 @@ function idleRule(s: Step, since: number, background: { task: string | null } | 
   const progress = progressOf(s.row)
   const wait = background === null ? null : since
   let stretch = s.p.acts.stretch
-  if (stretch === null || stretch.wait !== wait) stretch = { progress, nudges: 0, lastNudgeAt: null, countFrom: null, woke: false, wait }
-  else if (stretch.progress !== progress) stretch = { progress, nudges: 0, lastNudgeAt: null, countFrom: wait === null ? null : s.now, woke: false, wait }
+  if (stretch === null || stretch.wait !== wait) stretch = freshStretch(progress, wait, null)
+  else if (stretch.progress !== progress) stretch = freshStretch(progress, wait, wait === null ? null : s.now)
+  const turn = s.row.record.lastTurn
+  if (wait !== null && turn !== undefined && turnEndRestarts(stretch, wait, turn, s.now)) stretch = freshStretch(progress, wait, turn.endedAt)
   setActs(s, { stretch })
   if (stretch.woke) return
   const from = Math.max(since, s.p.pairedAt, stretch.countFrom ?? since, stretch.lastNudgeAt ?? since)

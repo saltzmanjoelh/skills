@@ -39,8 +39,12 @@ export type ForemanActs = {
   // stretch afresh at, inside the same wait, whether that read found the
   // wait or a turn of the sub session's own, so the count runs from that read
   // rather than from the wait's start; it is null for an idle stretch and for
-  // a stretch that began with its wait.
-  stretch: { progress: string; nudges: number; lastNudgeAt: number | null; countFrom: number | null; woke: boolean; wait: number | null } | null
+  // a stretch that began with its wait, and the end of a sub session's turn
+  // moves it later too (see `turnProgress`). `turnProgress` is true when the
+  // stretch last started from progress that foreman saw in a turn of the sub
+  // session's own, so the end of that turn restarts it even when a nudge
+  // started the turn; a stretch stored before foreman kept it reads as false.
+  stretch: { progress: string; nudges: number; lastNudgeAt: number | null; countFrom: number | null; woke: boolean; wait: number | null; turnProgress: boolean } | null
   // The episode, as `<state>@<since>`, that the needs-you notification and
   // the cleanup wake were last given for, or null.
   notifiedFor: string | null

@@ -7,7 +7,9 @@ import { RUNS_JQ, snapshotOf, type GhPullRequest } from '../hooks/github'
 import { NOTHING_WATCHED, STALE_WARNING } from '../hooks/pane'
 import { RELOAD_LINE, REREAD_CLOSING } from '../hooks/prompts'
 import { INSTRUCTION_PATHSPECS } from '../hooks/review'
+import { FOREMAN_NUDGE_TEXTS } from '../hooks/status'
 import type { BuildStatus, Compactions } from '../types'
+import { CROSS_SESSION_SHAPES } from './cross-session-fixture'
 
 const A = 'a'.repeat(40)
 const C = 'c'.repeat(40)
@@ -831,6 +833,7 @@ function memoryStore(on: On, entries: [string, unknown][] = []) {
 // CLAUDE.md names an architecture document that exists. `writes.refused`,
 // when set, refuses every write, as a full disk does. `writes.log` lists the
 // path of every write that was not refused, in the order the writes began,
+// `writes.texts` lists the text of each of those writes in the same order,
 // and `writes.hold`, when set, keeps the next write waiting until it
 // resolves, and the file then holds that write's text. `dirs` holds the
 // folders that exist, so a test can add another checkout beside `/repo`.
@@ -838,7 +841,7 @@ function fakeFiles(on: On) {
   const files = new Map<string, string>([['/repo/CLAUDE.md', 'Architecture document: docs/arch.md\n'], ['/repo/docs/arch.md', 'x']])
   const links = new Map<string, string>()
   const dirs = new Set(['/repo'])
-  const writes = { refused: false, log: [] as string[], hold: null as Promise<void> | null }
+  const writes = { refused: false, log: [] as string[], texts: [] as string[], hold: null as Promise<void> | null }
   // Every path read, in order, whether or not it is there.
   const reads: string[] = []
   on('fs.read', ($, e) => {
@@ -856,6 +859,7 @@ function fakeFiles(on: On) {
   on('fs.write', async ($, e) => {
     if (writes.refused) return { deny: 'disk full' }
     writes.log.push(e.path)
+    writes.texts.push(e.text)
     const hold = writes.hold
     writes.hold = null
     if (hold !== null) await hold
@@ -10616,14 +10620,20 @@ const S0 = Date.parse('2026-10-12T00:00:00Z')
 // the registrations, the session's id (which a test may change, as a /clear
 // does), its start and end, its prompts and turns, its skills, the classic
 // events the tests raise, and the transcript, which is `messages` or refused.
-// `env` is the environment the mod reads. `transcriptReads` counts the reads
-// of the transcript.
+// `ids.hold`, when set, keeps the next read of the session's id waiting until
+// it resolves. `env` is the environment the mod reads. `transcriptReads`
+// counts the reads of the transcript.
 function foremanSession(on: On, over: { env?: Record<string, string>; messages?: object[] | 'refused' } = {}) {
   const clock = mock.clock(on, { now: S0 })
   mock.store(on)
   mock.env(on, over.env ?? { HOME: '/home/me', CLAUDE_CODE_HOST_SESSION_ID: 'desk-1' })
-  const ids = { current: 'session-1' }
-  engine(on, undefined, async () => ({ value: ids.current }))
+  const ids = { current: 'session-1', hold: null as Promise<void> | null }
+  engine(on, undefined, async () => {
+    const hold = ids.hold
+    ids.hold = null
+    if (hold !== null) await hold
+    return { value: ids.current }
+  })
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   const transcript = { reads: 0 }
   on('session.messages', () => {
@@ -11021,6 +11031,167 @@ test('a refused write does not move the background-only wait\'s start', async ($
   await s.clock.advance(MINUTE)
   expect(s.statusAt()).toMatchObject({ state: 'working', backgroundOnly: { since: S0 + MINUTE / 2 } })
   expect(s.statusAt()?.writtenAt).toBeGreaterThan(S0 + MINUTE / 2)
+})
+
+test('a turn of the session\'s own writes when it ended and that no nudge started it, and a turn a foreman nudge started, in either shape, writes that one did', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  expect(s.statusAt()).toBeDefined()
+  expect('lastTurn' in s.statusAt()!).toBe(false)
+
+  await s.clock.advance(MINUTE)
+  await $.turn.start({ text: 'Carry on with the review findings.', turnId: 't1' } as never)
+  await s.clock.advance(MINUTE / 2)
+  const firstEnd = await s.clock.now()
+  await turnEnds($, 't1')
+  await s.clock.settle()
+  expect(s.statusAt()?.lastTurn).toEqual({ endedAt: firstEnd, answeredNudge: false })
+
+  for (const shape of CROSS_SESSION_SHAPES) {
+    for (const text of FOREMAN_NUDGE_TEXTS) {
+      const turnId = `nudge ${shape.name} ${text}`
+      await s.clock.advance(MINUTE)
+      await $.turn.start({ text: shape(text), turnId } as never)
+      await s.clock.advance(MINUTE / 2)
+      const nudgeEnd = await s.clock.now()
+      await turnEnds($, turnId)
+      await s.clock.settle()
+      expect(s.statusAt()?.lastTurn).toEqual({ endedAt: nudgeEnd, answeredNudge: true })
+    }
+  }
+
+  // A plain turn after a nudge is not counted as one.
+  await s.clock.advance(MINUTE)
+  await $.turn.start({ text: FOREMAN_NUDGE_TEXTS[0]!, turnId: 't2' } as never)
+  const lastEnd = await s.clock.now()
+  await turnEnds($, 't2')
+  await s.clock.settle()
+  expect(s.statusAt()?.lastTurn).toEqual({ endedAt: lastEnd, answeredNudge: false })
+})
+
+test('a turn that an error ended, and one that was aborted, write their end too', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+
+  await s.clock.advance(MINUTE)
+  const errorEnd = await s.clock.now()
+  await ownTurn($, 't1', 'error')
+  await s.clock.settle()
+  expect(s.statusAt()?.lastTurn).toEqual({ endedAt: errorEnd, answeredNudge: false })
+
+  for (const shape of CROSS_SESSION_SHAPES) {
+    for (const text of FOREMAN_NUDGE_TEXTS) {
+      const turnId = `aborted ${shape.name} ${text}`
+      await s.clock.advance(MINUTE)
+      await $.turn.start({ text: shape(text), turnId } as never)
+      const abortedEnd = await s.clock.now()
+      await $.turn.complete({ answer: '', durationMs: 1, isAborted: true, turnId, reason: 'aborted' } as never)
+      await s.clock.settle()
+      expect(s.statusAt()?.lastTurn).toEqual({ endedAt: abortedEnd, answeredNudge: true })
+    }
+  }
+})
+
+test('a subagent\'s turn end writes no last turn and leaves the session\'s own as it was', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  await $.turn.complete({ agentId: 'agent-1', answer: 'found it', durationMs: 1, isAborted: false, turnId: 'a1', reason: 'answer' } as never)
+  await s.clock.advance(MINUTE)
+  expect(s.statusAt()?.writtenAt).toBe(S0 + MINUTE)
+  expect('lastTurn' in s.statusAt()!).toBe(false)
+
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  const ownEnd = await s.clock.now()
+  await turnEnds($, 't1')
+  await s.clock.advance(MINUTE)
+  await $.turn.complete({ agentId: 'agent-2', answer: 'found it', durationMs: 1, isAborted: false, turnId: 'a2', reason: 'answer' } as never)
+  await s.clock.advance(MINUTE)
+  expect(s.statusAt()?.writtenAt).toBe(S0 + 3 * MINUTE)
+  expect(s.statusAt()?.lastTurn).toEqual({ endedAt: ownEnd, answeredNudge: false })
+})
+
+test('a subagent that starts during an answer to a nudge leaves the answer recorded as one', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  for (const shape of CROSS_SESSION_SHAPES) {
+    for (const text of FOREMAN_NUDGE_TEXTS) {
+      const turnId = `spawning ${shape.name} ${text}`
+      await s.clock.advance(MINUTE)
+      await $.turn.start({ text: shape(text), turnId } as never)
+      await $.turn.start({ text: 'look at the log', turnId: `agent ${turnId}`, agentId: 'agent-1' } as never)
+      await s.clock.settle()
+      const nudgeEnd = await s.clock.now()
+      await turnEnds($, turnId)
+      await s.clock.settle()
+      expect(s.statusAt()?.lastTurn).toEqual({ endedAt: nudgeEnd, answeredNudge: true })
+    }
+  }
+})
+
+test('the first record that shows the background-only wait after a turn ends already carries that turn\'s end', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  await ownTurnLeaving($, s.clock, 't1', [shellTask])
+  const firstEnd = S0
+
+  await s.clock.advance(9 * MINUTE)
+  const before = s.files.writes.texts.length
+  await $.turn.start({ text: 'Fix the review findings.', turnId: 't2' } as never)
+  await s.clock.advance(MINUTE / 2)
+  const secondEnd = await s.clock.now()
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [shellTask] } as never)
+  await s.clock.settle()
+  // The turn's end records itself in the memo, which first reads the
+  // session's id. That read is held, so a record written while the end is
+  // still being recorded would show the wait with the last turn before it.
+  // The turn is aborted, so nothing else at its end reads the id first.
+  let release = () => {}
+  s.ids.hold = new Promise<void>(resolve => {
+    release = resolve
+  })
+  const ending = $.turn.complete({ answer: '', durationMs: 1, isAborted: true, turnId: 't2', reason: 'aborted' } as never)
+  await s.clock.settle()
+  release()
+  await ending
+  await s.clock.settle()
+
+  const records = s.files.writes.texts
+    .map((text, i) => ({ text, path: s.files.writes.log[i] }))
+    .slice(before)
+    .filter(write => write.path === BUILD)
+    .map(write => JSON.parse(write.text) as BuildStatus)
+  const firstWaiting = records.find(record => record.backgroundOnly !== undefined)
+  expect(firstWaiting?.backgroundOnly?.since).toBe(firstEnd)
+  expect(firstWaiting?.lastTurn).toEqual({ endedAt: secondEnd, answeredNudge: false })
+  expect(records.every(record => record.backgroundOnly === undefined || record.lastTurn?.endedAt === secondEnd)).toBe(true)
+})
+
+test('a newer turn of the session\'s own that starts while a turn\'s end is being recorded keeps the session working', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  await $.turn.start({ text: 'Fix the review findings.', turnId: 't1' } as never)
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('working')
+
+  // The turn's end records itself in the memo, which first reads the
+  // session's id, and that read is held. The turn is aborted, so nothing else
+  // at its end reads the id first. A newer turn starts while the read is
+  // held, so when the end goes on after it, a newer turn is running, and the
+  // end must leave busy and turnRunning set for that turn.
+  let release = () => {}
+  s.ids.hold = new Promise<void>(resolve => {
+    release = resolve
+  })
+  const ending = $.turn.complete({ answer: '', durationMs: 1, isAborted: true, turnId: 't1', reason: 'aborted' } as never)
+  await s.clock.settle()
+  await $.turn.start({ text: 'Carry on with the next finding.', turnId: 't2' } as never)
+  await s.clock.settle()
+  release()
+  await ending
+  await s.clock.advance(MINUTE)
+
+  expect(s.statusAt()?.state).toBe('working')
+  expect(s.statusAt()?.writtenAt).toBe(S0 + MINUTE)
 })
 
 test('a Bash call that went to the background is written as the oldest task, from when the call started, with the moment it counts as hung, and never by its command', async ($, on) => {

@@ -2,13 +2,14 @@ import { expect, test } from 'claude-code/testing'
 
 import { snapshotOf } from '../hooks/github'
 import {
-  afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterWrite,
-  backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, ERROR_CHARS, errorLineOf, firstPromptOf, generationIn, HUNG_AFTER_MS, hungAtOf, isBackgroundOnly, isCleanupSkill,
-  isProbablyHung, issueOf, newMemo, oldestTaskOf, recordOf, shownOrWithheld, startOf, startsBackgrounded, startsIn, startsPruned, startsSeen, startsWithout, STATE_RULES, stateOf,
+  afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite,
+  backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, ERROR_CHARS, errorLineOf, firstPromptOf, FOREMAN_NUDGE_TEXTS, generationIn, HUNG_AFTER_MS, hungAtOf, isBackgroundOnly, isCleanupSkill,
+  isForemanNudge, isProbablyHung, issueOf, newMemo, oldestTaskOf, recordOf, shownOrWithheld, startOf, startsBackgrounded, startsIn, startsPruned, startsSeen, startsWithout, STATE_RULES, stateOf,
   statusMemoIn, TASK_CHARS, taskKeyOf, taskKeyOfId, ticketIn, WITHHELD, type StatusFacts,
 } from '../hooks/status'
 import { afterCost, afterStep, emptyUsage } from '../hooks/usage'
 import type { AgentCard, BackgroundTask, StatusMemo } from '../types'
+import { CROSS_SESSION_SHAPES } from './cross-session-fixture'
 
 const NOW = 1_000_000
 const HEAD = 'a'.repeat(40)
@@ -61,6 +62,34 @@ test('the first prompt is the first user message with text, and the prompt being
   expect(firstPromptOf([], 'the submitted prompt')).toBe('the submitted prompt')
   expect(firstPromptOf({ deny: 'no' }, 'the submitted prompt')).toBe('the submitted prompt')
   expect(firstPromptOf([null, 3, { role: 'user', text: '   ' }], 'the submitted prompt')).toBe('the submitted prompt')
+})
+
+test('each foreman nudge, in either shape the desktop app delivers it, starts a nudge turn, and so does one whose apostrophe is escaped', () => {
+  expect(FOREMAN_NUDGE_TEXTS.length).toBe(2)
+  for (const shape of CROSS_SESSION_SHAPES) {
+    for (const text of FOREMAN_NUDGE_TEXTS) {
+      expect(isForemanNudge(shape(text))).toBe(true)
+      expect(isForemanNudge(shape(text.replaceAll('\'', '&#39;')))).toBe(true)
+      expect(isForemanNudge(shape(text.replaceAll('\'', '&apos;')))).toBe(true)
+      // An apostrophe escaped twice is decoded once, so it is not a nudge.
+      if (text.includes('\'')) expect(isForemanNudge(shape(text.replaceAll('\'', '&amp;#39;')))).toBe(false)
+    }
+  }
+  // At least one of the texts holds the apostrophe that the escaped case
+  // replaces, so the escaped prompts above differ from the plain ones.
+  expect(FOREMAN_NUDGE_TEXTS.some(text => text.includes('\''))).toBe(true)
+})
+
+test('a plain prompt equal to a nudge, a cross-session message with other text, and a nudge outside the element are not nudges', () => {
+  for (const shape of CROSS_SESSION_SHAPES) {
+    for (const text of FOREMAN_NUDGE_TEXTS) {
+      expect(isForemanNudge(text)).toBe(false)
+      expect(isForemanNudge(shape(`${text} Then rebase the branch.`))).toBe(false)
+      expect(isForemanNudge(`${shape('Please rebase the branch.')}\n${text}`)).toBe(false)
+    }
+    expect(isForemanNudge(shape('Please rebase the branch.'))).toBe(false)
+  }
+  expect(isForemanNudge('')).toBe(false)
 })
 
 test('a title splits into its leading issue key and the rest, and a title without a key keeps it all', () => {
@@ -383,6 +412,46 @@ test('a stored wait reads back, and a memo without one or with a malformed one r
     const read = statusMemoIn({ ...memo({ state: 'idle' }), backgroundWait: bad }, 'session-1')
     expect(read).toEqual(memo({ state: 'idle' }))
   }
+})
+
+test('a turn start keeps whether a nudge started it and gives back the same memo when that is unchanged, and a turn end records its time and that flag', () => {
+  const m = memo()
+  expect(afterTurnStart(m, false)).toBe(m)
+  const nudged = afterTurnStart(m, true)
+  expect(nudged.nudgeTurn).toBe(true)
+  expect(afterTurnStart(nudged, true)).toBe(nudged)
+  expect(afterTurnEnd(nudged, NOW).lastTurn).toEqual({ endedAt: NOW, answeredNudge: true })
+  expect(afterTurnEnd(afterTurnStart(nudged, false), NOW + 1).lastTurn).toEqual({ endedAt: NOW + 1, answeredNudge: false })
+})
+
+test('a stored last turn reads back, and a memo without the nudge flag or the last turn, or with damaged ones, reads with no nudge turn and no last turn and is kept', () => {
+  const good = memo({ state: 'idle', nudgeTurn: true, lastTurn: { endedAt: NOW, answeredNudge: true } })
+  expect(statusMemoIn(good, 'session-1')).toEqual(good)
+  const fresh = newMemo({ sessionId: 'session-1', ticket: null, path: null, cwd: '', generation: 1 })
+  expect(fresh.nudgeTurn).toBe(false)
+  expect(fresh.lastTurn).toBeNull()
+  const older: Partial<StatusMemo> = { ...memo({ state: 'idle' }) }
+  delete older.nudgeTurn
+  delete older.lastTurn
+  expect(statusMemoIn(older, 'session-1')).toEqual(memo({ state: 'idle' }))
+  for (const bad of ['true', 1, null, {}]) {
+    expect(statusMemoIn({ ...good, nudgeTurn: bad }, 'session-1')).toEqual({ ...good, nudgeTurn: false })
+  }
+  for (const bad of ['soon', [], { endedAt: 'now', answeredNudge: false }, { endedAt: Number.NaN, answeredNudge: false }, { endedAt: Number.POSITIVE_INFINITY, answeredNudge: true }, { endedAt: NOW }, { endedAt: NOW, answeredNudge: 'yes' }, { answeredNudge: true }]) {
+    expect(statusMemoIn({ ...good, lastTurn: bad }, 'session-1')).toEqual({ ...good, lastTurn: null })
+  }
+})
+
+test('the record carries the last turn right after the background-only wait, copied field by field, and leaves it out when the memo holds none', () => {
+  const lastTurn = { endedAt: NOW - 1000, answeredNudge: true, extra: 'x' } as StatusMemo['lastTurn']
+  const m = { ...waiting(NOW - 5000, ['b1']), lastTurn }
+  const record = recordOf(facts({ memo: m, background: [suite] }), NOW)
+  expect(record.lastTurn).toEqual({ endedAt: NOW - 1000, answeredNudge: true })
+  expect(Object.keys(record).slice(-4)).toEqual(['writtenAt', 'backgroundOnly', 'lastTurn', 'oldestBackground'])
+  expect('lastTurn' in recordOf(facts({ memo: waiting(NOW - 5000, ['b1']), background: [suite] }), NOW)).toBe(false)
+  expect('lastTurn' in recordOf(facts(), NOW)).toBe(false)
+  // A record with no background-only wait carries it too, whatever its state.
+  expect(recordOf(facts({ memo: memo({ lastTurn: { endedAt: NOW, answeredNudge: false } }) }), NOW).lastTurn).toEqual({ endedAt: NOW, answeredNudge: false })
 })
 
 test('a task counts as probably hung once it has run fifteen minutes from its start, and not a millisecond before', () => {
