@@ -173,8 +173,8 @@ session in foreman's queue claimed, and it carries the number of slots
 free. While a waiting session that foreman can begin is left,
 foreman begins it in a freed slot instead and says so in the line of the
 next section. So when two slots free and only one waiting session claims
-one, the same wake carries both lines: this one first, naming the one slot
-left over, and then the line saying foreman began the queued session. That
+one, the same wake carries both lines: this one first, naming the slots left
+free, and then the line saying foreman began the queued session. That
 second line comes only once the begin message went; if it failed, this line
 comes alone. Follow this line for exactly the number of slots it names,
 because foreman has already left out the slot it used for the queued
