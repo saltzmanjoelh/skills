@@ -219,6 +219,18 @@ test('the refusal is read as the session id it was given for, and counts only fo
   expect(ticketsIn(JSON.parse(JSON.stringify(refused))).offRefusedFor).toBe('session-1')
 })
 
+test('the kept slots keep only names a wake line may carry, repeats included, the newest MAX_PAIRINGS, and survive a stored round trip', () => {
+  expect(ticketsIn({ pairings: [], folderMissing: false }).keptSlots).toEqual([])
+  expect(TICKETS_EMPTY.keptSlots).toEqual([])
+  expect(ticketsIn({ keptSlots: 'ABC-1' }).keptSlots).toEqual([])
+  const who = 'the sub session with ticket ft-x'
+  expect(ticketsIn({ keptSlots: ['ABC-1', 7, null, 'abc-2', 'ABC-3: x', 'the sub session with ticket bad ticket', who, 'ABC-1'] }).keptSlots).toEqual(['ABC-1', who, 'ABC-1'])
+  const many = Array.from({ length: MAX_PAIRINGS + 5 }, (_, i) => `ABC-${i + 1}`)
+  expect(ticketsIn({ keptSlots: many }).keptSlots).toEqual(many.slice(5))
+  const t = { ...TICKETS_EMPTY, keptSlots: ['ABC-1', who] }
+  expect(ticketsIn(JSON.parse(JSON.stringify(t))).keptSlots).toEqual(['ABC-1', who])
+})
+
 test('the unwatched list keeps only whole local_ ids, each once, the newest 50', () => {
   expect(ticketsIn({ unwatched: 'local_a' }).unwatched).toEqual([])
   expect(ticketsIn({ unwatched: ['local_a', 'local_a', 'local_b', 'Local_c', 'local_', 'x local_d', 'local_e f', 'local_g!', 7, null, 'local_h-1_x'] }).unwatched)

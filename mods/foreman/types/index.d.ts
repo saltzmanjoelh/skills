@@ -140,6 +140,9 @@ export type ForemanSpent = ForemanSpend & { ticket: string }
 // first. It outlives the pairing, so a sub session whose file is gone still
 // counts in the sum. `earlier` is the total of the entries folded out of
 // `spent` once it grew past its bound, or null while none was folded.
+// `keptSlots` names, oldest first, each slot that freed on a read which could
+// not read the desktop app's list while a sub session waited unclaimed, kept
+// for the queue until a later read decides it as if it had freed then.
 export type ForemanTickets = {
   pairings: ForemanPairing[]
   folderMissing: boolean
@@ -149,6 +152,7 @@ export type ForemanTickets = {
   unwatched: string[]
   spent: ForemanSpent[]
   earlier: ForemanSpend | null
+  keptSlots: string[]
 }
 
 declare module 'claude-code' {

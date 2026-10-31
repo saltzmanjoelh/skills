@@ -131,7 +131,74 @@ test('a freed slot that no waiting sub session can take, because the list leaves
   const d = read(t, [row('ft-a', { issueKey: 'ABC-1', state: 'done' }), row('ft-b')], T0 + MINUTE, { sessions })
   expect(begins(d)).toEqual([])
   expect(d.reasons).toEqual([{ kind: 'slot-free', free: 1 }])
+  expect(d.tickets.keptSlots).toEqual([])
   expect(d.tickets.pairings.find(p => p.ticket === 'ft-b')!.queue).toEqual({ place: 1, claim: null })
+})
+
+// A ledger whose ft-a went ahead and owns its file, with `waiters` in the
+// queue, so a read without ft-a's file frees its slot.
+const owned = (rows: SubRow[], ...pairings: ForemanPairing[]) => joinOwners(ledger(...pairings), rows).tickets
+const keptLog = (who: string) => `Kept the slot of ${who} for the queue, because the desktop app's list of sessions could not be read.`
+
+test('a slot freed on a read whose list could not be read is kept for an unclaimed waiting issue, and wakes nobody', () => {
+  const t = owned([busyRow('ft-a', 'ABC-1'), row('ft-b')], ahead('ft-a', 'ABC-1'), waiting('ft-b', 'ABC-2', 1))
+  const d = read(t, [row('ft-b')], T0 + MINUTE, { sessions: { kind: 'failed' } })
+  expect(d.reasons).toEqual([])
+  expect(begins(d)).toEqual([])
+  expect(d.tickets.keptSlots).toEqual(['ABC-1'])
+  expect(d.logs).toContain(keptLog('ABC-1'))
+  expect(d.tickets.pairings.find(p => p.ticket === 'ft-b')!.queue).toEqual({ place: 1, claim: null })
+})
+
+test('the next read that reads the list decides a kept slot as if it had freed then', () => {
+  const t = owned([busyRow('ft-a', 'ABC-1'), row('ft-b')], ahead('ft-a', 'ABC-1'), waiting('ft-b', 'ABC-2', 1))
+  const kept = read(t, [row('ft-b')], T0 + MINUTE, { sessions: { kind: 'failed' } }).tickets
+  const shown = read(kept, [row('ft-b')], T0 + 2 * MINUTE, { sessions: list([listed('local_ft-b')]) })
+  expect(begins(shown)).toEqual([['local_ft-b', 'ABC-2', 'ABC-1']])
+  expect(shown.reasons).toEqual([])
+  expect(shown.tickets.keptSlots).toEqual([])
+  const left = read(kept, [row('ft-b')], T0 + 2 * MINUTE, { sessions: list([listed('local_other')], false) })
+  expect(begins(left)).toEqual([])
+  expect(left.reasons).toEqual([{ kind: 'slot-free', free: 1 }])
+  expect(left.tickets.keptSlots).toEqual([])
+})
+
+test('a kept slot wakes the parent on a read whose list could not be read once nobody waits unclaimed', () => {
+  const d = read({ ...ledger(), keptSlots: ['ABC-1'] }, [], T0, { sessions: { kind: 'failed' } })
+  expect(d.reasons).toEqual([{ kind: 'slot-free', free: 1 }])
+  expect(d.tickets.keptSlots).toEqual([])
+  // The waiting issue began by itself before any list was read.
+  const begun = { ...owned([row('ft-b')], waiting('ft-b', 'ABC-2', 1)), keptSlots: ['ABC-1'] }
+  const after = read(begun, [row('ft-b', { issueKey: 'ABC-2', stage: 'spec' })], T0, { sessions: { kind: 'failed' }, slots: 2 })
+  expect(after.reasons).toEqual([{ kind: 'slot-free', free: 1 }])
+  expect(after.tickets.keptSlots).toEqual([])
+})
+
+test('slots freed on failed reads pile up in order and are all decided by the next read that reads the list', () => {
+  const rows = [busyRow('ft-a', 'ABC-1'), busyRow('ft-x', 'ABC-4'), row('ft-b')]
+  const t = owned(rows, ahead('ft-a', 'ABC-1'), ahead('ft-x', 'ABC-4'), waiting('ft-b', 'ABC-2', 1))
+  const together = read(t, [row('ft-b')], T0 + MINUTE, { sessions: { kind: 'failed' }, slots: 2 })
+  expect(together.tickets.keptSlots).toEqual(['ABC-1', 'ABC-4'])
+  const first = read(t, [busyRow('ft-x', 'ABC-4'), row('ft-b')], T0 + MINUTE, { sessions: { kind: 'failed' }, slots: 2 })
+  const second = read(first.tickets, [row('ft-b')], T0 + 2 * MINUTE, { sessions: { kind: 'failed' }, slots: 2 })
+  expect(second.reasons).toEqual([])
+  expect(second.tickets.keptSlots).toEqual(['ABC-1', 'ABC-4'])
+  const d = read(second.tickets, [row('ft-b')], T0 + 3 * MINUTE, { sessions: list([listed('local_ft-b')]), slots: 2 })
+  expect(begins(d)).toEqual([['local_ft-b', 'ABC-2', 'ABC-1']])
+  expect(d.reasons).toEqual([{ kind: 'slot-free', free: 1 }])
+  expect(d.tickets.keptSlots).toEqual([])
+})
+
+test('a slot freed on a failed read wakes the parent at once when only claimed sessions wait, or when its name could not be stored', () => {
+  const claimed = owned([busyRow('ft-a', 'ABC-1'), row('ft-b')], ahead('ft-a', 'ABC-1'), waiting('ft-b', 'ABC-2', 1, { attemptAt: T0, notified: false }))
+  const d = read(claimed, [row('ft-b')], T0 + MINUTE, { sessions: { kind: 'failed' }, slots: 2 })
+  expect(d.reasons).toEqual([{ kind: 'slot-free', free: 1 }])
+  expect(d.tickets.keptSlots).toEqual([])
+  // A damaged stored ticket gives a name that the ledger's reader would drop.
+  const damaged = owned([busyRow('bad ticket', 'not a key'), row('ft-b')], ahead('bad ticket', 'not a key'), waiting('ft-b', 'ABC-2', 1))
+  const woken = read(damaged, [row('ft-b')], T0 + MINUTE, { sessions: { kind: 'failed' } })
+  expect(woken.reasons).toEqual([{ kind: 'slot-free', free: 1 }])
+  expect(woken.tickets.keptSlots).toEqual([])
 })
 
 test('with the queue empty a freed slot wakes the parent as before', () => {

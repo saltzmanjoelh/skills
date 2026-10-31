@@ -160,7 +160,7 @@ export const ticketsKey = (sessionId: string) => `tickets:${sessionId}`
 
 export const OUTBOX_EMPTY: ForemanOutbox = { logs: [], effects: [], lines: [] }
 
-export const TICKETS_EMPTY: ForemanTickets = { pairings: [], folderMissing: false, outbox: OUTBOX_EMPTY, held: [], offRefusedFor: null, unwatched: [], spent: [], earlier: null }
+export const TICKETS_EMPTY: ForemanTickets = { pairings: [], folderMissing: false, outbox: OUTBOX_EMPTY, held: [], offRefusedFor: null, unwatched: [], spent: [], earlier: null, keptSlots: [] }
 
 // Whether the outbox holds anything to carry out.
 export const hasWork = (o: ForemanOutbox) => o.logs.length > 0 || o.effects.length > 0 || o.lines.length > 0
@@ -345,6 +345,12 @@ const UNWATCHED_SHAPE = new RegExp(`^${LOCAL_ID.source}$`)
 // reads as holding none.
 const unwatchedIn = (raw: unknown): string[] => [...new Set(strings(raw).filter(id => UNWATCHED_SHAPE.test(id)))].slice(-MAX_UNWATCHED)
 
+// The kept slots read tolerantly: only names a wake line may carry, the
+// newest MAX_PAIRINGS, so a ledger from before slots were kept reads as
+// keeping none. A name may repeat, because two sub sessions can carry the
+// same issue key and each freed a slot of its own.
+const keptSlotsIn = (raw: unknown): string[] => strings(raw).filter(isWhoName).slice(-MAX_PAIRINGS)
+
 // Stored spending, or null unless its counts are sound and its dollars are a
 // dollar figure or null.
 function spendIn(raw: unknown): ForemanSpend | null {
@@ -370,7 +376,7 @@ const spentIn = (raw: unknown): ForemanSpent[] => (Array.isArray(raw)
 // without a ticket is dropped while any other bad field takes its default.
 // A ledger from before the role-off facts were kept reads with no refusal
 // given and no unwatched sub sessions, and one from before foreman kept
-// spending reads with none.
+// spending reads with none, and one from before slots were kept keeps none.
 export function ticketsIn(raw: unknown): ForemanTickets {
   const t = objectOf(raw)
   if (t === null) return TICKETS_EMPTY
@@ -384,6 +390,7 @@ export function ticketsIn(raw: unknown): ForemanTickets {
     unwatched: unwatchedIn(t.unwatched),
     spent: spentIn(t.spent),
     earlier: spendIn(t.earlier),
+    keptSlots: keptSlotsIn(t.keptSlots),
   }
 }
 

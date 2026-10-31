@@ -174,6 +174,36 @@ test('a waiting sub session is not shown, not nudged and raises no wake, and a m
   expect(begins(w)).toEqual(['local_new2'])
 })
 
+test('a slot freed while the desktop app\'s list fails is kept for the queue, and the first read that lists begins the waiting session in it', async ($, on) => {
+  const { w, ui, live } = await queueOfTwo($, on)
+  await minutesPass(w, 2, live)
+  const { 'a.json': _, ...rest } = live
+  w.desktop.list = 'error'
+  w.folder.files.delete('a.json')
+  await minutesPass(w, 2, rest)
+  expect(w.engine.prompts).toEqual([])
+  expect(begins(w)).toEqual([])
+  expect(ledger(w).keptSlots).toEqual(['ABC-1'])
+  expect(await ui.paneText()).toContain('Kept the slot of ABC-1 for the queue, because the desktop app\'s list of sessions could not be read.')
+  w.desktop.list = 'ok'
+  await minutesPass(w, 1, rest)
+  expect(begins(w)).toEqual(['local_new2'])
+  expect(w.engine.prompts).toEqual(['foreman: foreman began ABC-2, the next issue in the queue, in the slot ABC-1 freed; tell the person so in one line.'])
+  expect(ledger(w).keptSlots).toEqual([])
+})
+
+test('a restart keeps a kept slot, and the first read that lists begins the waiting session in it', async ($, on) => {
+  const stored = { pairings: [newPairing('ft-b', 'local_b', T0 - 10 * MINUTE, 'ABC-2', { place: 1, claim: null })], keptSlots: ['ABC-1'] }
+  const w = world(on, { store: { 'parent:session-1': { isOn: true, slots: 1 }, [ticketsKey('session-1')]: stored } })
+  w.desktop.sessions = [listed('local_b', 'ABC-2')]
+  await mountBoth($, on)
+  await start($)
+  await w.clock.settle()
+  expect(begins(w)).toEqual(['local_b'])
+  expect(w.engine.prompts).toEqual(['foreman: foreman began ABC-2, the next issue in the queue, in the slot ABC-1 freed; tell the person so in one line.'])
+  expect(ledger(w).keptSlots).toEqual([])
+})
+
 test('with the queue empty, a freed slot wakes the parent to pick the next issue as before', async ($, on) => {
   const { w } = await parent($, on, 1)
   w.engine.startAnswers = [answer(1)]

@@ -1025,7 +1025,7 @@ export const register: Register = (on, options) => {
       await update($, tickets, heldRaw => {
         const held = ticketsIn(heldRaw)
         const isEmpty = held.pairings.length === 0 && !hasWork(held.outbox) && held.held.length === 0 && held.offRefusedFor === null && held.unwatched.length === 0
-          && held.spent.length === 0 && held.earlier === null
+          && held.spent.length === 0 && held.earlier === null && held.keptSlots.length === 0
         return isEmpty ? storedTickets : held
       })
     }
