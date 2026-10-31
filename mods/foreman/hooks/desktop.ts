@@ -16,10 +16,10 @@ export const SESSIONS_SERVER = 'ccd_session_mgmt'
 export const LIST_TOOL = 'list_sessions'
 export const SEND_TOOL = 'send_message'
 
-// The nudge foreman sends an idle sub session. Both nudges are typed by
-// builder's list of them, which builder uses to tell a turn that answers a
-// nudge from a turn of the sub session's own, so a nudge reworded here alone
-// fails the type check.
+// The nudge foreman sends an idle sub session. Both nudges are typed with
+// ForemanNudgeText from builder's state contract, which builder's recogniser
+// of a turn that answers a nudge is also checked against, so a nudge
+// reworded here alone fails the type check.
 export const NUDGE_TEXT: ForemanNudgeText = 'what\'s next?'
 // The nudge foreman sends a sub session that waits only on background work,
 // which asks about that work rather than what is next.
