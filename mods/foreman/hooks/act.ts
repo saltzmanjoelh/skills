@@ -437,8 +437,8 @@ const showsProgress = (row: SubRow) => row.record.issueKey !== null || row.recor
 //   archiving it, while a claimed one has its key held, with a notification
 //   only when no failed begin was told for it already;
 // - each free slot claims the first waiting sub session that the list shows
-//   unarchived, in the queue's order, naming the sub session whose slot this
-//   read freed, in order, when there is one;
+//   unarchived, in the queue's order, naming, in order, the sub session whose
+//   slot this read freed or an earlier read kept, when there is one;
 // - a claim whose begin did not go is tried again once its last try is
 //   CALL_TIMEOUT_MS old and the list shows its session unarchived.
 // A claim and a try add a begin effect and record the try's time.
