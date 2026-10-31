@@ -34,9 +34,10 @@ skill when the slot-free line arrives.
 2. The README's sentence in **Slots, Release and Nudge** says foreman wakes the
    parent for each freed slot that no session waiting in the queue claims.
 3. The wake skill's paragraph after the steps for the slot-free line says that
-   the line comes for each freed slot that no waiting session claimed, so it
-   can arrive in the same wake as the line saying foreman began a queued
-   session, and that the parent follows it for the slots it names.
+   the line comes once in a wake whose read freed a slot that no waiting
+   session claimed, carrying the number of slots free, so it can arrive in
+   the same wake as the line saying foreman began a queued session, and that
+   the parent follows it for the slots it names.
 
 ## Edge cases
 

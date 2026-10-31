@@ -168,8 +168,9 @@ with the number in words.
    as "Starting a session" says. The check just before each start still runs
    for every slot.
 
-This line comes for each freed slot that no waiting session in foreman's
-queue claimed. While a waiting session that foreman can begin is left,
+This line comes once in a wake whose read freed a slot that no waiting
+session in foreman's queue claimed, and it carries the number of slots
+free. While a waiting session that foreman can begin is left,
 foreman begins it in a freed slot instead and says so in the line of the
 next section. So when two slots free and only one waiting session claims
 one, the same wake carries both lines: this one first, naming the one slot
