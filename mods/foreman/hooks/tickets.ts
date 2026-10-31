@@ -182,7 +182,7 @@ function effectIn(raw: unknown): ForemanEffect | null {
   // the names it puts in the wake line are an issue key or a name whoOf gives.
   if (e?.kind === 'begin') {
     const { to, ticket, key, by } = e
-    if (typeof to !== 'string' || !UNWATCHED_SHAPE.test(to) || typeof ticket !== 'string' || !isTicket(ticket) || !isKeyOrNull(key)) return null
+    if (typeof to !== 'string' || !WHOLE_LOCAL_ID.test(to) || typeof ticket !== 'string' || !isTicket(ticket) || !isKeyOrNull(key)) return null
     return by === null || (typeof by === 'string' && isWhoName(by)) ? { kind: 'begin', to, ticket, key, by } : null
   }
   if (e?.kind === 'nudge' && typeof e.to === 'string' && typeof e.name === 'string') {
@@ -337,13 +337,14 @@ const heldIn = (raw: unknown): string[] => [...new Set(strings(raw).filter(isWho
 // The most unwatched sub sessions kept, the newest ones.
 export const MAX_UNWATCHED = 50
 
-// A whole desktop session id, which is all an unwatched entry may be.
-const UNWATCHED_SHAPE = new RegExp(`^${LOCAL_ID.source}$`)
+// A whole desktop session id with nothing around it, which is all an
+// unwatched entry and a begin message's target may be.
+const WHOLE_LOCAL_ID = new RegExp(`^${LOCAL_ID.source}$`)
 
 // The unwatched ids read tolerantly: only whole desktop session ids, each
 // once, the newest MAX_UNWATCHED, so a ledger from before the list existed
 // reads as holding none.
-const unwatchedIn = (raw: unknown): string[] => [...new Set(strings(raw).filter(id => UNWATCHED_SHAPE.test(id)))].slice(-MAX_UNWATCHED)
+const unwatchedIn = (raw: unknown): string[] => [...new Set(strings(raw).filter(id => WHOLE_LOCAL_ID.test(id)))].slice(-MAX_UNWATCHED)
 
 // The kept slots read tolerantly: only names a wake line may carry, the
 // newest MAX_PAIRINGS, so a ledger from before slots were kept reads as
@@ -405,7 +406,7 @@ export const isOffRefused = (t: ForemanTickets, sessionId: string) => t.offRefus
 // oldest dropped past MAX_UNWATCHED. An id already listed, or one that is not
 // a whole desktop session id, leaves the ledger as it was.
 export function withUnwatched(t: ForemanTickets, id: string): ForemanTickets {
-  if (!UNWATCHED_SHAPE.test(id) || t.unwatched.includes(id)) return t
+  if (!WHOLE_LOCAL_ID.test(id) || t.unwatched.includes(id)) return t
   return { ...t, unwatched: [...t.unwatched, id].slice(-MAX_UNWATCHED) }
 }
 
