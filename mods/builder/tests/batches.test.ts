@@ -72,12 +72,17 @@ function spawns(on: On) {
 // hooks would have left it, until the mod writes that key, and follows the
 // mod's writes: `value` is the batch state it last wrote, `holdWrites` every
 // value it wrote for the usage-limit hold, and `refuses` makes every write of
-// the batches fail, which `refusals` counts.
+// the batches fail, which `refusals` counts. `readRefusedIn`, when set to
+// n, refuses the nth read of the batches from then on.
 function stateOf(on: On, seeded: Record<string, unknown>) {
   const left = new Map(Object.entries(seeded))
-  const seen = { value: seeded.batches as BatchState | undefined, refuses: false, refusals: 0, holdWrites: [] as unknown[], reads: [] as string[] }
+  const seen = { value: seeded.batches as BatchState | undefined, refuses: false, refusals: 0, readRefusedIn: 0, holdWrites: [] as unknown[], reads: [] as string[] }
   on('state.get', ($, e, next) => {
     if (e.plugin === 'builder') seen.reads.push(e.key)
+    if (e.plugin === 'builder' && e.key === 'batches' && seen.readRefusedIn > 0) {
+      seen.readRefusedIn -= 1
+      if (seen.readRefusedIn === 0) return { deny: 'the state could not be read' } as never
+    }
     if (e.plugin !== 'builder' || !left.has(e.key)) return next(e)
     return { value: { value: left.get(e.key), version: 0 } } as never
   })
@@ -259,6 +264,20 @@ test('a deadline whose write is refused tries again a minute later rather than a
   expect(w.passed.map(p => p.text)).not.toContain(deadlineLine(['Plan agent-2-']))
   w.state.refuses = false
   await w.clock.advance(1000)
+  await w.clock.settle()
+  expect(w.passed.map(p => p.text)).toContain(deadlineLine(['Plan agent-2-']))
+})
+
+test('a read refused while the deadline\'s timer is armed arms it again a minute later, so the deadline still fires', async ($, on) => {
+  const w = world(on)
+  await launched($)
+  // The delivery reads the batches before its write and in it, and then
+  // the timer's arming reads them; the third read is refused.
+  w.state.readRefusedIn = 3
+  await deliver($, report(ALPHA))
+  expect(w.state.readRefusedIn).toBe(0)
+  expect(w.state.value?.batches[0]?.deadline).not.toBeNull()
+  await w.clock.advance(BATCH_LIMIT_MS + BATCH_RETRY_MS)
   await w.clock.settle()
   expect(w.passed.map(p => p.text)).toContain(deadlineLine(['Plan agent-2-']))
 })

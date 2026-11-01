@@ -993,14 +993,25 @@ async function changeBatches($: $, change: (state: BatchState) => BatchState) {
 // Arms the batch deadline's timer for the soonest stored deadline, in place of
 // any timer armed before, so a deadline set before a hot reload still fires.
 // As in armStuck, a wait longer than TIMER_STEP_MS is taken in steps, and a
-// step that ends early finds nothing due and arms the next.
+// step that ends early finds nothing due and arms the next. When its reads
+// fail and no newer call has taken over, the timer is armed again through
+// rearmBatch before the failure goes on to the caller, as armStuck does,
+// because most callers drop that failure, so without this one refused read
+// would end a batch's deadline for good.
 async function armBatch($: $) {
   batchGen += 1
   const gen = batchGen
   batchTimer?.cancel()
   batchTimer = undefined
-  const due = nextDeadline(await storedBatches($))
-  const now = await $.clock.now()
+  let due: number | null
+  let now: number
+  try {
+    due = nextDeadline(await storedBatches($))
+    now = await $.clock.now()
+  } catch (error) {
+    if (gen === batchGen) rearmBatch($, gen)
+    throw error
+  }
   if (gen !== batchGen || due === null) return
   batchTimer = $.clock.after(stepDelay(due, now), () => {
     void fireBatch($).then(() => armBatch($)).catch(() => rearmBatch($, gen)).catch(() => undefined)
