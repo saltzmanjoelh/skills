@@ -393,6 +393,15 @@ export type ForemanNudgeText =
   | 'what\'s next?'
   | 'could you check that your background work is still making progress, and stop it if it hangs?'
 
+// The message builder sends the parent session each time its status file
+// changes, word for word, which foreman consumes and answers by reading its
+// folder at once. It carries no state and no session id. Builder's constant
+// and foreman's are both typed with this, so rewording it on one side alone
+// fails the type check. It does not begin with `foreman: `, because the wake
+// skill handles every line that begins that way.
+export type StatusChangedText =
+  'A builder status file changed. This message is for the foreman mod, which reads it; there is nothing to do.'
+
 // The tokens one model spent, in the four kinds the API reports: uncached
 // input, output, input read from the prompt cache and input written to it.
 // Each is a whole number of zero or more.
@@ -450,6 +459,12 @@ export type StatusMemo = {
   path: string | null
   // The desktop app's session id, read with the ticket, when it was set.
   desktopSessionId?: string
+  // The parent session's id, from the first prompt's `foreman-parent:` line,
+  // read with the ticket, when the line was there and its value passed the
+  // character rule. Builder sends the parent a message after each changed
+  // write. It is never written into the status file. A memo an older build
+  // saved without it, or with a value that cannot be read, reads as none.
+  parentSessionId?: string
   // The folder the session started in, read with the ticket.
   cwd: string
   // The state last written and when it began, or null before the first write.
