@@ -145,7 +145,7 @@ test('a start whose answer comes after the ledger lost its reservation is paired
   ])
 })
 
-test('a waiting sub session is not shown, not nudged and raises no wake, and a merge begins it with the fixed message and one line', async ($, on) => {
+test('a waiting sub session is not shown, not nudged and raises no wake, and a merge begins it with the fixed message and one notification', async ($, on) => {
   const { w, ui, live } = await queueOfTwo($, on)
   await minutesPass(w, 16, live)
   expect(w.desktop.sent).toEqual([])
@@ -158,10 +158,11 @@ test('a waiting sub session is not shown, not nudged and raises no wake, and a m
   await minutesPass(w, 2, { ...live, 'a.json': merged })
   expect(begins(w)).toEqual(['local_new2'])
   // ABC-1's file shows its pull request for the first time already merged,
-  // so the wake reports the opening and the merge, as it does today, and then
-  // the begin.
-  expect(w.engine.prompts).toEqual([
-    'foreman: ABC-1 opened pull request #7. ABC-1\'s pull request #7 merged. foreman began ABC-2, the next issue in the queue, in the slot ABC-1 freed; tell the person so in one line.',
+  // so one notification reports the opening and the merge, and then the
+  // begin, and nothing wakes the parent.
+  expect(w.engine.prompts).toEqual([])
+  expect(w.engine.notices).toEqual([
+    'ABC-1 opened pull request #7. ABC-1\'s pull request #7 merged. foreman began ABC-2, the next issue in the queue, in the slot ABC-1 freed.',
   ])
   const p = ledger(w).pairings.find(q => q.localId === 'local_new2')!
   expect(p.queue).toBeNull()
@@ -188,7 +189,8 @@ test('a slot freed while the desktop app\'s list fails is kept for the queue, an
   w.desktop.list = 'ok'
   await minutesPass(w, 1, rest)
   expect(begins(w)).toEqual(['local_new2'])
-  expect(w.engine.prompts).toEqual(['foreman: foreman began ABC-2, the next issue in the queue, in the slot ABC-1 freed; tell the person so in one line.'])
+  expect(w.engine.prompts).toEqual([])
+  expect(w.engine.notices).toEqual(['foreman began ABC-2, the next issue in the queue, in the slot ABC-1 freed.'])
   expect(ledger(w).keptSlots).toEqual([])
 })
 
@@ -200,7 +202,8 @@ test('a restart keeps a kept slot, and the first read that lists begins the wait
   await start($)
   await w.clock.settle()
   expect(begins(w)).toEqual(['local_b'])
-  expect(w.engine.prompts).toEqual(['foreman: foreman began ABC-2, the next issue in the queue, in the slot ABC-1 freed; tell the person so in one line.'])
+  expect(w.engine.prompts).toEqual([])
+  expect(w.engine.notices).toEqual(['foreman began ABC-2, the next issue in the queue, in the slot ABC-1 freed.'])
   expect(ledger(w).keptSlots).toEqual([])
 })
 
@@ -252,9 +255,9 @@ test('raising the slot count begins the waiting sub sessions in the new slots', 
   await foreman($, '3')
   await w.clock.settle()
   expect(begins(w)).toEqual(['local_new2', 'local_new3'])
-  expect(w.engine.prompts).toEqual([
-    'foreman: foreman began ABC-2, the next issue in the queue, in a free slot; tell the person so in one line.'
-    + ' foreman began ABC-3, the next issue in the queue, in a free slot; tell the person so in one line.',
+  expect(w.engine.prompts).toEqual([])
+  expect(w.engine.notices).toEqual([
+    'foreman began ABC-2, the next issue in the queue, in a free slot. foreman began ABC-3, the next issue in the queue, in a free slot.',
   ])
   await minutesPass(w, 2, live)
   expect(begins(w)).toEqual(['local_new2', 'local_new3'])
@@ -284,9 +287,8 @@ test('a begin that fails raises one notification and is tried again, not while t
   await minutesPass(w, 3, live)
   expect(ledger(w).held).toEqual(['ABC-2'])
   expect(ledger(w).pairings.some(q => q.localId === 'local_new2')).toBe(false)
-  expect(w.engine.notices).toEqual([failed])
   expect(begins(w)).toEqual(['local_new3'])
-  expect(w.engine.prompts.at(-1)).toBe('foreman: foreman began ABC-3, the next issue in the queue, in a free slot; tell the person so in one line.')
+  expect(w.engine.notices).toEqual([failed, 'foreman began ABC-3, the next issue in the queue, in a free slot.'])
 })
 
 test('a restart keeps the queue, and a claim whose begin never went is sent on the first read', async ($, on) => {
@@ -303,7 +305,8 @@ test('a restart keeps the queue, and a claim whose begin never went is sent on t
   await w.clock.settle()
   expect(begins(w)).toEqual(['local_b'])
   expect(ledger(w).pairings.map(p => [p.ticket, p.queue])).toEqual([['ft-b', null], ['ft-c', { place: 2, claim: null }]])
-  expect(w.engine.prompts).toEqual(['foreman: foreman began ABC-2, the next issue in the queue, in a free slot; tell the person so in one line.'])
+  expect(w.engine.prompts).toEqual([])
+  expect(w.engine.notices).toEqual(['foreman began ABC-2, the next issue in the queue, in a free slot.'])
   await w.clock.advance(30 * SECOND)
   await w.clock.settle()
   expect(begins(w)).toEqual(['local_b'])

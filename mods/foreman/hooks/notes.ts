@@ -1,14 +1,15 @@
 // The desktop app's notes and messages: the prompts it sends a parent each
 // time a session the parent started ends a turn, or sends it a message.
 // Foreman already shows its sub sessions in the pane and wakes the parent's
-// model when a decision is needed, so a prompt made only of turn-end notes
-// about sub sessions it tracks is rewritten to its log line, whose turn
+// model when a decision is needed, and it checks by itself a sub session it
+// holds no record of, so a prompt made only of turn-end notes about sub
+// sessions it tracks or checks is rewritten to its log line, whose turn
 // foreman answers itself without the model, and any other prompt made only of
 // the app's notes and messages reaches the model with one line asking for a
-// one-word reply, or, when a note is about a sub session foreman holds no
-// record of, asking for one check of it later. These functions say which
-// prompts those are and what the log and the lines say about them. Every
-// function is pure.
+// one-word reply, or, while foreman's role is off and the prompt holds a note
+// about a sub session it checks, one line that asks for a brief reply to the
+// rest of the prompt. These functions say which prompts those are and what the
+// log and the lines say about them. Every function is pure.
 //
 // A turn-end note is a <system-reminder> block that begins `The session
 // "<title>" you started (local_<id>) finished a turn`. The app often sends a
@@ -20,8 +21,8 @@
 
 import type { StatusChangedText } from 'builder'
 import type { ForemanPairing } from '../types'
-import { listOf, plural } from './text'
-import { LOCAL_ID } from './tickets'
+import { LOCAL_ID, WHOLE_LOCAL_ID } from './desktop'
+import { listOf } from './text'
 import { whoOf } from './wake'
 
 // What foreman's turn.step hook answers, in place of the model, for the turn
@@ -33,23 +34,25 @@ export const NOTED_REPLY = 'Noted.'
 // these say plainly that a foreman parent does not.
 export const FOREMAN_REPORTS = 'Foreman reports pull requests opened, verdicts, merges and closes in its own lines. In a foreman parent this overrides the app\'s request to report the outcome in one or two lines.'
 
-// The context foreman attaches to a prompt made only of the app's notes and
-// messages that it does not rewrite and that names no sub session foreman
-// holds no record of.
+// The context foreman attaches, while its role is on, to a prompt made only
+// of the app's notes and messages that it does not rewrite.
 export const NOTED = `From the foreman mod: this prompt holds only the desktop app's notes about sessions this parent started, or messages from them. Reply with the single word "Noted." and end the turn, unless one of them asks the person or this parent a question. ${FOREMAN_REPORTS}`
 
-// The context line for a prompt made only of the app's parts whose turn-end
-// notes name sub sessions foreman holds no record of: it names each by its
-// desktop session id, once and sorted, and asks for one check of each
-// `minutes` from now, as the wake skill's section on such sub sessions says,
-// in place of a bare "Noted.". The ids are the app's own, read with LOCAL_ID,
-// so nothing a sub session wrote is repeated.
-export function checkLine(ids: readonly string[], minutes: number): string {
-  const sorted = [...new Set(ids)].sort()
-  const one = sorted.length === 1
-  const list = listOf(sorted)
-  const them = one ? `the sub session ${list}, so nobody watches it` : `the sub sessions ${list}, so nobody watches them`
-  return `From the foreman mod: foreman holds no record of ${them}. Instead of replying with a bare "Noted.", schedule one check of ${one ? 'it' : 'each'} for ${plural(minutes, 'minute')} from now, as the foreman:wake skill's section "Checking a sub session foreman does not watch" says, and reply briefly to the rest of this prompt.`
+// The context foreman attaches, while its role is off, to a prompt made only
+// of the app's notes and messages that it does not rewrite and that holds a
+// turn-end note about a sub session it checks beside other notes or messages.
+// While the role is off only the model reports the other sessions' outcomes,
+// so the line asks for no "Noted.": it says foreman records the notes about
+// the checked sub sessions `ids` itself, so the model does not reply to them,
+// and asks for a brief reply to the rest of the prompt, because the wake
+// skill's rule of a bare "Noted." would otherwise swallow the other outcomes.
+// The ids are named once and sorted, and only ids that match WHOLE_LOCAL_ID,
+// which every id partsOf reads does, so no other text a sub session wrote is
+// repeated.
+export function checkedLine(ids: readonly string[]): string {
+  const sorted = [...new Set(ids)].filter(id => WHOLE_LOCAL_ID.test(id)).sort()
+  const sessions = sorted.length === 1 ? 'the sub session' : 'the sub sessions'
+  return `From the foreman mod: foreman records the turn-end notes about ${sessions} ${listOf(sorted)} itself, so do not reply to them. Reply briefly to the rest of this prompt, not with a single word.`
 }
 
 const OPEN = '<system-reminder>'
@@ -80,10 +83,17 @@ const FINISHED = new RegExp(`^(${LOCAL_ID.source})\\) finished a turn`)
 // names, another note about a session the parent started, or none of these.
 type Block = { kind: 'status' } | { kind: 'turn-end'; id: string } | { kind: 'other-note' } | null
 
+// A note that holds `you started (local_` more than once is read as another
+// note, with no turn-end id. The title before the app's id is the sub
+// session's own text, so a title can forge a turn-end about another session,
+// and foreman would then check and nudge that one instead. Such a note goes
+// to the parent's model as any other note does.
 function blockOf(body: string): Block {
   const text = body.trimStart()
   if (text.startsWith(STATUS_HEAD)) return { kind: 'status' }
   if (!text.startsWith(NOTE_HEAD)) return null
+  const first = text.indexOf(ANY_NOTE)
+  if (first !== -1 && text.includes(ANY_NOTE, first + 1)) return { kind: 'other-note' }
   const at = text.indexOf(STARTED)
   const id = at === -1 ? undefined : FINISHED.exec(text.slice(at + STARTED.length))?.[1]
   if (id !== undefined) return { kind: 'turn-end', id }
@@ -188,7 +198,7 @@ function partsOf(text: string): Parts | null {
 // another kind or messages come with them, and empty for any other text.
 // `wantsNoted` says whether the text is made only of the app's parts and holds
 // at least one note or message, so that the model reading it should get the
-// Noted line or the check line.
+// Noted line.
 export function notesIn(text: string): { turnEnds: string[] | null; allTurnEnds: string[]; wantsNoted: boolean } {
   const parts = partsOf(text)
   if (parts === null) return { turnEnds: null, allTurnEnds: [], wantsNoted: false }
@@ -241,9 +251,11 @@ export function keptNames(ids: readonly string[], pairings: readonly ForemanPair
 }
 
 // The log line for one rewritten prompt, which is also the text the prompt is
-// rewritten to. The number of sub sessions, not of notes, decides between
-// note and notes, so a repeat of the same rewrite gives the same line and the
-// log counts it on the one before.
+// rewritten to. `names` are the names keptNames gives tracked sub sessions and
+// the bare `local_…` ids of sub sessions foreman checks, sorted. The number of
+// sub sessions, not of notes, decides between note and notes, so a repeat of
+// the same rewrite gives the same line and the log counts it on the one
+// before.
 export function keptLine(names: readonly string[]): string {
   const owned = names.map(name => `${name}'s`)
   return `Kept ${listOf(owned)} turn-end ${owned.length === 1 ? 'note' : 'notes'} from the parent's model.`

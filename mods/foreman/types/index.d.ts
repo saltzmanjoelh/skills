@@ -101,20 +101,35 @@ export type ForemanPairing = {
 // Something to do outside the ledger: a nudge to a desktop session, naming
 // the sub session for the log, a notification with its text, or the begin
 // message to the waiting sub session of `ticket`, whose desktop session is
-// `to`. A nudge's `about` is 'background' for a sub session that waits only
+// `to`. A notification is `quiet` when the log already holds its text, so
+// only a failure to raise it is logged. A nudge's `about` is 'background' for a sub session that waits only
 // on background work, which gets its own text, and is absent for an idle one.
 // A begin's `key` is its issue key, or null, and `by` names the sub session
 // whose slot it takes, or is null when the slot was free already.
 export type ForemanEffect =
   | { kind: 'nudge'; to: string; name: string; about?: 'background' }
-  | { kind: 'notify'; text: string }
+  | { kind: 'notify'; text: string; quiet?: true }
   | { kind: 'begin'; to: string; ticket: string; key: string | null; by: string | null }
 
-// What foreman decided and has not yet carried out: log lines, effects, and
-// lines that wake the parent. A read puts its decision here in the same
-// update that records it, and carrying it out takes it back out, so a hot
-// reload that drops the timer in between loses nothing.
-export type ForemanOutbox = { logs: string[]; effects: ForemanEffect[]; lines: string[] }
+// What foreman decided and has not yet carried out: log lines, effects,
+// lines that wake the parent, and report sentences that foreman shows itself
+// in its band, its pane and a notification without waking anyone. A read
+// puts its decision here in the same update that records it, and carrying it
+// out takes it back out, so a hot reload that drops the timer in between
+// loses nothing.
+export type ForemanOutbox = { logs: string[]; effects: ForemanEffect[]; lines: string[]; reports: string[] }
+
+// A sub session foreman holds no record of, which foreman checks by itself
+// after a turn-end note about it. `id` is its `local_…` id, `notedAt` when
+// foreman read the last note about it, and `dueAt` when foreman next reads
+// its events. `nudged` says foreman sent it the nudge text, and `answered`
+// that the first note after the nudge has come, which counts as the answer
+// to the nudge. Only a nudged record is answered. `sending` says foreman
+// marked the record nudged but the nudge has not gone yet. A note that comes
+// while the copy of foreman that marked it is still sending counts as the
+// answer, but a record that a hot reload left with it set was never nudged,
+// so a note about it counts as new work. Only a nudged record is sending.
+export type ForemanCheck = { id: string; notedAt: number; dueAt: number; nudged: boolean; answered: boolean; sending: boolean }
 
 // Tokens in the four kinds the API reports: uncached input, output, input
 // read from the prompt cache and input written to it. Each is a whole number
@@ -147,6 +162,8 @@ export type ForemanSpent = ForemanSpend & { ticket: string }
 // `keptSlots` names, oldest first, each slot that freed on a read which could
 // not read the desktop app's list while a sub session waited unclaimed, kept
 // for the queue until a later read decides it as if it had freed then.
+// `checks` holds the sub sessions foreman holds no record of that it checks
+// by itself, oldest note first.
 export type ForemanTickets = {
   pairings: ForemanPairing[]
   folderMissing: boolean
@@ -157,6 +174,7 @@ export type ForemanTickets = {
   spent: ForemanSpent[]
   earlier: ForemanSpend | null
   keptSlots: string[]
+  checks: ForemanCheck[]
 }
 
 declare module 'claude-code' {
@@ -188,6 +206,10 @@ declare module 'claude-code' {
       // answered without the model only when the conversation ends with this
       // line alone.
       quietLine: string | null
+      // The newest report sentence foreman showed and when it showed it, so
+      // the band can show it for a while, or null before the first. It is
+      // kept in $.state only, so it outlives a hot reload but not a restart.
+      report: { text: string; at: number } | null
     }
   }
 }

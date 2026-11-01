@@ -11,9 +11,9 @@
 
 import type { PromptSubmitInput, ToolCallResult } from 'claude-code'
 
-import type { Listed } from './desktop'
+import { LOCAL_ID, type Listed } from './desktop'
 import { listOf } from './text'
-import { KEYED_TITLE, LOCAL_ID } from './tickets'
+import { KEYED_TITLE } from './tickets'
 
 // The words foreman recognises the two refusals by, in the app's own wording.
 // The desktop app refuses start_session with: "The user is working over

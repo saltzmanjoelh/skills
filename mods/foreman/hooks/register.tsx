@@ -1,15 +1,16 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PromptSubmitInput, Register, ResolveInput, ToolCallResult } from 'claude-code'
 
+import { checkOutcome, clampedDue, endsOf, isClaimed, soonestDue, withNote, withoutPaired, type CheckDone } from './checks'
 import { CALL_TIMEOUT_MS, decide, desktopOf, freeSlots, GONE_MS, keptByUnreadList, needsList, slotOutcome, startWaits, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
 import { isSvgSurface } from './art'
 import { becameParentAnswer, COMMAND, commandOf, PASSED_ON, PASTED_LINE, pastedCommandIn, slotsAnswer, type Command } from './commands'
-import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, failureLine, listSessions, NUDGE_TEXT, openSession, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
+import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, failureLine, linkedFamily, listSessions, NUDGE_TEXT, openSession, readHeader, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
 import { acceptedLog, beginFailedNotice, heldLine, heldLog, heldNotice, heldSentence, isHeldRefusal, isPersonPrompt, keyOfTitle } from './held'
 import { ignoredLine, readIssueLink } from './links'
-import { checkLine, FOREMAN_REPORTS, isAppParts, isStatusChanged, keptLine, keptNames, NOTED, NOTED_REPLY, notesIn } from './notes'
-import { bandTree, PANE, paneTree, type Elements, type View } from './pane'
-import type { ForemanEffect, ForemanParent, ForemanTickets } from '../types'
+import { checkedLine, isAppParts, isStatusChanged, keptLine, keptNames, NOTED, NOTED_REPLY, notesIn } from './notes'
+import { bandTree, PANE, paneTree, shownReport, type Elements, type View } from './pane'
+import type { ForemanCheck, ForemanEffect, ForemanParent, ForemanTickets } from '../types'
 import { PARENT_OFF, parentIn, slotsOf, storeKey } from './parent'
 import { usageIn } from './record'
 import { spendOf, spentSum } from './spend'
@@ -19,7 +20,7 @@ import {
   addWork, briefFor, carriesTicket, fallbackOf, hasWork, isOffRefused, joinOwners, localIdIn, newPairing, nextPlace, NO_TICKET_SENTENCE, OFF_LOG, OFF_REFUSAL, OUTBOX_EMPTY, ownsTicket,
   runsImplement, shownRows, ticketsIn, ticketsKey, TICKETS_EMPTY, waitingBrief, waitingUnclaimed, WAITING_SENTENCE, withOffRefusal, withUnwatched,
 } from './tickets'
-import { REASON_WORDS, wakeLine, whoOf, withSentences } from './wake'
+import { REASON_WORDS, splitReasons, wakeLine, whoOf } from './wake'
 
 type $ = EngineInterface
 
@@ -34,6 +35,9 @@ const log = atom({ plugin: 'foreman', key: 'log' } as const, [])
 const tickets = atom({ plugin: 'foreman', key: 'tickets' } as const, TICKETS_EMPTY)
 const turnRuns = atom({ plugin: 'foreman', key: 'turnRuns' } as const, false)
 const quietLine = atom({ plugin: 'foreman', key: 'quietLine' } as const, null)
+// The newest report sentence foreman showed and when, for the band. It is
+// never stored in the ledger, so a restart drops it.
+const report = atom({ plugin: 'foreman', key: 'report' } as const, null)
 
 // The spending builder publishes for the session it runs in, which ownSpend
 // reads. Builder writes it; foreman only reads it.
@@ -76,6 +80,11 @@ let timer: { cancel: () => void } | undefined
 let ticker: { cancel: () => void } | undefined
 // The read under way, so a second one waits for it rather than racing it.
 let reading: Promise<void> | undefined
+// The last pass of checks of sub sessions foreman holds no record of, so the
+// next one waits for it and two never overlap.
+let checking: Promise<void> = Promise.resolve()
+// The timer that makes those checks while the role is off.
+let checkTimer: { cancel: () => void } | undefined
 // The plugin's options, as register received them. Everything reads them
 // from here.
 let currentOptions: Record<string, unknown> = {}
@@ -279,9 +288,10 @@ function readNow($: $): Promise<void> {
 // One read: the role is checked first, because a read the timer started may
 // find it turned off. A listing that failed keeps the files and the time of
 // the last read. Then foreman decides what the read leads to, schedules the
-// next read, and only then carries out the decision, without waiting for it,
-// so a desktop tool that is slow to answer never holds the reads up. The next
-// read comes at the usual delay, or sooner when a nudge or a wake falls due.
+// next read, and only then carries out the decision and, when a check fell
+// due, makes the checks, without waiting for them, so a desktop tool that is
+// slow to answer never holds the reads up. The next read comes at the usual
+// delay, or sooner when a nudge, a wake or a check falls due.
 async function readAndSchedule($: $) {
   try {
     if (!(await isOn($))) return
@@ -292,12 +302,17 @@ async function readAndSchedule($: $) {
       await update($, files, kept => afterRead(Array.isArray(kept) ? kept : [], found))
       await update($, readAt, () => now)
     }
-    const { decision, rows } = await decideNow($, listing.exists, listing.found !== null, now)
+    const { decision, rows, written } = await decideNow($, listing.exists, listing.found !== null, now)
     const usual = nextReadDelay(shownRows(rows, decision.tickets))
-    const delay = decision.nextDueAt === null ? usual : Math.min(usual, Math.max(decision.nextDueAt - now, SOONEST_READ_MS))
+    const checkDue = soonestDue(written.checks)
+    const dues = [decision.nextDueAt, checkDue].filter((at): at is number => at !== null)
+    const delay = dues.length === 0 ? usual : Math.min(usual, Math.max(Math.min(...dues) - now, SOONEST_READ_MS))
     schedule($, delay)
     await update($, nextReadAt, () => now + delay)
-    later($, () => carryOut($))
+    later($, async () => {
+      await carryOut($)
+      if (checkDue !== null && checkDue <= now) await checkNow($)
+    })
   } catch {
     // A read that failed partway still schedules the next one, after the
     // slow interval, so a parent left alone keeps refreshing. Only when that
@@ -326,10 +341,15 @@ function later($: $, work: () => Promise<unknown>) {
 // a rule, a held key or the queue needs it, and decides what the read leads
 // to, inside the ledger's update, so the decision and the ledger it was made
 // on are written together and no other writer can claim the same nudge, wake
-// or begin. A list that could not be read is logged with what it kept from
-// happening: a freed slot when a slot rule needed it, else a released hold
-// when a key is held, and otherwise a queued issue begun or dropped.
-async function decideNow($: $, folderExists: boolean, listed: boolean, now: number): Promise<{ decision: Decision; rows: SubRow[] }> {
+// or begin. A check of a sub session that a pairing now holds is dropped in
+// the same update, since the pairing's own watch takes over, and a due time
+// that lies too far ahead is pulled in, so it stays where it was put rather
+// than being pushed on at every read. The ledger written comes back with the
+// decision, so the caller schedules the checks without reading it again. A
+// list that could not be read is logged with what it kept from happening: a
+// freed slot when a slot rule needed it, else a released hold when a key is
+// held, and otherwise a queued issue begun or dropped.
+async function decideNow($: $, folderExists: boolean, listed: boolean, now: number): Promise<{ decision: Decision; rows: SubRow[]; written: ForemanTickets }> {
   const rows = await rowsNow($)
   const before = joinOwners(ticketsIn(await read($, tickets)), rows).tickets
   let sessions: SessionsLook = { kind: 'unread' }
@@ -347,14 +367,16 @@ async function decideNow($: $, folderExists: boolean, listed: boolean, now: numb
   const settings = parentIn(await read($, parent))
   const input = { rows, now, limits: limitsOf(currentOptions), sessions, folderExists, listed, slots: slotsOf(settings, currentOptions.slots) }
   let decision: Decision = { tickets: TICKETS_EMPTY, effects: [], reasons: [], logs: [], nextDueAt: null }
-  await writeTickets($, t => {
+  const written = await writeTickets($, t => {
     const joined = joinOwners(t, rows)
     decision = decide({ ...input, tickets: joined.tickets })
-    const line = wakeLine(decision.reasons)
-    const work = { logs: [...joined.logs, ...decision.logs], effects: decision.effects, lines: line === null ? [] : [line] }
-    return { ...decision.tickets, outbox: addWork(decision.tickets.outbox, work) }
+    const { wakes, reports } = splitReasons(decision.reasons)
+    const line = wakeLine(wakes)
+    const work = { logs: [...joined.logs, ...decision.logs], effects: decision.effects, lines: line === null ? [] : [line], reports }
+    const checks = clampedDue(withoutPaired(decision.tickets.checks, decision.tickets.pairings), now, input.limits.idleMs)
+    return { ...decision.tickets, checks, outbox: addWork(decision.tickets.outbox, work) }
   })
-  return { decision, rows }
+  return { decision, rows, written }
 }
 
 // What `within` answers when the call did not answer in time.
@@ -387,12 +409,15 @@ async function nudge($: $, to: string, name: string, why: string, text = NUDGE_T
   await addLog($, result === 'sent' ? `Nudged ${name} with "${text}"${why}.` : `Could not nudge ${name}: ${sendFailure(result)}.`)
 }
 
-// Raises one native notification and logs how it went.
-async function notify($: $, text: string) {
+// Raises one native notification and logs how it went. A `quiet` one, whose
+// text the log already holds, logs only a failure to raise it.
+async function notify($: $, text: string, { quiet = false } = {}) {
   try {
     const sent = await within($, $.ui.notify(text, { title: 'foreman' }))
     if (sent === TIMED_OUT) await addLog($, `Could not raise a notification, because it did not go within ${CALL_TIMEOUT_MS / 1000} seconds: ${text}`)
-    else if (sent.isSent) await addLog($, `Raised a notification: ${text}`)
+    else if (sent.isSent) {
+      if (!quiet) await addLog($, `Raised a notification: ${text}`)
+    }
     else await addLog($, `Could not raise a notification (${sent.reason}): ${text}`)
   } catch {
     await addLog($, `Could not raise a notification: ${text}`)
@@ -402,7 +427,7 @@ async function notify($: $, text: string) {
 // Sends one waiting sub session its begin message and records how it went,
 // in one ledger update. A begin that went takes the pairing out of the queue
 // and sets its pairing time to now, so it counts as busy and is watched like
-// any other from here, and answers the began sentence for the wake. A begin
+// any other from here, and answers the began sentence as a report. A begin
 // that did not go keeps the claim, records the time of this try, and raises
 // the notification only when this update is the one that first marked the
 // failure as told, so two tries at once raise one. It answers null then, and
@@ -439,13 +464,12 @@ async function beginOne($: $, effect: Extract<ForemanEffect, { kind: 'begin' }>)
 }
 
 // Carries out what the ledger's outbox holds: its log lines, then its nudges,
-// notifications and begin messages, then the lines that wake the parent, each
-// logged with how it went. A nudge for a sub session that waits only on
-// background work asks about that work, and its log line says so. The began
-// sentence of each begin that went is added to the wake, after the line's own
-// sentences, so the parent hears it in the same wake as the merge that freed
-// the slot. The outbox is emptied first, in one update, so two callers never
-// carry out the same work.
+// notifications and begin messages, then its report sentences together with
+// the began sentence of each begin that went, which foreman shows itself,
+// and last the lines that wake the parent, each logged with how it went. A
+// nudge for a sub session that waits only on background work asks about that
+// work, and its log line says so. The outbox is emptied first, in one update,
+// so two callers never carry out the same work.
 async function carryOut($: $) {
   let work = OUTBOX_EMPTY
   await writeTickets($, t => {
@@ -455,7 +479,7 @@ async function carryOut($: $) {
   if (!hasWork(work)) return
   await addLogs($, work.logs)
   const done = await Promise.all(work.effects.map(async (effect): Promise<string | null> => {
-    if (effect.kind === 'notify') await notify($, effect.text).catch(() => undefined)
+    if (effect.kind === 'notify') await notify($, effect.text, { quiet: effect.quiet === true }).catch(() => undefined)
     else if (effect.kind === 'begin') return beginOne($, effect).catch(() => null)
     else {
       await (effect.about === 'background'
@@ -465,7 +489,20 @@ async function carryOut($: $) {
     return null
   }))
   const began = done.flatMap(sentence => (sentence === null ? [] : [sentence]))
-  for (const line of withSentences(work.lines, began)) await wake($, line)
+  await showReports($, [...work.reports, ...began]).catch(() => undefined)
+  for (const line of work.lines) await wake($, line)
+}
+
+// Shows report sentences without waking the parent's model: each as a line
+// in the log, the newest in the band from now, and all of them joined in one
+// notification, which logs only a failure to raise it, since the log already
+// holds the sentences.
+async function showReports($: $, sentences: readonly string[]) {
+  if (sentences.length === 0) return
+  await addLogs($, sentences)
+  const at = await $.clock.now()
+  await update($, report, () => ({ text: sentences.at(-1)!, at }))
+  await notify($, sentences.join(' '), { quiet: true })
 }
 
 // Wakes the parent's model with one line: appended to the turn that runs, or
@@ -487,6 +524,133 @@ async function wake($: $, line: string) {
   } catch (error) {
     await addLog($, `Could not wake the parent (${reasonOf(error)}): ${line}`)
   }
+}
+
+// Makes the checks that fell due, after the pass under way, if any, so two
+// passes never overlap.
+function checkNow($: $): Promise<void> {
+  checking = checking.then(() => runDueChecks($)).catch(() => undefined)
+  return checking
+}
+
+// One pass over the checks of sub sessions foreman holds no record of. First,
+// in one ledger update, it drops the records a pairing now holds, pulls in a
+// due time that lies too far ahead, and claims every record that fell due by
+// moving its due time an idle period on, so a second pass, here or in a copy
+// of the module after a hot reload, finds nothing due. Then it reads each
+// claimed sub session's events header, and nudges it when checkOutcome says
+// so, but only a sub session in this parent's family of linked sessions, read
+// once for the pass before any header. A note's ids come from text a sub
+// session's title can forge, so a forged id must reach no read and no nudge.
+// A family that could not be read ends every claimed record as a failed read,
+// and an id missing from a family that may be incomplete is checked as usual.
+// Last, in a second update, endsOf decides which records the outcomes end and
+// the log lines, the notification and the wake they leave, and those go
+// into the outbox in that same update, so a reload cannot lose them, and are
+// then carried out. The pass ends by arming the timer for the next check while
+// the role is off, and by carrying out any work still left in the outbox then.
+async function runDueChecks($: $) {
+  try {
+    const now = await $.clock.now()
+    const { idleMs } = limitsOf(currentOptions)
+    let claims: ForemanCheck[] = []
+    await writeTickets($, t => {
+      const kept = clampedDue(withoutPaired(t.checks, t.pairings), now, idleMs)
+      claims = kept.filter(c => c.dueAt <= now).map(c => ({ ...c, dueAt: now + idleMs }))
+      if (kept === t.checks && claims.length === 0) return t
+      return { ...t, checks: kept.map(c => claims.find(claim => claim.id === c.id) ?? c) }
+    })
+    if (claims.length === 0) return
+    const family = await within($, linkedFamily(desktopCall($))).catch(() => ({ reason: REASONS.notConnected }))
+    const refusal = (id: string): string | null => {
+      if (family === TIMED_OUT) return NO_ANSWER
+      if ('reason' in family) return family.reason
+      return family.complete && !family.ids.includes(id) ? REASONS.notLinked : null
+    }
+    const done = await Promise.all(claims.map(claim => {
+      const reason = refusal(claim.id)
+      return reason === null ? checkOne($, claim) : { claim, outcome: { kind: 'drop-failed' as const, reason } }
+    }))
+    let queued = false
+    await writeTickets($, t => {
+      const ended = endsOf(done, t.checks)
+      queued = ended.checks !== t.checks
+      return queued ? { ...t, checks: ended.checks, outbox: addWork(t.outbox, ended.work) } : t
+    })
+    if (queued) await carryOut($)
+  } finally {
+    await ensureOffRoleWork($).catch(() => undefined)
+  }
+}
+
+// The ids of the sub sessions whose nudge this copy of the module is sending
+// right now. A hot reload starts it empty, so a record left marked as sending
+// by the copy before is never taken for one whose nudge is still out.
+const nudgesOut = new Set<string>()
+
+// The check of one claimed record: its sub session's events header read
+// within CALL_TIMEOUT_MS, a read that did not answer in time counting as a
+// failed one, and what checkOutcome makes of it. A nudge first marks the
+// record nudged, only while it still holds its claim, so the note of the turn
+// the nudge starts finds the mark even when it comes before the send answers,
+// and then sends the nudge text. The same update marks the nudge as still
+// being sent, so a hot reload before the send leaves a record that the next
+// pass nudges again rather than one it wakes the parent about, and the mark is
+// cleared once the nudge went, only while the record still holds its claim.
+// A record that a note overtook is not nudged. A nudge that went, or one left
+// out, leaves the record as it stands, and one that did not go is a failed
+// check, which endsOf honours even when a note overtook the record during the
+// send. While the send is out, the id is in nudgesOut, so a note that comes
+// then counts as the answer to the nudge.
+async function checkOne($: $, claim: ForemanCheck): Promise<CheckDone> {
+  const look = await within($, readHeader(desktopCall($), claim.id)).catch(() => ({ reason: REASONS.notConnected }))
+  const outcome = checkOutcome(claim, look === TIMED_OUT ? { reason: NO_ANSWER } : look)
+  if (outcome.kind !== 'nudge') return { claim, outcome }
+  let marked = false
+  await writeTickets($, t => {
+    marked = t.checks.some(c => isClaimed(c, claim))
+    return marked ? { ...t, checks: t.checks.map(c => (isClaimed(c, claim) ? { ...c, nudged: true, answered: false, sending: true } : c)) } : t
+  })
+  if (!marked) return { claim, outcome: { kind: 'later' } }
+  nudgesOut.add(claim.id)
+  const sent = await within($, sendMessage(desktopCall($), claim.id, NUDGE_TEXT))
+    .catch((): SendResult => 'not-connected')
+    .finally(() => nudgesOut.delete(claim.id))
+  if (sent !== 'sent') return { claim, outcome: { kind: 'nudge-failed', reason: sendFailure(sent) } }
+  await writeTickets($, t => (t.checks.some(c => isClaimed(c, claim) && c.sending)
+    ? { ...t, checks: t.checks.map(c => (isClaimed(c, claim) ? { ...c, sending: false } : c)) }
+    : t))
+  await addLog($, `Nudged the sub session ${claim.id} with "${NUDGE_TEXT}", because it has been idle.`)
+  return { claim, outcome: { kind: 'later' } }
+}
+
+// Does what the role being off leaves to the hooks, from one read of the role
+// and one parse of the ledger. It arms the timer for the checks at the soonest
+// due time of the records, replacing any timer already armed, or none when no
+// record is left, and carries out work left in the outbox, as when a check
+// queued it and a hot reload dropped the call that would have carried it out.
+// While the role is on it cancels the timer and carries out nothing, because
+// the read loop makes the checks then and ensureArmed carries out the outbox.
+// It reads the role every time, so every hook that calls it hands the checks
+// to whichever of the two applies, and the first hook after a hot reload arms
+// the timer again and carries out the work left behind.
+async function ensureOffRoleWork($: $) {
+  if (await isOn($)) {
+    checkTimer?.cancel()
+    checkTimer = undefined
+    return
+  }
+  const t = ticketsIn(await read($, tickets))
+  const now = await $.clock.now()
+  const due = soonestDue(clampedDue(t.checks, now, limitsOf(currentOptions).idleMs))
+  checkTimer?.cancel()
+  checkTimer = due === null
+    ? undefined
+    : $.clock.after(Math.max(due - now, 0), () => {
+      checkTimer = undefined
+      void checkNow($).catch(() => undefined)
+    })
+  if (hasWork(t.outbox)) later($, () => carryOut($))
 }
 
 // Arms the timer for the next read `delay` from now, replacing any timer
@@ -542,16 +706,18 @@ async function view($: $, withSpending: boolean): Promise<View> {
   const lines = await read($, log)
   const ledger = settings.isOn ? ticketsIn(await read($, tickets)) : null
   const isSpendingShown = withSpending && ledger !== null
+  const now = await $.clock.now()
   return {
     isOn: settings.isOn,
     slots: slotsOf(settings, currentOptions.slots),
     rows: ledger === null ? [] : shownRows(await rowsNow($), ledger),
-    now: await $.clock.now(),
+    now,
     nextReadAt: typeof due === 'number' && Number.isFinite(due) ? due : null,
     log: Array.isArray(lines) ? lines : [],
     issueLink: settings.isOn ? issueAddress : null,
     subsSpent: isSpendingShown ? spentSum(ledger) : null,
     ownSpent: isSpendingShown ? await ownSpend($) : null,
+    report: settings.isOn ? shownReport(await read($, report), now) : null,
   }
 }
 
@@ -820,42 +986,62 @@ function withAnswer(t: ForemanTickets, ticket: string, localId: string | null, a
 // another hook added each mean there is something more for the model to read.
 const isPlain = (e: PromptSubmitInput) => e.command === undefined && (e.attachments?.length ?? 0) === 0 && (e.context?.length ?? 0) === 0
 
-// What foreman does with a prompt made only of the app's notes and messages.
-// While the role is on, it keeps the prompt from the parent's model by
-// rewriting it to the log line for it, when it is made of turn-end notes about
-// sub sessions this parent tracks. Otherwise, when a turn-end note in it is
-// about a sub session foreman holds no record of, the prompt goes on with the
-// check line, which asks for one later check of each such sub session: while
-// the role is on, one whose id no pairing holds, whatever its standing, and
-// while it is off, one in the unwatched list. While the role is on, any other
-// such prompt goes on with the Noted line. Every other prompt goes on as it
-// came, which withPasted or withHeld may give a line.
+// What foreman does with a prompt made only of the app's notes and messages,
+// and the ids of the sub sessions foreman holds no record of whose turn-end
+// notes it holds, which foreman then checks by itself: while the role is on,
+// each one whose id no pairing holds, whatever its standing, and while it is
+// off, each one in the unwatched list. A prompt made only of turn-end notes,
+// each about a sub session foreman checks or, while the role is on, one this
+// parent tracks, is kept from the parent's model by rewriting it to the log
+// line for it, which names a checked one by its bare id. While the role is
+// on, any other such prompt goes on with the Noted line. While it is off, one
+// that holds a note about a sub session foreman checks beside anything else
+// goes on with the checked line, which names the checked ids and asks for a
+// brief reply to the rest of the prompt, because only the model reports the
+// other sessions' outcomes then, and every other prompt goes on as it came,
+// which withPasted or withHeld may give a line.
 // The text is checked before any state is read, so a prompt the person typed
 // waits here on no read, and the ledger is read only for a prompt that holds
 // a turn-end note. A prompt the person typed that goes on does wait for
 // reads of the role and the ledger, to learn whether foreman is off or any key
 // is held.
-type Choice = { kind: 'keep'; line: string } | { kind: 'check'; context: string[] } | { kind: 'noted' } | { kind: 'pass' }
+type Choice = { kind: 'keep'; line: string; checks: string[] } | { kind: 'context'; context: string; checks: string[] } | { kind: 'pass' }
 
 async function choiceFor($: $, e: PromptSubmitInput): Promise<Choice> {
   if (!isPlain(e)) return { kind: 'pass' }
   const notes = notesIn(e.text)
   if (!notes.wantsNoted) return { kind: 'pass' }
-  const minutes = limitsOf(currentOptions).idleMs / 60_000
-  // While the role is off, only a sub session in the unwatched list gets the
-  // check line, and every other prompt goes on as it came.
-  if (!(await isOn($))) {
-    if (notes.allTurnEnds.length === 0) return { kind: 'pass' }
-    const { unwatched } = ticketsIn(await read($, tickets))
-    const unrecorded = notes.allTurnEnds.filter(id => unwatched.includes(id))
-    return unrecorded.length === 0 ? { kind: 'pass' } : { kind: 'check', context: [checkLine(unrecorded, minutes)] }
+  const on = await isOn($)
+  if (notes.allTurnEnds.length === 0) return on ? { kind: 'context', context: NOTED, checks: [] } : { kind: 'pass' }
+  const { pairings, unwatched } = ticketsIn(await read($, tickets))
+  const isChecked = (id: string) => (on ? !pairings.some(p => p.localId === id) : unwatched.includes(id))
+  const checks = [...new Set(notes.allTurnEnds.filter(isChecked))]
+  if (notes.turnEnds !== null) {
+    const tracked = notes.turnEnds.filter(id => !isChecked(id))
+    // Every note is about a checked sub session, so the prompt is kept and its
+    // line names only those.
+    if (tracked.length === 0) return { kind: 'keep', line: keptLine([...checks].sort()), checks }
+    // While the role is on, the prompt is kept when every other note is about
+    // a sub session foreman tracks, and its line names those too.
+    if (on) {
+      const names = keptNames(tracked, pairings)
+      if (names !== null) return { kind: 'keep', line: keptLine([...names, ...checks].sort()), checks }
+    }
+    // While the role is off, a note about a sub session foreman does not check
+    // reaches the parent's model, so the prompt is not kept.
   }
-  if (notes.allTurnEnds.length === 0) return { kind: 'noted' }
-  const { pairings } = ticketsIn(await read($, tickets))
-  const names = notes.turnEnds === null ? null : keptNames(notes.turnEnds, pairings)
-  if (names !== null) return { kind: 'keep', line: keptLine(names) }
-  const unrecorded = notes.allTurnEnds.filter(id => !pairings.some(p => p.localId === id))
-  return unrecorded.length === 0 ? { kind: 'noted' } : { kind: 'check', context: [checkLine(unrecorded, minutes), FOREMAN_REPORTS] }
+  if (on) return { kind: 'context', context: NOTED, checks }
+  return checks.length === 0 ? { kind: 'pass' } : { kind: 'context', context: checkedLine(checks), checks }
+}
+
+// Records a turn-end note, read now, about each of the sub sessions `ids`
+// names, in one ledger update, so each one's check falls due an idle period
+// from now.
+async function noteChecks($: $, ids: readonly string[]) {
+  if (ids.length === 0) return
+  const now = await $.clock.now()
+  const { idleMs } = limitsOf(currentOptions)
+  await writeTickets($, t => ({ ...t, checks: ids.reduce((checks, id) => withNote(checks, id, now, idleMs, nudgesOut.has(id)), t.checks) }))
 }
 
 // The prompt with the pasted line added to its context, when it is the
@@ -975,7 +1161,8 @@ async function applyCommand($: $, command: Exclude<Command, { kind: 'refused' }>
 }
 
 // Turns the role on, reads the Issue link fact when the session was not
-// already the parent, reads the status folder and opens the pane.
+// already the parent, reads the status folder, hands the checks to the read
+// loop and opens the pane.
 async function becomeParent($: $) {
   const wasOn = await isOn($)
   await writeParent($, p => ({ ...p, isOn: true }))
@@ -984,6 +1171,7 @@ async function becomeParent($: $) {
   // before the pane opens. Opened first, the pane would draw from no read at
   // all and say that the folder holds no sub sessions until the read landed.
   await ensureArmed($)
+  await ensureOffRoleWork($).catch(() => undefined)
   await $.ui.open({ id: PANE, title: 'foreman' }).catch(() => undefined)
 }
 
@@ -1025,7 +1213,7 @@ export const register: Register = (on, options) => {
       await update($, tickets, heldRaw => {
         const held = ticketsIn(heldRaw)
         const isEmpty = held.pairings.length === 0 && !hasWork(held.outbox) && held.held.length === 0 && held.offRefusedFor === null && held.unwatched.length === 0
-          && held.spent.length === 0 && held.earlier === null && held.keptSlots.length === 0
+          && held.spent.length === 0 && held.earlier === null && held.keptSlots.length === 0 && held.checks.length === 0
         return isEmpty ? storedTickets : held
       })
     }
@@ -1037,6 +1225,7 @@ export const register: Register = (on, options) => {
         await ensureArmed($)
       }
     }
+    void ensureOffRoleWork($).catch(() => undefined)
     return next(e)
   })
 
@@ -1059,17 +1248,20 @@ export const register: Register = (on, options) => {
   // again. Neither waits for the arming, as builder's do not, because arming
   // may read the whole status folder and the person's prompt or the turn's end
   // should not wait for that read.
-  // A prompt made only of turn-end notes about sub sessions this parent
-  // tracks goes on with its text replaced by its line in the log, because the
-  // pane already shows them, and the marker holds that line so that the
-  // turn.step hook below answers its turn without the model. The host draws a
-  // dropped prompt as a warning, which is why the prompt is not dropped. Any
-  // other prompt made only of the app's notes and messages goes on with the
-  // Noted line as context, its text unchanged, and every other prompt goes on
-  // as it came, except that the person's own prompt carries the held line as
-  // context while a key whose start the app refused is held. The marker is
-  // set before the line is written, and a hook that throws, a failed write
-  // included, passes the prompt on as it came, so no prompt is rewritten
+  // A prompt made only of turn-end notes about sub sessions this parent tracks
+  // or foreman checks goes on with its text replaced by its line in the log,
+  // because the pane already shows the tracked ones and foreman checks the
+  // others by itself, and the marker holds that line so that the turn.step
+  // hook below answers its turn without the model. The host draws a dropped
+  // prompt as a warning, which is why the prompt is not dropped. Any other
+  // prompt made only of the app's notes and messages goes on with a Noted line
+  // as context, as choiceFor says, its text unchanged, and every other prompt
+  // goes on as it came, except that the person's own prompt carries the held
+  // line as context while a key whose start the app refused is held. A note
+  // about a sub session foreman checks is recorded in the ledger before the
+  // prompt goes on, so its check falls due an idle period after the note. The
+  // marker is set before the line is written, and a hook that throws, a failed
+  // write included, passes the prompt on as it came, so no prompt is rewritten
   // without a line in the log or without its marker, and no line in the log
   // speaks of a note that went on unchanged. A marker left by a failed log
   // write is cleared by the next first step, whose last message is then not
@@ -1077,9 +1269,13 @@ export const register: Register = (on, options) => {
   on('prompt.submit', async ($, e, next) => {
     void ensureArmed($).catch(() => undefined)
     const choice = await choiceFor($, e)
-    if (choice.kind === 'pass') return next(await withHeld($, await withPasted($, e)))
-    if (choice.kind === 'noted') return next({ ...e, context: [NOTED] })
-    if (choice.kind === 'check') return next({ ...e, context: choice.context })
+    if (choice.kind === 'pass') {
+      void ensureOffRoleWork($).catch(() => undefined)
+      return next(await withHeld($, await withPasted($, e)))
+    }
+    await noteChecks($, choice.checks)
+    void ensureOffRoleWork($).catch(() => undefined)
+    if (choice.kind === 'context') return next({ ...e, context: [choice.context] })
     await update($, quietLine, () => choice.line)
     await addLog($, choice.line)
     return next({ ...e, text: choice.line })
@@ -1098,16 +1294,19 @@ export const register: Register = (on, options) => {
     return { consumed: 'a builder status file changed, so foreman reads its folder' }
   }).catch(($, e, next) => next(e))
   // Whether a turn of the session's own loop runs decides how a wake goes in,
-  // so the end of a turn and the start of one below keep turnRuns. A
-  // subagent's turn raises both events too, and is passed over.
+  // so the end of a turn and the start of one below keep turnRuns, whatever
+  // the role, because a check that falls due while the role is off can wake
+  // the parent too. A subagent's turn raises both events too, and is passed
+  // over.
   on('turn.complete', async ($, e, next) => {
     void ensureArmed($).catch(() => undefined)
-    if (e.agentId === undefined && (await isOn($))) await update($, turnRuns, () => false)
+    void ensureOffRoleWork($).catch(() => undefined)
+    if (e.agentId === undefined) await update($, turnRuns, () => false)
     return next(e)
   }).catch(($, e, next) => next(e))
 
   on('turn.start', async ($, e, next) => {
-    if (e.agentId === undefined && (await isOn($))) await update($, turnRuns, () => true)
+    if (e.agentId === undefined) await update($, turnRuns, () => true)
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -1117,8 +1316,9 @@ export const register: Register = (on, options) => {
   // subagent's leaves the marker for that first step. answersAlone decides
   // before anything is yielded, because the engine keeps a chunk once it is
   // yielded, and a failure after it would let the model's answer follow
-  // foreman's. The role is not checked, since the marker is set only while it
-  // is on. Unlike the hooks around it, this one has no .catch on purpose: a
+  // foreman's. The role is not checked, since a marker set while it is off,
+  // for notes about sub sessions foreman checks, is answered the same way.
+  // Unlike the hooks around it, this one has no .catch on purpose: a
   // hook that throws before it yields anything is skipped, so the model
   // answers, while a .catch that called next after a yield would add the
   // model's answer after foreman's.

@@ -425,7 +425,7 @@ test('after a reload the ledger in $.state keeps a wake from coming twice', asyn
   expect(w.engine.prompts).toEqual([])
 })
 
-test('a sub session\'s pull request opening wakes the parent once', async ($, on) => {
+test('a sub session\'s pull request opening is reported once and wakes nobody', async ($, on) => {
   const w = world(on)
   const working = record('ABC-1', 'working', { desktopSessionId: 'local_a' })
   const opened = record('ABC-1', 'working', { desktopSessionId: 'local_a', pr: { repo: 'o/r', number: 7, state: 'OPEN', checks: 'pending', verdicts: null } })
@@ -434,14 +434,15 @@ test('a sub session\'s pull request opening wakes the parent once', async ($, on
   await start($)
   await foreman($)
   await minutesPass(w, 2, { 'a.json': working })
-  expect(w.engine.prompts).toEqual([])
+  expect(w.engine.notices).toEqual([])
   await minutesPass(w, 3, { 'a.json': opened })
-  expect(w.engine.prompts).toEqual(['foreman: ABC-1 opened pull request #7.'])
+  expect(w.engine.notices).toEqual(['ABC-1 opened pull request #7.'])
   await minutesPass(w, 10, { 'a.json': opened })
-  expect(w.engine.prompts).toHaveLength(1)
+  expect(w.engine.notices).toHaveLength(1)
+  expect(w.engine.prompts).toEqual([])
 })
 
-test('a pairing stored before foreman remembered milestones stays silent on its first read, stores that read as its baseline, and wakes for a later merge', async ($, on) => {
+test('a pairing stored before foreman remembered milestones stays silent on its first read, stores that read as its baseline, and reports a later merge', async ($, on) => {
   const w = world(on)
   const verdicts = { sha: 'a'.repeat(40), spec: 'APPROVE', adversarial: 'APPROVE' }
   const pr = (state: string) => ({ repo: 'o/r', number: 7, state, checks: 'passed', verdicts })
@@ -463,9 +464,10 @@ test('a pairing stored before foreman remembered milestones stays silent on its 
   expect(w.engine.prompts).toEqual([])
   expect(ledger(w).pairings[0]!.acts.announced).toEqual({ number: 7, state: 'OPEN', verdicts })
   await minutesPass(w, 3, { 'a.json': open })
-  expect(w.engine.prompts).toEqual([])
+  expect(w.engine.notices).toEqual([])
   await minutesPass(w, 3, { 'a.json': record('ABC-1', 'working', { desktopSessionId: 'local_a', pr: pr('MERGED') }) })
-  expect(w.engine.prompts).toEqual(['foreman: ABC-1\'s pull request #7 merged.'])
+  expect(w.engine.notices).toEqual(['ABC-1\'s pull request #7 merged.'])
+  expect(w.engine.prompts).toEqual([])
 })
 
 test('a read that fails partway still schedules the next read after two minutes', async ($, on) => {
@@ -595,7 +597,7 @@ test('work a read decided before a reload dropped its timer is carried out once 
   expect(w.desktop.sent).toEqual([['local_a', NUDGE]])
   expect(w.engine.prompts).toEqual(['foreman: one slot free; pick the next issue and start it.'])
   expect(await ui.paneText()).toContain('A line decided before the reload.')
-  expect(ledger(w).outbox).toEqual({ logs: [], effects: [], lines: [] })
+  expect(ledger(w).outbox).toEqual({ logs: [], effects: [], lines: [], reports: [] })
 })
 
 test('a read that changes nothing writes nothing to the store, and a store write that fails is logged', async ($, on) => {
@@ -965,6 +967,22 @@ test('a ledger left in $.state that holds only kept slots outweighs an older sto
   await start($)
   expect((await startSession($, IMPLEMENT)).deny).toBe(OFF_REFUSAL)
   expect(ledger(w).keptSlots).toEqual(['ABC-1'])
+})
+
+test('a ledger left in $.state that holds only checks outweighs an older stored one', async ($, on) => {
+  const w = world(on, { store: { [ticketsKey('session-1')]: { ...TICKETS_EMPTY, offRefusedFor: 'session-1' } } })
+  const check = { id: 'local_old', notedAt: T0, dueAt: T0 + 5 * MINUTE, nudged: false, answered: false, sending: false }
+  leftInState(on, { tickets: { ...TICKETS_EMPTY, checks: [check] } })
+  await start($)
+  expect((await startSession($, IMPLEMENT)).deny).toBe(OFF_REFUSAL)
+  expect(ledger(w).checks).toEqual([check])
+})
+
+test('a ledger left in $.state whose outbox holds only reports outweighs an older stored one', async ($, on) => {
+  const w = world(on, { store: { [ticketsKey('session-1')]: { ...TICKETS_EMPTY, offRefusedFor: 'session-1' } } })
+  leftInState(on, { tickets: { ...TICKETS_EMPTY, outbox: { logs: [], effects: [], lines: [], reports: ['ABC-1 merged.'] } } })
+  await start($)
+  expect((await startSession($, IMPLEMENT)).deny).toBe(OFF_REFUSAL)
 })
 
 test('two /implement starts at once while off give exactly one refusal', async ($, on) => {

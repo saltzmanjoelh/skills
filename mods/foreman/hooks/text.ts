@@ -49,3 +49,7 @@ export const listOf = (names: readonly string[]) => (names.length === 1 ? names[
 
 // A count with its word, plural unless the count is one: "1 minute", "5 minutes".
 export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
+
+// A stored value as an object, or null when it is not one: null and lists are
+// not objects here.
+export const objectOf = (raw: unknown): Record<string, unknown> | null => (typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? raw as Record<string, unknown> : null)
