@@ -17,7 +17,7 @@ import { ADVERSARIAL_REVIEWER, afterReport, endedOf, FOCUSED_REVIEWERS, focusedR
 import { changePrompt, ciEventContext, resumePrompt, stateLines, stuckPrompt } from './prompts'
 import { changedKinds, commitRecordsOf, decidedItems, factIn, INSTRUCTION_PATHSPECS, instructionFileIsLink, isFullSha, isUpForCheck, LATER_CONTEXT_LINES, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pluginRootsOf, reviewedHeadOf, secretIn, specDirOf, trendOf, trendStopLine, underRoot, verdictHeadOf, verdictsLine, type CommitRecord, type EarlierRound, type FileKind, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
-import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isForemanNudge, newMemo, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
+import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isForemanNudge, newMemo, parentIn, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, STATUS_CHANGED_TEXT, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
 import { timeOfDay } from './text'
 import { afterCost, afterStep, emptyUsage, usageIn } from './usage'
 
@@ -3366,8 +3366,13 @@ let loadStamp = 0
 // conversation writes a memo of its own.
 let statusGen = 0
 // The text of the record last written, as comparedTextOf gives it, to
-// compare the next one with. A hot reload forgets it, which costs one write.
+// compare the next one with. A hot reload forgets it, which costs one write,
+// and one message to the parent, since that write counts as changed.
 let lastWrittenText: string | null = null
+// A message to the parent is running, and another is owed because a changed
+// write finished while it ran.
+let parentSendInFlight = false
+let parentSendOwed = false
 // The minute's tick, and whether the session has ended, after which nothing
 // more is written.
 let statusTick: { cancel: () => void } | undefined
@@ -3380,6 +3385,8 @@ const STATUS_EVERY_MS = 60_000
 // that never settles cannot stop writing for good. A write that finishes
 // after the writer gave up on it, over a newer one, is put right by the next.
 const STATUS_WRITE_TIMEOUT_MS = 30_000
+// How long one message to the parent may take before it is dropped.
+const PARENT_SEND_TIMEOUT_MS = 10_000
 // The time the session's end leaves of the engine's budget for ending a
 // session, for the reads and the delete that follow its wait.
 const END_MARGIN_MS = 250
@@ -3431,6 +3438,9 @@ function statusChanged($: $, force = false) {
 // inside a working episode changes neither the state nor its start, so the
 // update after the write would never save it, and its start would move at
 // every write. Storing it first also keeps a write that fails from moving it.
+// Once a write whose record differs from the last one written has finished,
+// the parent is told, when the memo names one. A forced write of the same
+// record, and a write given up after its timeout, tell it nothing.
 async function writeStatus($: $, gen: number): Promise<void> {
   try {
     while (statusDirty && !statusClosed && gen === statusGen) {
@@ -3456,11 +3466,13 @@ async function writeStatus($: $, gen: number): Promise<void> {
       const facts = waitChanged ? { ...found, memo: { ...found.memo, backgroundWait: wait } } : found
       const record = recordOf(facts, now)
       const text = comparedTextOf(record)
-      if (!force && text === lastWrittenText) continue
+      const changed = text !== lastWrittenText
+      if (!force && !changed) continue
       const current = statusMemoIn(await read($, statusMemo), sessionId)
       if (statusClosed || gen !== statusGen || current?.generation !== gen) return
       await withinTimeout($, trackedWrite($, path, JSON.stringify(record)), STATUS_WRITE_TIMEOUT_MS)
       lastWrittenText = text
+      if (changed && facts.memo.parentSessionId !== undefined) tellParent($, facts.memo.parentSessionId)
       if (facts.memo.state === record.state && facts.memo.stateSince === record.stateSince) continue
       await update($, statusMemo, raw => {
         const memo = statusMemoIn(raw, sessionId)
@@ -3473,6 +3485,34 @@ async function writeStatus($: $, gen: number): Promise<void> {
     statusPending = false
     if (statusDirty) statusChanged($)
   }
+}
+
+// Sends the parent session the fixed marker that tells foreman the status
+// file changed, so it reads its folder at once instead of at its next timer.
+// The writer does not wait for it. At most one send runs: one asked for while
+// another runs is owed, and however many are owed, one more is sent once the
+// running one ends. A send that is refused, is not delivered, throws or runs
+// past PARENT_SEND_TIMEOUT_MS is dropped with no retry, because the file and
+// foreman's timer cover the gap, and nothing here can stop a hook.
+function tellParent($: $, parent: string) {
+  if (parentSendInFlight) {
+    parentSendOwed = true
+    return
+  }
+  parentSendInFlight = true
+  void (async () => {
+    try {
+      await withinTimeout($, $.session.send({ to: { sessionId: parent }, text: STATUS_CHANGED_TEXT }), PARENT_SEND_TIMEOUT_MS)
+    } catch {
+      // Dropped, as said above.
+    } finally {
+      parentSendInFlight = false
+      if (parentSendOwed) {
+        parentSendOwed = false
+        tellParent($, parent)
+      }
+    }
+  })()
 }
 
 // Writes the file, keeping the write among the unsettled ones until it
@@ -3615,7 +3655,8 @@ async function takeUpMemo($: $, sessionId: string, found: StatusMemo | null) {
 // look again. Otherwise the first prompt is the first user message of the
 // transcript, or the prompt being submitted when the transcript holds none
 // or cannot be read. The configuration folder and the desktop id are read
-// only when there is a ticket, so a session without one reads nothing more.
+// only when there is a ticket, so a session without one reads nothing more,
+// and the parent's id is kept only beside a ticket.
 // The new memo carries this copy's load stamp. A memo of this session that
 // another prompt, the copy of the module from before a hot reload, or a
 // newer copy wrote while this one looked is never written over: it is taken
@@ -3638,6 +3679,7 @@ async function lookForTicket($: $, submitted: string) {
         ticket,
         path: buildPathOf(configDirOf(await $.env.get('CLAUDE_CONFIG_DIR'), await $.env.get('HOME')), sessionId),
         desktopSessionId: await $.env.get('CLAUDE_CODE_HOST_SESSION_ID'),
+        parentSessionId: parentIn(first) ?? undefined,
         cwd: (await read($, cwd)) ?? (await $.session.cwd()),
         generation: loadStamp,
       })
@@ -3710,6 +3752,7 @@ async function reopenForNextConversation($: $) {
   ticketKnown = undefined
   ticketFor = undefined
   lastWrittenText = null
+  parentSendOwed = false
   statusDirty = false
   statusForced = false
   // Writing opens again even when the reset fails. That is safe, because a
