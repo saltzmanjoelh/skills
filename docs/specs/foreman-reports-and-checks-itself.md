@@ -214,6 +214,9 @@ behavior breaks.
 - A turn-end note about a sub session foreman holds no record of wakes no
   model, gets "Noted.", and writes a record with the right due time, both
   while the role is on and while it is off.
+- While the role is off, a prompt that holds such a note beside other notes
+  or messages gets a context line that names only the checked sub sessions,
+  asks for no "Noted.", and asks for a brief reply to the rest of the prompt.
 - At the due time, an idle header nudges once with the constant nudge text;
   the first note after the nudge keeps the mark; at the next due time an idle
   header wakes the parent once with the still-waits sentence; a second note

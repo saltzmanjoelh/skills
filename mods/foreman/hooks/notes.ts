@@ -45,9 +45,10 @@ export const NOTED = `From the foreman mod: this prompt holds only the desktop a
 // so the line asks for no "Noted.": it says foreman records the notes about
 // the checked sub sessions `ids` itself, so the model does not reply to them,
 // and asks for a brief reply to the rest of the prompt, because the wake
-// skill's rule of a bare "Noted." would otherwise swallow the other outcomes. The ids are named once and sorted,
-// and only ids that match WHOLE_LOCAL_ID, which every id partsOf reads does,
-// so no other text a sub session wrote is repeated.
+// skill's rule of a bare "Noted." would otherwise swallow the other outcomes.
+// The ids are named once and sorted, and only ids that match WHOLE_LOCAL_ID,
+// which every id partsOf reads does, so no other text a sub session wrote is
+// repeated.
 export function checkedLine(ids: readonly string[]): string {
   const sorted = [...new Set(ids)].filter(id => WHOLE_LOCAL_ID.test(id)).sort()
   const sessions = sorted.length === 1 ? 'the sub session' : 'the sub sessions'
