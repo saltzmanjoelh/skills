@@ -68,6 +68,9 @@ export type View = {
   // that seed lands, when the held one is another session's or cannot be
   // read, and always in the band's view, which never reads it.
   usage: UsageLedger | null
+  // How many reports builder holds back from the model until their batch of
+  // agents finishes, as heldReports in hooks/batch.ts counts them.
+  heldReports: number
 }
 
 type El = Pick<EngineElements['terminal'], 'Box' | 'Text'>
@@ -696,6 +699,12 @@ function agentWithOutput(ui: Elements, card: AgentCard, now: number, columns: nu
   ]
 }
 
+// The line under the agents heading while builder holds reports back from
+// the model until their batch finishes.
+export function heldLine(n: number): string {
+  return `Holding ${n} ${n === 1 ? 'report' : 'reports'} back from the model until their batch finishes.`
+}
+
 // The agents in three groups: running ones, then planned ones, then finished
 // ones under a button that folds and unfolds them, followed by the session's
 // background work.
@@ -708,6 +717,7 @@ function agentsTree(ui: Elements, v: View, columns: number | undefined, presses:
   return [
     <Text key="agents-head" bold>Agents</Text>,
     ...(isEmpty ? [<Text key="agents-none" dimColor>None launched yet.</Text>] : []),
+    ...(v.heldReports > 0 ? [<Text key="agents-held" dimColor>{heldLine(v.heldReports)}</Text>] : []),
     ...running.flatMap(card => agentWithOutput(ui, card, v.now, columns, presses)),
     ...v.planned.map(type => plannedRow(ui, type, columns)),
     ...(finished.length === 0 ? [] : [

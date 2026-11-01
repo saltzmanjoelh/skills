@@ -19,6 +19,8 @@ export const REMEMBER_MS = 10 * 60_000
 // How many launch steps are kept, which bounds the state when agents never
 // deliver anything.
 export const BATCHES_KEPT = 20
+// What builder answers a held delivery's turn with, in place of the model.
+export const NOTED_REPLY = 'Noted.'
 
 // One delivery from a finishing agent: its report, or the notification about
 // it with the status the notification gives.
@@ -195,6 +197,6 @@ export function answersStep(state: BatchState, last: { role: string } | undefine
 
 // The marker after such a first step: one less when the step was answered,
 // and zero when it went to the model.
-export function afterStep(state: BatchState, answered: boolean): BatchState {
+export function afterFirstStep(state: BatchState, answered: boolean): BatchState {
   return { ...state, marker: answered ? Math.max(state.marker - 1, 0) : 0 }
 }

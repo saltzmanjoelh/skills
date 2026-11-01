@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { PromptOrigin } from 'claude-code'
 
-import { afterDeadline, afterDelivery, afterLaunch, afterResume, afterStep, answersStep, BATCH_LIMIT_MS, BATCHES_KEPT, batchStateIn, completeLine, deadlineLine, deliveryOf, emptyBatchState, heldReports, incompleteLine, isBatchLaunch, nextDeadline, REMEMBER_MS, runningLines, type Delivery } from '../hooks/batch'
+import { afterDeadline, afterDelivery, afterLaunch, afterResume, afterFirstStep, answersStep, BATCH_LIMIT_MS, BATCHES_KEPT, batchStateIn, completeLine, deadlineLine, deliveryOf, emptyBatchState, heldReports, incompleteLine, isBatchLaunch, nextDeadline, REMEMBER_MS, runningLines, type Delivery } from '../hooks/batch'
 import type { BatchState } from '../types'
 
 const PEER: PromptOrigin = { kind: 'peer' } as PromptOrigin
@@ -133,7 +133,7 @@ test('two batches open at once each release on their own', () => {
 
 test('a resumed agent is forgotten as a member, and launching twice records one member', () => {
   const again = afterLaunch(launched(), 't1:0', { id: ALPHA, type: 'Explore' })
-  expect(again.batches[0].members).toHaveLength(2)
+  expect(again.batches[0]?.members).toHaveLength(2)
   const state = afterResume(launched(), ALPHA)
   expect(afterDelivery(state, report(ALPHA), true, 0).act).toEqual({ kind: 'pass' })
 })
@@ -142,7 +142,7 @@ test('only the newest batches are kept', () => {
   let state = emptyBatchState()
   for (let i = 0; i < BATCHES_KEPT + 5; i++) state = afterLaunch(state, `t${i}:0`, { id: `x${i}`, type: 'Explore' })
   expect(state.batches).toHaveLength(BATCHES_KEPT)
-  expect(state.batches[0].step).toBe('t5:0')
+  expect(state.batches[0]?.step).toBe('t5:0')
 })
 
 test('a step is answered only when the marker is set and the last message is not a user message', () => {
@@ -151,11 +151,11 @@ test('a step is answered only when the marker is set and the last message is not
   expect(answersStep(marked, { role: 'user' })).toBe(false)
   expect(answersStep(marked, undefined)).toBe(false)
   expect(answersStep(launched(), { role: 'assistant' })).toBe(false)
-  expect(afterStep(marked, true).marker).toBe(0)
+  expect(afterFirstStep(marked, true).marker).toBe(0)
   const twice = afterDelivery(afterDelivery(marked, notice(ALPHA, 'completed'), true, 0).state, report(ALPHA), true, 0).state
   expect(twice.marker).toBe(3)
-  expect(afterStep(twice, true).marker).toBe(2)
-  expect(afterStep(twice, false).marker).toBe(0)
+  expect(afterFirstStep(twice, true).marker).toBe(2)
+  expect(afterFirstStep(twice, false).marker).toBe(0)
 })
 
 test('a stored value in another shape or version reads as the empty state', () => {
