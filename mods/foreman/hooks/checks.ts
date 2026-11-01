@@ -6,13 +6,13 @@
 
 import type { ForemanCheck, ForemanOutbox, ForemanPairing } from '../types'
 import { REASONS, WHOLE_LOCAL_ID } from './desktop'
+import { objectOf } from './text'
 import { wakeLine } from './wake'
 
 // The most checks kept, the newest ones, the same bound as the list of
 // unwatched sub sessions.
 export const MAX_CHECKS = 50
 
-const objectOf = (raw: unknown): Record<string, unknown> | null => (typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? raw as Record<string, unknown> : null)
 const isTime = (raw: unknown): raw is number => typeof raw === 'number' && Number.isFinite(raw)
 
 // One stored check, or null unless its id is a whole desktop session id and
@@ -138,13 +138,13 @@ export type CheckDone = { claim: ForemanCheck; outcome: CheckOutcome }
 
 // The checks after the outcomes `done` of one pass, and the work they leave
 // for the outbox. Only an outcome whose record still holds its claimed times
-// counts, so the outcome of a check that a newer note overtook is thrown
-// away. Every outcome but `later` ends its record, and checkOne has already
-// turned a nudge into `later` or a failure. An archived sub session
-// gets a log line. Each failure gets a log line, and all the failures share
-// one quiet notification, whose text the log already holds. The sub sessions
-// that still wait after the nudge share one line that wakes the parent. The
-// same checks and empty work come back when no record ends.
+// counts, so the outcome of a check that a newer note overtook is thrown away.
+// Every outcome but `later` ends its record, and checkOne has already turned a
+// nudge into `later` or a failure. An archived sub session gets a log line.
+// Each failure gets a log line, and all the failures share one quiet
+// notification, whose text the log already holds. The sub sessions that still
+// wait after the nudge share one line that wakes the parent. The same checks
+// and empty work come back when no record ends.
 export function endsOf(done: readonly CheckDone[], checks: ForemanCheck[]): { checks: ForemanCheck[]; work: Omit<ForemanOutbox, 'reports'> } {
   const ends = done.filter(d => d.outcome.kind !== 'later' && checks.some(c => isClaimed(c, d.claim)))
   if (ends.length === 0) return { checks, work: { logs: [], effects: [], lines: [] } }

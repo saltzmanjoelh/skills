@@ -231,10 +231,11 @@ export function keptNames(ids: readonly string[], pairings: readonly ForemanPair
 }
 
 // The log line for one rewritten prompt, which is also the text the prompt is
-// rewritten to. `names` are the names keptNames gives tracked sub sessions
-// and the bare `local_…` ids of sub sessions foreman checks, sorted. The number of sub sessions, not of notes, decides between
-// note and notes, so a repeat of the same rewrite gives the same line and the
-// log counts it on the one before.
+// rewritten to. `names` are the names keptNames gives tracked sub sessions and
+// the bare `local_…` ids of sub sessions foreman checks, sorted. The number of
+// sub sessions, not of notes, decides between note and notes, so a repeat of
+// the same rewrite gives the same line and the log counts it on the one
+// before.
 export function keptLine(names: readonly string[]): string {
   const owned = names.map(name => `${name}'s`)
   return `Kept ${listOf(owned)} turn-end ${owned.length === 1 ? 'note' : 'notes'} from the parent's model.`

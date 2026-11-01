@@ -290,8 +290,8 @@ function readNow($: $): Promise<void> {
 // the last read. Then foreman decides what the read leads to, schedules the
 // next read, and only then carries out the decision and, when a check fell
 // due, makes the checks, without waiting for them, so a desktop tool that is
-// slow to answer never holds the reads up. The next read comes at the usual delay, or sooner
-// when a nudge, a wake or a check falls due.
+// slow to answer never holds the reads up. The next read comes at the usual
+// delay, or sooner when a nudge, a wake or a check falls due.
 async function readAndSchedule($: $) {
   try {
     if (!(await isOn($))) return
@@ -346,10 +346,9 @@ function later($: $, work: () => Promise<unknown>) {
 // that lies too far ahead is pulled in, so it stays where it was put rather
 // than being pushed on at every read. The ledger written comes back with the
 // decision, so the caller schedules the checks without reading it again. A
-// list that
-// could not be read is logged with what it kept from happening: a freed slot
-// when a slot rule needed it, else a released hold when a key is held, and
-// otherwise a queued issue begun or dropped.
+// list that could not be read is logged with what it kept from happening: a
+// freed slot when a slot rule needed it, else a released hold when a key is
+// held, and otherwise a queued issue begun or dropped.
 async function decideNow($: $, folderExists: boolean, listed: boolean, now: number): Promise<{ decision: Decision; rows: SubRow[]; written: ForemanTickets }> {
   const rows = await rowsNow($)
   const before = joinOwners(ticketsIn(await read($, tickets)), rows).tickets
@@ -540,11 +539,11 @@ function checkNow($: $): Promise<void> {
 // moving its due time an idle period on, so a second pass, here or in a copy
 // of the module after a hot reload, finds nothing due. Then it reads each
 // claimed sub session's events header, and nudges it when checkOutcome says
-// so. Last, in a second update, endsOf decides which records the outcomes
-// end and the log lines, the notification and the wake they leave, and those
-// go into the outbox in that same update, so a reload cannot lose them, and
-// are then carried out. The pass ends by arming
-// the timer for the next check while the role is off.
+// so. Last, in a second update, endsOf decides which records the outcomes end
+// and the log lines, the notification and the wake they leave, and those go
+// into the outbox in that same update, so a reload cannot lose them, and are
+// then carried out. The pass ends by arming the timer for the next check while
+// the role is off.
 async function runDueChecks($: $) {
   try {
     const now = await $.clock.now()
@@ -1213,20 +1212,20 @@ export const register: Register = (on, options) => {
   // again. Neither waits for the arming, as builder's do not, because arming
   // may read the whole status folder and the person's prompt or the turn's end
   // should not wait for that read.
-  // A prompt made only of turn-end notes about sub sessions this parent
-  // tracks or foreman checks goes on with its text replaced by its line in the
-  // log, because the pane already shows the tracked ones and foreman checks
-  // the others by itself, and the marker holds that line so that the
-  // turn.step hook below answers its turn without the model. The host draws a
-  // dropped prompt as a warning, which is why the prompt is not dropped. Any
-  // other prompt made only of the app's notes and messages goes on with a
-  // Noted line as context, as choiceFor says, its text unchanged, and every
-  // other prompt goes on as it came, except that the person's own prompt carries the held line as
-  // context while a key whose start the app refused is held. A note about a
-  // sub session foreman checks is recorded in the ledger before the prompt
-  // goes on, so its check falls due an idle period after the note. The marker
-  // is set before the line is written, and a hook that throws, a failed write
-  // included, passes the prompt on as it came, so no prompt is rewritten
+  // A prompt made only of turn-end notes about sub sessions this parent tracks
+  // or foreman checks goes on with its text replaced by its line in the log,
+  // because the pane already shows the tracked ones and foreman checks the
+  // others by itself, and the marker holds that line so that the turn.step
+  // hook below answers its turn without the model. The host draws a dropped
+  // prompt as a warning, which is why the prompt is not dropped. Any other
+  // prompt made only of the app's notes and messages goes on with a Noted line
+  // as context, as choiceFor says, its text unchanged, and every other prompt
+  // goes on as it came, except that the person's own prompt carries the held
+  // line as context while a key whose start the app refused is held. A note
+  // about a sub session foreman checks is recorded in the ledger before the
+  // prompt goes on, so its check falls due an idle period after the note. The
+  // marker is set before the line is written, and a hook that throws, a failed
+  // write included, passes the prompt on as it came, so no prompt is rewritten
   // without a line in the log or without its marker, and no line in the log
   // speaks of a note that went on unchanged. A marker left by a failed log
   // write is cleared by the next first step, whose last message is then not

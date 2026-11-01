@@ -8,6 +8,7 @@ import { checksIn } from './checks'
 import { BEGIN_TEXT, LOCAL_ID, WHOLE_LOCAL_ID } from './desktop'
 import { countsIn, isDollars, isPullRequestNumber, isPullRequestState, verdictsIn } from './record'
 import { byKeyThenFile, keyOf, nameOf, type SubRow } from './subs'
+import { objectOf } from './text'
 import { byTicket, isTicket, isWholeKey, isWhoName, KEY, TICKET_PREFIX } from './wake'
 
 // The line builder looks for in a sub session's first prompt.
@@ -235,7 +236,6 @@ export function newPairing(ticket: string, localId: string | null, at: number, i
 const STANDINGS: readonly ForemanStanding[] = ['active', 'freed', 'released']
 const textOr = <T>(raw: unknown, fallback: T): string | T => (typeof raw === 'string' && raw !== '' ? raw : fallback)
 const numberOr = <T>(raw: unknown, fallback: T): number | T => (typeof raw === 'number' && Number.isFinite(raw) ? raw : fallback)
-const objectOf = (raw: unknown): Record<string, unknown> | null => (typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? raw as Record<string, unknown> : null)
 
 // A stored milestone memory, or null, which stands for none, unless every
 // field is sound: a positive whole number or null, one of the three states or
