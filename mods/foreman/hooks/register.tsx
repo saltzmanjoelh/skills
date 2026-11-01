@@ -664,7 +664,7 @@ async function releaseRow($: $, file: string) {
 // arguments spread on it, so briefFor can read `prompt`, `context`, `title`
 // and `proposal_id`.
 async function startSession<E extends Record<string, unknown>>($: $, e: E, next: (e: E) => Promise<ToolCallResult>): Promise<ToolCallResult> {
-  const brief = briefFor(e, crypto.randomUUID())
+  const brief = briefFor(e, crypto.randomUUID(), await $.session.id())
   if (brief.kind === 'deny') {
     await addLog($, brief.log).catch(() => undefined)
     return { deny: brief.text }

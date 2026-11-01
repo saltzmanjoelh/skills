@@ -26,7 +26,7 @@ async function minutesPass(w: World, minutes: number, live: Record<string, strin
 const ledger = (w: World) => ticketsIn(w.stored.get(ticketsKey('session-1')))
 const startSession = ($: Engine, args: Record<string, unknown>) => $.tool.call({ tool: START, ...args } as never) as Promise<{ deny?: string; text?: string; context?: readonly string[] }>
 
-test('in a parent, start_session gets the ticket line and the local_ id it answers is paired with the ticket', async ($, on) => {
+test('in a parent, start_session gets the ticket line and then the parent line with the parent\'s own session id, and the local_ id it answers is paired with the ticket', async ($, on) => {
   const w = world(on)
   const ui = await mountBoth($, on)
   await start($)
@@ -34,8 +34,8 @@ test('in a parent, start_session gets the ticket line and the local_ id it answe
   const out = await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh', title: 'ABC-7: short' })
   expect(out.text).toContain('local_new1')
   const prompt = String(w.engine.started[0]!.prompt)
-  expect(prompt).toMatch(/^Run \/implement ABC-7\.\n\nforeman-ticket: ft-[0-9a-f-]{36}$/)
-  const ticket = prompt.slice(prompt.indexOf('ft-'))
+  expect(prompt).toMatch(/^Run \/implement ABC-7\.\n\nforeman-ticket: ft-[0-9a-f-]{36}\nforeman-parent: session-1$/)
+  const ticket = prompt.slice(prompt.indexOf('ft-')).split('\n')[0]!
   expect(ledger(w).pairings.map(p => [p.ticket, p.localId, p.standing])).toEqual([[ticket, 'local_new1', 'active']])
   expect(await ui.newestLog()).toBe(`Paired ticket ${ticket} with local_new1.`)
 })
@@ -52,7 +52,7 @@ test('a start_session answer of today\'s wording pairs the id after session_id',
   await foreman($)
   await startSession($, { prompt: 'Run /implement ABC-7.', context: 'fresh', title: 'ABC-7: short' })
   const prompt = String(w.engine.started[0]!.prompt)
-  const ticket = prompt.slice(prompt.indexOf('ft-'))
+  const ticket = prompt.slice(prompt.indexOf('ft-')).split('\n')[0]!
   expect(ledger(w).pairings.map(p => [p.ticket, p.localId])).toEqual([[ticket, 'local_7c1d9e2a-4b6f-4d3e-9a8b-0f1e2d3c4b5a']])
   expect(await ui.newestLog()).toBe(`Paired ticket ${ticket} with local_7c1d9e2a-4b6f-4d3e-9a8b-0f1e2d3c4b5a.`)
 })
@@ -118,7 +118,7 @@ test('in a parent, a "No issue: " title with a brief reaches the desktop app wit
   await foreman($)
   await startSession($, { prompt: 'Tidy the docs.', context: 'fresh', title: 'No issue: tidy' })
   const prompt = String(w.engine.started[0]!.prompt)
-  const ticket = prompt.slice(prompt.indexOf('ft-'))
+  const ticket = prompt.slice(prompt.indexOf('ft-')).split('\n')[0]!
   expect(ticket).toMatch(/^ft-[0-9a-f-]{36}$/)
   expect(w.engine.started[0]!.title).toBe(`${ticket}: tidy`)
   expect(ledger(w).pairings.map(p => p.ticket)).toEqual([ticket])

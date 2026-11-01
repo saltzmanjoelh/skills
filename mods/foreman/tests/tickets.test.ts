@@ -23,37 +23,37 @@ function row(file: string, over: Record<string, unknown> = {}): SubRow {
 
 const withPairings = (...pairings: ForemanTickets['pairings']): ForemanTickets => ({ ...TICKETS_EMPTY, pairings })
 
-test('the ticket line is added after a blank line, a call with no brief passes, and a fork is refused first', () => {
-  expect(briefFor({ prompt: 'Do ABC-1.\n\n', context: 'fresh', title: 'ABC-1: x' }, 'u-1')).toEqual({ kind: 'add', ticket: 'ft-u-1', prompt: 'Do ABC-1.\n\nforeman-ticket: ft-u-1' })
-  expect(briefFor({ proposal_id: 'p' }, 'u-1')).toEqual({ kind: 'pass' })
-  expect(briefFor({ prompt: '   ', title: 'ABC-1: x' }, 'u-1')).toEqual({ kind: 'pass' })
-  expect(briefFor({ context: 'fork' }, 'u-1')).toMatchObject({ kind: 'deny', text: FORK_REFUSAL })
-  expect(briefFor({ prompt: 'Do it.', context: 'fork', title: 'Implement ABC-1' }, 'u-1')).toMatchObject({ kind: 'deny', text: FORK_REFUSAL })
+test('the ticket line is added after a blank line and the parent line right after it, a call with no brief passes, and a fork is refused first', () => {
+  expect(briefFor({ prompt: 'Do ABC-1.\n\n', context: 'fresh', title: 'ABC-1: x' }, 'u-1', 'parent-1')).toEqual({ kind: 'add', ticket: 'ft-u-1', prompt: 'Do ABC-1.\n\nforeman-ticket: ft-u-1\nforeman-parent: parent-1' })
+  expect(briefFor({ proposal_id: 'p' }, 'u-1', 'parent-1')).toEqual({ kind: 'pass' })
+  expect(briefFor({ prompt: '   ', title: 'ABC-1: x' }, 'u-1', 'parent-1')).toEqual({ kind: 'pass' })
+  expect(briefFor({ context: 'fork' }, 'u-1', 'parent-1')).toMatchObject({ kind: 'deny', text: FORK_REFUSAL })
+  expect(briefFor({ prompt: 'Do it.', context: 'fork', title: 'Implement ABC-1' }, 'u-1', 'parent-1')).toMatchObject({ kind: 'deny', text: FORK_REFUSAL })
 })
 
 // What briefFor answers for a call with a brief and the title given.
-const titled = (title: unknown) => briefFor({ prompt: 'Do it.', context: 'fresh', title }, 'u-1')
+const titled = (title: unknown) => briefFor({ prompt: 'Do it.', context: 'fresh', title }, 'u-1', 'parent-1')
 
 test('a title passes only when it begins with an issue key and a space or a colon', () => {
   for (const good of ['ABC-123: x', 'ABC-123 x', 'A1-2:', 'ABC-7 ']) {
-    expect(titled(good)).toEqual({ kind: 'add', ticket: 'ft-u-1', prompt: 'Do it.\n\nforeman-ticket: ft-u-1' })
+    expect(titled(good)).toEqual({ kind: 'add', ticket: 'ft-u-1', prompt: 'Do it.\n\nforeman-ticket: ft-u-1\nforeman-parent: parent-1' })
   }
   const bad = ['Implement ABC-123: x', 'ABC-123', 'abc-123: x', 'ABC-123-fix: x', ' ABC-1: x', 'ABC-: x', '1BC-2: x', 'ABC-1\tx', 'ABC-\uFF11: x', '', 'no issue: x', 'No issue:x']
   for (const title of [...bad, undefined, null, 7, [], {}]) expect(titled(title)).toMatchObject({ kind: 'deny', text: TITLE_REFUSAL })
 })
 
 test('the "No issue: " marker is replaced by the ticket on a call with a brief, and refused on one without', () => {
-  expect(titled('No issue: ABC-12 cleanup')).toEqual({ kind: 'add', ticket: 'ft-u-1', prompt: 'Do it.\n\nforeman-ticket: ft-u-1', title: 'ft-u-1: ABC-12 cleanup' })
-  expect(briefFor({ title: 'No issue: tidy' }, 'u-1')).toMatchObject({ kind: 'deny', text: TITLE_REFUSAL })
-  expect(briefFor({ prompt: '  ', title: 'No issue: tidy' }, 'u-1')).toMatchObject({ kind: 'deny', text: TITLE_REFUSAL })
+  expect(titled('No issue: ABC-12 cleanup')).toEqual({ kind: 'add', ticket: 'ft-u-1', prompt: 'Do it.\n\nforeman-ticket: ft-u-1\nforeman-parent: parent-1', title: 'ft-u-1: ABC-12 cleanup' })
+  expect(briefFor({ title: 'No issue: tidy' }, 'u-1', 'parent-1')).toMatchObject({ kind: 'deny', text: TITLE_REFUSAL })
+  expect(briefFor({ prompt: '  ', title: 'No issue: tidy' }, 'u-1', 'parent-1')).toMatchObject({ kind: 'deny', text: TITLE_REFUSAL })
 })
 
 test('only a proposal started by its id with no title skips the check', () => {
-  expect(briefFor({ proposal_id: 'p', title: null }, 'u-1')).toEqual({ kind: 'pass' })
-  expect(briefFor({ proposal_id: 'p', title: 'Implement ABC-1' }, 'u-1')).toMatchObject({ kind: 'deny', text: TITLE_REFUSAL })
-  expect(briefFor({ proposal_id: 'p', title: '' }, 'u-1')).toMatchObject({ kind: 'deny', text: TITLE_REFUSAL })
-  expect(briefFor({ proposal_id: '' }, 'u-1')).toMatchObject({ kind: 'deny', text: TITLE_REFUSAL })
-  expect(briefFor({ title: 'Implement ABC-1', initiation: 'offer' }, 'u-1')).toMatchObject({ kind: 'deny', text: TITLE_REFUSAL })
+  expect(briefFor({ proposal_id: 'p', title: null }, 'u-1', 'parent-1')).toEqual({ kind: 'pass' })
+  expect(briefFor({ proposal_id: 'p', title: 'Implement ABC-1' }, 'u-1', 'parent-1')).toMatchObject({ kind: 'deny', text: TITLE_REFUSAL })
+  expect(briefFor({ proposal_id: 'p', title: '' }, 'u-1', 'parent-1')).toMatchObject({ kind: 'deny', text: TITLE_REFUSAL })
+  expect(briefFor({ proposal_id: '' }, 'u-1', 'parent-1')).toMatchObject({ kind: 'deny', text: TITLE_REFUSAL })
+  expect(briefFor({ title: 'Implement ABC-1', initiation: 'offer' }, 'u-1', 'parent-1')).toMatchObject({ kind: 'deny', text: TITLE_REFUSAL })
 })
 
 test('briefFor never throws, and never lets a title of the wrong shape go on, whatever the arguments hold', () => {
@@ -64,7 +64,7 @@ test('briefFor never throws, and never lets a title of the wrong shape go on, wh
       for (const proposal_id of odd) {
         for (const context of [...odd, 'fork', 'fresh']) {
           const args = { title, prompt, proposal_id, context }
-          const out = briefFor(args, 'u-1')
+          const out = briefFor(args, 'u-1', 'parent-1')
           if (out.kind === 'deny') continue
           const outTitle = out.kind === 'add' && out.title !== undefined ? out.title : title
           const fromProposal = typeof proposal_id === 'string' && proposal_id !== '' && (title === undefined || title === null)
@@ -337,9 +337,9 @@ test('the wait line says to run /implement only once the begin message arrives, 
 })
 
 test('a waiting brief puts the wait line first, before a brief that begins with /implement and before its ticket line', () => {
-  const brief = briefFor({ prompt: '/implement ABC-2', context: 'fresh', title: 'ABC-2: x' }, 'u-1')
+  const brief = briefFor({ prompt: '/implement ABC-2', context: 'fresh', title: 'ABC-2: x' }, 'u-1', 'parent-1')
   if (brief.kind !== 'add') throw new Error('the brief should get a ticket')
-  expect(waitingBrief('ABC-2', brief.prompt)).toBe(`${WAIT_LINE('ABC-2')}\n\n/implement ABC-2\n\nforeman-ticket: ft-u-1`)
+  expect(waitingBrief('ABC-2', brief.prompt)).toBe(`${WAIT_LINE('ABC-2')}\n\n/implement ABC-2\n\nforeman-ticket: ft-u-1\nforeman-parent: parent-1`)
   expect(carriesTicket({ prompt: waitingBrief('ABC-2', brief.prompt) })).toBe(true)
 })
 
