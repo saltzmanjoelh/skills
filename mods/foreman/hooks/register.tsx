@@ -996,23 +996,23 @@ const isPlain = (e: PromptSubmitInput) => e.command === undefined && (e.attachme
 // line for it, which names a checked one by its bare id. While the role is
 // on, any other such prompt goes on with the Noted line. While it is off, one
 // that holds a note about a sub session foreman checks beside anything else
-// goes on with the checked line, which names the checked ids and leaves the
-// rest of the prompt to the model, because only the model reports the other
-// sessions' outcomes then, and every other prompt goes on as it came, which
-// withPasted or withHeld may give a line.
+// goes on with the checked line, which names the checked ids and asks for a
+// brief reply to the rest of the prompt, because only the model reports the
+// other sessions' outcomes then, and every other prompt goes on as it came,
+// which withPasted or withHeld may give a line.
 // The text is checked before any state is read, so a prompt the person typed
 // waits here on no read, and the ledger is read only for a prompt that holds
 // a turn-end note. A prompt the person typed that goes on does wait for
 // reads of the role and the ledger, to learn whether foreman is off or any key
 // is held.
-type Choice = { kind: 'keep'; line: string; checks: string[] } | { kind: 'noted'; context: string; checks: string[] } | { kind: 'pass' }
+type Choice = { kind: 'keep'; line: string; checks: string[] } | { kind: 'context'; context: string; checks: string[] } | { kind: 'pass' }
 
 async function choiceFor($: $, e: PromptSubmitInput): Promise<Choice> {
   if (!isPlain(e)) return { kind: 'pass' }
   const notes = notesIn(e.text)
   if (!notes.wantsNoted) return { kind: 'pass' }
   const on = await isOn($)
-  if (notes.allTurnEnds.length === 0) return on ? { kind: 'noted', context: NOTED, checks: [] } : { kind: 'pass' }
+  if (notes.allTurnEnds.length === 0) return on ? { kind: 'context', context: NOTED, checks: [] } : { kind: 'pass' }
   const { pairings, unwatched } = ticketsIn(await read($, tickets))
   const isChecked = (id: string) => (on ? !pairings.some(p => p.localId === id) : unwatched.includes(id))
   const checks = [...new Set(notes.allTurnEnds.filter(isChecked))]
@@ -1030,8 +1030,8 @@ async function choiceFor($: $, e: PromptSubmitInput): Promise<Choice> {
     // While the role is off, a note about a sub session foreman does not check
     // reaches the parent's model, so the prompt is not kept.
   }
-  if (on) return { kind: 'noted', context: NOTED, checks }
-  return checks.length === 0 ? { kind: 'pass' } : { kind: 'noted', context: checkedLine(checks), checks }
+  if (on) return { kind: 'context', context: NOTED, checks }
+  return checks.length === 0 ? { kind: 'pass' } : { kind: 'context', context: checkedLine(checks), checks }
 }
 
 // Records a turn-end note, read now, about each of the sub sessions `ids`
@@ -1275,7 +1275,7 @@ export const register: Register = (on, options) => {
     }
     await noteChecks($, choice.checks)
     void ensureOffRoleWork($).catch(() => undefined)
-    if (choice.kind === 'noted') return next({ ...e, context: [choice.context] })
+    if (choice.kind === 'context') return next({ ...e, context: [choice.context] })
     await update($, quietLine, () => choice.line)
     await addLog($, choice.line)
     return next({ ...e, text: choice.line })
