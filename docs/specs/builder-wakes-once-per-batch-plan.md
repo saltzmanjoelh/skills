@@ -69,9 +69,17 @@ plan saw, which are the first two grafts below.
   conversation. Review showed that this is not enough: each held report's
   turn was answered with "Noted.", so when a member never reports, nothing
   wakes the model, against the counsel's ruling that every held report goes
-  to the model in one turn after the limit. A batch whose line the engine
-  refuses, or whose submit throws, is therefore put back, and the deadline's
-  timer tries again a minute later.
+  to the model in one turn after the limit. Putting a refused batch back
+  in a second write was not enough either, because that write can fail too,
+  and members that reported while the batch was out of the state were still
+  named as running. So the deadline now marks its batch as fired and moves
+  its deadline a minute on, in the same write that claims it, and drops the
+  batch only once the engine has taken its line. A line the engine refuses,
+  a submit that throws, a removal that fails or a hot reload in the middle
+  all leave the batch to fire again a minute later, naming the members still
+  running then, because a fired batch's deliveries pass but still end their
+  members. A removal that fails after the engine took the line sends the
+  line a second time, which is the cheaper failure.
 - **`ownStep` is cleared at the session's own `turn.complete`.** Taken from
   the most robust plan, so that an agent launched while the session is idle
   does not join the last step's batch.

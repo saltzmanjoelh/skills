@@ -1,9 +1,9 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Next, PromptOrigin, PromptSubmitInput, Register, ResolveInput, ToolCallInput, ToolCallResult, TurnStepResult } from 'claude-code'
 
-import type { AgentCard, BackgroundTask, Batch, BatchState, BuilderRun, Compactions, ContextMeasure, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, StatusMemo, UsageLedger, Wake } from '../types'
+import type { AgentCard, BackgroundTask, BatchState, BuilderRun, Compactions, ContextMeasure, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, StatusMemo, UsageLedger, Wake } from '../types'
 import { isSvgSurface } from './art'
-import { afterDeadline, afterDelivery, afterRefusedDeadline, BATCH_RETRY_MS, afterLaunch, afterResume, afterFirstStep, answersStep, batchStateIn, deliveryOf, heldReports, isBatchLaunch, nextDeadline, NOTED_REPLY, runningLines, type DeliveryAct } from './batch'
+import { afterDeadline, afterDeadlineSent, afterDelivery, BATCH_RETRY_MS, afterLaunch, afterResume, afterFirstStep, answersStep, batchStateIn, deliveryOf, heldReports, isBatchLaunch, nextDeadline, NOTED_REPLY, runningLines, type DeliveryAct } from './batch'
 import { checkoutSentence, otherRepositorySentence, worktreeWithBranch, type Checkout } from './checkout'
 // The context module's `told` is the compaction record after a reload was
 // announced; it is renamed here because `told` below is the snapshot last
@@ -1036,34 +1036,35 @@ function rearmBatch($: $, gen: number) {
   })
 }
 
-// Ends each batch whose deadline has passed, in one write, so that only one
+// Claims each batch whose deadline has passed, in one write, so that only one
 // timer submits its prompt, and submits builder's line for each. It calls
 // $.prompt.submit directly rather than submitClaimed, because submitClaimed
 // gives back the isDelivering flag when it ends, which would clear it in the
-// middle of a handover that holds it. A batch whose line the engine refuses,
-// or whose submit throws, is put back and the step fails, so the timer tries
-// again a minute later (see rearmBatch): the held reports were each answered
-// with "Noted.", so nothing else may wake the model for them.
+// middle of a handover that holds it. A claimed batch stays in the state until
+// the engine has taken its line, because the held reports were each answered
+// with "Noted.", so nothing else may wake the model for them: a line the
+// engine refuses, a submit that throws, a removal that fails and a hot reload
+// in the middle all leave the batch to be claimed again a minute later, with
+// the members still running then. The cost is that a removal that fails after
+// the engine took the line sends the line a second time.
 // The deadline is first worked out from a plain read, so that a timer step
 // that finds nothing due writes nothing, and then again inside the write,
 // because the batches may have changed in between.
 async function fireBatch($: $) {
   const now = await $.clock.now()
-  if (afterDeadline(await storedBatches($), now).lines.length === 0) return
-  let ended: { batch: Batch; line: string }[] = []
+  if (afterDeadline(await storedBatches($), now).due.length === 0) return
+  let due: { step: string; line: string }[] = []
   await changeBatches($, state => {
     const out = afterDeadline(state, now)
-    ended = out.ended
+    due = out.due
     return out.state
   })
-  const refused: Batch[] = []
-  for (const { batch, line } of ended) {
+  const sent: string[] = []
+  for (const { step, line } of due) {
     const submitted = await $.prompt.submit({ text: line }).catch(() => ({ drop: 'the submit failed' }))
-    if (submitted.drop !== undefined) refused.push(batch)
+    if (submitted.drop === undefined) sent.push(step)
   }
-  if (refused.length === 0) return
-  await changeBatches($, state => afterRefusedDeadline(state, refused))
-  throw new Error('the engine refused a deadline line')
+  if (sent.length > 0) await changeBatches($, state => afterDeadlineSent(state, sent))
 }
 
 // What builder does to a prompt for the batches. A finishing agent's

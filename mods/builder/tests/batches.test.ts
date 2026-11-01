@@ -49,11 +49,15 @@ const assistant = (text: string): SessionMessage => ({ role: 'assistant', text, 
 // The engine beneath the mod's prompt.submit hook: each prompt that goes on
 // is recorded with its context, as the engine would start its turn, unless
 // `refusing.on` is set, which makes the engine refuse every prompt as a Stop
-// hook that stands does.
-function promptsBelow(on: On, refusing: { on: boolean }) {
+// hook that stands does, and waits for `refusing.then` at each refusal, so a
+// test can act while the refused prompt is still being submitted.
+function promptsBelow(on: On, refusing: { on: boolean; then?: () => unknown }) {
   const passed: { text: string; context: readonly string[] }[] = []
-  on('prompt.submit', ($, e) => {
-    if (refusing.on) return { drop: 'a Stop hook stands' }
+  on('prompt.submit', async ($, e) => {
+    if (refusing.on) {
+      await refusing.then?.()
+      return { drop: 'a Stop hook stands' }
+    }
     passed.push({ text: e.text, context: e.context ?? [] })
     return { text: e.text, context: e.context }
   })
@@ -153,7 +157,7 @@ function world(on: On, seeded: Record<string, unknown> = {}) {
   const state = stateOf(on, seeded)
   const asked = model(on)
   const talk = conversation(on)
-  const refusing = { on: false }
+  const refusing: { on: boolean; then?: () => unknown } = { on: false }
   const passed = promptsBelow(on, refusing)
   return { clock, state, asked, talk, passed, refusing }
 }
@@ -288,6 +292,43 @@ test('a deadline prompt the engine refuses keeps its batch and is submitted agai
   await w.clock.settle()
   expect(w.passed.filter(p => p.text === deadlineLine(['Plan agent-2-'])).length).toBe(1)
   expect(w.state.value?.batches.some(b => b.deadline !== null)).toBe(false)
+})
+
+test('a deadline line refused while every write of the batches is refused too still reaches the model once both clear', async ($, on) => {
+  const w = world(on)
+  await launched($)
+  await deliver($, report(ALPHA))
+  w.refusing.on = true
+  w.refusing.then = () => { w.state.refuses = true }
+  await w.clock.advance(BATCH_LIMIT_MS)
+  await w.clock.settle()
+  expect(w.state.refuses).toBe(true)
+  w.refusing.on = false
+  w.state.refuses = false
+  await w.clock.advance(5 * BATCH_RETRY_MS)
+  await w.clock.settle()
+  expect(w.passed.filter(p => p.text === deadlineLine(['Plan agent-2-'])).length).toBe(1)
+  expect(w.state.value?.batches.some(b => b.deadline !== null)).toBe(false)
+})
+
+test('a report that arrives while a deadline line the engine refuses is being submitted passes, and the line sent again names only the members still running', async ($, on) => {
+  const w = world(on)
+  await launched($, ['Explore', 'Plan', 'Explore'])
+  await deliver($, report(ALPHA))
+  let during: Submitted | undefined
+  w.refusing.on = true
+  w.refusing.then = async () => {
+    w.refusing.on = false
+    w.refusing.then = undefined
+    during = await deliver($, report(BRAVO))
+  }
+  await w.clock.advance(BATCH_LIMIT_MS)
+  await w.clock.settle()
+  expect(during).toEqual({ text: report(BRAVO) })
+  await w.clock.advance(BATCH_RETRY_MS)
+  await w.clock.settle()
+  const lines = w.passed.map(p => p.text).filter(t => t.startsWith('builder: the time limit'))
+  expect(lines).toEqual([deadlineLine(['Explore agent-3-'])])
 })
 
 test('a read refused while the deadline\'s timer is armed arms it again a minute later, so the deadline still fires', async ($, on) => {

@@ -30,8 +30,9 @@ export const NOTED_REPLY = 'Noted.'
 export type Delivery = { id: string; isReport: boolean; status: string | null }
 
 // What register.tsx does with a prompt: pass it on as it came, pass it on as
-// it came and count it as held, or pass it on with the completion line added.
-export type DeliveryAct = { kind: 'pass' } | { kind: 'hold' } | { kind: 'release'; line: string }
+// it came and record that its member ended, pass it on as it came and count
+// it as held, or pass it on with the completion line added.
+export type DeliveryAct = { kind: 'pass' } | { kind: 'end' } | { kind: 'hold' } | { kind: 'release'; line: string }
 
 export const emptyBatchState = (sessionId: string): BatchState => ({ version: 1, sessionId, batches: [], marker: 0 })
 
@@ -45,7 +46,8 @@ const isTime = (raw: unknown): raw is number | null => raw === null || (typeof r
 const isBatch = (raw: unknown): raw is Batch => {
   const b = raw as Batch | null
   return typeof b === 'object' && b !== null && typeof b.step === 'string' && Array.isArray(b.members) && b.members.every(isMember) &&
-    Number.isInteger(b.heldReports) && b.heldReports >= 0 && isTime(b.deadline) && isTime(b.releasedAt)
+    Number.isInteger(b.heldReports) && b.heldReports >= 0 && isTime(b.deadline) && isTime(b.releasedAt) &&
+    (b.fired === undefined || b.fired === true)
 }
 
 // The stored state of the conversation `sessionId` names, or the empty state
@@ -154,7 +156,10 @@ const ends = (d: Delivery) => d.isReport || d.status === 'failed' || d.status ==
 // batch. Every other delivery from a member of an open or remembered batch is
 // held: it starts the batch's deadline if none is set, and raises the marker
 // when it arrives while the session is idle (`isIdle`), because only then does
-// it start a turn of its own.
+// it start a turn of its own. Once the deadline's line has been sent for a
+// batch, its deliveries pass but still end their members, so that a line sent
+// again names only those still running; the one that ends the last member
+// drops the batch.
 export function afterDelivery(state: BatchState, d: Delivery, isIdle: boolean, now: number): { state: BatchState; act: DeliveryAct } {
   const kept = pruned(state, now)
   const batch = kept.batches.find(b => countsAsBatch(b) && b.members.some(m => m.id === d.id))
@@ -165,6 +170,13 @@ export function afterDelivery(state: BatchState, d: Delivery, isIdle: boolean, n
   })
   if (batch.releasedAt !== null) return held(batch)
   const members = batch.members.map(m => (m.id === d.id && ends(d) ? { ...m, ended: true } : m))
+  if (batch.fired === true) {
+    if (!ends(d)) return { state: kept, act: { kind: 'pass' } }
+    const batches = members.every(m => m.ended)
+      ? kept.batches.filter(b => b !== batch)
+      : kept.batches.map(b => (b === batch ? { ...batch, members } : b))
+    return { state: { ...kept, batches }, act: { kind: 'end' } }
+  }
   if (members.every(m => m.ended)) {
     const released = { ...batch, members, heldReports: 0, deadline: null, releasedAt: now }
     return {
@@ -198,25 +210,24 @@ export function runningLines(state: BatchState): string[] {
   return state.batches.filter(isOpenWithHeld).map(b => incompleteLine(runningOf(b)))
 }
 
-// Ends every open batch whose deadline has passed, and answers the line to
-// submit for each, both alone and beside the batch it ends. Its members'
-// later deliveries then pass.
-export function afterDeadline(state: BatchState, now: number): { state: BatchState; lines: string[]; ended: { batch: Batch; line: string }[] } {
-  const due = (b: Batch) => isOpenWithHeld(b) && (b.deadline as number) <= now
-  const ended = state.batches.filter(due).map(batch => ({ batch, line: deadlineLine(runningOf(batch)) }))
+// Claims every open batch whose deadline has passed, and answers the line to
+// submit for each, beside the step that names the batch. A claimed batch is
+// marked as fired and stays in the state with its deadline moved
+// BATCH_RETRY_MS on, so that no other timer claims it in the meantime, and so
+// that a line the engine refuses, or a removal that fails, leaves it to be
+// claimed again with the members still running at that time.
+export function afterDeadline(state: BatchState, now: number): { state: BatchState; due: { step: string; line: string }[] } {
+  const isDue = (b: Batch) => isOpenWithHeld(b) && (b.deadline as number) <= now
   return {
-    state: { ...state, batches: state.batches.filter(b => !due(b)) },
-    lines: ended.map(e => e.line),
-    ended,
+    state: { ...state, batches: state.batches.map(b => (isDue(b) ? { ...b, fired: true as const, deadline: now + BATCH_RETRY_MS } : b)) },
+    due: state.batches.filter(isDue).map(b => ({ step: b.step, line: deadlineLine(runningOf(b)) })),
   }
 }
 
-// Puts back the ended batches whose deadline line the engine refused, so that
-// the deadline, which has passed, fires again. One whose step holds a batch
-// again is left out.
-export function afterRefusedDeadline(state: BatchState, refused: Batch[]): BatchState {
-  const back = refused.filter(b => !state.batches.some(kept => kept.step === b.step))
-  return back.length === 0 ? state : { ...state, batches: [...state.batches, ...back] }
+// Drops the fired batches of the steps whose deadline line the engine took.
+// Their members' later deliveries then pass.
+export function afterDeadlineSent(state: BatchState, steps: string[]): BatchState {
+  return { ...state, batches: state.batches.filter(b => !(b.fired === true && b.releasedAt === null && steps.includes(b.step))) }
 }
 
 // The soonest deadline still to pass, or null when no batch has one.

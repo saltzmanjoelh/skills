@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { PromptOrigin } from 'claude-code'
 
-import { afterDeadline, afterDelivery, afterRefusedDeadline, afterLaunch, afterResume, afterFirstStep, answersStep, BATCH_LIMIT_MS, BATCHES_KEPT, batchStateIn, completeLine, deadlineLine, deliveryOf, emptyBatchState, heldReports, incompleteLine, isBatchLaunch, nextDeadline, REMEMBER_MS, runningLines, type Delivery } from '../hooks/batch'
+import { afterDeadline, afterDeadlineSent, afterDelivery, afterLaunch, afterResume, afterFirstStep, answersStep, BATCH_LIMIT_MS, BATCH_RETRY_MS, BATCHES_KEPT, batchStateIn, completeLine, deadlineLine, deliveryOf, emptyBatchState, heldReports, incompleteLine, isBatchLaunch, nextDeadline, REMEMBER_MS, runningLines, type Delivery } from '../hooks/batch'
 import type { BatchState } from '../types'
 
 const PEER: PromptOrigin = { kind: 'peer' } as PromptOrigin
@@ -16,6 +16,8 @@ const SESSION = 'session-1'
 
 const report = (id: string): Delivery => ({ id, isReport: true, status: null })
 const notice = (id: string, status: string): Delivery => ({ id, isReport: false, status })
+// The deadline lines due at `now`.
+const dueLines = (state: BatchState, now: number) => afterDeadline(state, now).due.map(d => d.line)
 
 // A state with ALPHA and BRAVO launched together in step t1:0, and CHARLIE
 // alone in step t1:1.
@@ -113,22 +115,35 @@ test('the person is told which members still run once a batch has held deliverie
   expect(incompleteLine(['Plan bbbbbbbb'])).toContain('Plan bbbbbbbb')
 })
 
-test('the deadline ends the batch with a line naming the members still running, and a later report then passes', () => {
+test('the deadline claims the batch with a line naming the members still running, and once the line is taken a later report passes', () => {
   const state = afterDelivery(launched(), report(ALPHA), true, 0).state
-  expect(afterDeadline(state, BATCH_LIMIT_MS - 1).lines).toEqual([])
+  expect(dueLines(state, BATCH_LIMIT_MS - 1)).toEqual([])
   const out = afterDeadline(state, BATCH_LIMIT_MS)
-  expect(out.lines).toEqual([deadlineLine(['Plan bbbbbbbb'])])
-  expect(nextDeadline(out.state)).toBeNull()
-  expect(afterDelivery(out.state, report(BRAVO), true, BATCH_LIMIT_MS + 1).act).toEqual({ kind: 'pass' })
-  expect(afterDeadline(out.state, BATCH_LIMIT_MS).lines).toEqual([])
+  expect(out.due).toEqual([{ step: 't1:0', line: deadlineLine(['Plan bbbbbbbb']) }])
+  expect(dueLines(out.state, BATCH_LIMIT_MS + BATCH_RETRY_MS - 1)).toEqual([])
+  const sent = afterDeadlineSent(out.state, ['t1:0'])
+  expect(nextDeadline(sent)).toBeNull()
+  expect(afterDelivery(sent, report(BRAVO), true, BATCH_LIMIT_MS + 1).act).toEqual({ kind: 'pass' })
 })
 
-test('a batch whose deadline line was refused is put back, so its deadline fires again, unless its step holds a batch again', () => {
-  const state = afterDelivery(launched(), report(ALPHA), true, 0).state
-  const out = afterDeadline(state, BATCH_LIMIT_MS)
-  const back = afterRefusedDeadline(out.state, out.ended.map(e => e.batch))
-  expect(afterDeadline(back, BATCH_LIMIT_MS).lines).toEqual([deadlineLine(['Plan bbbbbbbb'])])
-  expect(afterRefusedDeadline(back, out.ended.map(e => e.batch))).toBe(back)
+test('a claimed batch whose line is not taken is claimed again a minute later, naming only the members still running then', () => {
+  let state = afterLaunch(launched(), 't1:0', { id: 'ddddddddd', type: 'Explore' })
+  state = afterDelivery(state, report(ALPHA), true, 0).state
+  state = afterDeadline(state, BATCH_LIMIT_MS).state
+  const passed = afterDelivery(state, report(BRAVO), true, BATCH_LIMIT_MS + 1)
+  expect(passed.act).toEqual({ kind: 'end' })
+  expect(afterDelivery(state, notice(BRAVO, 'completed'), true, BATCH_LIMIT_MS + 1).act).toEqual({ kind: 'pass' })
+  expect(dueLines(passed.state, BATCH_LIMIT_MS + BATCH_RETRY_MS)).toEqual([deadlineLine(['Explore dddddddd'])])
+  const last = afterDelivery(passed.state, report('ddddddddd'), true, BATCH_LIMIT_MS + 2)
+  expect(last.act).toEqual({ kind: 'end' })
+  expect(nextDeadline(last.state)).toBeNull()
+})
+
+test('a fired mark in any other shape reads as empty', () => {
+  const state = afterDeadline(afterDelivery(launched(), report(ALPHA), true, 0).state, BATCH_LIMIT_MS).state
+  expect(batchStateIn(state, SESSION)).toEqual(state)
+  const bad = { ...state, batches: state.batches.map(b => ({ ...b, fired: false })) }
+  expect(batchStateIn(bad, SESSION)).toEqual(emptyBatchState(SESSION))
 })
 
 test('two batches open at once each release on their own', () => {
@@ -155,7 +170,7 @@ test('after a member that reported is resumed, the member left still releases th
   const out = afterDelivery(state, report(BRAVO), true, 2)
   expect(out.act).toEqual({ kind: 'release', line: completeLine(1) })
   expect(heldReports(out.state)).toBe(0)
-  expect(afterDeadline(out.state, BATCH_LIMIT_MS).lines).toEqual([])
+  expect(dueLines(out.state, BATCH_LIMIT_MS)).toEqual([])
   expect(afterDelivery(out.state, notice(BRAVO, 'completed'), true, 3).act).toEqual({ kind: 'hold' })
   expect(completeLine(1)).toContain('the batch of agents launched together is complete')
 })
@@ -165,7 +180,7 @@ test('resuming the last member still running, after the others ended, releases t
   state = afterResume(state, BRAVO, 5)
   expect(heldReports(state)).toBe(0)
   expect(nextDeadline(state)).toBeNull()
-  expect(afterDeadline(state, BATCH_LIMIT_MS).lines).toEqual([])
+  expect(dueLines(state, BATCH_LIMIT_MS)).toEqual([])
   expect(afterDelivery(state, report(BRAVO), true, 6).act).toEqual({ kind: 'pass' })
 })
 
@@ -182,7 +197,7 @@ test('the trim of old steps never drops an open batch with held deliveries, so i
   expect(state.batches).toHaveLength(BATCHES_KEPT)
   expect(state.batches[0]?.step).toBe('t1:0')
   expect(nextDeadline(state)).toBe(BATCH_LIMIT_MS)
-  expect(afterDeadline(state, BATCH_LIMIT_MS).lines).toEqual([deadlineLine(['Plan bbbbbbbb'])])
+  expect(dueLines(state, BATCH_LIMIT_MS)).toEqual([deadlineLine(['Plan bbbbbbbb'])])
 })
 
 test('a step is answered only when the marker is set and the last message is not a user message', () => {
