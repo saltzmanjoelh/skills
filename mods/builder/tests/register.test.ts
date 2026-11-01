@@ -11539,6 +11539,49 @@ test('three changed writes while one send is held give exactly one more send onc
   expect(sends.log.length).toBe(2)
 })
 
+test('a send owed when a /clear ends the conversation is not sent once the held send is released', async ($, on) => {
+  const s = foremanSession(on)
+  const sends = parentSends(on, s)
+  let release = () => {}
+  sends.hold = new Promise(resolve => {
+    release = resolve
+  })
+  await firstPrompt($, s.clock, PARENTED)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  expect(s.writesOf()).toBe(2)
+  expect(sends.log.length).toBe(1)
+
+  await endSession($, 'clear')
+  s.ids.current = 'session-2'
+  release()
+  await s.clock.settle()
+  expect(sends.log.length).toBe(1)
+})
+
+test('a send owed by the new conversation after a /clear goes to the new parent once the old send is released', async ($, on) => {
+  const s = foremanSession(on)
+  const sends = parentSends(on, s)
+  let release = () => {}
+  sends.hold = new Promise(resolve => {
+    release = resolve
+  })
+  await firstPrompt($, s.clock, PARENTED)
+  expect(sends.log.length).toBe(1)
+
+  await endSession($, 'clear')
+  s.ids.current = 'session-2'
+  await $.prompt.submit({ text: 'foreman-ticket: slot-2\nforeman-parent: parent-2\n', origin: { kind: 'composer' } } as never)
+  await s.clock.settle()
+  expect(s.statusAt('/home/me/.claude/foreman/builds/session-2.json')?.ticket).toBe('slot-2')
+  expect(sends.log.length).toBe(1)
+
+  release()
+  await s.clock.settle()
+  expect(sends.log.length).toBe(2)
+  expect(sends.log[1]?.to).toEqual(expect.stringContaining('parent-2'))
+})
+
 test('a send that hangs is dropped after 10 seconds while the writes go on, and the next change sends again', async ($, on) => {
   const s = foremanSession(on)
   const sends = parentSends(on, s)

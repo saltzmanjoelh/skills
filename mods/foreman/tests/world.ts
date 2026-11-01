@@ -304,6 +304,12 @@ export const MESSAGE = '<cross-session-message from="local_a" name="example">\nI
 export const CHANGED_ELEMENT = `<cross-session-message from="local_a" name="example">\n${STATUS_CHANGED_TEXT}\n</cross-session-message>`
 export const CHANGED = `Another Claude session sent a message:\n${CHANGED_ELEMENT}\n\nThis came from another Claude session.`
 
+// Builder's message that a status file changed exactly as a session.receive
+// hook got it in a real headless parent: the bare element with the three
+// attributes the app writes, whose sender is a socket address, with no header
+// or trailer. The ids are invented.
+export const CHANGED_AS_RECEIVED = `<cross-session-message from="uds:/tmp/cc-socks/12345.sock" from-name="example" from-mode="prompting">\n${STATUS_CHANGED_TEXT}\n</cross-session-message>`
+
 // The element the app puts after the notes when none of the parent's sessions
 // is working.
 export const EVENT = '<side-sessions-event>None of the sessions you started is working now; their notes are above. Carry on with any step they unblock, or else tell the user the outcome in one or two lines.</side-sessions-event>'

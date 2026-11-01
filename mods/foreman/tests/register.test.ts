@@ -5,7 +5,7 @@ import type { Engine } from 'claude-code/testing'
 import { REASONS } from '../hooks/desktop'
 import { STATUS_CHANGED_TEXT } from '../hooks/notes'
 import { ticketsIn, ticketsKey, TICKETS_EMPTY } from '../hooks/tickets'
-import { CHANGED, CHANGED_ELEMENT, foreman, HOME, MINUTE, SECOND, SECRET, SURFACES, T0, leftInState, mountBoth, record, SENT, start, statusFolder, world } from './world'
+import { CHANGED, CHANGED_AS_RECEIVED, CHANGED_ELEMENT, foreman, HOME, MINUTE, SECOND, SECRET, SURFACES, T0, leftInState, mountBoth, record, SENT, start, statusFolder, world } from './world'
 
 // Two sub sessions: one working at the plan stage with three stages done and
 // a pull request, and one that needs the person.
@@ -667,6 +667,20 @@ test('builder\'s message that a status file changed, in either shape the app del
   expect(w.folder.lists).toBe(4)
   await w.clock.advance(SECOND)
   expect(w.folder.lists).toBe(5)
+})
+
+test('builder\'s message that a status file changed, in the shape a receive hook really gets it, is consumed and reads the folder at once', async ($, on) => {
+  const w = world(on)
+  w.folder.put('a.json', record('ABC-1', 'working'))
+  await mountBoth($, on)
+  await start($)
+  await foreman($)
+  expect(w.folder.lists).toBe(1)
+  const out = await receive($, CHANGED_AS_RECEIVED)
+  expect(out.consumed).toBeDefined()
+  expect(out.text).toBeUndefined()
+  await w.clock.settle()
+  expect(w.folder.lists).toBe(2)
 })
 
 test('a peer\'s message that a status file changed is consumed whatever plugin it claims, or with no claim at all', async ($, on) => {

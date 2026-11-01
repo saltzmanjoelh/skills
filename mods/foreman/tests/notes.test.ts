@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import { checkLine, FOREMAN_REPORTS, isAppParts, isStatusChanged, keptLine, keptNames, NOTED, notesIn, STATUS_CHANGED_TEXT, turnEndIds, wantsNoted } from '../hooks/notes'
 import { newPairing } from '../hooks/tickets'
 import type { ForemanPairing } from '../types'
-import { ARCHIVED, CHANGED, CHANGED_ELEMENT, EVENT, MESSAGE, note, OTHER_EVENT, PROPOSAL, SENT, STATUS, T0, WORKTREE } from './world'
+import { ARCHIVED, CHANGED, CHANGED_AS_RECEIVED, CHANGED_ELEMENT, EVENT, MESSAGE, note, OTHER_EVENT, PROPOSAL, SENT, STATUS, T0, WORKTREE } from './world'
 
 const pairing = (localId: string | null, issueKey: string | null, standing: ForemanPairing['standing'], ticket = `ft-${localId}`): ForemanPairing => ({
   ...newPairing(ticket, localId, T0), issueKey, standing,
@@ -195,4 +195,23 @@ test('a message that is not exactly one element whose body is the marker is not 
     `${note('local_a')}\n${CHANGED_ELEMENT}`,
   ]
   for (const text of refused) expect(isStatusChanged(text)).toBe(false)
+})
+
+test('builder\'s message that a status file changed is known in the shape a receive hook really gets it, with the app\'s three attributes', () => {
+  expect(isStatusChanged(CHANGED_AS_RECEIVED)).toBe(true)
+  expect(isStatusChanged(`\n${CHANGED_AS_RECEIVED}\n`)).toBe(true)
+})
+
+test('the marker alongside a status block, another note, the side-sessions element or a header with no trailer is not builder\'s message, though the prompt is made of the app\'s parts', () => {
+  const alongside = [
+    `${STATUS}\n${CHANGED_ELEMENT}`,
+    `${CHANGED_ELEMENT}\n${STATUS}`,
+    `${ARCHIVED}\n${CHANGED_ELEMENT}`,
+    `${CHANGED_ELEMENT}\n${EVENT}`,
+    `Another Claude session sent a message:\n${CHANGED_ELEMENT}`,
+  ]
+  for (const text of alongside) {
+    expect(isAppParts(text)).toBe(true)
+    expect(isStatusChanged(text)).toBe(false)
+  }
 })

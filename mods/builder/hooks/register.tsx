@@ -3369,10 +3369,13 @@ let statusGen = 0
 // compare the next one with. A hot reload forgets it, which costs one write,
 // and one message to the parent, since that write counts as changed.
 let lastWrittenText: string | null = null
-// A message to the parent is running, and another is owed because a changed
-// write finished while it ran.
+// A message to the parent is running, and the parent that one more message
+// is owed to because a changed write finished while it ran, or null when none
+// is owed. It is the parent of the latest such write, so that after a /clear
+// or a resume the owed message goes to the new conversation's parent rather
+// than to the one the running send was for.
 let parentSendInFlight = false
-let parentSendOwed = false
+let parentSendOwedTo: string | null = null
 // The minute's tick, and whether the session has ended, after which nothing
 // more is written.
 let statusTick: { cancel: () => void } | undefined
@@ -3491,12 +3494,13 @@ async function writeStatus($: $, gen: number): Promise<void> {
 // file changed, so it reads its folder at once instead of at its next timer.
 // The writer does not wait for it. At most one send runs: one asked for while
 // another runs is owed, and however many are owed, one more is sent once the
-// running one ends. A send that is refused, is not delivered, throws or runs
-// past PARENT_SEND_TIMEOUT_MS is dropped with no retry, because the file and
-// foreman's timer cover the gap, and nothing here can stop a hook.
+// running one ends, to the parent the latest of them named. A send that is
+// refused, is not delivered, throws or runs past PARENT_SEND_TIMEOUT_MS is
+// dropped with no retry, because the file and foreman's timer cover the gap,
+// and nothing here can stop a hook.
 function tellParent($: $, parent: string) {
   if (parentSendInFlight) {
-    parentSendOwed = true
+    parentSendOwedTo = parent
     return
   }
   parentSendInFlight = true
@@ -3507,10 +3511,9 @@ function tellParent($: $, parent: string) {
       // Dropped, as said above.
     } finally {
       parentSendInFlight = false
-      if (parentSendOwed) {
-        parentSendOwed = false
-        tellParent($, parent)
-      }
+      const owedTo = parentSendOwedTo
+      parentSendOwedTo = null
+      if (owedTo !== null) tellParent($, owedTo)
     }
   })()
 }
@@ -3752,7 +3755,7 @@ async function reopenForNextConversation($: $) {
   ticketKnown = undefined
   ticketFor = undefined
   lastWrittenText = null
-  parentSendOwed = false
+  parentSendOwedTo = null
   statusDirty = false
   statusForced = false
   // Writing opens again even when the reset fails. That is safe, because a
