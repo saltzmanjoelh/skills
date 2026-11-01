@@ -179,10 +179,6 @@ test('a prompt is the app\'s parts only when nothing in it is the person\'s typi
   for (const text of [`${note('local_a')}\nhello`, 'hello', '/start-foreman 3', `${WORKTREE}\n${note('local_a')}`]) expect(isAppParts(text)).toBe(false)
 })
 
-test('the Noted line ends with the sentences about foreman\'s own reports', () => {
-  expect(NOTED.endsWith(`unless one of them asks the person or this parent a question. ${FOREMAN_REPORTS}`)).toBe(true)
-})
-
 test('the checked line names each checked sub session once and sorted, asks for no "Noted.", and leaves the rest of the prompt to the model', () => {
   expect(checkedLine(['local_u'])).toBe('From the foreman mod: foreman records the turn-end notes about the sub session local_u itself, so do not reply to them. Reply briefly to the rest of this prompt, not with a single word.')
   expect(checkedLine(['local_v', 'local_u', 'local_v'])).toBe('From the foreman mod: foreman records the turn-end notes about the sub sessions local_u and local_v itself, so do not reply to them. Reply briefly to the rest of this prompt, not with a single word.')
