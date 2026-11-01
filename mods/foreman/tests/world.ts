@@ -155,12 +155,16 @@ export function desktopApp(on: On) {
 // start, which each start takes in turn, with `startFails` making it answer
 // an error and `startThrows` making it throw.
 // `onStart` is awaited as each start runs, before it answers, so a test can
-// look at the ledger, or change what happens, while the call is out.
-export function engine(on: On) {
+// look at the ledger, or change what happens, while the call is out. `now`
+// answers the time a notification was raised at.
+export function engine(on: On, now: () => number = () => T0) {
   const toasts: string[] = []
   const panes: string[] = []
   const answers = {
     notices: [] as string[],
+    // Each notification raised, with its title and the time it was raised,
+    // in the same order as `notices`.
+    raised: [] as { title: string | undefined; at: number }[],
     prompts: [] as string[],
     // Where each prompt came from, and the context it came with, in the same
     // order as `prompts`.
@@ -189,6 +193,7 @@ export function engine(on: On) {
     if (answers.notify === 'throws') throw new Error('no channel')
     if (answers.notify === 'hang') return new Promise<never>(() => {})
     answers.notices.push(e.text)
+    answers.raised.push({ title: e.title, at: now() })
     return { value: answers.notify === 'sent' ? { isSent: true, channel: 'terminal' } : { isSent: false, reason: 'disabled' } } as never
   })
   on('prompt.submit', ($, e) => {
@@ -247,7 +252,7 @@ export function world(on: On, options: { store?: Record<string, unknown>; env?: 
   mock.env(on, options.env ?? { HOME })
   const folder = statusFolder(on, options.at, stored)
   const desktop = desktopApp(on)
-  const { toasts, panes, answers } = engine(on)
+  const { toasts, panes, answers } = engine(on, () => clock.now())
   return { clock, folder, desktop, toasts, panes, stored, store, engine: answers }
 }
 

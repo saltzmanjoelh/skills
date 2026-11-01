@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { DATA_NOTE, quoted, REASON_WORDS, slotWords, wakeLine, whoOf, withSentences } from '../hooks/wake'
+import { DATA_NOTE, quoted, REASON_WORDS, REPORT_KINDS, slotWords, splitReasons, wakeLine, whoOf, type Reason } from '../hooks/wake'
 
 const TICKET = 'ft-1234'
 
@@ -105,19 +105,37 @@ test('a background sentence with no task, or one that is empty once cleaned, end
   expect(wakeLine([{ kind: 'unseen', who: 'ABC-1', minutes: 5, mismatch: true }])).not.toContain(DATA_NOTE)
 })
 
-// The wake skill quotes both forms of the began sentence, so they are pinned.
+// The README quotes both forms of the began sentence, so they are pinned.
+// Foreman shows the sentence itself rather than waking the parent's model
+// with it, so it no longer tells that model what to do.
 test('the began sentence names the slot that freed, or says the slot was free', () => {
   expect(REASON_WORDS.began({ kind: 'began', who: 'ABC-2', by: 'ABC-1' }))
-    .toBe('foreman began ABC-2, the next issue in the queue, in the slot ABC-1 freed; tell the person so in one line.')
+    .toBe('foreman began ABC-2, the next issue in the queue, in the slot ABC-1 freed.')
   expect(REASON_WORDS.began({ kind: 'began', who: 'ABC-2', by: null }))
-    .toBe('foreman began ABC-2, the next issue in the queue, in a free slot; tell the person so in one line.')
+    .toBe('foreman began ABC-2, the next issue in the queue, in a free slot.')
 })
 
-test('sentences added after a send go at the end of the last wake line, or make a line of their own when there is none', () => {
-  const began = REASON_WORDS.began({ kind: 'began', who: 'ABC-2', by: 'ABC-1' })
-  expect(withSentences([], [])).toEqual([])
-  expect(withSentences(['foreman: ABC-1\'s pull request #7 merged.'], [])).toEqual(['foreman: ABC-1\'s pull request #7 merged.'])
-  expect(withSentences(['foreman: ABC-1\'s pull request #7 merged.'], [began])).toEqual([`foreman: ABC-1's pull request #7 merged. ${began}`])
-  expect(withSentences(['foreman: a.', 'foreman: b.'], [began, began])).toEqual(['foreman: a.', `foreman: b. ${began} ${began}`])
-  expect(withSentences([], [began])).toEqual([`foreman: ${began}`])
+// The wake skill quotes the still-waits sentence as a heading, so it is pinned.
+test('the still-waits sentence names the sub session by its id', () => {
+  expect(REASON_WORDS['still-waits']({ kind: 'still-waits', id: 'local_abc' }))
+    .toBe('the sub session local_abc, which foreman holds no record of, still waits after foreman\'s nudge.')
+})
+
+test('the five report kinds are the pull request milestones and the begin, and nothing else', () => {
+  expect([...REPORT_KINDS].sort()).toEqual(['began', 'closed', 'merged', 'opened', 'verdicts'])
+  expect(REPORT_KINDS.has('still-waits')).toBe(false)
+})
+
+test('reasons split into the ones that wake, in order, and the report sentences, in order', () => {
+  const reasons: Reason[] = [
+    { kind: 'opened', who: 'ABC-1', number: 7 },
+    { kind: 'idle', who: 'ABC-2', nudged: true, minutes: 15 },
+    { kind: 'merged', who: 'ABC-1', number: 7 },
+    { kind: 'slot-free', free: 1 },
+    { kind: 'still-waits', id: 'local_abc' },
+  ]
+  const { wakes, reports } = splitReasons(reasons)
+  expect(wakes.map(r => r.kind)).toEqual(['idle', 'slot-free', 'still-waits'])
+  expect(reports).toEqual(['ABC-1 opened pull request #7.', 'ABC-1\'s pull request #7 merged.'])
+  expect(splitReasons([])).toEqual({ wakes: [], reports: [] })
 })

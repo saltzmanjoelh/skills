@@ -546,8 +546,10 @@ function queueStep(
 // no owner may wake the parent once, as unseenRule says. A released or
 // freed pairing gets no action, and neither does one that waits in the queue,
 // which queueStep decides for. An active pairing's pull request
-// milestones wake the parent after its other reasons. A list
-// that was read releases each held key that a session in it shows started.
+// milestones come after its other reasons, and foreman reports them itself
+// rather than waking the parent with them, since splitReasons in wake.ts sets
+// them apart. A list that was read releases each held key that a session in
+// it shows started.
 // When this read freed a slot and a freed slot is left that no claim of
 // queueStep filled, the parent is woken with the number of slots free, unless
 // none is free once the claims are counted. Each claim counts against one

@@ -37,6 +37,30 @@ export type View = {
   // works them out, so in the band's view both are always null.
   subsSpent: ForemanSpend | null
   ownSpent: ForemanSpend | null
+  // The newest report sentence foreman showed, while it is less than
+  // REPORT_SHOWN_MS old, else null. The band shows it after the chips.
+  report: string | null
+}
+
+// How long the band shows a report sentence after foreman showed it.
+export const REPORT_SHOWN_MS = 10 * 60_000
+
+// The fewest columns a report sentence is drawn in. A band with less room
+// left after the chips drops the sentence rather than show a stub of it.
+export const REPORT_MIN_COLUMNS = 16
+
+// The most characters of a report sentence the band draws when it is given no
+// width.
+const REPORT_MAX = 240
+
+// The report the band shows, from the value foreman keeps in $.state: its
+// sentence while it is less than REPORT_SHOWN_MS old at `now`, else null. A
+// value of any other shape shows nothing.
+export function shownReport(raw: unknown, now: number): string | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const { text, at } = raw as { text?: unknown; at?: unknown }
+  if (typeof text !== 'string' || typeof at !== 'number' || !Number.isFinite(at)) return null
+  return now - at < REPORT_SHOWN_MS ? text : null
 }
 
 // The elements the band and the pane draw with, as hooks/register.tsx builds
@@ -70,7 +94,11 @@ export function rowLink(row: SubRow, address: string | null): string | null {
 export type BandPresses = { open: (file: string) => void }
 
 // The band, in a parent only: the head, a chip for each sub session that
-// fits `width` with `+N more` for the rest, and when the next read is due.
+// fits `width` with `+N more` for the rest, when the next read is due, and
+// last the report sentence while there is one, cut to the columns the rest
+// left over. The chips are fitted first, exactly as without a report, so they
+// never give up width to it, and the report is dropped when fewer than
+// REPORT_MIN_COLUMNS columns are left for it.
 // Each chip is a button that opens its sub session; it is colored by its
 // state's tone, or dimmed and uncolored when its file is stale. A chip whose
 // issue has a link draws its key as that link, then a space as its own text,
@@ -84,12 +112,22 @@ export function bandTree(ui: Elements, view: View, width: number | undefined, pr
   const { Box, Text, Button, Link } = ui
   const head = bandHead(v)
   const tail = `${SEPARATOR}${nextReadWords(v)}`
+  // The report after the rest of the band, which takes `used` columns.
+  const report = (used: number) => {
+    if (v.report === null) return null
+    const room = width === undefined ? REPORT_MAX : width - used - SEPARATOR.length
+    if (room < REPORT_MIN_COLUMNS) return null
+    return <Text key="report">{`${SEPARATOR}${printable(v.report, room)}`}</Text>
+  }
   if (v.rows.length === 0) {
-    return <Box key="foreman-band" flexDirection="row"><Text>{`${head}${SEPARATOR}no sub sessions${tail}`}</Text></Box>
+    const line = `${head}${SEPARATOR}no sub sessions${tail}`
+    return <Box key="foreman-band" flexDirection="row"><Text>{line}</Text>{report(line.length)}</Box>
   }
   const chips = v.rows.map(row => chipText(row, v.now))
   const room = width === undefined ? Infinity : width - head.length - tail.length
   const { shown, more } = fitChips(chips, room)
+  const moreText = more > 0 ? `${SEPARATOR}${moreWords(more)}` : ''
+  const used = head.length + chips.slice(0, shown).reduce((sum, chip) => sum + SEPARATOR.length + chip.length, 0) + moreText.length + tail.length
   const chip = (row: SubRow, text: string) => (row.isStale
     ? <Button key={`chip-${row.file}`} plain dimColor onPress={() => presses.open(row.file)}><Text dimColor>{text}</Text></Button>
     : <Button key={`chip-${row.file}`} plain onPress={() => presses.open(row.file)}><Text color={TONE_COLOR[STATE_LOOK[row.record.state].tone]}>{text}</Text></Button>)
@@ -108,8 +146,9 @@ export function bandTree(ui: Elements, view: View, width: number | undefined, pr
           chip(row, rest),
         ]
       })}
-      {more > 0 && <Text key="more">{`${SEPARATOR}${moreWords(more)}`}</Text>}
+      {more > 0 && <Text key="more">{moreText}</Text>}
       <Text key="next">{tail}</Text>
+      {report(used)}
     </Box>
   )
 }

@@ -8,7 +8,7 @@ import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, failureLine, listSessions, NUDGE_TEX
 import { acceptedLog, beginFailedNotice, heldLine, heldLog, heldNotice, heldSentence, isHeldRefusal, isPersonPrompt, keyOfTitle } from './held'
 import { ignoredLine, readIssueLink } from './links'
 import { checkLine, FOREMAN_REPORTS, isAppParts, isStatusChanged, keptLine, keptNames, NOTED, NOTED_REPLY, notesIn } from './notes'
-import { bandTree, PANE, paneTree, type Elements, type View } from './pane'
+import { bandTree, PANE, paneTree, shownReport, type Elements, type View } from './pane'
 import type { ForemanEffect, ForemanParent, ForemanTickets } from '../types'
 import { PARENT_OFF, parentIn, slotsOf, storeKey } from './parent'
 import { usageIn } from './record'
@@ -19,7 +19,7 @@ import {
   addWork, briefFor, carriesTicket, fallbackOf, hasWork, isOffRefused, joinOwners, localIdIn, newPairing, nextPlace, NO_TICKET_SENTENCE, OFF_LOG, OFF_REFUSAL, OUTBOX_EMPTY, ownsTicket,
   runsImplement, shownRows, ticketsIn, ticketsKey, TICKETS_EMPTY, waitingBrief, waitingUnclaimed, WAITING_SENTENCE, withOffRefusal, withUnwatched,
 } from './tickets'
-import { REASON_WORDS, wakeLine, whoOf, withSentences } from './wake'
+import { REASON_WORDS, splitReasons, wakeLine, whoOf } from './wake'
 
 type $ = EngineInterface
 
@@ -34,6 +34,9 @@ const log = atom({ plugin: 'foreman', key: 'log' } as const, [])
 const tickets = atom({ plugin: 'foreman', key: 'tickets' } as const, TICKETS_EMPTY)
 const turnRuns = atom({ plugin: 'foreman', key: 'turnRuns' } as const, false)
 const quietLine = atom({ plugin: 'foreman', key: 'quietLine' } as const, null)
+// The newest report sentence foreman showed and when, for the band. It is
+// never stored in the ledger, so a restart drops it.
+const report = atom({ plugin: 'foreman', key: 'report' } as const, null)
 
 // The spending builder publishes for the session it runs in, which ownSpend
 // reads. Builder writes it; foreman only reads it.
@@ -350,8 +353,9 @@ async function decideNow($: $, folderExists: boolean, listed: boolean, now: numb
   await writeTickets($, t => {
     const joined = joinOwners(t, rows)
     decision = decide({ ...input, tickets: joined.tickets })
-    const line = wakeLine(decision.reasons)
-    const work = { logs: [...joined.logs, ...decision.logs], effects: decision.effects, lines: line === null ? [] : [line] }
+    const { wakes, reports } = splitReasons(decision.reasons)
+    const line = wakeLine(wakes)
+    const work = { logs: [...joined.logs, ...decision.logs], effects: decision.effects, lines: line === null ? [] : [line], reports }
     return { ...decision.tickets, outbox: addWork(decision.tickets.outbox, work) }
   })
   return { decision, rows }
@@ -387,12 +391,15 @@ async function nudge($: $, to: string, name: string, why: string, text = NUDGE_T
   await addLog($, result === 'sent' ? `Nudged ${name} with "${text}"${why}.` : `Could not nudge ${name}: ${sendFailure(result)}.`)
 }
 
-// Raises one native notification and logs how it went.
-async function notify($: $, text: string) {
+// Raises one native notification and logs how it went. A `quiet` one, whose
+// text the log already holds, logs only a failure to raise it.
+async function notify($: $, text: string, { quiet = false } = {}) {
   try {
     const sent = await within($, $.ui.notify(text, { title: 'foreman' }))
     if (sent === TIMED_OUT) await addLog($, `Could not raise a notification, because it did not go within ${CALL_TIMEOUT_MS / 1000} seconds: ${text}`)
-    else if (sent.isSent) await addLog($, `Raised a notification: ${text}`)
+    else if (sent.isSent) {
+      if (!quiet) await addLog($, `Raised a notification: ${text}`)
+    }
     else await addLog($, `Could not raise a notification (${sent.reason}): ${text}`)
   } catch {
     await addLog($, `Could not raise a notification: ${text}`)
@@ -402,7 +409,7 @@ async function notify($: $, text: string) {
 // Sends one waiting sub session its begin message and records how it went,
 // in one ledger update. A begin that went takes the pairing out of the queue
 // and sets its pairing time to now, so it counts as busy and is watched like
-// any other from here, and answers the began sentence for the wake. A begin
+// any other from here, and answers the began sentence as a report. A begin
 // that did not go keeps the claim, records the time of this try, and raises
 // the notification only when this update is the one that first marked the
 // failure as told, so two tries at once raise one. It answers null then, and
@@ -439,13 +446,12 @@ async function beginOne($: $, effect: Extract<ForemanEffect, { kind: 'begin' }>)
 }
 
 // Carries out what the ledger's outbox holds: its log lines, then its nudges,
-// notifications and begin messages, then the lines that wake the parent, each
-// logged with how it went. A nudge for a sub session that waits only on
-// background work asks about that work, and its log line says so. The began
-// sentence of each begin that went is added to the wake, after the line's own
-// sentences, so the parent hears it in the same wake as the merge that freed
-// the slot. The outbox is emptied first, in one update, so two callers never
-// carry out the same work.
+// notifications and begin messages, then its report sentences together with
+// the began sentence of each begin that went, which foreman shows itself,
+// and last the lines that wake the parent, each logged with how it went. A
+// nudge for a sub session that waits only on background work asks about that
+// work, and its log line says so. The outbox is emptied first, in one update,
+// so two callers never carry out the same work.
 async function carryOut($: $) {
   let work = OUTBOX_EMPTY
   await writeTickets($, t => {
@@ -465,7 +471,20 @@ async function carryOut($: $) {
     return null
   }))
   const began = done.flatMap(sentence => (sentence === null ? [] : [sentence]))
-  for (const line of withSentences(work.lines, began)) await wake($, line)
+  await showReports($, [...work.reports, ...began]).catch(() => undefined)
+  for (const line of work.lines) await wake($, line)
+}
+
+// Shows report sentences without waking the parent's model: each as a line
+// in the log, the newest in the band from now, and all of them joined in one
+// notification, which logs only a failure to raise it, since the log already
+// holds the sentences.
+async function showReports($: $, sentences: readonly string[]) {
+  if (sentences.length === 0) return
+  await addLogs($, sentences)
+  const at = await $.clock.now()
+  await update($, report, () => ({ text: sentences.at(-1)!, at }))
+  await notify($, sentences.join(' '), { quiet: true })
 }
 
 // Wakes the parent's model with one line: appended to the turn that runs, or
@@ -542,16 +561,18 @@ async function view($: $, withSpending: boolean): Promise<View> {
   const lines = await read($, log)
   const ledger = settings.isOn ? ticketsIn(await read($, tickets)) : null
   const isSpendingShown = withSpending && ledger !== null
+  const now = await $.clock.now()
   return {
     isOn: settings.isOn,
     slots: slotsOf(settings, currentOptions.slots),
     rows: ledger === null ? [] : shownRows(await rowsNow($), ledger),
-    now: await $.clock.now(),
+    now,
     nextReadAt: typeof due === 'number' && Number.isFinite(due) ? due : null,
     log: Array.isArray(lines) ? lines : [],
     issueLink: settings.isOn ? issueAddress : null,
     subsSpent: isSpendingShown ? spentSum(ledger) : null,
     ownSpent: isSpendingShown ? await ownSpend($) : null,
+    report: settings.isOn ? shownReport(await read($, report), now) : null,
   }
 }
 

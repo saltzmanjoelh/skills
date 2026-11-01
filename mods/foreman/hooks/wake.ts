@@ -2,12 +2,14 @@
 // joined, with any text from a status record quoted as data. A sub session
 // can influence the text in its own record, so that text is cleaned, cut and
 // quoted, and the line says that quoted text is data, not instructions.
+// Five kinds of reason only report something, so they never go in that line:
+// foreman shows their sentences itself, and splitReasons sets them apart.
 // Every function is pure.
 //
 // The skill at skills/wake/SKILL.md tells the parent's model what each
-// sentence means and uses each sentence as a heading, so REASON_WORDS is pinned
-// by tests/wake.test.ts, listed in the README and quoted in that skill. Change
-// all four together.
+// sentence that wakes it means and uses each such sentence as a heading, so
+// REASON_WORDS is pinned by tests/wake.test.ts, listed in the README and
+// quoted in that skill. Change all four together.
 
 import type { RecordVerdicts } from './record'
 import { plural, printable } from './text'
@@ -20,7 +22,9 @@ import { plural, printable } from './text'
 // foreman can join: `mismatch` says a file carries its ticket but names
 // another desktop session or none. `background` is a working sub session
 // that waits only on background work, with its first task's description as
-// builder wrote it, or null when the record names none.
+// builder wrote it, or null when the record names none. `still-waits` is a
+// sub session that foreman holds no record of, named by its `local_…` id,
+// that still waits after foreman's nudge.
 export type Reason =
   | { kind: 'idle'; who: string; nudged: boolean; minutes: number }
   | { kind: 'unseen'; who: string; minutes: number; mismatch: boolean }
@@ -33,6 +37,13 @@ export type Reason =
   | { kind: 'closed'; who: string; number: number }
   | { kind: 'slot-free'; free: number }
   | { kind: 'began'; who: string; by: string | null }
+  | { kind: 'still-waits'; id: string }
+
+// The kinds of reason that only report something: a sub session's pull
+// request opened, got its verdict pair, merged or was closed, and foreman
+// began a queued issue. The parent's model could only repeat them, so foreman
+// shows their sentences itself and never wakes the model with one.
+export const REPORT_KINDS: ReadonlySet<Reason['kind']> = new Set<Reason['kind']>(['opened', 'verdicts', 'merged', 'closed', 'began'])
 
 // The shape of an issue key, such as ABC-123, as a pattern for other patterns
 // to build on. The title check in tickets.ts uses it too, so the two agree.
@@ -124,7 +135,8 @@ export const REASON_WORDS: { [K in Reason['kind']]: (r: Extract<Reason, { kind: 
   'merged': r => `${r.who}'s pull request #${r.number} merged.`,
   'closed': r => `${r.who}'s pull request #${r.number} was closed without merging.`,
   'slot-free': r => slotWords(r.free),
-  'began': r => `foreman began ${r.who}, the next issue in the queue, ${r.by === null ? 'in a free slot' : `in the slot ${r.by} freed`}; tell the person so in one line.`,
+  'began': r => `foreman began ${r.who}, the next issue in the queue, ${r.by === null ? 'in a free slot' : `in the slot ${r.by} freed`}.`,
+  'still-waits': r => `the sub session ${r.id}, which foreman holds no record of, still waits after foreman's nudge.`,
 }
 
 const sentenceOf = (r: Reason) => (REASON_WORDS[r.kind] as (r: Reason) => string)(r)
@@ -136,12 +148,12 @@ export function wakeLine(reasons: readonly Reason[]): string | null {
   return reasons.some(quotesText) ? `${line} ${DATA_NOTE}` : line
 }
 
-// The wake lines with `sentences` added at the end of the last one, or as a
-// line of their own when there is none. The began sentence is added this way
-// once its begin message went, so the parent hears it in the same wake that
-// reports the merge that freed the slot.
-export function withSentences(lines: readonly string[], sentences: readonly string[]): string[] {
-  if (sentences.length === 0) return [...lines]
-  if (lines.length === 0) return [`foreman: ${sentences.join(' ')}`]
-  return [...lines.slice(0, -1), `${lines.at(-1)} ${sentences.join(' ')}`]
+// The reasons found in one read, split into the ones that wake the parent's
+// model, in their order, and the sentences of the ones that only report
+// something, in their order.
+export function splitReasons(reasons: readonly Reason[]): { wakes: Reason[]; reports: string[] } {
+  return {
+    wakes: reasons.filter(r => !REPORT_KINDS.has(r.kind)),
+    reports: reasons.filter(r => REPORT_KINDS.has(r.kind)).map(sentenceOf),
+  }
 }
