@@ -241,3 +241,30 @@ test('a report whose notification is not raised is still in the log and the band
   expect(await ui.bandText()).toContain('ABC-1 opened pull request #7.')
   expect(w.engine.prompts).toEqual([])
 })
+
+test('with no sub sessions left, the band shows the report after the no sub sessions line in full when wide, and cuts or drops it when narrow', async ($, on) => {
+  const w = world(on)
+  const a = working('ABC-1', { pr: pr(7, 'OPEN') })
+  w.folder.put('a.json', a)
+  const wide = await mountBoth($, on, 'terminal', 200)
+  await start($)
+  await foreman($)
+  await minutesPass(w, 1, { 'a.json': a })
+  await minutesPass(w, 1, { 'a.json': working('ABC-1', { pr: pr(7, 'MERGED') }) })
+  w.folder.files.clear()
+  await minutesPass(w, 1)
+  const sentence = 'ABC-1\'s pull request #7 merged.'
+  const full = await wide.bandText()
+  expect(full).toMatch(/^foreman: 0 of 2 slots busy · no sub sessions · next read in \S+ · /)
+  expect(full.endsWith(` · ${sentence}`)).toBe(true)
+  const withoutReport = full.slice(0, full.length - ` · ${sentence}`.length)
+  for (const columns of [withoutReport.length + 20, withoutReport.length + 10, withoutReport.length]) {
+    const band = await $.ui.mount({ plugin: 'foreman', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, bodyColumns: columns } as never })
+    const text = (await band.find({ key: 'foreman-band' }))?.text ?? ''
+    expect(text.startsWith(withoutReport)).toBe(true)
+    expect(text).toContain('no sub sessions')
+    expect(text.length).toBeLessThanOrEqual(columns)
+    if (columns - withoutReport.length >= 19) expect(text).toBe(`${withoutReport} · ${sentence.slice(0, columns - withoutReport.length - 4)}…`)
+    else expect(text).toBe(withoutReport)
+  }
+})

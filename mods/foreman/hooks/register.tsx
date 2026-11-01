@@ -543,7 +543,7 @@ function checkNow($: $): Promise<void> {
 // and the log lines, the notification and the wake they leave, and those go
 // into the outbox in that same update, so a reload cannot lose them, and are
 // then carried out. The pass ends by arming the timer for the next check while
-// the role is off.
+// the role is off, and by carrying out any work still left in the outbox then.
 async function runDueChecks($: $) {
   try {
     const now = await $.clock.now()
@@ -566,6 +566,7 @@ async function runDueChecks($: $) {
     if (queued) await carryOut($)
   } finally {
     await ensureChecks($).catch(() => undefined)
+    await replayOutbox($).catch(() => undefined)
   }
 }
 
@@ -596,11 +597,10 @@ async function checkOne($: $, claim: ForemanCheck): Promise<CheckDone> {
 
 // Arms the timer for the checks while the role is off: at the soonest due
 // time of the records, replacing any timer already armed, or none when no
-// record is left. It also carries out work left in the outbox, which
-// ensureArmed does only while the role is on. While the role is on it cancels
-// the timer, because the read loop makes the checks then. It reads the role
-// every time, so every hook that calls it hands the checks to whichever of the
-// two applies, and the first hook after a hot reload arms the timer again.
+// record is left. While the role is on it cancels the timer, because the read
+// loop makes the checks then. It reads the role every time, so every hook that
+// calls it hands the checks to whichever of the two applies, and the first
+// hook after a hot reload arms the timer again.
 async function ensureChecks($: $) {
   if (await isOn($)) {
     checkTimer?.cancel()
@@ -608,7 +608,6 @@ async function ensureChecks($: $) {
     return
   }
   const t = ticketsIn(await read($, tickets))
-  if (hasWork(t.outbox)) later($, () => carryOut($))
   const now = await $.clock.now()
   const due = soonestDue(clampedDue(t.checks, now, limitsOf(currentOptions).idleMs))
   checkTimer?.cancel()
@@ -618,6 +617,16 @@ async function ensureChecks($: $) {
       checkTimer = undefined
       void checkNow($).catch(() => undefined)
     })
+}
+
+// Carries out work left in the outbox while the role is off, as when a check
+// queued it and a hot reload dropped the call that would have carried it out.
+// While the role is on, ensureArmed does this instead. The hooks that call
+// ensureChecks call this too, so the first of them after a hot reload carries
+// the work out.
+async function replayOutbox($: $) {
+  if (await isOn($)) return
+  if (hasWork(ticketsIn(await read($, tickets)).outbox)) later($, () => carryOut($))
 }
 
 // Arms the timer for the next read `delay` from now, replacing any timer
@@ -1137,6 +1146,7 @@ async function becomeParent($: $) {
   // all and say that the folder holds no sub sessions until the read landed.
   await ensureArmed($)
   await ensureChecks($).catch(() => undefined)
+  await replayOutbox($).catch(() => undefined)
   await $.ui.open({ id: PANE, title: 'foreman' }).catch(() => undefined)
 }
 
@@ -1191,6 +1201,7 @@ export const register: Register = (on, options) => {
       }
     }
     void ensureChecks($).catch(() => undefined)
+    void replayOutbox($).catch(() => undefined)
     return next(e)
   })
 
@@ -1236,10 +1247,12 @@ export const register: Register = (on, options) => {
     const choice = await choiceFor($, e)
     if (choice.kind === 'pass') {
       void ensureChecks($).catch(() => undefined)
+      void replayOutbox($).catch(() => undefined)
       return next(await withHeld($, await withPasted($, e)))
     }
     await noteChecks($, choice.checks)
     void ensureChecks($).catch(() => undefined)
+    void replayOutbox($).catch(() => undefined)
     if (choice.kind === 'noted') return next({ ...e, context: [choice.context] })
     await update($, quietLine, () => choice.line)
     await addLog($, choice.line)
@@ -1266,6 +1279,7 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     void ensureArmed($).catch(() => undefined)
     void ensureChecks($).catch(() => undefined)
+    void replayOutbox($).catch(() => undefined)
     if (e.agentId === undefined) await update($, turnRuns, () => false)
     return next(e)
   }).catch(($, e, next) => next(e))
