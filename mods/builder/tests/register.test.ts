@@ -12990,3 +12990,35 @@ test('a counted step never asks for the status file to be written, and the minut
   expect(s.writesOf()).toBe(before + 1)
   expect(s.statusAt()?.usage).toEqual({ models: [{ model: 'example-model-large', input: 1, output: 1, cacheRead: 1, cacheWrite: 1 }], usd: null })
 })
+
+// A delivery that a batch of background agents holds writes the batches, and
+// the foreman reads nothing from them, so that write never asks for the status
+// file to be written (see docs/specs/builder-wakes-once-per-batch.md). The
+// writer skips a record equal to the last one, so the file's writes cannot
+// show an ask; the writer's read of the progress value, which it makes for
+// every ask, does.
+test('a delivery held for a batch of agents launched together never asks for the status file to be written', async ($, on) => {
+  const s = foremanSession(on)
+  modelSteps(on)
+  let progressReads = 0
+  on('state.get', ($, e, next) => {
+    if (e.plugin === 'builder' && e.key === 'progress') progressReads += 1
+    return next(e)
+  })
+  let spawned = 0
+  on('agent.spawn', () => ({ model: 'test', agentId: `agent-${++spawned}-xxxxxxxxxx` }))
+  on('agent.list', () => ({ value: [] }))
+  await firstPrompt($, s.clock)
+  await $.turn.start({ text: 'launch them', turnId: 't1' } as never)
+  await modelStep($, 't1', 0)
+  for (const type of ['Explore', 'Plan']) {
+    await $.agent.spawn({ subagentType: type, prompt: 'go', description: type, background: true, fork: false } as never)
+  }
+  await turnEnds($, 't1')
+  await s.clock.settle()
+  const before = progressReads
+
+  await $.prompt.submit({ text: '<agent-message from="agent-1-xxxxxxxxxx">\nThe report.', wait: false, origin: { kind: 'peer' }, isMeta: true } as never)
+  await s.clock.settle()
+  expect(progressReads).toBe(before)
+})
