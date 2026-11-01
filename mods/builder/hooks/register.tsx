@@ -1042,6 +1042,9 @@ function rearmBatch($: $, gen: number) {
 // gives back the isDelivering flag when it ends, which would clear it in the
 // middle of a handover that holds it. A refused prompt is not tried again:
 // the batch has ended, and the reports that arrived are in the conversation.
+// The deadline is first worked out from a plain read, so that a timer step
+// that finds nothing due writes nothing, and then again inside the write,
+// because the batches may have changed in between.
 async function fireBatch($: $) {
   const now = await $.clock.now()
   if (afterDeadline(await storedBatches($), now).lines.length === 0) return
@@ -1060,7 +1063,9 @@ async function fireBatch($: $) {
 // batch carries the completion line. A person's prompt, other than a slash
 // command, carries a line for each batch with held deliveries naming its
 // members still running. Every other prompt, and every prompt when a read or
-// write fails, passes as it came.
+// write fails, passes as it came. A delivery is first decided on a plain
+// read, so that one from an agent in no batch writes nothing, and then again
+// inside the write, because the batches may have changed in between.
 async function withBatch($: $, e: PromptSubmitInput): Promise<PromptSubmitInput> {
   try {
     const d = deliveryOf(e.origin, e.text)
@@ -4330,11 +4335,13 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined) {
-      // Both are read or set before the first await. The number of turns
-      // started goes with a hold this end may start, so that hold's save can
-      // tell that a later turn replied while this end was still under way,
-      // and with the clear a reply makes, so that the clear can tell that a
-      // later turn started and leave that turn's hold alone.
+      // The number of turns started, isNoted with the clearing of notedTurn,
+      // the clearing of ownStep and isReplied are all read or set before the
+      // first await. The number of turns started goes with a hold this end
+      // may start, so that hold's save can tell that a later turn replied
+      // while this end was still under way, and with the clear a reply
+      // makes, so that the clear can tell that a later turn started and leave
+      // that turn's hold alone.
       const turnsStarted = ownTurnsStarted
       // A turn builder answered without the model is not a reply: its end
       // measures and compacts nothing, leaves a usage-limit hold and a held
