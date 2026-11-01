@@ -30,7 +30,7 @@ export type Delivery = { id: string; isReport: boolean; status: string | null }
 // it came and count it as held, or pass it on with the completion line added.
 export type DeliveryAct = { kind: 'pass' } | { kind: 'hold' } | { kind: 'release'; line: string }
 
-export const emptyBatchState = (): BatchState => ({ version: 1, batches: [], marker: 0 })
+export const emptyBatchState = (sessionId: string): BatchState => ({ version: 1, sessionId, batches: [], marker: 0 })
 
 const isMember = (raw: unknown): raw is BatchMember => {
   const m = raw as BatchMember | null
@@ -45,13 +45,19 @@ const isBatch = (raw: unknown): raw is Batch => {
     Number.isInteger(b.heldReports) && b.heldReports >= 0 && isTime(b.deadline) && isTime(b.releasedAt)
 }
 
-// The stored state, or the empty state for a value in any other shape or
-// version, so that a value an older or newer build wrote leaves every
-// delivery to reach the model as it would without builder.
-export function batchStateIn(raw: unknown): BatchState {
+// The stored state of the conversation `sessionId` names, or the empty state
+// for a value in any other shape or version, so that a value an older or
+// newer build wrote leaves every delivery to reach the model as it would
+// without builder. A value stamped with another session id is read as empty
+// too, because a /clear or a resume keeps the stored state: the batches an
+// earlier conversation of the process launched then add no line to this
+// conversation, their deadline submits nothing, and their marker answers no
+// step.
+export function batchStateIn(raw: unknown, sessionId: string): BatchState {
   const s = raw as BatchState | null
-  if (typeof s !== 'object' || s === null || s.version !== 1 || !Array.isArray(s.batches) || !s.batches.every(isBatch)) return emptyBatchState()
-  if (!Number.isInteger(s.marker) || s.marker < 0) return emptyBatchState()
+  if (typeof s !== 'object' || s === null || s.version !== 1 || s.sessionId !== sessionId) return emptyBatchState(sessionId)
+  if (!Array.isArray(s.batches) || !s.batches.every(isBatch)) return emptyBatchState(sessionId)
+  if (!Number.isInteger(s.marker) || s.marker < 0) return emptyBatchState(sessionId)
   return s
 }
 

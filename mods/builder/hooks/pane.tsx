@@ -69,7 +69,8 @@ export type View = {
   // read, and always in the band's view, which never reads it.
   usage: UsageLedger | null
   // How many reports builder holds back from the model until their batch of
-  // agents finishes, as heldReports in hooks/batch.ts counts them.
+  // agents finishes, as heldReports in hooks/batch.ts counts them. It is
+  // always zero in the band's view, which never reads the batches.
   heldReports: number
 }
 

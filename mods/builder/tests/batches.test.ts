@@ -241,23 +241,42 @@ test('the deadline submits builder\'s line naming the members still running, and
   expect(w.state.value?.marker).toBe(0)
 })
 
+// A stored batch with ALPHA's report held, BRAVO still running and a
+// deadline five minutes in, with a marker set, stamped with `sessionId`.
+const heldBatchOf = (sessionId: string): BatchState => ({
+  version: 1,
+  sessionId,
+  marker: 1,
+  batches: [{
+    step: 't1:0',
+    members: [{ id: ALPHA, type: 'Explore', ended: true }, { id: BRAVO, type: 'Plan', ended: false }],
+    heldReports: 1,
+    deadline: 5 * 60_000,
+    releasedAt: null,
+  }],
+})
+
 test('a deadline stored before a hot reload still fires after the session starts again', async ($, on) => {
-  const w = world(on, { batches: {
-    version: 1,
-    marker: 0,
-    batches: [{
-      step: 't1:0',
-      members: [{ id: ALPHA, type: 'Explore', ended: true }, { id: BRAVO, type: 'Plan', ended: false }],
-      heldReports: 1,
-      deadline: 5 * 60_000,
-      releasedAt: null,
-    }],
-  } })
+  const w = world(on, { batches: heldBatchOf('session-1') })
   await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
   await w.clock.settle()
   await w.clock.advance(5 * 60_000)
   await w.clock.settle()
   expect(w.passed.map(p => p.text)).toContain(deadlineLine(['Plan agent-2-']))
+})
+
+test('batches an earlier conversation left behind before a clear add no line, fire no deadline and answer no step', async ($, on) => {
+  const w = world(on, { batches: heldBatchOf('an-earlier-conversation') })
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await w.clock.settle()
+  expect((await deliver($, 'how is it going?', 'composer')).context).toBeUndefined()
+  const before = w.asked.calls
+  await step($, { turnId: 't1', index: 0 })
+  expect(w.asked.calls).toBe(before + 1)
+  await w.clock.advance(5 * 60_000)
+  await w.clock.settle()
+  expect(w.passed.map(p => p.text)).not.toContain(deadlineLine(['Plan agent-2-']))
+  expect(await deliver($, report(BRAVO))).toEqual({ text: report(BRAVO) })
 })
 
 test('a first step whose last message is a user message goes to the model and clears the marker', async ($, on) => {

@@ -523,8 +523,9 @@ export type Batch = { step: string; members: BatchMember[]; heldReports: number;
 
 // The batches, oldest first, and the counter marker: how many held deliveries
 // have arrived while the session was idle and still owe a turn answered
-// without the model. Read through batchStateIn in hooks/batch.ts.
-export type BatchState = { version: 1; batches: Batch[]; marker: number }
+// without the model, stamped with the session id of the conversation they
+// belong to. Read through batchStateIn in hooks/batch.ts.
+export type BatchState = { version: 1; sessionId: string; batches: Batch[]; marker: number }
 
 declare module 'claude-code' {
   interface PluginState {

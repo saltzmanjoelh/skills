@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Next, PromptOrigin, PromptSubmitInput, Register, ResolveInput, ToolCallInput, ToolCallResult, TurnStepResult } from 'claude-code'
 
-import type { AgentCard, BackgroundTask, BuilderRun, Compactions, ContextMeasure, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, StatusMemo, UsageLedger, Wake } from '../types'
+import type { AgentCard, BackgroundTask, BatchState, BuilderRun, Compactions, ContextMeasure, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, StatusMemo, UsageLedger, Wake } from '../types'
 import { isSvgSurface } from './art'
 import { afterDeadline, afterDelivery, afterLaunch, afterResume, afterFirstStep, answersStep, batchStateIn, deliveryOf, heldReports, isBatchLaunch, nextDeadline, NOTED_REPLY, runningLines, type DeliveryAct } from './batch'
 import { checkoutSentence, otherRepositorySentence, worktreeWithBranch, type Checkout } from './checkout'
@@ -87,7 +87,11 @@ const statusMemo = atom({ plugin: 'builder', key: 'statusMemo' } as const, null)
 const usageLedger = atom({ plugin: 'builder', key: 'usage' } as const, null)
 // The batches of background agents the session's own loop launched, and the
 // marker of turns builder answers without the model. It survives a hot
-// reload. Read through batchStateIn in hooks/batch.ts.
+// reload, and it is stamped with the session id of the conversation it
+// belongs to, so batches an earlier conversation of the process left behind,
+// before a /clear or a resume, are read as empty. Read and written only
+// through storedBatches and changeBatches, which read it through batchStateIn
+// in hooks/batch.ts.
 const batches = atom({ plugin: 'builder', key: 'batches' } as const, null)
 
 // The builder mod: it watches the pull request the session works on, shows that
@@ -976,6 +980,16 @@ async function ensureArmed($: $) {
 
 const isHoldOn = async ($: $) => holdIn(await read($, usageHold)) !== null
 
+// The batch state of this conversation, read through batchStateIn.
+const storedBatches = async ($: $) => batchStateIn(await read($, batches), await $.session.id())
+
+// Writes what `change` makes of this conversation's batch state. The session
+// id is read before the write, so the decision and its change stay one write.
+async function changeBatches($: $, change: (state: BatchState) => BatchState) {
+  const sessionId = await $.session.id()
+  await update($, batches, raw => change(batchStateIn(raw, sessionId)))
+}
+
 // Arms the batch deadline's timer for the soonest stored deadline, in place of
 // any timer armed before, so a deadline set before a hot reload still fires.
 // As in armStuck, a wait longer than TIMER_STEP_MS is taken in steps, and a
@@ -985,7 +999,7 @@ async function armBatch($: $) {
   const gen = batchGen
   batchTimer?.cancel()
   batchTimer = undefined
-  const due = nextDeadline(batchStateIn(await read($, batches)))
+  const due = nextDeadline(await storedBatches($))
   const now = await $.clock.now()
   if (gen !== batchGen || due === null) return
   batchTimer = $.clock.after(stepDelay(due, now), () => {
@@ -1001,10 +1015,10 @@ async function armBatch($: $) {
 // the batch has ended, and the reports that arrived are in the conversation.
 async function fireBatch($: $) {
   const now = await $.clock.now()
-  if (afterDeadline(batchStateIn(await read($, batches)), now).lines.length === 0) return
+  if (afterDeadline(await storedBatches($), now).lines.length === 0) return
   let lines: string[] = []
-  await update($, batches, raw => {
-    const out = afterDeadline(batchStateIn(raw), now)
+  await changeBatches($, state => {
+    const out = afterDeadline(state, now)
     lines = out.lines
     return out.state
   })
@@ -1023,15 +1037,15 @@ async function withBatch($: $, e: PromptSubmitInput): Promise<PromptSubmitInput>
     const d = deliveryOf(e.origin, e.text)
     if (d === null) {
       if (!isPersonPrompt(e.origin, e.text) || e.command !== undefined) return e
-      const lines = runningLines(batchStateIn(await read($, batches)))
+      const lines = runningLines(await storedBatches($))
       return lines.length === 0 ? e : { ...e, context: [...(e.context ?? []), ...lines] }
     }
     const isIdle = e.turnId === undefined
     const now = await $.clock.now()
-    if (afterDelivery(batchStateIn(await read($, batches)), d, isIdle, now).act.kind === 'pass') return e
+    if (afterDelivery(await storedBatches($), d, isIdle, now).act.kind === 'pass') return e
     let act = { kind: 'pass' } as DeliveryAct
-    await update($, batches, raw => {
-      const out = afterDelivery(batchStateIn(raw), d, isIdle, now)
+    await changeBatches($, state => {
+      const out = afterDelivery(state, d, isIdle, now)
       act = out.act
       return out.state
     })
@@ -1052,18 +1066,17 @@ async function withBatch($: $, e: PromptSubmitInput): Promise<PromptSubmitInput>
 // the model answers.
 async function answersHeld($: $): Promise<boolean> {
   try {
-    if (batchStateIn(await read($, batches)).marker === 0) return false
+    if ((await storedBatches($)).marker === 0) return false
     const messages = await $.session.messages()
     const last = Array.isArray(messages) ? messages.at(-1) : undefined
     let answered = false
-    await update($, batches, raw => {
-      const state = batchStateIn(raw)
+    await changeBatches($, state => {
       answered = answersStep(state, last)
       return afterFirstStep(state, answered)
     })
     return answered
   } catch {
-    await update($, batches, raw => afterFirstStep(batchStateIn(raw), false)).catch(() => undefined)
+    await changeBatches($, state => afterFirstStep(state, false)).catch(() => undefined)
     return false
   }
 }
@@ -3305,7 +3318,7 @@ async function view($: $, isPane: boolean): Promise<View> {
     context: await storedMeasure($),
     compactions: await storedCompactions($),
     usage: isPane ? await storedUsage($) : null,
-    heldReports: isPane ? heldReports(batchStateIn(await read($, batches))) : 0,
+    heldReports: isPane ? heldReports(await storedBatches($)) : 0,
   }
 }
 
@@ -4264,10 +4277,10 @@ export const register: Register = on => {
     const id = spawned.agentId
     const resumed = e.resume?.agentId
     if (resumed !== undefined) {
-      void $.clock.now().then(now => update($, batches, raw => afterResume(batchStateIn(raw), resumed, now))).catch(() => undefined)
+      void $.clock.now().then(now => changeBatches($, state => afterResume(state, resumed, now))).catch(() => undefined)
     }
     if (id !== undefined && step !== undefined && isBatchLaunch(e)) {
-      void update($, batches, raw => afterLaunch(batchStateIn(raw), step, { id, type: e.subagentType })).catch(() => undefined)
+      void changeBatches($, state => afterLaunch(state, step, { id, type: e.subagentType })).catch(() => undefined)
     }
     if (id !== undefined) {
       const startedAt = await $.clock.now()

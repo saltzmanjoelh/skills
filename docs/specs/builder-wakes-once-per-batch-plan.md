@@ -103,10 +103,14 @@ plan saw, which are the first two grafts below.
   the most robust plan. It needs a record in the atom, a second submit at
   the turn's end and its own tests, for a case nobody has observed and that
   the probe above settles more cheaply.
-- **Stamping the state with the session id,** from the most robust plan.
-  Neither the spec nor the counsel's decision asks for it, and after a
-  `/clear` the first step already zeroes the marker, because the person's
-  prompt is a user message.
+- **Stamping the state with the session id,** from the most robust plan,
+  was rejected here at first, because after a `/clear` the first step
+  already zeroes the marker. Review showed that a reset marker is not
+  enough: the stored state survives a `/clear` or a resume, so an open
+  batch would still add its line to the new conversation's prompts and
+  submit its deadline line there, naming agents that conversation never
+  launched. The state is therefore stamped with the session id, as the
+  context record is, and a value stamped with another id reads as empty.
 - **An `ownStep` atom,** from the most robust plan. It writes on every step
   of the session's loop to keep the batching of one step across a hot
   reload, and losing that batching is safe.

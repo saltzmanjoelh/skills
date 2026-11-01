@@ -12,13 +12,15 @@ const ALPHA = 'aaaaaaaaaaaaaaaaa'
 const BRAVO = 'bbbbbbbbbbbbbbbbb'
 const CHARLIE = 'ccccccccccccccccc'
 
+const SESSION = 'session-1'
+
 const report = (id: string): Delivery => ({ id, isReport: true, status: null })
 const notice = (id: string, status: string): Delivery => ({ id, isReport: false, status })
 
 // A state with ALPHA and BRAVO launched together in step t1:0, and CHARLIE
 // alone in step t1:1.
 function launched(): BatchState {
-  let state = emptyBatchState()
+  let state = emptyBatchState(SESSION)
   state = afterLaunch(state, 't1:0', { id: ALPHA, type: 'Explore' })
   state = afterLaunch(state, 't1:0', { id: BRAVO, type: 'Plan' })
   return afterLaunch(state, 't1:1', { id: CHARLIE, type: 'Explore' })
@@ -160,7 +162,7 @@ test('resuming the last member still running, after the others ended, releases t
 })
 
 test('only the newest batches are kept', () => {
-  let state = emptyBatchState()
+  let state = emptyBatchState(SESSION)
   for (let i = 0; i < BATCHES_KEPT + 5; i++) state = afterLaunch(state, `t${i}:0`, { id: `x${i}`, type: 'Explore' })
   expect(state.batches).toHaveLength(BATCHES_KEPT)
   expect(state.batches[0]?.step).toBe('t5:0')
@@ -189,16 +191,21 @@ test('a step is answered only when the marker is set and the last message is not
 })
 
 test('a stored value in another shape or version reads as the empty state', () => {
-  expect(batchStateIn(undefined)).toEqual(emptyBatchState())
-  expect(batchStateIn({ version: 2, batches: [], marker: 1 })).toEqual(emptyBatchState())
-  expect(batchStateIn({ version: 1, batches: 'x', marker: 1 })).toEqual(emptyBatchState())
-  expect(batchStateIn({ version: 1, batches: [], marker: -1 })).toEqual(emptyBatchState())
-  expect(batchStateIn({ version: 1, batches: [{ step: 's' }], marker: 0 })).toEqual(emptyBatchState())
-  expect(batchStateIn(launched())).toEqual(launched())
+  expect(batchStateIn(undefined, SESSION)).toEqual(emptyBatchState(SESSION))
+  expect(batchStateIn({ version: 2, sessionId: SESSION, batches: [], marker: 1 }, SESSION)).toEqual(emptyBatchState(SESSION))
+  expect(batchStateIn({ version: 1, sessionId: SESSION, batches: 'x', marker: 1 }, SESSION)).toEqual(emptyBatchState(SESSION))
+  expect(batchStateIn({ version: 1, sessionId: SESSION, batches: [], marker: -1 }, SESSION)).toEqual(emptyBatchState(SESSION))
+  expect(batchStateIn({ version: 1, sessionId: SESSION, batches: [{ step: 's' }], marker: 0 }, SESSION)).toEqual(emptyBatchState(SESSION))
+  expect(batchStateIn(launched(), SESSION)).toEqual(launched())
+})
+
+test('a stored value stamped with another session id, which a clear or a resume leaves behind, reads as the empty state', () => {
+  expect(batchStateIn(launched(), 'a-later-conversation')).toEqual(emptyBatchState('a-later-conversation'))
+  expect(batchStateIn({ ...launched(), sessionId: undefined }, SESSION)).toEqual(emptyBatchState(SESSION))
 })
 
 test('a member is named by its printable type and the first eight characters of its id', () => {
-  let state = emptyBatchState()
+  let state = emptyBatchState(SESSION)
   state = afterLaunch(state, 's', { id: ALPHA, type: 'x\u001b[31mred\ntype' })
   state = afterLaunch(state, 's', { id: BRAVO, type: 'Plan' })
   state = afterDelivery(state, report(BRAVO), true, 0).state
