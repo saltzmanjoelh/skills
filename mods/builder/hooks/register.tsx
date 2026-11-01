@@ -1,8 +1,9 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Next, PromptOrigin, Register, ResolveInput, ToolCallInput, ToolCallResult, TurnStepResult } from 'claude-code'
+import type { EngineInterface, Next, PromptOrigin, PromptSubmitInput, Register, ResolveInput, ToolCallInput, ToolCallResult, TurnStepResult } from 'claude-code'
 
-import type { AgentCard, BackgroundTask, BuilderRun, Compactions, ContextMeasure, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, StatusMemo, UsageLedger, Wake } from '../types'
+import type { AgentCard, BackgroundTask, BatchState, BuilderRun, Compactions, ContextMeasure, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, StatusMemo, UsageLedger, Wake } from '../types'
 import { isSvgSurface } from './art'
+import { afterDeadline, afterDeadlineSent, afterDelivery, BATCH_RETRY_MS, afterLaunch, afterResume, afterFirstStep, answersStep, batchStateIn, deliveryOf, heldReports, isBatchLaunch, nextDeadline, NOTED_REPLY, runningLines, type DeliveryAct } from './batch'
 import { checkoutSentence, otherRepositorySentence, worktreeWithBranch, type Checkout } from './checkout'
 // The context module's `told` is the compaction record after a reload was
 // announced; it is renamed here because `told` below is the snapshot last
@@ -84,6 +85,14 @@ const statusMemo = atom({ plugin: 'builder', key: 'statusMemo' } as const, null)
 // file; the minute's write carries the totals. The atom is named for the
 // ledger, because the hooks name the engine's usage figures `usage`.
 const usageLedger = atom({ plugin: 'builder', key: 'usage' } as const, null)
+// The batches of background agents the session's own loop launched, and the
+// marker of turns builder answers without the model. It survives a hot
+// reload, and it is stamped with the session id of the conversation it
+// belongs to, so batches an earlier conversation of the process left behind,
+// before a /clear or a resume, are read as empty. Read and written only
+// through storedBatches and changeBatches, which read it through batchStateIn
+// in hooks/batch.ts.
+const batches = atom({ plugin: 'builder', key: 'batches' } as const, null)
 
 // The builder mod: it watches the pull request the session works on, shows that
 // pull request and the session's agents in a pane, and starts a turn when the
@@ -183,6 +192,20 @@ let stalledHead: string | null = null
 // A prompt is being submitted. A look that finds another change meanwhile
 // leaves it for the next look rather than submit a second prompt at once.
 let isDelivering = false
+// The step of the session's own loop that is running, as its turn id and
+// index, so that the agents it launches are recorded as one group, or
+// undefined between turns. A hot reload loses it, so the agents launched in
+// the step that was running then form no batch and keep today's handling.
+let ownStep: string | undefined
+// The turn whose first step builder answered without the model, until that
+// turn's end, which then does none of a reply's work.
+let notedTurn: string | undefined
+// The batch deadline's timer and its number, which moves on at each arming,
+// so that only the newest arming arms a timer. isBatchArmed says whether this
+// load of the hooks armed it from the stored deadline yet.
+let batchTimer: { cancel: () => void } | undefined
+let batchGen = 0
+let isBatchArmed = false
 // The stuck prompt's timer, and the number of the arming it belongs to. Each
 // arming takes a new number, so a timer an older arming set does nothing when
 // it fires. While a pull request is watched and open, the session always has
@@ -938,6 +961,12 @@ function stopTicker() {
 }
 
 async function ensureArmed($: $) {
+  if (!isBatchArmed) {
+    isBatchArmed = true
+    void armBatch($).catch(() => {
+      isBatchArmed = false
+    })
+  }
   if (!isUnattendedArmed) {
     isUnattendedArmed = true
     void armUnattended($).catch(() => {
@@ -950,6 +979,151 @@ async function ensureArmed($: $) {
 }
 
 const isHoldOn = async ($: $) => holdIn(await read($, usageHold)) !== null
+
+// The batch state of this conversation, read through batchStateIn.
+const storedBatches = async ($: $) => batchStateIn(await read($, batches), await $.session.id())
+
+// Writes what `change` makes of this conversation's batch state. The session
+// id is read before the write, so the decision and its change stay one write.
+async function changeBatches($: $, change: (state: BatchState) => BatchState) {
+  const sessionId = await $.session.id()
+  await update($, batches, raw => change(batchStateIn(raw, sessionId)))
+}
+
+// Arms the batch deadline's timer for the soonest stored deadline, in place of
+// any timer armed before, so a deadline set before a hot reload still fires.
+// As in armStuck, a wait longer than TIMER_STEP_MS is taken in steps, and a
+// step that ends early finds nothing due and arms the next. When its reads
+// fail and no newer call has taken over, the timer is armed again through
+// rearmBatch before the failure goes on to the caller, as armStuck does,
+// because most callers drop that failure, so without this one refused read
+// would end a batch's deadline for good.
+async function armBatch($: $) {
+  batchGen += 1
+  const gen = batchGen
+  batchTimer?.cancel()
+  batchTimer = undefined
+  let due: number | null
+  let now: number
+  try {
+    due = nextDeadline(await storedBatches($))
+    now = await $.clock.now()
+  } catch (error) {
+    if (gen === batchGen) rearmBatch($, gen)
+    throw error
+  }
+  if (gen !== batchGen || due === null) return
+  batchTimer = $.clock.after(stepDelay(due, now), () => {
+    void fireBatch($).then(() => armBatch($)).catch(() => rearmBatch($, gen)).catch(() => undefined)
+  })
+}
+
+// Arms the deadline's timer again BATCH_RETRY_MS from now after its work
+// failed, as when a write of the batches is refused. As in rearmStuck, it
+// counts from now rather than from the deadline, because the deadline has
+// passed, so a timer counted from it would fire at once and spin for as long
+// as the write stays refused. A timer numbered `gen` whose number has moved
+// on has given way to a newer arming, which is left alone when it armed a
+// timer. When it armed none, because its own read failed, this one arms in
+// its place.
+function rearmBatch($: $, gen: number) {
+  if (gen !== batchGen && batchTimer !== undefined) return
+  batchGen += 1
+  const retryGen = batchGen
+  batchTimer?.cancel()
+  batchTimer = $.clock.after(BATCH_RETRY_MS, () => {
+    void armBatch($).catch(() => rearmBatch($, retryGen)).catch(() => undefined)
+  })
+}
+
+// Claims each batch whose deadline has passed, in one write, so that only one
+// timer submits its prompt, and submits builder's line for each. It calls
+// $.prompt.submit directly rather than submitClaimed, because submitClaimed
+// gives back the isDelivering flag when it ends, which would clear it in the
+// middle of a handover that holds it. A claimed batch stays in the state until
+// the engine has taken its line, because the held reports were each answered
+// with "Noted.", so nothing else may wake the model for them: a line the
+// engine refuses, a submit that throws, a removal that fails and a hot reload
+// in the middle all leave the batch to be claimed again a minute later, with
+// the members still running then. The cost is that a removal that fails after
+// the engine took the line sends the line a second time.
+// The deadline is first worked out from a plain read, so that a timer step
+// that finds nothing due writes nothing, and then again inside the write,
+// because the batches may have changed in between.
+async function fireBatch($: $) {
+  const now = await $.clock.now()
+  if (afterDeadline(await storedBatches($), now).due.length === 0) return
+  let due: { step: string; line: string }[] = []
+  await changeBatches($, state => {
+    const out = afterDeadline(state, now)
+    due = out.due
+    return out.state
+  })
+  const sent: string[] = []
+  for (const { step, line } of due) {
+    const submitted = await $.prompt.submit({ text: line }).catch(() => ({ drop: 'the submit failed' }))
+    if (submitted.drop === undefined) sent.push(step)
+  }
+  if (sent.length > 0) await changeBatches($, state => afterDeadlineSent(state, sent))
+}
+
+// What builder does to a prompt for the batches. A finishing agent's
+// delivery passes on with its text unchanged: a held one raises the marker
+// when the session is idle and starts the deadline, and the one that ends a
+// batch carries the completion line. A person's prompt, other than a slash
+// command, carries a line for each batch with held deliveries naming its
+// members still running. Every other prompt, and every prompt when a read or
+// write fails, passes as it came. A delivery is first decided on a plain
+// read, so that one from an agent in no batch writes nothing, and then again
+// inside the write, because the batches may have changed in between.
+async function withBatch($: $, e: PromptSubmitInput): Promise<PromptSubmitInput> {
+  try {
+    const d = deliveryOf(e.origin, e.text)
+    if (d === null) {
+      if (!isPersonPrompt(e.origin, e.text) || e.command !== undefined) return e
+      const lines = runningLines(await storedBatches($))
+      return lines.length === 0 ? e : { ...e, context: [...(e.context ?? []), ...lines] }
+    }
+    const isIdle = e.turnId === undefined
+    const now = await $.clock.now()
+    if (afterDelivery(await storedBatches($), d, isIdle, now).act.kind === 'pass') return e
+    let act = { kind: 'pass' } as DeliveryAct
+    await changeBatches($, state => {
+      const out = afterDelivery(state, d, isIdle, now)
+      act = out.act
+      return out.state
+    })
+    if (act.kind === 'hold') void armBatch($).catch(() => undefined)
+    return act.kind === 'release' ? { ...e, context: [...(e.context ?? []), act.line] } : e
+  } catch {
+    return e
+  }
+}
+
+// Whether builder answers the first step of a turn of the session's own loop
+// itself: only when a held delivery raised the marker and the conversation's
+// last message is not a user message, or is only a held member's frame (see
+// answersStep), so that no person's or plugin's prompt started the turn. The
+// marker is read first, so a turn with no marker set reads nothing more and
+// writes nothing. The step's decision and the marker's change are one write:
+// one less when the step is answered, and zero when it goes to the model,
+// which a failure also tries to write. Any failure means the model answers.
+async function answersHeld($: $): Promise<boolean> {
+  try {
+    if ((await storedBatches($)).marker === 0) return false
+    const messages = await $.session.messages()
+    const last = Array.isArray(messages) ? messages.at(-1) : undefined
+    let answered = false
+    await changeBatches($, state => {
+      answered = answersStep(state, last)
+      return afterFirstStep(state, answered)
+    })
+    return answered
+  } catch {
+    await changeBatches($, state => afterFirstStep(state, false)).catch(() => undefined)
+    return false
+  }
+}
 
 // Arms the hold's timer when a hold is on, and the stuck timer otherwise,
 // from the atoms. The hold is armed with nothing watched too, so a hold in
@@ -3155,11 +3329,12 @@ async function agentType($: $, id: string): Promise<string | undefined> {
 
 // What the band and the panes draw from. A value an older build stored in
 // another shape is read as its default: no progress, not started, folded.
-// The spending is read only when `withUsage` is set, which only the pane
-// sets, because the band never shows it, and reading it while drawing would
-// subscribe the band to the usage value, which changes after every counted
-// model step. Without the flag the usage is null.
-async function view($: $, withUsage: boolean): Promise<View> {
+// The spending and the count of held reports are read only when `isPane` is
+// set, which only the pane sets, because the band never shows them, and
+// reading them while drawing would subscribe the band to values that change
+// after every counted model step and every batch delivery. Without the flag
+// the usage is null and the count is zero.
+async function view($: $, isPane: boolean): Promise<View> {
   const s = await read($, pr)
   const shown = isDrawable(s) ? s : null
   const cards = await read($, agents)
@@ -3186,7 +3361,8 @@ async function view($: $, withUsage: boolean): Promise<View> {
     issueLink: issueAddress,
     context: await storedMeasure($),
     compactions: await storedCompactions($),
-    usage: withUsage ? await storedUsage($) : null,
+    usage: isPane ? await storedUsage($) : null,
+    heldReports: isPane ? heldReports(await storedBatches($)) : 0,
   }
 }
 
@@ -3784,7 +3960,7 @@ export const register: Register = on => {
   // such a session does what it did before the file existed.
   on('state.set', async ($, e, next) => {
     const set = await next(e)
-    if (e.plugin === 'builder' && e.key !== statusMemo.ref.key && e.key !== usageLedger.ref.key) statusChanged($)
+    if (e.plugin === 'builder' && e.key !== statusMemo.ref.key && e.key !== usageLedger.ref.key && e.key !== batches.ref.key) statusChanged($)
     return set
   })
 
@@ -4094,6 +4270,7 @@ export const register: Register = on => {
     await personPromptResets($, e.origin, e.text).catch(() => undefined)
     await lookForTicket($, e.text).catch(() => undefined)
     if (isPersonPrompt(e.origin, e.text)) await changeMemo($, afterPersonPrompt).catch(() => undefined)
+    e = await withBatch($, e)
     if (e.origin.kind !== 'sdk' || !isCiMonitorEvent(e.text)) return next(e)
     const r0 = await read($, run)
     const toldBefore = r0 === null ? null : await told($, r0)
@@ -4139,8 +4316,16 @@ export const register: Register = on => {
     if (e.workflow !== undefined && READ_ONLY_AGENTS.has(e.subagentType)) {
       return { deny: `builder: ${e.subagentType} runs only from the session, where the reviewer fence can see it.` }
     }
+    const step = ownStep
     const spawned = await next(e)
     const id = spawned.agentId
+    const resumed = e.resume?.agentId
+    if (resumed !== undefined) {
+      void $.clock.now().then(now => changeBatches($, state => afterResume(state, resumed, now))).catch(() => undefined)
+    }
+    if (id !== undefined && step !== undefined && isBatchLaunch(e)) {
+      void changeBatches($, state => afterLaunch(state, step, { id, type: e.subagentType })).catch(() => undefined)
+    }
     if (id !== undefined) {
       const startedAt = await $.clock.now()
       await update($, agents, list => [...list, {
@@ -4160,15 +4345,24 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined) {
-      // Both are read or set before the first await. The number of turns
-      // started goes with a hold this end may start, so that hold's save can
-      // tell that a later turn replied while this end was still under way,
-      // and with the clear a reply makes, so that the clear can tell that a
-      // later turn started and leave that turn's hold alone.
+      // The number of turns started, isNoted with the clearing of notedTurn,
+      // the clearing of ownStep and isReplied are all read or set before the
+      // first await. The number of turns started goes with a hold this end
+      // may start, so that hold's save can tell that a later turn replied
+      // while this end was still under way, and with the clear a reply
+      // makes, so that the clear can tell that a later turn started and leave
+      // that turn's hold alone.
+      const turnsStarted = ownTurnsStarted
+      // A turn builder answered without the model is not a reply: its end
+      // measures and compacts nothing, leaves a usage-limit hold and a held
+      // handover as they are, restarts no quiet time and starts no looks,
+      // because the model has not read the batch's reports yet.
+      const isNoted = e.turnId === notedTurn
+      if (isNoted) notedTurn = undefined
+      ownStep = undefined
+      const isReplied = !isNoted && (e.reason === 'answer' || e.reason === 'refusal')
       // The last turn that replied is set so that a hold whose save is under
       // way sees that this turn replied (see saveHoldOrTakeItOff).
-      const turnsStarted = ownTurnsStarted
-      const isReplied = e.reason === 'answer' || e.reason === 'refusal'
       if (isReplied) repliedTurn = ownTurnsStarted
       // A turn that replied is passed on to the engine first, then measured,
       // and then, when the context is at or above the threshold, compacted
@@ -4222,6 +4416,7 @@ export const register: Register = on => {
       // Every turn end compares the mod's files, hold or not, so a session
       // with nothing watched still learns that builder changed on disk.
       void compareLoaded($).catch(() => undefined)
+      if (isNoted) return next(e)
       // A turn an API error ended may start a usage-limit hold. While the
       // hold is on, a change held during the turn stays held for the end of
       // the turn after the hold, and no look runs. A turn that ended with an
@@ -4332,10 +4527,22 @@ export const register: Register = on => {
   // Every model step, the main loop's and each subagent's, is passed through
   // untouched, and its usage is then counted without waiting, so a failure in
   // the counting or a slow store can never hold up or change the model's
-  // response. The hook yields nothing of its own. It has no .catch, for the
-  // reason the foreman's own turn.step hook gives: a .catch that called next
-  // again after the step had streamed would ask the model a second time.
+  // response. The one exception is the first step of a turn that a held
+  // batch delivery started, which builder answers with "Noted." without the
+  // model (see answersHeld), deciding before anything is yielded. A step of
+  // the session's own loop also records itself as the step its agents are
+  // launched in. The hook has no .catch, for the reason the foreman's own
+  // turn.step hook gives: a .catch that called next again after the step had
+  // streamed would ask the model a second time.
   on('turn.step', async function* ($, e, next) {
+    if (e.agentId === undefined) ownStep = `${e.turnId}:${e.index}`
+    if (e.index === 0 && e.agentId === undefined && (await answersHeld($))) {
+      // The step has no usage, so nothing is counted for it.
+      notedTurn = e.turnId
+      yield { kind: 'text', index: 0, text: NOTED_REPLY }
+      yield { kind: 'stop', stopReason: 'end_turn', usage: null }
+      return { turnId: e.turnId, index: e.index, answer: NOTED_REPLY, toolUses: [], stopReason: 'end_turn', usage: null }
+    }
     const r = yield* next(e)
     void countStep($, r).catch(() => undefined)
     return r

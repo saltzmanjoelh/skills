@@ -507,6 +507,29 @@ export type StatusMemo = {
 // Read through loadedIn in hooks/loaded.ts.
 export type Loaded = { head: string | null; session: LoadedCommit; hooks: LoadedCommit }
 
+// One background agent the session's own loop launched, as a member of the
+// group of agents launched in the same step. `ended` is set at its report, or
+// at a notification that it failed or was killed.
+export type BatchMember = { id: string; type: string; ended: boolean }
+
+// The agents the session's own loop launched in one step, keyed by that
+// step's turn id and index. Two or more members make a batch. `heldReports`
+// counts the reports held back from the model while the batch is open.
+// `deadline` is when the time limit passes, ten minutes after the first
+// delivery held for the batch, or null before one. `releasedAt` is when the
+// last member ended, after which the batch is remembered for ten minutes, so
+// that a notification coming after the release is held too. `fired` is set
+// when the deadline claims the batch, before its line is submitted, and stays
+// set through a refused or failed submit until the batch is dropped once the
+// engine has taken the line.
+export type Batch = { step: string; members: BatchMember[]; heldReports: number; deadline: number | null; releasedAt: number | null; fired?: true }
+
+// The batches, oldest first, and the counter marker: how many held deliveries
+// have arrived while the session was idle and still owe a turn answered
+// without the model, stamped with the session id of the conversation they
+// belong to. Read through batchStateIn in hooks/batch.ts.
+export type BatchState = { version: 1; sessionId: string; batches: Batch[]; marker: number }
+
 declare module 'claude-code' {
   interface PluginState {
     builder: {
@@ -611,6 +634,12 @@ declare module 'claude-code' {
       // `usd`; the other fields are builder's own bookkeeping. Read through
       // usageIn in hooks/usage.ts.
       usage: UsageLedger | null
+      // The batches of background agents the session's own loop launched and
+      // the marker of turns builder answers without the model, or null before
+      // the first launch. It survives a hot reload; a restart starts without
+      // it, and every delivery then reaches the model as it would without
+      // builder. Read through batchStateIn in hooks/batch.ts.
+      batches: BatchState | null
     }
   }
 }

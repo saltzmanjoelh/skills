@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import { agentSvg } from '../hooks/art'
 import { SETTINGS_HINT } from '../hooks/context'
 import { snapshotOf } from '../hooks/github'
-import { abovePromptLine, agentCount, agentLines, agentRowOf, backgroundLines, contextLines, counselLines, messageLines, messagesReadOf, NAMED_AFTER_MS, nextStep, secondRow, STALE_WARNING, timeUntil, type View } from '../hooks/pane'
+import { abovePromptLine, agentCount, agentLines, heldLine, agentRowOf, backgroundLines, contextLines, counselLines, messageLines, messagesReadOf, NAMED_AFTER_MS, nextStep, secondRow, STALE_WARNING, timeUntil, type View } from '../hooks/pane'
 import { RELOAD_LINE, resumePrompt, stuckPrompt } from '../hooks/prompts'
 import { clockTime, printable, timeOfDay } from '../hooks/text'
 import { afterCost, afterStep, emptyUsage, usageLines } from '../hooks/usage'
@@ -54,6 +54,7 @@ function view(over: Partial<View> = {}): View {
     context: null,
     compactions: null,
     usage: null,
+    heldReports: 0,
     ...over,
   }
 }
@@ -871,4 +872,9 @@ test('with no dollar reading the pane says the cost is unknown and never shows $
 
 test('a model name that holds control characters is cleaned before the pane shows it', () => {
   expect(usageLines(spent(['bad\u001b[2Jname', 1_000, 0, 0, 0]))[1]).toBe('  badname: 1K in, 0K out, 0K cache read, 0K cache write')
+})
+
+test('the line about held reports counts them in plain words', () => {
+  expect(heldLine(1)).toBe('Holding 1 report back from the model until their batch finishes.')
+  expect(heldLine(3)).toBe('Holding 3 reports back from the model until their batch finishes.')
 })
