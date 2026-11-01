@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { PromptOrigin } from 'claude-code'
 
-import { afterDeadline, afterDelivery, afterLaunch, afterResume, afterFirstStep, answersStep, BATCH_LIMIT_MS, BATCHES_KEPT, batchStateIn, completeLine, deadlineLine, deliveryOf, emptyBatchState, heldReports, incompleteLine, isBatchLaunch, nextDeadline, REMEMBER_MS, runningLines, type Delivery } from '../hooks/batch'
+import { afterDeadline, afterDelivery, afterRefusedDeadline, afterLaunch, afterResume, afterFirstStep, answersStep, BATCH_LIMIT_MS, BATCHES_KEPT, batchStateIn, completeLine, deadlineLine, deliveryOf, emptyBatchState, heldReports, incompleteLine, isBatchLaunch, nextDeadline, REMEMBER_MS, runningLines, type Delivery } from '../hooks/batch'
 import type { BatchState } from '../types'
 
 const PEER: PromptOrigin = { kind: 'peer' } as PromptOrigin
@@ -121,6 +121,14 @@ test('the deadline ends the batch with a line naming the members still running, 
   expect(nextDeadline(out.state)).toBeNull()
   expect(afterDelivery(out.state, report(BRAVO), true, BATCH_LIMIT_MS + 1).act).toEqual({ kind: 'pass' })
   expect(afterDeadline(out.state, BATCH_LIMIT_MS).lines).toEqual([])
+})
+
+test('a batch whose deadline line was refused is put back, so its deadline fires again, unless its step holds a batch again', () => {
+  const state = afterDelivery(launched(), report(ALPHA), true, 0).state
+  const out = afterDeadline(state, BATCH_LIMIT_MS)
+  const back = afterRefusedDeadline(out.state, out.ended.map(e => e.batch))
+  expect(afterDeadline(back, BATCH_LIMIT_MS).lines).toEqual([deadlineLine(['Plan bbbbbbbb'])])
+  expect(afterRefusedDeadline(back, out.ended.map(e => e.batch))).toBe(back)
 })
 
 test('two batches open at once each release on their own', () => {

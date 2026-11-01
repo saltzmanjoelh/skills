@@ -1,9 +1,9 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Next, PromptOrigin, PromptSubmitInput, Register, ResolveInput, ToolCallInput, ToolCallResult, TurnStepResult } from 'claude-code'
 
-import type { AgentCard, BackgroundTask, BatchState, BuilderRun, Compactions, ContextMeasure, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, StatusMemo, UsageLedger, Wake } from '../types'
+import type { AgentCard, BackgroundTask, Batch, BatchState, BuilderRun, Compactions, ContextMeasure, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, StatusMemo, UsageLedger, Wake } from '../types'
 import { isSvgSurface } from './art'
-import { afterDeadline, afterDelivery, BATCH_RETRY_MS, afterLaunch, afterResume, afterFirstStep, answersStep, batchStateIn, deliveryOf, heldReports, isBatchLaunch, nextDeadline, NOTED_REPLY, runningLines, type DeliveryAct } from './batch'
+import { afterDeadline, afterDelivery, afterRefusedDeadline, BATCH_RETRY_MS, afterLaunch, afterResume, afterFirstStep, answersStep, batchStateIn, deliveryOf, heldReports, isBatchLaunch, nextDeadline, NOTED_REPLY, runningLines, type DeliveryAct } from './batch'
 import { checkoutSentence, otherRepositorySentence, worktreeWithBranch, type Checkout } from './checkout'
 // The context module's `told` is the compaction record after a reload was
 // announced; it is renamed here because `told` below is the snapshot last
@@ -1040,21 +1040,30 @@ function rearmBatch($: $, gen: number) {
 // timer submits its prompt, and submits builder's line for each. It calls
 // $.prompt.submit directly rather than submitClaimed, because submitClaimed
 // gives back the isDelivering flag when it ends, which would clear it in the
-// middle of a handover that holds it. A refused prompt is not tried again:
-// the batch has ended, and the reports that arrived are in the conversation.
+// middle of a handover that holds it. A batch whose line the engine refuses,
+// or whose submit throws, is put back and the step fails, so the timer tries
+// again a minute later (see rearmBatch): the held reports were each answered
+// with "Noted.", so nothing else may wake the model for them.
 // The deadline is first worked out from a plain read, so that a timer step
 // that finds nothing due writes nothing, and then again inside the write,
 // because the batches may have changed in between.
 async function fireBatch($: $) {
   const now = await $.clock.now()
   if (afterDeadline(await storedBatches($), now).lines.length === 0) return
-  let lines: string[] = []
+  let ended: { batch: Batch; line: string }[] = []
   await changeBatches($, state => {
     const out = afterDeadline(state, now)
-    lines = out.lines
+    ended = out.ended
     return out.state
   })
-  for (const text of lines) await $.prompt.submit({ text }).catch(() => undefined)
+  const refused: Batch[] = []
+  for (const { batch, line } of ended) {
+    const submitted = await $.prompt.submit({ text: line }).catch(() => ({ drop: 'the submit failed' }))
+    if (submitted.drop !== undefined) refused.push(batch)
+  }
+  if (refused.length === 0) return
+  await changeBatches($, state => afterRefusedDeadline(state, refused))
+  throw new Error('the engine refused a deadline line')
 }
 
 // What builder does to a prompt for the batches. A finishing agent's

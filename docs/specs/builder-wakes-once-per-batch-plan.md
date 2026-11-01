@@ -64,9 +64,14 @@ plan saw, which are the first two grafts below.
   from the most robust plan. `submitClaimed` sets the shared `isDelivering`
   flag without checking it first and clears it when it ends, so a deadline
   that fires while builder is handing over a pull request's state would
-  clear the flag in the middle of that handover. A refused or throwing
-  submit is not retried, because the batch has already ended and its
-  reports are in the conversation.
+  clear the flag in the middle of that handover. The plan first left a
+  refused or throwing submit untried, because the reports are in the
+  conversation. Review showed that this is not enough: each held report's
+  turn was answered with "Noted.", so when a member never reports, nothing
+  wakes the model, against the counsel's ruling that every held report goes
+  to the model in one turn after the limit. A batch whose line the engine
+  refuses, or whose submit throws, is therefore put back, and the deadline's
+  timer tries again a minute later.
 - **`ownStep` is cleared at the session's own `turn.complete`.** Taken from
   the most robust plan, so that an agent launched while the session is idle
   does not join the last step's batch.

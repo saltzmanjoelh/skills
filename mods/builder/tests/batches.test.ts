@@ -47,10 +47,13 @@ const user = (text: string): SessionMessage => ({ role: 'user', text, toolUses: 
 const assistant = (text: string): SessionMessage => ({ role: 'assistant', text, toolUses: [] })
 
 // The engine beneath the mod's prompt.submit hook: each prompt that goes on
-// is recorded with its context, as the engine would start its turn.
-function promptsBelow(on: On) {
+// is recorded with its context, as the engine would start its turn, unless
+// `refusing.on` is set, which makes the engine refuse every prompt as a Stop
+// hook that stands does.
+function promptsBelow(on: On, refusing: { on: boolean }) {
   const passed: { text: string; context: readonly string[] }[] = []
   on('prompt.submit', ($, e) => {
+    if (refusing.on) return { drop: 'a Stop hook stands' }
     passed.push({ text: e.text, context: e.context ?? [] })
     return { text: e.text, context: e.context }
   })
@@ -150,8 +153,9 @@ function world(on: On, seeded: Record<string, unknown> = {}) {
   const state = stateOf(on, seeded)
   const asked = model(on)
   const talk = conversation(on)
-  const passed = promptsBelow(on)
-  return { clock, state, asked, talk, passed }
+  const refusing = { on: false }
+  const passed = promptsBelow(on, refusing)
+  return { clock, state, asked, talk, passed, refusing }
 }
 
 test('agents launched in one step make one batch: an idle held report passes on unchanged, and its turn is answered without the model', async ($, on) => {
@@ -266,6 +270,24 @@ test('a deadline whose write is refused tries again a minute later rather than a
   await w.clock.advance(1000)
   await w.clock.settle()
   expect(w.passed.map(p => p.text)).toContain(deadlineLine(['Plan agent-2-']))
+})
+
+test('a deadline prompt the engine refuses keeps its batch and is submitted again a minute later', async ($, on) => {
+  const w = world(on)
+  await launched($)
+  await deliver($, report(ALPHA))
+  w.refusing.on = true
+  await w.clock.advance(BATCH_LIMIT_MS)
+  await w.clock.settle()
+  expect(w.state.value?.batches.some(b => b.deadline !== null)).toBe(true)
+  w.refusing.on = false
+  await w.clock.advance(BATCH_RETRY_MS - 1000)
+  await w.clock.settle()
+  expect(w.passed.map(p => p.text)).not.toContain(deadlineLine(['Plan agent-2-']))
+  await w.clock.advance(1000)
+  await w.clock.settle()
+  expect(w.passed.filter(p => p.text === deadlineLine(['Plan agent-2-'])).length).toBe(1)
+  expect(w.state.value?.batches.some(b => b.deadline !== null)).toBe(false)
 })
 
 test('a read refused while the deadline\'s timer is armed arms it again a minute later, so the deadline still fires', async ($, on) => {

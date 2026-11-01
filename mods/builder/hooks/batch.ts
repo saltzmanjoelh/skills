@@ -199,13 +199,24 @@ export function runningLines(state: BatchState): string[] {
 }
 
 // Ends every open batch whose deadline has passed, and answers the line to
-// submit for each. Its members' later deliveries then pass.
-export function afterDeadline(state: BatchState, now: number): { state: BatchState; lines: string[] } {
+// submit for each, both alone and beside the batch it ends. Its members'
+// later deliveries then pass.
+export function afterDeadline(state: BatchState, now: number): { state: BatchState; lines: string[]; ended: { batch: Batch; line: string }[] } {
   const due = (b: Batch) => isOpenWithHeld(b) && (b.deadline as number) <= now
+  const ended = state.batches.filter(due).map(batch => ({ batch, line: deadlineLine(runningOf(batch)) }))
   return {
     state: { ...state, batches: state.batches.filter(b => !due(b)) },
-    lines: state.batches.filter(due).map(b => deadlineLine(runningOf(b))),
+    lines: ended.map(e => e.line),
+    ended,
   }
+}
+
+// Puts back the ended batches whose deadline line the engine refused, so that
+// the deadline, which has passed, fires again. One whose step holds a batch
+// again is left out.
+export function afterRefusedDeadline(state: BatchState, refused: Batch[]): BatchState {
+  const back = refused.filter(b => !state.batches.some(kept => kept.step === b.step))
+  return back.length === 0 ? state : { ...state, batches: [...state.batches, ...back] }
 }
 
 // The soonest deadline still to pass, or null when no batch has one.
