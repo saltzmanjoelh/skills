@@ -134,8 +134,29 @@ test('two batches open at once each release on their own', () => {
 test('a resumed agent is forgotten as a member, and launching twice records one member', () => {
   const again = afterLaunch(launched(), 't1:0', { id: ALPHA, type: 'Explore' })
   expect(again.batches[0]?.members).toHaveLength(2)
-  const state = afterResume(launched(), ALPHA)
+  const state = afterResume(launched(), ALPHA, 0)
   expect(afterDelivery(state, report(ALPHA), true, 0).act).toEqual({ kind: 'pass' })
+})
+
+test('after a member that reported is resumed, the member left still releases the batch, and the deadline names no one who reported', () => {
+  let state = afterDelivery(launched(), report(ALPHA), true, 0).state
+  state = afterResume(state, ALPHA, 1)
+  expect(runningLines(state)).toEqual([incompleteLine(['Plan bbbbbbbb'])])
+  const out = afterDelivery(state, report(BRAVO), true, 2)
+  expect(out.act).toEqual({ kind: 'release', line: completeLine(1) })
+  expect(heldReports(out.state)).toBe(0)
+  expect(afterDeadline(out.state, BATCH_LIMIT_MS).lines).toEqual([])
+  expect(afterDelivery(out.state, notice(BRAVO, 'completed'), true, 3).act).toEqual({ kind: 'hold' })
+  expect(completeLine(1)).toContain('the batch of agents launched together is complete')
+})
+
+test('resuming the last member still running, after the others ended, releases the batch with no line', () => {
+  let state = afterDelivery(launched(), report(ALPHA), true, 0).state
+  state = afterResume(state, BRAVO, 5)
+  expect(heldReports(state)).toBe(0)
+  expect(nextDeadline(state)).toBeNull()
+  expect(afterDeadline(state, BATCH_LIMIT_MS).lines).toEqual([])
+  expect(afterDelivery(state, report(BRAVO), true, 6).act).toEqual({ kind: 'pass' })
 })
 
 test('only the newest batches are kept', () => {

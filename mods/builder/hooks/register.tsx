@@ -195,7 +195,7 @@ let isDelivering = false
 let ownStep: string | undefined
 // The turn whose first step builder answered without the model, until that
 // turn's end, which then does none of a reply's work.
-let quietTurn: string | undefined
+let notedTurn: string | undefined
 // The batch deadline's timer and its number, which moves on at each arming,
 // so that only the newest arming arms a timer. isBatchArmed says whether this
 // load of the hooks armed it from the stored deadline yet.
@@ -4261,7 +4261,10 @@ export const register: Register = on => {
     const step = ownStep
     const spawned = await next(e)
     const id = spawned.agentId
-    if (e.resume !== undefined) void update($, batches, raw => afterResume(batchStateIn(raw), e.resume?.agentId ?? '')).catch(() => undefined)
+    const resumed = e.resume?.agentId
+    if (resumed !== undefined) {
+      void $.clock.now().then(now => update($, batches, raw => afterResume(batchStateIn(raw), resumed, now))).catch(() => undefined)
+    }
     if (id !== undefined && step !== undefined && isBatchLaunch(e)) {
       void update($, batches, raw => afterLaunch(batchStateIn(raw), step, { id, type: e.subagentType })).catch(() => undefined)
     }
@@ -4296,10 +4299,10 @@ export const register: Register = on => {
       // measures and compacts nothing, leaves a usage-limit hold and a held
       // handover as they are, restarts no quiet time and starts no looks,
       // because the model has not read the batch's reports yet.
-      const isQuiet = e.turnId === quietTurn
-      if (isQuiet) quietTurn = undefined
+      const isNoted = e.turnId === notedTurn
+      if (isNoted) notedTurn = undefined
       ownStep = undefined
-      const isReplied = !isQuiet && (e.reason === 'answer' || e.reason === 'refusal')
+      const isReplied = !isNoted && (e.reason === 'answer' || e.reason === 'refusal')
       if (isReplied) repliedTurn = ownTurnsStarted
       // A turn that replied is passed on to the engine first, then measured,
       // and then, when the context is at or above the threshold, compacted
@@ -4353,7 +4356,7 @@ export const register: Register = on => {
       // Every turn end compares the mod's files, hold or not, so a session
       // with nothing watched still learns that builder changed on disk.
       void compareLoaded($).catch(() => undefined)
-      if (isQuiet) return next(e)
+      if (isNoted) return next(e)
       // A turn an API error ended may start a usage-limit hold. While the
       // hold is on, a change held during the turn stays held for the end of
       // the turn after the hold, and no look runs. A turn that ended with an
@@ -4475,7 +4478,7 @@ export const register: Register = on => {
     if (e.agentId === undefined) ownStep = `${e.turnId}:${e.index}`
     if (e.index === 0 && e.agentId === undefined && (await answersHeld($))) {
       // The step has no usage, so nothing is counted for it.
-      quietTurn = e.turnId
+      notedTurn = e.turnId
       yield { kind: 'text', index: 0, text: NOTED_REPLY }
       yield { kind: 'stop', stopReason: 'end_turn', usage: null }
       return { turnId: e.turnId, index: e.index, answer: NOTED_REPLY, toolUses: [], stopReason: 'end_turn', usage: null }

@@ -379,3 +379,13 @@ test('the pane shows how many reports are held back only while a batch holds som
   await pane.redraw()
   expect(await pane.find({ type: 'Text', text: /^Holding / })).toBeUndefined()
 })
+
+test('a member resumed by the session is forgotten, so its later report passes and raises no marker', async ($, on) => {
+  const w = world(on)
+  await launched($)
+  await $.agent.spawn(launch('Explore', { resume: { agentId: ALPHA } }))
+  await w.clock.settle()
+  expect(await deliver($, report(ALPHA))).toEqual({ text: report(ALPHA) })
+  expect(w.state.value?.marker).toBe(0)
+  expect(w.state.value?.batches.flatMap(b => b.members.map(m => m.id))).not.toContain(ALPHA)
+})
