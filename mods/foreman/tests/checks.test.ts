@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { checkOutcome, checksIn, clampedDue, headerOf, MAX_CHECKS, soonestDue, withNote, withoutPaired } from '../hooks/checks'
+import { checkOutcome, checksIn, clampedDue, endsOf, headerOf, MAX_CHECKS, soonestDue, withNote, withoutPaired } from '../hooks/checks'
 import { REASONS } from '../hooks/desktop'
 import { newPairing } from '../hooks/tickets'
 import type { ForemanCheck } from '../types'
@@ -148,4 +148,43 @@ test('a failed read, and an answer whose header cannot be read, drop the record 
 test('the soonest due time is the earliest of the records, or null when there are none', () => {
   expect(soonestDue([])).toBeNull()
   expect(soonestDue([check('local_a', T0 + MINUTE), check('local_b', T0), check('local_c', T0 + 2 * MINUTE)])).toBe(T0 + IDLE)
+})
+
+test('outcomes that end nothing leave the same checks and no work', () => {
+  const checks = [check('local_a'), check('local_b')]
+  const got = endsOf([{ claim: check('local_a'), outcome: { kind: 'later' } }], checks)
+  expect(got.checks).toBe(checks)
+  expect(got.work).toEqual({ logs: [], effects: [], lines: [] })
+  expect(endsOf([], checks).checks).toBe(checks)
+})
+
+test('ending outcomes drop their records with a log line each, one quiet notification for the failures, and one wake line for the sessions that still wait', () => {
+  const checks = [check('local_a'), check('local_b'), check('local_c'), check('local_d'), check('local_e'), check('local_f')]
+  const got = endsOf([
+    { claim: check('local_a'), outcome: { kind: 'drop-failed', reason: REASONS.notConnected } },
+    { claim: check('local_b'), outcome: { kind: 'drop-archived' } },
+    { claim: check('local_c'), outcome: { kind: 'later' } },
+    { claim: check('local_d'), outcome: { kind: 'wake' } },
+    { claim: check('local_e'), outcome: { kind: 'drop-failed', reason: REASONS.eventsUnreadable } },
+    { claim: check('local_f'), outcome: { kind: 'wake' } },
+  ], checks)
+  const a = `Stopped checking the sub session local_a, because ${REASONS.notConnected}.`
+  const e = `Stopped checking the sub session local_e, because ${REASONS.eventsUnreadable}.`
+  expect(got.checks).toEqual([check('local_c')])
+  expect(got.work).toEqual({
+    logs: ['Stopped checking the sub session local_b, because its session is archived.', a, e],
+    effects: [{ kind: 'notify', text: `${a} ${e}`, quiet: true }],
+    lines: ['foreman: the sub session local_d, which foreman holds no record of, still waits after foreman\'s nudge. the sub session local_f, which foreman holds no record of, still waits after foreman\'s nudge.'],
+  })
+})
+
+test('an outcome whose record no longer holds its claimed times is thrown away', () => {
+  const moved = check('local_a', T0 + MINUTE)
+  const checks = [moved, check('local_b')]
+  const got = endsOf([
+    { claim: check('local_a'), outcome: { kind: 'drop-archived' } },
+    { claim: check('local_c'), outcome: { kind: 'wake' } },
+  ], checks)
+  expect(got.checks).toBe(checks)
+  expect(got.work).toEqual({ logs: [], effects: [], lines: [] })
 })

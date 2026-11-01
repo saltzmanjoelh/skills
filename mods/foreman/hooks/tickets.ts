@@ -146,11 +146,6 @@ export const waitingBrief = (key: string, prompt: string) => `${WAIT_LINE(key)}\
 // not tell the person that the issue started.
 export const WAITING_SENTENCE = (key: string) => `${key} waits in foreman's queue: its sub session begins by itself once a slot frees, so tell the person that ${key} is queued, not that it started.`
 
-// The shape of a desktop session id lives in hooks/desktop.ts, so that
-// hooks/checks.ts can read it without importing this module. It is passed on
-// from here for the modules that already read it here.
-export { LOCAL_ID }
-
 // The first desktop session id in a start_session answer, or null when it
 // names none, as for a proposal card, which starts no session yet.
 export function localIdIn(text: string): string | null {

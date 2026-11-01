@@ -1,10 +1,12 @@
 // The checks foreman makes by itself of sub sessions it holds no record of:
 // the records as the ledger keeps them, what a turn-end note does to them,
-// how the header of a session's events reads, and what a check that fell due
-// does. Every function is pure. register.tsx carries out what they decide.
+// how the header of a session's events reads, what a check that fell due
+// does, and which records its outcomes end. Every function is pure.
+// register.tsx carries out what they decide.
 
-import type { ForemanCheck, ForemanPairing } from '../types'
+import type { ForemanCheck, ForemanOutbox, ForemanPairing } from '../types'
 import { REASONS, WHOLE_LOCAL_ID } from './desktop'
+import { wakeLine } from './wake'
 
 // The most checks kept, the newest ones, the same bound as the list of
 // unwatched sub sessions.
@@ -42,10 +44,11 @@ export function checksIn(raw: unknown): ForemanCheck[] {
 
 // The checks with every due time later than `now` plus the idle period pulled
 // in to that, as after the clock went back or the idle minutes were made
-// shorter. The same list comes back when no due time changes. The caller
-// writes the result back to the ledger in the update that claims the due
-// checks: a due time pulled in once then stays where it was put, so it falls
-// due one idle period later rather than being pushed on at every read.
+// shorter. The same list comes back when no due time changes. The callers
+// write the result back to the ledger, a read in the update that records its
+// decision and a check pass in the update that claims the due checks: a due
+// time pulled in once then stays where it was put, so it falls due one idle
+// period later rather than being pushed on at every read.
 export function clampedDue(checks: ForemanCheck[], now: number, idleMs: number): ForemanCheck[] {
   const latest = now + idleMs
   return checks.some(c => c.dueAt > latest) ? checks.map(c => (c.dueAt > latest ? { ...c, dueAt: latest } : c)) : checks
@@ -121,3 +124,39 @@ export function checkOutcome(record: ForemanCheck, look: { header: string } | { 
 
 // The earliest due time of the checks, or null when there are none.
 export const soonestDue = (checks: readonly ForemanCheck[]): number | null => (checks.length === 0 ? null : Math.min(...checks.map(c => c.dueAt)))
+
+// Whether `check` is still the record a pass claimed as `claim`: a note that
+// came in since then changed its times, and a pass that dropped it left none.
+export const isClaimed = (check: ForemanCheck, claim: ForemanCheck) => check.id === claim.id && check.notedAt === claim.notedAt && check.dueAt === claim.dueAt
+
+// The sentence that says foreman stopped checking the sub session `id`, and
+// why.
+const stoppedLine = (id: string, why: string) => `Stopped checking the sub session ${id}, because ${why}.`
+
+// A claimed record and the outcome of its check.
+export type CheckDone = { claim: ForemanCheck; outcome: CheckOutcome }
+
+// The checks after the outcomes `done` of one pass, and the work they leave
+// for the outbox. Only an outcome whose record still holds its claimed times
+// counts, so the outcome of a check that a newer note overtook is thrown
+// away. Every outcome but `later` ends its record, and checkOne has already
+// turned a nudge into `later` or a failure. An archived sub session
+// gets a log line. Each failure gets a log line, and all the failures share
+// one quiet notification, whose text the log already holds. The sub sessions
+// that still wait after the nudge share one line that wakes the parent. The
+// same checks and empty work come back when no record ends.
+export function endsOf(done: readonly CheckDone[], checks: ForemanCheck[]): { checks: ForemanCheck[]; work: Omit<ForemanOutbox, 'reports'> } {
+  const ends = done.filter(d => d.outcome.kind !== 'later' && checks.some(c => isClaimed(c, d.claim)))
+  if (ends.length === 0) return { checks, work: { logs: [], effects: [], lines: [] } }
+  const failed = ends.flatMap(d => (d.outcome.kind === 'drop-failed' ? [stoppedLine(d.claim.id, d.outcome.reason)] : []))
+  const archived = ends.flatMap(d => (d.outcome.kind === 'drop-archived' ? [stoppedLine(d.claim.id, 'its session is archived')] : []))
+  const line = wakeLine(ends.flatMap(d => (d.outcome.kind === 'wake' ? [{ kind: 'still-waits' as const, id: d.claim.id }] : [])))
+  return {
+    checks: checks.filter(c => !ends.some(d => isClaimed(c, d.claim))),
+    work: {
+      logs: [...archived, ...failed],
+      effects: failed.length === 0 ? [] : [{ kind: 'notify', text: failed.join(' '), quiet: true }],
+      lines: line === null ? [] : [line],
+    },
+  }
+}

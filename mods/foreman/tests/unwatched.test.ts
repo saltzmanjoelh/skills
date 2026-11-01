@@ -262,6 +262,16 @@ test('after the role turns on, the read loop makes the due checks, one read per 
   expect(eventCalls(w).map(c => c.args.session_id)).toEqual(['local_u', 'local_v', 'local_u', 'local_v'])
 })
 
+test('with the role on, the reads before a check falls due read no events, and the read at its due time reads them once', async ($, on) => {
+  const { w } = await parentWith($, on, { checks: [check('local_u', T0)] })
+  w.desktop.events.set('local_u', { state: 'running' })
+  await pass(w, 5 * MINUTE - SECOND)
+  expect(eventCalls(w)).toEqual([])
+  await pass(w, SECOND)
+  expect(eventCalls(w)).toHaveLength(1)
+  expect(ledger(w).checks).toEqual([check('local_u', T0, { dueAt: T0 + 10 * MINUTE })])
+})
+
 test('with the role on and no hook since a hot reload, the read loop alone makes a due check', async ($, on) => {
   const w = world(on)
   w.desktop.events.set('local_u', { state: 'running' })

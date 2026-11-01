@@ -19,8 +19,8 @@
 
 import type { StatusChangedText } from 'builder'
 import type { ForemanPairing } from '../types'
+import { LOCAL_ID } from './desktop'
 import { listOf } from './text'
-import { LOCAL_ID } from './tickets'
 import { whoOf } from './wake'
 
 // What foreman's turn.step hook answers, in place of the model, for the turn
