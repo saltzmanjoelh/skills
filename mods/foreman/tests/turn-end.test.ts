@@ -3,7 +3,7 @@ import type { On, SessionMessage, TurnStepChunk, TurnStepInput } from 'claude-co
 import type { Engine } from 'claude-code/testing'
 
 import { PASTED_LINE } from '../hooks/commands'
-import { checkLine, FOREMAN_REPORTS, NOTED } from '../hooks/notes'
+import { NOTED, NOTED_WHILE_OFF } from '../hooks/notes'
 import { newPairing, ticketsIn, ticketsKey } from '../hooks/tickets'
 import type { ForemanPairing } from '../types'
 import { ARCHIVED, EVENT, leftInState, MESSAGE, mountBoth, note, OTHER_EVENT, PROPOSAL, SENT, start, STATUS, T0, world, WORKTREE } from './world'
@@ -91,16 +91,9 @@ async function noted($: Engine, w: ReturnType<typeof world>, text: string, over:
   expect(w.engine.prompts.at(-1)).toBe(text)
 }
 
-// Asserts that `text` reached the model exactly as it came, with the check
-// line for `ids` at `minutes` as its context, followed by the sentences about
-// foreman's own reports while the role is on.
-async function checked($: Engine, w: ReturnType<typeof world>, text: string, ids: string[], { minutes = 5, isOn = true } = {}) {
-  const out = await submit($, text)
-  expect(out.drop).toBeUndefined()
-  expect(out.text).toBe(text)
-  expect(out.context).toEqual(isOn ? [checkLine(ids, minutes), FOREMAN_REPORTS] : [checkLine(ids, minutes)])
-  expect(w.engine.prompts.at(-1)).toBe(text)
-}
+// The line foreman writes for a note about `id`, a sub session it holds no
+// record of, which it names by its bare id.
+const ALONE = (id: string) => `Kept ${id}'s turn-end note from the parent's model.`
 
 test('a prompt of tracked turn-end notes goes on as its log line, with the marker set and one line in the log, while the role is on', async ($, on) => {
   const { w, ui, marker } = await parentWith($, on)
@@ -120,12 +113,12 @@ test('a prompt in which the person typed after the notes passes byte for byte', 
   await passes($, w, `${note('local_a')}\n${STATUS}\n\nWhat should we do next?  `)
 })
 
-test('a note about an untracked or a trimmed sub session passes with the check line, a released one\'s with the Noted line, and a freed one\'s is rewritten', async ($, on) => {
+test('a note about an untracked or a trimmed sub session is kept under its id, a released one\'s gets the Noted line, and a freed one\'s is rewritten', async ($, on) => {
   const { w, ui, marker } = await parentWith($, on)
   expect(ticketsIn(w.stored.get(ticketsKey('session-1'))).pairings.map(p => p.localId)).not.toContain('local_t')
-  await checked($, w, note('local_z'), ['local_z'])
+  await kept($, w, marker, note('local_z'), ALONE('local_z'))
   await noted($, w, note('local_r'))
-  await checked($, w, note('local_t'), ['local_t'])
+  await kept($, w, marker, note('local_t'), ALONE('local_t'))
   await noted($, w, `${note('local_a')}\n${note('local_r')}`)
   await kept($, w, marker, note('local_f'), 'Kept ABC-6\'s turn-end note from the parent\'s model.')
   expect(await ui.newestLog()).toBe('Kept ABC-6\'s turn-end note from the parent\'s model.')
@@ -151,9 +144,9 @@ test('foreman\'s own wake line still reaches the model', async ($, on) => {
   await passes($, w, 'foreman: one slot free; pick the next issue and start it.')
 })
 
-test('with an empty ledger every note passes with the check line', async ($, on) => {
-  const { w } = await parentWith($, on, [])
-  await checked($, w, note('local_a'), ['local_a'])
+test('with an empty ledger every note is kept under its id', async ($, on) => {
+  const { w, marker } = await parentWith($, on, [])
+  await kept($, w, marker, note('local_a'), ALONE('local_a'))
 })
 
 test('a ledger that cannot be read lets the note pass', async ($, on) => {
@@ -207,12 +200,12 @@ test('an element the hook does not recognise makes the prompt pass unchanged, wi
   expect(await ui.newestLog()).toBe('')
 })
 
-test('the Noted line is attached, with the text unchanged, to tracked notes bundled with a delivery and to a lone delivery, and the check line to a note about an untracked session', async ($, on) => {
-  const { w } = await parentWith($, on)
+test('the Noted line is attached, with the text unchanged, to tracked notes bundled with a delivery and to a lone delivery, and a note about an untracked session is kept under its id', async ($, on) => {
+  const { w, marker } = await parentWith($, on)
   await noted($, w, `${note('local_a')}\n${STATUS}\n${MESSAGE}\n\n${EVENT}`)
   await noted($, w, `${note('local_a')}\n${STATUS}\n${MESSAGE}`)
   await noted($, w, SENT, { origin: { kind: 'sdk' } })
-  await checked($, w, `${note('local_z')}\n\n${EVENT}`, ['local_z'])
+  await kept($, w, marker, `${note('local_z')}\n\n${EVENT}`, ALONE('local_z'))
 })
 
 test('the Noted line is not attached to a prompt with the person\'s typing, a worktree reminder or a proposal block', async ($, on) => {
@@ -490,25 +483,24 @@ test('while a key is held, the app\'s notes keep their own handling and get no h
   await noted($, w, SENT, { origin: { kind: 'sdk' } })
 })
 
-test('while the role is on, a note mixed with tracked ones names only the untracked sub sessions, and a delivery mixed in keeps the line', async ($, on) => {
-  const { w } = await parentWith($, on)
-  await checked($, w, `${note('local_a')}\n${note('local_z')}\n${STATUS}`, ['local_z'])
-  await checked($, w, `${note('local_y')}\n${MESSAGE}\n${note('local_z')}\n${note('local_b')}`, ['local_y', 'local_z'])
-  await checked($, w, `${ARCHIVED}\n${note('local_z')}`, ['local_z'])
+test('while the role is on, notes about tracked and untracked sub sessions are kept together, and a delivery or another note mixed in gets the Noted line', async ($, on) => {
+  const { w, marker } = await parentWith($, on)
+  await kept($, w, marker, `${note('local_a')}\n${note('local_z')}\n${STATUS}`, 'Kept ABC-1\'s and local_z\'s turn-end notes from the parent\'s model.')
+  await noted($, w, `${note('local_y')}\n${MESSAGE}\n${note('local_z')}\n${note('local_b')}`)
+  await noted($, w, `${ARCHIVED}\n${note('local_z')}`)
 })
 
-test('the check line gives the idleMinutes option as its minutes', { options: { idleMinutes: 2 } }, async ($, on) => {
-  const { w } = await parentWith($, on)
-  await checked($, w, note('local_z'), ['local_z'], { minutes: 2 })
-})
-
-test('while the role is off, a note about an unwatched sub session gets the check line alone, and every other prompt passes unchanged', async ($, on) => {
+test('while the role is off, a note about an unwatched sub session is kept under its id, a mixed prompt that names one gets the Noted line without the report sentences, and every other prompt passes unchanged', async ($, on) => {
   const w = world(on, { store: { 'parent:session-1': { isOn: false, slots: null }, [ticketsKey('session-1')]: { ...ledgerOf(PAIRINGS), unwatched: ['local_u'] } } })
+  const marker = markerOf(on)
   await mountBoth($, on)
   await start($)
   await w.clock.settle()
-  await checked($, w, note('local_u'), ['local_u'], { isOn: false })
-  await checked($, w, `${note('local_a')}\n${MESSAGE}\n${note('local_u')}`, ['local_u'], { isOn: false })
+  await kept($, w, marker, note('local_u'), ALONE('local_u'))
+  for (const text of [`${note('local_a')}\n${MESSAGE}\n${note('local_u')}`, `${note('local_a')}\n${note('local_u')}`]) {
+    const out = await submit($, text)
+    expect([out.text, out.context]).toEqual([text, [NOTED_WHILE_OFF]])
+  }
   await passes($, w, note('local_a'))
   await passes($, w, note('local_z'))
   await passes($, w, SENT, { origin: { kind: 'sdk' } })

@@ -1,14 +1,13 @@
 // The desktop app's notes and messages: the prompts it sends a parent each
 // time a session the parent started ends a turn, or sends it a message.
 // Foreman already shows its sub sessions in the pane and wakes the parent's
-// model when a decision is needed, so a prompt made only of turn-end notes
-// about sub sessions it tracks is rewritten to its log line, whose turn
+// model when a decision is needed, and it checks by itself a sub session it
+// holds no record of, so a prompt made only of turn-end notes about sub
+// sessions it tracks or checks is rewritten to its log line, whose turn
 // foreman answers itself without the model, and any other prompt made only of
 // the app's notes and messages reaches the model with one line asking for a
-// one-word reply, or, when a note is about a sub session foreman holds no
-// record of, asking for one check of it later. These functions say which
-// prompts those are and what the log and the lines say about them. Every
-// function is pure.
+// one-word reply. These functions say which prompts those are and what the
+// log and the lines say about them. Every function is pure.
 //
 // A turn-end note is a <system-reminder> block that begins `The session
 // "<title>" you started (local_<id>) finished a turn`. The app often sends a
@@ -20,7 +19,7 @@
 
 import type { StatusChangedText } from 'builder'
 import type { ForemanPairing } from '../types'
-import { listOf, plural } from './text'
+import { listOf } from './text'
 import { LOCAL_ID } from './tickets'
 import { whoOf } from './wake'
 
@@ -33,24 +32,15 @@ export const NOTED_REPLY = 'Noted.'
 // these say plainly that a foreman parent does not.
 export const FOREMAN_REPORTS = 'Foreman reports pull requests opened, verdicts, merges and closes in its own lines. In a foreman parent this overrides the app\'s request to report the outcome in one or two lines.'
 
-// The context foreman attaches to a prompt made only of the app's notes and
-// messages that it does not rewrite and that names no sub session foreman
-// holds no record of.
-export const NOTED = `From the foreman mod: this prompt holds only the desktop app's notes about sessions this parent started, or messages from them. Reply with the single word "Noted." and end the turn, unless one of them asks the person or this parent a question. ${FOREMAN_REPORTS}`
+// The context foreman attaches, while its role is off, to a prompt made only
+// of the app's notes and messages that it does not rewrite and that holds a
+// note about a sub session it checks. It leaves out the sentences about
+// foreman's own reports, because foreman reports nothing while it is off.
+export const NOTED_WHILE_OFF = 'From the foreman mod: this prompt holds only the desktop app\'s notes about sessions this parent started, or messages from them. Reply with the single word "Noted." and end the turn, unless one of them asks the person or this parent a question.'
 
-// The context line for a prompt made only of the app's parts whose turn-end
-// notes name sub sessions foreman holds no record of: it names each by its
-// desktop session id, once and sorted, and asks for one check of each
-// `minutes` from now, as the wake skill's section on such sub sessions says,
-// in place of a bare "Noted.". The ids are the app's own, read with LOCAL_ID,
-// so nothing a sub session wrote is repeated.
-export function checkLine(ids: readonly string[], minutes: number): string {
-  const sorted = [...new Set(ids)].sort()
-  const one = sorted.length === 1
-  const list = listOf(sorted)
-  const them = one ? `the sub session ${list}, so nobody watches it` : `the sub sessions ${list}, so nobody watches them`
-  return `From the foreman mod: foreman holds no record of ${them}. Instead of replying with a bare "Noted.", schedule one check of ${one ? 'it' : 'each'} for ${plural(minutes, 'minute')} from now, as the foreman:wake skill's section "Checking a sub session foreman does not watch" says, and reply briefly to the rest of this prompt.`
-}
+// The context foreman attaches, while its role is on, to a prompt made only
+// of the app's notes and messages that it does not rewrite.
+export const NOTED = `${NOTED_WHILE_OFF} ${FOREMAN_REPORTS}`
 
 const OPEN = '<system-reminder>'
 const CLOSE = '</system-reminder>'
@@ -188,7 +178,7 @@ function partsOf(text: string): Parts | null {
 // another kind or messages come with them, and empty for any other text.
 // `wantsNoted` says whether the text is made only of the app's parts and holds
 // at least one note or message, so that the model reading it should get the
-// Noted line or the check line.
+// Noted line.
 export function notesIn(text: string): { turnEnds: string[] | null; allTurnEnds: string[]; wantsNoted: boolean } {
   const parts = partsOf(text)
   if (parts === null) return { turnEnds: null, allTurnEnds: [], wantsNoted: false }
@@ -241,7 +231,8 @@ export function keptNames(ids: readonly string[], pairings: readonly ForemanPair
 }
 
 // The log line for one rewritten prompt, which is also the text the prompt is
-// rewritten to. The number of sub sessions, not of notes, decides between
+// rewritten to. `names` are the names keptNames gives tracked sub sessions
+// and the bare `local_…` ids of sub sessions foreman checks, sorted. The number of sub sessions, not of notes, decides between
 // note and notes, so a repeat of the same rewrite gives the same line and the
 // log counts it on the one before.
 export function keptLine(names: readonly string[]): string {

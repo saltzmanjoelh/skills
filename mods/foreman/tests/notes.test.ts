@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { checkLine, FOREMAN_REPORTS, isAppParts, isStatusChanged, keptLine, keptNames, NOTED, notesIn, STATUS_CHANGED_TEXT, turnEndIds, wantsNoted } from '../hooks/notes'
+import { FOREMAN_REPORTS, isAppParts, isStatusChanged, keptLine, keptNames, NOTED, NOTED_WHILE_OFF, notesIn, STATUS_CHANGED_TEXT, turnEndIds, wantsNoted } from '../hooks/notes'
 import { newPairing } from '../hooks/tickets'
 import type { ForemanPairing } from '../types'
 import { ARCHIVED, CHANGED, CHANGED_AS_RECEIVED, CHANGED_ELEMENT, EVENT, MESSAGE, note, OTHER_EVENT, PROPOSAL, SENT, STATUS, T0, WORKTREE } from './world'
@@ -152,13 +152,15 @@ test('a prompt is the app\'s parts only when nothing in it is the person\'s typi
   for (const text of [`${note('local_a')}\nhello`, 'hello', '/start-foreman 3', `${WORKTREE}\n${note('local_a')}`]) expect(isAppParts(text)).toBe(false)
 })
 
-test('the check line names each sub session once, sorted, with the minutes, and points at the wake skill\'s section', () => {
-  expect(checkLine(['local_a'], 5)).toBe('From the foreman mod: foreman holds no record of the sub session local_a, so nobody watches it. Instead of replying with a bare "Noted.", schedule one check of it for 5 minutes from now, as the foreman:wake skill\'s section "Checking a sub session foreman does not watch" says, and reply briefly to the rest of this prompt.')
-  const several = checkLine(['local_c', 'local_a', 'local_c', 'local_b'], 2)
-  expect(several).toContain('the sub sessions local_a, local_b and local_c, so nobody watches them.')
-  expect(several).toContain('schedule one check of each for 2 minutes from now')
-  expect(checkLine(['local_b', 'local_a'], 1)).toContain('the sub sessions local_a and local_b,')
-  expect(checkLine(['local_a'], 1)).toContain('for 1 minute from now')
+test('the Noted line while the role is off is the Noted line without the sentences about foreman\'s own reports, which are untrue while off', () => {
+  expect(NOTED).toBe(`${NOTED_WHILE_OFF} ${FOREMAN_REPORTS}`)
+  expect(NOTED_WHILE_OFF).not.toContain('Foreman reports')
+  expect(NOTED_WHILE_OFF.endsWith('unless one of them asks the person or this parent a question.')).toBe(true)
+})
+
+test('the kept line names a sub session foreman holds no record of by its bare id, sorted among the names of tracked ones', () => {
+  expect(keptLine(['local_u'])).toBe('Kept local_u\'s turn-end note from the parent\'s model.')
+  expect(keptLine(['ABC-1', 'local_u'])).toBe('Kept ABC-1\'s and local_u\'s turn-end notes from the parent\'s model.')
 })
 
 test('the Noted line ends with the sentences about foreman\'s own reports, which stand alone too', () => {

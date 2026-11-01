@@ -1,13 +1,14 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PromptSubmitInput, Register, ResolveInput, ToolCallResult } from 'claude-code'
 
+import { withNote } from './checks'
 import { CALL_TIMEOUT_MS, decide, desktopOf, freeSlots, GONE_MS, keptByUnreadList, needsList, slotOutcome, startWaits, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
 import { isSvgSurface } from './art'
 import { becameParentAnswer, COMMAND, commandOf, PASSED_ON, PASTED_LINE, pastedCommandIn, slotsAnswer, type Command } from './commands'
 import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, failureLine, listSessions, NUDGE_TEXT, openSession, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
 import { acceptedLog, beginFailedNotice, heldLine, heldLog, heldNotice, heldSentence, isHeldRefusal, isPersonPrompt, keyOfTitle } from './held'
 import { ignoredLine, readIssueLink } from './links'
-import { checkLine, FOREMAN_REPORTS, isAppParts, isStatusChanged, keptLine, keptNames, NOTED, NOTED_REPLY, notesIn } from './notes'
+import { isAppParts, isStatusChanged, keptLine, keptNames, NOTED, NOTED_REPLY, NOTED_WHILE_OFF, notesIn } from './notes'
 import { bandTree, PANE, paneTree, shownReport, type Elements, type View } from './pane'
 import type { ForemanEffect, ForemanParent, ForemanTickets } from '../types'
 import { PARENT_OFF, parentIn, slotsOf, storeKey } from './parent'
@@ -841,42 +842,51 @@ function withAnswer(t: ForemanTickets, ticket: string, localId: string | null, a
 // another hook added each mean there is something more for the model to read.
 const isPlain = (e: PromptSubmitInput) => e.command === undefined && (e.attachments?.length ?? 0) === 0 && (e.context?.length ?? 0) === 0
 
-// What foreman does with a prompt made only of the app's notes and messages.
-// While the role is on, it keeps the prompt from the parent's model by
-// rewriting it to the log line for it, when it is made of turn-end notes about
-// sub sessions this parent tracks. Otherwise, when a turn-end note in it is
-// about a sub session foreman holds no record of, the prompt goes on with the
-// check line, which asks for one later check of each such sub session: while
-// the role is on, one whose id no pairing holds, whatever its standing, and
-// while it is off, one in the unwatched list. While the role is on, any other
-// such prompt goes on with the Noted line. Every other prompt goes on as it
-// came, which withPasted or withHeld may give a line.
+// What foreman does with a prompt made only of the app's notes and messages,
+// and the ids of the sub sessions foreman holds no record of whose turn-end
+// notes it holds, which foreman then checks by itself: while the role is on,
+// each one whose id no pairing holds, whatever its standing, and while it is
+// off, each one in the unwatched list. A prompt made only of turn-end notes,
+// each about a sub session foreman checks or, while the role is on, one this
+// parent tracks, is kept from the parent's model by rewriting it to the log
+// line for it, which names a checked one by its bare id. While the role is
+// on, any other such prompt goes on with the Noted line. While it is off, one
+// that holds a note about a sub session foreman checks goes on with the Noted
+// line without the sentences about foreman's reports, and every other prompt
+// goes on as it came, which withPasted or withHeld may give a line.
 // The text is checked before any state is read, so a prompt the person typed
 // waits here on no read, and the ledger is read only for a prompt that holds
 // a turn-end note. A prompt the person typed that goes on does wait for
 // reads of the role and the ledger, to learn whether foreman is off or any key
 // is held.
-type Choice = { kind: 'keep'; line: string } | { kind: 'check'; context: string[] } | { kind: 'noted' } | { kind: 'pass' }
+type Choice = { kind: 'keep'; line: string; checks: string[] } | { kind: 'noted'; context: string; checks: string[] } | { kind: 'pass' }
 
 async function choiceFor($: $, e: PromptSubmitInput): Promise<Choice> {
   if (!isPlain(e)) return { kind: 'pass' }
   const notes = notesIn(e.text)
   if (!notes.wantsNoted) return { kind: 'pass' }
-  const minutes = limitsOf(currentOptions).idleMs / 60_000
-  // While the role is off, only a sub session in the unwatched list gets the
-  // check line, and every other prompt goes on as it came.
-  if (!(await isOn($))) {
-    if (notes.allTurnEnds.length === 0) return { kind: 'pass' }
-    const { unwatched } = ticketsIn(await read($, tickets))
-    const unrecorded = notes.allTurnEnds.filter(id => unwatched.includes(id))
-    return unrecorded.length === 0 ? { kind: 'pass' } : { kind: 'check', context: [checkLine(unrecorded, minutes)] }
+  const on = await isOn($)
+  if (notes.allTurnEnds.length === 0) return on ? { kind: 'noted', context: NOTED, checks: [] } : { kind: 'pass' }
+  const { pairings, unwatched } = ticketsIn(await read($, tickets))
+  const isChecked = (id: string) => (on ? !pairings.some(p => p.localId === id) : unwatched.includes(id))
+  const checks = [...new Set(notes.allTurnEnds.filter(isChecked))]
+  if (notes.turnEnds !== null) {
+    const tracked = notes.turnEnds.filter(id => !isChecked(id))
+    const names = tracked.length === 0 ? [] : on ? keptNames(tracked, pairings) : null
+    if (names !== null) return { kind: 'keep', line: keptLine([...names, ...checks].sort()), checks }
   }
-  if (notes.allTurnEnds.length === 0) return { kind: 'noted' }
-  const { pairings } = ticketsIn(await read($, tickets))
-  const names = notes.turnEnds === null ? null : keptNames(notes.turnEnds, pairings)
-  if (names !== null) return { kind: 'keep', line: keptLine(names) }
-  const unrecorded = notes.allTurnEnds.filter(id => !pairings.some(p => p.localId === id))
-  return unrecorded.length === 0 ? { kind: 'noted' } : { kind: 'check', context: [checkLine(unrecorded, minutes), FOREMAN_REPORTS] }
+  if (on) return { kind: 'noted', context: NOTED, checks }
+  return checks.length === 0 ? { kind: 'pass' } : { kind: 'noted', context: NOTED_WHILE_OFF, checks }
+}
+
+// Records a turn-end note, read now, about each of the sub sessions `ids`
+// names, in one ledger update, so each one's check falls due an idle period
+// from now.
+async function noteChecks($: $, ids: readonly string[]) {
+  if (ids.length === 0) return
+  const now = await $.clock.now()
+  const { idleMs } = limitsOf(currentOptions)
+  await writeTickets($, t => ({ ...t, checks: ids.reduce((checks, id) => withNote(checks, id, now, idleMs), t.checks) }))
 }
 
 // The prompt with the pasted line added to its context, when it is the
@@ -1081,15 +1091,18 @@ export const register: Register = (on, options) => {
   // may read the whole status folder and the person's prompt or the turn's end
   // should not wait for that read.
   // A prompt made only of turn-end notes about sub sessions this parent
-  // tracks goes on with its text replaced by its line in the log, because the
-  // pane already shows them, and the marker holds that line so that the
+  // tracks or foreman checks goes on with its text replaced by its line in the
+  // log, because the pane already shows the tracked ones and foreman checks
+  // the others by itself, and the marker holds that line so that the
   // turn.step hook below answers its turn without the model. The host draws a
   // dropped prompt as a warning, which is why the prompt is not dropped. Any
-  // other prompt made only of the app's notes and messages goes on with the
-  // Noted line as context, its text unchanged, and every other prompt goes on
-  // as it came, except that the person's own prompt carries the held line as
-  // context while a key whose start the app refused is held. The marker is
-  // set before the line is written, and a hook that throws, a failed write
+  // other prompt made only of the app's notes and messages goes on with a
+  // Noted line as context, as choiceFor says, its text unchanged, and every
+  // other prompt goes on as it came, except that the person's own prompt carries the held line as
+  // context while a key whose start the app refused is held. A note about a
+  // sub session foreman checks is recorded in the ledger before the prompt
+  // goes on, so its check falls due an idle period after the note. The marker
+  // is set before the line is written, and a hook that throws, a failed write
   // included, passes the prompt on as it came, so no prompt is rewritten
   // without a line in the log or without its marker, and no line in the log
   // speaks of a note that went on unchanged. A marker left by a failed log
@@ -1099,8 +1112,8 @@ export const register: Register = (on, options) => {
     void ensureArmed($).catch(() => undefined)
     const choice = await choiceFor($, e)
     if (choice.kind === 'pass') return next(await withHeld($, await withPasted($, e)))
-    if (choice.kind === 'noted') return next({ ...e, context: [NOTED] })
-    if (choice.kind === 'check') return next({ ...e, context: choice.context })
+    await noteChecks($, choice.checks)
+    if (choice.kind === 'noted') return next({ ...e, context: [choice.context] })
     await update($, quietLine, () => choice.line)
     await addLog($, choice.line)
     return next({ ...e, text: choice.line })
@@ -1138,8 +1151,9 @@ export const register: Register = (on, options) => {
   // subagent's leaves the marker for that first step. answersAlone decides
   // before anything is yielded, because the engine keeps a chunk once it is
   // yielded, and a failure after it would let the model's answer follow
-  // foreman's. The role is not checked, since the marker is set only while it
-  // is on. Unlike the hooks around it, this one has no .catch on purpose: a
+  // foreman's. The role is not checked, since a marker set while it is off,
+  // for notes about sub sessions foreman checks, is answered the same way.
+  // Unlike the hooks around it, this one has no .catch on purpose: a
   // hook that throws before it yields anything is skipped, so the model
   // answers, while a .catch that called next after a yield would add the
   // model's answer after foreman's.
