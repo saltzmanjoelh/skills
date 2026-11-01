@@ -647,7 +647,8 @@ The parent says nothing about a sub session's progress reviewer by reviewer.
 Foreman keeps most of the desktop app's notes about sub sessions from the
 parent, but some still arrive, such as a message a sub session sent or a note
 in a form foreman does not recognise. Foreman may attach a line of context to
-such a prompt that asks for the same reply as this rule. When one arrives,
+such a prompt that asks for the same reply as this rule, with one exception,
+described at the end of this section. When one arrives,
 reply with the single word "Noted." and end the turn, unless it asks the
 person a question, or it is a sub session's line about a streak of 3 or a
 limit, which "When the parent speaks" lists, or it asks the parent a
@@ -664,6 +665,15 @@ wakes the parent only when it still waits after foreman's nudge. Never reply
 with nothing, because the app refuses an empty reply. In a foreman parent this
 rule overrides the app's request, at the end of its notes, to report the
 outcome in one or two lines.
+
+The exception is the line foreman attaches while its role is off to a prompt
+that holds a note about a sub session it checks beside other notes or
+messages. That line names the checked sub sessions by their `local_…` ids and
+asks for a brief reply to the rest of the prompt rather than a single word.
+Follow it: do not reply to the notes about the sub sessions it names, and
+report the other notes' outcomes briefly, as the app asks, instead of
+replying with a bare "Noted.", because while foreman is off nothing else
+reports them.
 
 ## What the parent never does
 
