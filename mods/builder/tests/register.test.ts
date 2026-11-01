@@ -555,6 +555,76 @@ test('a change found while the session\'s turn runs is held, then handed over wi
   expect(prompts[0]).toContain('The checks went from passed to failed.')
 })
 
+// A turn that builder answers with "Noted.", because a batch of background
+// agents holds the delivery that started it, leaves a change held during it
+// for the end of the next turn the model answers, and restarts no quiet time
+// (see docs/specs/builder-wakes-once-per-batch.md).
+test('a change held during a turn answered with "Noted." waits for the end of the next turn the model answers', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const prompts = recordPrompts(on)
+  sessionTurns(on)
+  let spawned = 0
+  on('agent.spawn', () => ({ model: 'test', agentId: `agent-${++spawned}-xxxxxxxxxx` }))
+  on('agent.list', () => ({ value: [] }))
+  on('session.messages', () => ({ value: [{ role: 'assistant', text: 'Launched them.', toolUses: [] }] }))
+  const model = { calls: 0 }
+  on('turn.step', async function* ($, e) {
+    model.calls += 1
+    yield { kind: 'stop', stopReason: 'end_turn', usage: null }
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+  const quietWrites: unknown[] = []
+  on('state.set', ($, e, next) => {
+    if (e.plugin === 'builder' && e.key === 'quietSince') quietWrites.push(e.value)
+    return next(e)
+  })
+  const stepOf = async (turnId: string) => {
+    const stream = $.turn.step({ turnId, index: 0, model: 'example-model', messageCount: 2 })
+    while (!(await stream.next()).done);
+  }
+  const changed = () => prompts.filter(text => text.includes('pull request #7 changed'))
+
+  // Checks still running keep the poll at its shortest, well inside the
+  // batch's ten-minute deadline.
+  world.pr = checksRunning()
+  await watch($)
+  await $.turn.start({ text: 'launch them', turnId: 't1' } as never)
+  await stepOf('t1')
+  for (const type of ['Explore', 'Plan']) {
+    await $.agent.spawn({ subagentType: type, prompt: 'go', description: type, background: true, fork: false } as never)
+  }
+  await turnEnds($, 't1')
+  await clock.settle()
+
+  // The first agent reports while the session is idle, so the turn its
+  // report starts is answered without the model, and a poll during that
+  // turn finds the checks failed and holds the change.
+  await $.prompt.submit({ text: '<agent-message from="agent-1-xxxxxxxxxx">\nThe report.', wait: false, origin: { kind: 'peer' }, isMeta: true } as never)
+  await $.turn.start({ text: 'the report', turnId: 't2' } as never)
+  await stepOf('t2')
+  expect(model.calls).toBe(1)
+  world.pr = failing()
+  await clock.advance(2 * 60_000)
+  expect(changed()).toEqual([])
+
+  const quietBefore = quietWrites.length
+  await turnEnds($, 't2')
+  await clock.settle()
+  expect(changed()).toEqual([])
+  expect(quietWrites.length).toBe(quietBefore)
+
+  await $.turn.start({ text: 'what now?', turnId: 't3' } as never)
+  await stepOf('t3')
+  expect(model.calls).toBe(2)
+  await turnEnds($, 't3')
+  await clock.settle()
+  expect(changed().length).toBe(1)
+  expect(quietWrites.length).toBeGreaterThan(quietBefore)
+})
+
 test('/builder poll shows the state without swallowing a change the session has not been told', async ($, on) => {
   const clock = mock.clock(on)
   mock.store(on)
