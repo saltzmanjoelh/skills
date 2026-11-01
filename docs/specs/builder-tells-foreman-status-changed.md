@@ -98,7 +98,18 @@ file stays the only source of state, and the timer stays as the fallback.
 - The parent restarts or ends, so the send is refused or not delivered.
   Builder drops it; the next change sends again as usual.
 - The parent receives the marker while its folder read is already running.
-  The read in progress is reused; nothing reads twice at once.
+  The read in progress is reused; nothing reads twice at once. When that
+  read listed the folder before the new write landed, the change waits for
+  the next timer read, which is accepted.
+- After a hot reload or a restart of builder, the writer no longer knows the
+  record it wrote last, so its first write counts as changed and sends one
+  marker even when only the write time moved. That costs the parent one
+  folder read and is accepted rather than keeping the compared text in the
+  memo.
+- A delivery of the marker addressed to one of the parent's own subagents is
+  consumed like any other; the marker carries nothing for a subagent.
+- Deleting the status file after a merge sends nothing; foreman's timer
+  notices it, as it does today.
 - A delivery that forges the marker inside a longer message, or wraps two
   elements, is not exactly one element with the marker as its body, so it
   passes through to the model.
