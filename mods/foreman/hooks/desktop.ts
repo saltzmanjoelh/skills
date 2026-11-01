@@ -58,6 +58,7 @@ export const REASONS = {
   sendRefused: 'the desktop app refused the message',
   eventsRefused: 'the desktop app could not read its events',
   eventsUnreadable: 'the desktop app\'s answer about its events could not be read',
+  notLinked: 'it is not a session in this parent\'s family of linked sessions',
 } as const
 
 export type OpenResult = { opened: string } | { reason: string }
@@ -177,6 +178,27 @@ export async function listSessions(call: DesktopCall): Promise<{ sessions: Liste
       if (typeof s?.sessionId !== 'string') return []
       const title = typeof s.title === 'string' ? s.title : null
       return [{ sessionId: s.sessionId, isArchived: s.isArchived === true, isRunning: s.isRunning !== false, title, surelyUnarchived: s.isArchived === false }]
+    }),
+    complete: raw.length < LIST_LIMIT,
+  }
+}
+
+// The ids of this parent's family of linked sessions, archived ones included,
+// as the desktop app's list gives them when asked for the linked family alone:
+// the session that started the parent, the sessions it or they started, and
+// their own linked sessions. Answers those ids and whether the list is
+// complete, which it is only when it came back shorter than LIST_LIMIT,
+// entries foreman could not read included, or why it could not be read.
+export async function linkedFamily(call: DesktopCall): Promise<{ ids: string[]; complete: boolean } | { reason: string }> {
+  const answer = await answerOf(call, SESSIONS_SERVER, LIST_TOOL, { linked: true, limit: LIST_LIMIT, include_archived: true })
+  if (answer === 'not-connected') return { reason: REASONS.notConnected }
+  if (answer === 'refused') return { reason: REASONS.listRefused }
+  const raw = entriesIn(answer)
+  if (raw === null) return { reason: REASONS.listUnreadable }
+  return {
+    ids: raw.flatMap(entry => {
+      const s = entry as { sessionId?: unknown } | null
+      return typeof s?.sessionId === 'string' ? [s.sessionId] : []
     }),
     complete: raw.length < LIST_LIMIT,
   }

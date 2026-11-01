@@ -5,7 +5,7 @@ import { checkOutcome, clampedDue, endsOf, isClaimed, soonestDue, withNote, with
 import { CALL_TIMEOUT_MS, decide, desktopOf, freeSlots, GONE_MS, keptByUnreadList, needsList, slotOutcome, startWaits, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
 import { isSvgSurface } from './art'
 import { becameParentAnswer, COMMAND, commandOf, PASSED_ON, PASTED_LINE, pastedCommandIn, slotsAnswer, type Command } from './commands'
-import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, failureLine, listSessions, NUDGE_TEXT, openSession, readHeader, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
+import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, failureLine, linkedFamily, listSessions, NUDGE_TEXT, openSession, readHeader, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
 import { acceptedLog, beginFailedNotice, heldLine, heldLog, heldNotice, heldSentence, isHeldRefusal, isPersonPrompt, keyOfTitle } from './held'
 import { ignoredLine, readIssueLink } from './links'
 import { isAppParts, isStatusChanged, keptLine, keptNames, NOTED, NOTED_REPLY, NOTED_WHILE_OFF, notesIn } from './notes'
@@ -539,8 +539,13 @@ function checkNow($: $): Promise<void> {
 // moving its due time an idle period on, so a second pass, here or in a copy
 // of the module after a hot reload, finds nothing due. Then it reads each
 // claimed sub session's events header, and nudges it when checkOutcome says
-// so. Last, in a second update, endsOf decides which records the outcomes end
-// and the log lines, the notification and the wake they leave, and those go
+// so, but only a sub session in this parent's family of linked sessions, read
+// once for the pass before any header. A note's ids come from text a sub
+// session's title can forge, so a forged id must reach no read and no nudge.
+// A family that could not be read ends every claimed record as a failed read,
+// and an id missing from a family that may be incomplete is checked as usual.
+// Last, in a second update, endsOf decides which records the outcomes end and
+// the log lines, the notification and the wake they leave, and those go
 // into the outbox in that same update, so a reload cannot lose them, and are
 // then carried out. The pass ends by arming the timer for the next check while
 // the role is off, and by carrying out any work still left in the outbox then.
@@ -556,7 +561,16 @@ async function runDueChecks($: $) {
       return { ...t, checks: kept.map(c => claims.find(claim => claim.id === c.id) ?? c) }
     })
     if (claims.length === 0) return
-    const done = await Promise.all(claims.map(claim => checkOne($, claim)))
+    const family = await within($, linkedFamily(desktopCall($))).catch(() => ({ reason: REASONS.notConnected }))
+    const refusal = (id: string): string | null => {
+      if (family === TIMED_OUT) return NO_ANSWER
+      if ('reason' in family) return family.reason
+      return family.complete && !family.ids.includes(id) ? REASONS.notLinked : null
+    }
+    const done = await Promise.all(claims.map(claim => {
+      const reason = refusal(claim.id)
+      return reason === null ? checkOne($, claim) : { claim, outcome: { kind: 'drop-failed' as const, reason } }
+    }))
     let queued = false
     await writeTickets($, t => {
       const ended = endsOf(done, t.checks)

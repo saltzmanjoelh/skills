@@ -107,11 +107,17 @@ export const eventsAnswer = (header: string) => `${header}\nOlder messages exist
 // that `events` does not hold answers as one the app does not know.
 // `beforeSend`, when set, is awaited once, by the next send_message call
 // before it answers, so a test can change what happens while the send is out.
+// `linked` says how list_sessions answers when asked for the parent's linked
+// family alone, in the same ways as `list`, and `linkedIds` holds the ids that
+// answer lists, or every id `events` holds when it is null, so a sub session
+// a test checks is in the parent's family unless the test says otherwise.
 export function desktopApp(on: On) {
   const d = {
     calls: [] as { server: string; tool: string; args: Record<string, unknown> }[],
     sessions: [] as { sessionId: string; cwd: string; title?: string; isArchived?: boolean; isRunning?: boolean }[],
     list: 'ok' as 'ok' | 'error' | 'garbage' | 'not-connected' | 'hang',
+    linked: 'ok' as 'ok' | 'error' | 'garbage' | 'not-connected' | 'hang',
+    linkedIds: null as string[] | null,
     send: 'ok' as 'ok' | 'error' | 'not-connected' | 'hang',
     open: 'ok' as 'ok' | 'error' | 'error-empty' | 'not-connected',
     sendTo: new Map<string, 'ok' | 'error' | 'not-connected' | 'hang'>(),
@@ -139,7 +145,8 @@ export function desktopApp(on: On) {
   })
   // How every tool but list_events answers.
   function other(e: { server: string; tool: string; args: Record<string, unknown> }) {
-    const how = e.tool === 'list_sessions' ? d.list : e.tool === 'send_message' ? d.sendTo.get(String(e.args.session_id)) ?? d.send : d.open
+    const isLinked = e.tool === 'list_sessions' && e.args.linked === true
+    const how = isLinked ? d.linked : e.tool === 'list_sessions' ? d.list : e.tool === 'send_message' ? d.sendTo.get(String(e.args.session_id)) ?? d.send : d.open
     if (how === 'hang') return new Promise<never>(() => {})
     if (how === 'ok' && e.tool === 'send_message') {
       d.sent.push([String(e.args.session_id), String(e.args.message)])
@@ -149,6 +156,7 @@ export function desktopApp(on: On) {
     if (how === 'error') return answer({ content: [{ type: 'text', text: SECRET }], isError: true })
     if (how === 'error-empty') return answer({ content: [], isError: true })
     if (how === 'garbage') return answer({ content: [{ type: 'text', text: SECRET }], isError: false })
+    if (isLinked) return answer({ content: [{ type: 'text', text: JSON.stringify((d.linkedIds ?? [...d.events.keys()]).map(sessionId => ({ sessionId, startedBy: 'session-1' }))) }], isError: false })
     if (e.tool === 'list_sessions') return answer({ content: [{ type: 'text', text: JSON.stringify(d.sessions) }], isError: false })
     return answer({ content: [{ type: 'text', text: 'Opened in split view.' }], isError: false })
   }

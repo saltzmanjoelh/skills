@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { McpToolResult } from 'claude-code'
 
-import { EVENTS_TOOL, failureLine, LIST_LIMIT, listSessions, openSession, readHeader, REASONS, type DesktopCall } from '../hooks/desktop'
+import { EVENTS_TOOL, failureLine, linkedFamily, LIST_LIMIT, listSessions, openSession, readHeader, REASONS, type DesktopCall } from '../hooks/desktop'
 import { desktopApp, eventsAnswer } from './world'
 
 const SECRET = 'SECRET-ERROR-TEXT'
@@ -137,6 +137,34 @@ test('a header read that is refused, not connected or has no text answers its ow
     expect(JSON.stringify(got)).not.toContain(SECRET)
   }
   expect(new Set(Object.values(REASONS)).size).toBe(Object.values(REASONS).length)
+})
+
+test('the linked family asks the list for this session\'s linked sessions, archived ones included, and answers their ids', async () => {
+  const d = desktop({ list: async () => sessions([{ sessionId: 'local_a', startedBy: 'local_parent' }, { sessionId: 7 }, null, { sessionId: 'local_b' }]) })
+  expect(await linkedFamily(d.call)).toEqual({ ids: ['local_a', 'local_b'], complete: true })
+  expect(d.calls).toEqual([{ server: 'ccd_session_mgmt', tool: 'list_sessions', args: { linked: true, limit: LIST_LIMIT, include_archived: true } }])
+})
+
+test('a linked family as long as the limit is not complete, entries it could not read included', async () => {
+  const full = [...Array.from({ length: LIST_LIMIT - 1 }, (_, i) => ({ sessionId: `local_${i}` })), { sessionId: null }]
+  const got = await linkedFamily(desktop({ list: async () => sessions(full) }).call)
+  expect('ids' in got && got.ids.length).toBe(LIST_LIMIT - 1)
+  expect('ids' in got && got.complete).toBe(false)
+})
+
+test('each way the linked family can fail to be read answers its own reason and never the tool\'s own error text', async () => {
+  const cases: [string, () => Promise<McpToolResult>][] = [
+    [REASONS.notConnected, async () => { throw new Error(SECRET) }],
+    [REASONS.listRefused, async () => ({ content: [{ type: 'text', text: SECRET }], isError: true })],
+    [REASONS.listUnreadable, async () => text(SECRET)],
+    [REASONS.listUnreadable, async () => sessions({ sessions: [] })],
+    [REASONS.listUnreadable, async () => ({ content: [], isError: false })],
+  ]
+  for (const [reason, list] of cases) {
+    const got = await linkedFamily(desktop({ list }).call)
+    expect(got).toEqual({ reason })
+    expect(JSON.stringify(got)).not.toContain(SECRET)
+  }
 })
 
 // Whether `promise` settles within a few turns of the event loop's microtask
