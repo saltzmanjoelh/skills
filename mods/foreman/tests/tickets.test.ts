@@ -93,6 +93,11 @@ test('a stored ledger in any other shape reads as empty, and a pairing with a ba
   expect(outbox).toEqual({ logs: ['a'], effects: [{ kind: 'notify', text: 'n' }], lines: [], reports: ['r'] })
 })
 
+test('a quiet notification keeps its mark through the store, and a mark that is not exactly true is left out', () => {
+  const effects = ticketsIn({ outbox: { effects: [{ kind: 'notify', text: 'q', quiet: true }, { kind: 'notify', text: 'n', quiet: 'yes' }] } }).outbox.effects
+  expect(effects).toEqual([{ kind: 'notify', text: 'q', quiet: true }, { kind: 'notify', text: 'n' }])
+})
+
 test('a new pairing has announced nothing, with the number, the state and the verdicts all null', () => {
   expect(newPairing('ft-a', null, 1).acts.announced).toEqual({ number: null, state: null, verdicts: null })
 })

@@ -101,13 +101,14 @@ export type ForemanPairing = {
 // Something to do outside the ledger: a nudge to a desktop session, naming
 // the sub session for the log, a notification with its text, or the begin
 // message to the waiting sub session of `ticket`, whose desktop session is
-// `to`. A nudge's `about` is 'background' for a sub session that waits only
+// `to`. A notification is `quiet` when the log already holds its text, so
+// only a failure to raise it is logged. A nudge's `about` is 'background' for a sub session that waits only
 // on background work, which gets its own text, and is absent for an idle one.
 // A begin's `key` is its issue key, or null, and `by` names the sub session
 // whose slot it takes, or is null when the slot was free already.
 export type ForemanEffect =
   | { kind: 'nudge'; to: string; name: string; about?: 'background' }
-  | { kind: 'notify'; text: string }
+  | { kind: 'notify'; text: string; quiet?: true }
   | { kind: 'begin'; to: string; ticket: string; key: string | null; by: string | null }
 
 // What foreman decided and has not yet carried out: log lines, effects,
