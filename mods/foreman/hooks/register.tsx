@@ -7,7 +7,7 @@ import { becameParentAnswer, COMMAND, commandOf, PASSED_ON, PASTED_LINE, pastedC
 import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, failureLine, listSessions, NUDGE_TEXT, openSession, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
 import { acceptedLog, beginFailedNotice, heldLine, heldLog, heldNotice, heldSentence, isHeldRefusal, isPersonPrompt, keyOfTitle } from './held'
 import { ignoredLine, readIssueLink } from './links'
-import { checkLine, FOREMAN_REPORTS, isAppParts, keptLine, keptNames, NOTED, NOTED_REPLY, notesIn } from './notes'
+import { checkLine, FOREMAN_REPORTS, isAppParts, isStatusChanged, keptLine, keptNames, NOTED, NOTED_REPLY, notesIn } from './notes'
 import { bandTree, PANE, paneTree, type Elements, type View } from './pane'
 import type { ForemanEffect, ForemanParent, ForemanTickets } from '../types'
 import { PARENT_OFF, parentIn, slotsOf, storeKey } from './parent'
@@ -1083,6 +1083,19 @@ export const register: Register = (on, options) => {
     await update($, quietLine, () => choice.line)
     await addLog($, choice.line)
     return next({ ...e, text: choice.line })
+  }).catch(($, e, next) => next(e))
+  // Builder's message that a sub session's status file changed is taken here,
+  // so it never reaches the transcript or the model, and starts a read of the
+  // folder at once without waiting for it. readNow reuses a read already
+  // under way, and readAndSchedule checks that the role is on before it lists
+  // the folder, so a message that arrives while foreman is off is taken and
+  // nothing is read. The origin's plugin is only the sender's claim, so it is
+  // never looked at. Every other delivery, and one met by a hook that throws,
+  // passes on as it came.
+  on('session.receive', async ($, e, next) => {
+    if (e.origin.kind !== 'peer' || !isStatusChanged(e.text)) return next(e)
+    void readNow($).catch(() => undefined)
+    return { consumed: 'a builder status file changed, so foreman reads its folder' }
   }).catch(($, e, next) => next(e))
   // Whether a turn of the session's own loop runs decides how a wake goes in,
   // so the end of a turn and the start of one below keep turnRuns. A

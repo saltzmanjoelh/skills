@@ -18,6 +18,7 @@
 // alone or between a header line and a trailer line. A prompt in any other
 // shape, such as one the person typed into, reaches the model as before.
 
+import type { StatusChangedText } from 'builder'
 import type { ForemanPairing } from '../types'
 import { listOf, plural } from './text'
 import { LOCAL_ID } from './tickets'
@@ -64,6 +65,12 @@ const MESSAGE_OPEN = '<cross-session-message'
 const MESSAGE_CLOSE = '</cross-session-message>'
 const MESSAGE_HEAD = 'Another Claude session sent a message:'
 const MESSAGE_TAIL = 'This came from another Claude session'
+
+// The message builder sends the parent each time a sub session's status file
+// changes. It is typed with StatusChangedText from builder's state contract,
+// which builder's own copy is checked against too, so a message reworded on
+// one side alone fails the type check.
+export const STATUS_CHANGED_TEXT: StatusChangedText = 'A builder status file changed. This message is for the foreman mod, which reads it; there is nothing to do.'
 
 // What follows the first `you started (` in a turn-end note: the id, which
 // the app writes itself, and the words that make it a turn's end.
@@ -185,6 +192,27 @@ export const isAppParts = (text: string) => partsOf(text) !== null
 
 export const turnEndIds = (text: string) => notesIn(text).turnEnds
 export const wantsNoted = (text: string) => notesIn(text).wantsNoted
+
+// One message element, its body as the first group, and the two shapes the
+// app delivers a message in: the element alone, or the element after the
+// header line and followed by the trailer line. Only white space may come
+// around them. The body stops at the first closing tag, or runs on to a later
+// one, so a text with two elements or a forged closing tag either fails the
+// match or leaves more than the marker in the body. None of the constants
+// holds a character that a regular expression treats specially.
+const ELEMENT = `${MESSAGE_OPEN}(?:\\s[^>]*)?>([\\s\\S]*?)${MESSAGE_CLOSE}`
+const MESSAGE_SHAPE = new RegExp(`^\\s*(?:${MESSAGE_HEAD}\\s*${ELEMENT}(?:\\s*${MESSAGE_TAIL}[^\\n]*)?|${ELEMENT})\\s*$`)
+
+// Whether `text` is builder's message that a status file changed: exactly one
+// message element, in either shape, whose body, trimmed, is the marker. The
+// marker holds no character the app writes as an entity, so the body is
+// compared as it came. A message with other words beside the marker reaches
+// the model.
+export function isStatusChanged(text: string): boolean {
+  const match = MESSAGE_SHAPE.exec(text)
+  if (match === null) return false
+  return (match[1] ?? match[2])?.trim() === STATUS_CHANGED_TEXT
+}
 
 // The names of the sub sessions the notes are about, as foreman names them
 // elsewhere, without repeats and sorted, so the same sub sessions always give
