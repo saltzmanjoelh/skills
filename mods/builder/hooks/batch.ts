@@ -67,8 +67,22 @@ export function isBatchLaunch(e: { background: boolean; parentAgentId?: string; 
 const withoutMember = (batches: Batch[], id: string) =>
   batches.map(b => ({ ...b, members: b.members.filter(m => m.id !== id) }))
 
+// A batch that is not released and holds deliveries, so its deadline is set.
+const isOpenWithHeld = (b: Batch) => b.releasedAt === null && b.deadline !== null
+
+// Drops the oldest steps beyond BATCHES_KEPT, but never an open batch with
+// held deliveries, because its deadline still has to fire and its held
+// reports still have to reach the model.
+function trimmed(batches: Batch[]): Batch[] {
+  let excess = batches.length - BATCHES_KEPT
+  return batches.filter(b => {
+    if (excess <= 0 || isOpenWithHeld(b)) return true
+    excess -= 1
+    return false
+  })
+}
+
 // Records an agent launched in the step `step` of the session's own loop.
-// Only the newest BATCHES_KEPT steps are kept.
 export function afterLaunch(state: BatchState, step: string, agent: { id: string; type: string }): BatchState {
   const member = { id: agent.id, type: agent.type, ended: false }
   const batches = withoutMember(state.batches, agent.id)
@@ -76,7 +90,7 @@ export function afterLaunch(state: BatchState, step: string, agent: { id: string
   const next = found === undefined
     ? [...batches, { step, members: [member], heldReports: 0, deadline: null, releasedAt: null }]
     : batches.map(b => (b === found ? { ...b, members: [...b.members, member] } : b))
-  return { ...state, batches: next.filter(b => b.members.length > 0).slice(-BATCHES_KEPT) }
+  return { ...state, batches: trimmed(next.filter(b => b.members.length > 0)) }
 }
 
 // Forgets a resumed agent as a member.
@@ -139,8 +153,6 @@ export function afterDelivery(state: BatchState, d: Delivery, isIdle: boolean, n
   }
   return held({ ...batch, members, heldReports: batch.heldReports + (d.isReport ? 1 : 0), deadline: batch.deadline ?? now + BATCH_LIMIT_MS })
 }
-
-const isOpenWithHeld = (b: Batch) => b.releasedAt === null && b.deadline !== null
 
 // A member as the lines name it: its agent type, made printable, and the
 // first eight characters of its id.

@@ -3,6 +3,7 @@ import type { On, SessionMessage, TurnStepChunk, TurnStepInput } from 'claude-co
 import type { Engine } from 'claude-code/testing'
 
 import { BATCH_LIMIT_MS, completeLine, deadlineLine, incompleteLine } from '../hooks/batch'
+import { heldLine } from '../hooks/pane'
 import type { BatchState } from '../types'
 
 // The hooks that make builder wait for a whole batch of background agents
@@ -219,6 +220,8 @@ test('a person\'s prompt while a batch has held deliveries names the members sti
   await deliver($, report(ALPHA))
   const deadline = w.state.value?.batches[0]?.deadline
   expect(await deliver($, 'how is it going?', 'composer')).toEqual({ text: 'how is it going?', context: [incompleteLine(['Plan agent-2-'])] })
+  // A slash command the person runs carries no line, because no model reads it.
+  expect((await deliver($, '/builder status', 'composer', { command: { name: 'builder', args: 'status' } })).context).toBeUndefined()
   expect(await deliver($, 'and now?', 'sdk')).toEqual({ text: 'and now?', context: [incompleteLine(['Plan agent-2-'])] })
   expect(w.state.value?.batches[0]?.deadline).toBe(deadline)
 })
@@ -358,4 +361,21 @@ test('a turn the model answered clears the usage-limit hold and starts the turn-
   const { looks, holdWrites } = await turnEndOf($, on, false)
   expect(looks).toBeGreaterThan(0)
   expect(holdWrites).toContain(null)
+})
+
+test('the pane shows how many reports are held back only while a batch holds some', async ($, on) => {
+  const w = world(on)
+  const pane = await $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'Pane', requestId: 'builder', props: { bodyColumns: 120 } as never })
+  await launched($)
+  await w.clock.settle()
+  await pane.redraw()
+  expect(await pane.find({ type: 'Text', text: /^Holding / })).toBeUndefined()
+  await deliver($, report(ALPHA))
+  await w.clock.settle()
+  await pane.redraw()
+  expect(await pane.find({ type: 'Text', text: heldLine(1) })).toBeDefined()
+  await deliver($, report(BRAVO))
+  await w.clock.settle()
+  await pane.redraw()
+  expect(await pane.find({ type: 'Text', text: /^Holding / })).toBeUndefined()
 })

@@ -145,6 +145,15 @@ test('only the newest batches are kept', () => {
   expect(state.batches[0]?.step).toBe('t5:0')
 })
 
+test('the trim of old steps never drops an open batch with held deliveries, so its deadline still fires', () => {
+  let state = afterDelivery(launched(), report(ALPHA), true, 0).state
+  for (let i = 0; i < BATCHES_KEPT + 5; i++) state = afterLaunch(state, `t${i + 10}:0`, { id: `x${i}`, type: 'Explore' })
+  expect(state.batches).toHaveLength(BATCHES_KEPT)
+  expect(state.batches[0]?.step).toBe('t1:0')
+  expect(nextDeadline(state)).toBe(BATCH_LIMIT_MS)
+  expect(afterDeadline(state, BATCH_LIMIT_MS).lines).toEqual([deadlineLine(['Plan bbbbbbbb'])])
+})
+
 test('a step is answered only when the marker is set and the last message is not a user message', () => {
   const marked = afterDelivery(launched(), report(ALPHA), true, 0).state
   expect(answersStep(marked, { role: 'assistant' })).toBe(true)
