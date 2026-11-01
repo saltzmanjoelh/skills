@@ -197,7 +197,7 @@ test('an old ledger reads with no refusal given, no unwatched sub sessions, no c
 })
 
 test('the ledger reads its checks tolerantly, keeping the sound ones', () => {
-  const sound = { id: 'local_a', notedAt: T0, dueAt: T0 + 5 * 60 * 1000, nudged: true, answered: false }
+  const sound = { id: 'local_a', notedAt: T0, dueAt: T0 + 5 * 60 * 1000, nudged: true, answered: false, sending: false }
   expect(ticketsIn({ checks: [sound, { id: 'nope', notedAt: T0, dueAt: T0 }, 7] }).checks).toEqual([sound])
   expect(ticketsIn({ checks: 'local_a' }).checks).toEqual([])
 })

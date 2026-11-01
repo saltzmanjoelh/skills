@@ -11,7 +11,7 @@ const IDLE = 5 * MINUTE
 
 // A record for `id` noted at `notedAt`, due an idle period later, with
 // `over` changing its fields.
-const check = (id: string, notedAt = T0, over: Partial<ForemanCheck> = {}): ForemanCheck => ({ id, notedAt, dueAt: notedAt + IDLE, nudged: false, answered: false, ...over })
+const check = (id: string, notedAt = T0, over: Partial<ForemanCheck> = {}): ForemanCheck => ({ id, notedAt, dueAt: notedAt + IDLE, nudged: false, answered: false, sending: false, ...over })
 
 // The header the desktop app's list_events answers, then the lines below it,
 // which foreman never reads.
@@ -39,6 +39,13 @@ test('a stored check reads its marks as true only when they are exactly true, an
   expect(checksIn([{ id: 'local_a', notedAt: T0, dueAt: T0 + IDLE }])).toEqual([check('local_a')])
   expect(checksIn([check('local_a', T0, { answered: true })])).toEqual([check('local_a')])
   expect(checksIn([check('local_a', T0, { nudged: true, answered: true })])).toEqual([check('local_a', T0, { nudged: true, answered: true })])
+})
+
+test('a stored check reads a nudge as still being sent only when it is nudged and the mark is exactly true, and a record without the mark reads as sent', () => {
+  expect(checksIn([check('local_a', T0, { nudged: true, sending: true })])).toEqual([check('local_a', T0, { nudged: true, sending: true })])
+  expect(checksIn([{ id: 'local_a', notedAt: T0, dueAt: T0 + IDLE, nudged: true, answered: false }])).toEqual([check('local_a', T0, { nudged: true })])
+  expect(checksIn([{ ...check('local_a', T0, { nudged: true }), sending: 'yes' }])).toEqual([check('local_a', T0, { nudged: true })])
+  expect(checksIn([check('local_a', T0, { sending: true })])).toEqual([check('local_a')])
 })
 
 test('the checks keep one record per id, the last one, and only the newest fifty', () => {
@@ -82,6 +89,11 @@ test('the first note after the nudge is its answer and keeps the mark, and a sec
   expect(answered).toEqual([check('local_a', T0 + 6 * MINUTE, { nudged: true, answered: true })])
   const work = withNote(answered, 'local_a', T0 + 8 * MINUTE, IDLE)
   expect(work).toEqual([check('local_a', T0 + 8 * MINUTE)])
+})
+
+test('a note that comes while the nudge is still being sent is its answer, keeps the mark and clears the sending mark', () => {
+  const sending = [check('local_a', T0, { nudged: true, sending: true, dueAt: T0 + 10 * MINUTE })]
+  expect(withNote(sending, 'local_a', T0 + 5 * MINUTE, IDLE)).toEqual([check('local_a', T0 + 5 * MINUTE, { nudged: true, answered: true })])
 })
 
 test('the records past fifty drop the oldest when a note adds one', () => {
@@ -137,6 +149,12 @@ test('a check\'s outcome follows the header: archived drops, idle nudges once an
     expect(checkOutcome(check('local_a'), { header: `Session "t" (${state}) — showing 1 of 2 messages` })).toEqual({ kind: 'later' })
     expect(checkOutcome(check('local_a', T0, { nudged: true }), { header: `Session "t" (${state}) — showing 1 of 2 messages` })).toEqual({ kind: 'later' })
   }
+})
+
+test('an idle record whose nudge was still being sent, as one a hot reload cut off before the send, is nudged again rather than woken about', () => {
+  const idle = { header: answer('Session "t" (idle) — showing 1 of 2 messages') }
+  expect(checkOutcome(check('local_a', T0, { nudged: true, sending: true }), idle)).toEqual({ kind: 'nudge' })
+  expect(checkOutcome(check('local_a', T0, { nudged: true, sending: true }), { header: 'Session "t" (running) — showing 1 of 2 messages' })).toEqual({ kind: 'later' })
 })
 
 test('a failed read, and an answer whose header cannot be read, drop the record with the reason', () => {
@@ -196,6 +214,7 @@ test('a nudge that did not go ends the record of its sub session while it carrie
   const got = endsOf([failed], [answered, check('local_b')])
   expect(got.checks).toEqual([check('local_b')])
   expect(got.work).toEqual({ logs: [line], effects: [{ kind: 'notify', text: line, quiet: true }], lines: [] })
+  expect(endsOf([failed], [check('local_a', T0, { nudged: true, sending: true })]).checks).toEqual([])
   const cleared = [check('local_a', T0 + MINUTE)]
   expect(endsOf([failed], cleared).checks).toBe(cleared)
   const moved = [check('local_a', T0 + MINUTE, { nudged: true, answered: true })]

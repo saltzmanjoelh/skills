@@ -70,10 +70,17 @@ const FINISHED = new RegExp(`^(${LOCAL_ID.source})\\) finished a turn`)
 // names, another note about a session the parent started, or none of these.
 type Block = { kind: 'status' } | { kind: 'turn-end'; id: string } | { kind: 'other-note' } | null
 
+// A note that holds `you started (local_` more than once is read as another
+// note, with no turn-end id. The title before the app's id is the sub
+// session's own text, so a title can forge a turn-end about another session,
+// and foreman would then check and nudge that one instead. Such a note goes
+// to the parent's model as any other note does.
 function blockOf(body: string): Block {
   const text = body.trimStart()
   if (text.startsWith(STATUS_HEAD)) return { kind: 'status' }
   if (!text.startsWith(NOTE_HEAD)) return null
+  const first = text.indexOf(ANY_NOTE)
+  if (first !== -1 && text.includes(ANY_NOTE, first + 1)) return { kind: 'other-note' }
   const at = text.indexOf(STARTED)
   const id = at === -1 ? undefined : FINISHED.exec(text.slice(at + STARTED.length))?.[1]
   if (id !== undefined) return { kind: 'turn-end', id }

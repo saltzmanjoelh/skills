@@ -565,8 +565,7 @@ async function runDueChecks($: $) {
     })
     if (queued) await carryOut($)
   } finally {
-    await ensureChecks($).catch(() => undefined)
-    await replayOutbox($).catch(() => undefined)
+    await ensureOffRoleWork($).catch(() => undefined)
   }
 }
 
@@ -575,10 +574,14 @@ async function runDueChecks($: $) {
 // failed one, and what checkOutcome makes of it. A nudge first marks the
 // record nudged, only while it still holds its claim, so the note of the turn
 // the nudge starts finds the mark even when it comes before the send answers,
-// and then sends the nudge text. A record that a note overtook is not nudged.
-// A nudge that went, or one left out, leaves the record as it stands, and one
-// that did not go is a failed check, which endsOf honours even when a note
-// overtook the record during the send.
+// and then sends the nudge text. The same update marks the nudge as still
+// being sent, so a hot reload before the send leaves a record that the next
+// pass nudges again rather than one it wakes the parent about, and the mark is
+// cleared once the nudge went, only while the record still holds its claim.
+// A record that a note overtook is not nudged. A nudge that went, or one left
+// out, leaves the record as it stands, and one that did not go is a failed
+// check, which endsOf honours even when a note overtook the record during the
+// send.
 async function checkOne($: $, claim: ForemanCheck): Promise<CheckDone> {
   const look = await within($, readHeader(desktopCall($), claim.id)).catch(() => ({ reason: REASONS.notConnected }))
   const outcome = checkOutcome(claim, look === TIMED_OUT ? { reason: NO_ANSWER } : look)
@@ -586,22 +589,29 @@ async function checkOne($: $, claim: ForemanCheck): Promise<CheckDone> {
   let marked = false
   await writeTickets($, t => {
     marked = t.checks.some(c => isClaimed(c, claim))
-    return marked ? { ...t, checks: t.checks.map(c => (isClaimed(c, claim) ? { ...c, nudged: true, answered: false } : c)) } : t
+    return marked ? { ...t, checks: t.checks.map(c => (isClaimed(c, claim) ? { ...c, nudged: true, answered: false, sending: true } : c)) } : t
   })
   if (!marked) return { claim, outcome: { kind: 'later' } }
   const sent = await within($, sendMessage(desktopCall($), claim.id, NUDGE_TEXT)).catch((): SendResult => 'not-connected')
   if (sent !== 'sent') return { claim, outcome: { kind: 'nudge-failed', reason: sendFailure(sent) } }
+  await writeTickets($, t => (t.checks.some(c => isClaimed(c, claim) && c.sending)
+    ? { ...t, checks: t.checks.map(c => (isClaimed(c, claim) ? { ...c, sending: false } : c)) }
+    : t))
   await addLog($, `Nudged the sub session ${claim.id} with "${NUDGE_TEXT}", because it has been idle.`)
   return { claim, outcome: { kind: 'later' } }
 }
 
-// Arms the timer for the checks while the role is off: at the soonest due
-// time of the records, replacing any timer already armed, or none when no
-// record is left. While the role is on it cancels the timer, because the read
-// loop makes the checks then. It reads the role every time, so every hook that
-// calls it hands the checks to whichever of the two applies, and the first
-// hook after a hot reload arms the timer again.
-async function ensureChecks($: $) {
+// Does what the role being off leaves to the hooks, from one read of the role
+// and one parse of the ledger. It arms the timer for the checks at the soonest
+// due time of the records, replacing any timer already armed, or none when no
+// record is left, and carries out work left in the outbox, as when a check
+// queued it and a hot reload dropped the call that would have carried it out.
+// While the role is on it cancels the timer and carries out nothing, because
+// the read loop makes the checks then and ensureArmed carries out the outbox.
+// It reads the role every time, so every hook that calls it hands the checks
+// to whichever of the two applies, and the first hook after a hot reload arms
+// the timer again and carries out the work left behind.
+async function ensureOffRoleWork($: $) {
   if (await isOn($)) {
     checkTimer?.cancel()
     checkTimer = undefined
@@ -617,16 +627,7 @@ async function ensureChecks($: $) {
       checkTimer = undefined
       void checkNow($).catch(() => undefined)
     })
-}
-
-// Carries out work left in the outbox while the role is off, as when a check
-// queued it and a hot reload dropped the call that would have carried it out.
-// While the role is on, ensureArmed does this instead. The hooks that call
-// ensureChecks call this too, so the first of them after a hot reload carries
-// the work out.
-async function replayOutbox($: $) {
-  if (await isOn($)) return
-  if (hasWork(ticketsIn(await read($, tickets)).outbox)) later($, () => carryOut($))
+  if (hasWork(t.outbox)) later($, () => carryOut($))
 }
 
 // Arms the timer for the next read `delay` from now, replacing any timer
@@ -1145,8 +1146,7 @@ async function becomeParent($: $) {
   // before the pane opens. Opened first, the pane would draw from no read at
   // all and say that the folder holds no sub sessions until the read landed.
   await ensureArmed($)
-  await ensureChecks($).catch(() => undefined)
-  await replayOutbox($).catch(() => undefined)
+  await ensureOffRoleWork($).catch(() => undefined)
   await $.ui.open({ id: PANE, title: 'foreman' }).catch(() => undefined)
 }
 
@@ -1200,8 +1200,7 @@ export const register: Register = (on, options) => {
         await ensureArmed($)
       }
     }
-    void ensureChecks($).catch(() => undefined)
-    void replayOutbox($).catch(() => undefined)
+    void ensureOffRoleWork($).catch(() => undefined)
     return next(e)
   })
 
@@ -1246,13 +1245,11 @@ export const register: Register = (on, options) => {
     void ensureArmed($).catch(() => undefined)
     const choice = await choiceFor($, e)
     if (choice.kind === 'pass') {
-      void ensureChecks($).catch(() => undefined)
-      void replayOutbox($).catch(() => undefined)
+      void ensureOffRoleWork($).catch(() => undefined)
       return next(await withHeld($, await withPasted($, e)))
     }
     await noteChecks($, choice.checks)
-    void ensureChecks($).catch(() => undefined)
-    void replayOutbox($).catch(() => undefined)
+    void ensureOffRoleWork($).catch(() => undefined)
     if (choice.kind === 'noted') return next({ ...e, context: [choice.context] })
     await update($, quietLine, () => choice.line)
     await addLog($, choice.line)
@@ -1278,8 +1275,7 @@ export const register: Register = (on, options) => {
   // over.
   on('turn.complete', async ($, e, next) => {
     void ensureArmed($).catch(() => undefined)
-    void ensureChecks($).catch(() => undefined)
-    void replayOutbox($).catch(() => undefined)
+    void ensureOffRoleWork($).catch(() => undefined)
     if (e.agentId === undefined) await update($, turnRuns, () => false)
     return next(e)
   }).catch(($, e, next) => next(e))

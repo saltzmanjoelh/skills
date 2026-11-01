@@ -971,7 +971,7 @@ test('a ledger left in $.state that holds only kept slots outweighs an older sto
 
 test('a ledger left in $.state that holds only checks outweighs an older stored one', async ($, on) => {
   const w = world(on, { store: { [ticketsKey('session-1')]: { ...TICKETS_EMPTY, offRefusedFor: 'session-1' } } })
-  const check = { id: 'local_old', notedAt: T0, dueAt: T0 + 5 * MINUTE, nudged: false, answered: false }
+  const check = { id: 'local_old', notedAt: T0, dueAt: T0 + 5 * MINUTE, nudged: false, answered: false, sending: false }
   leftInState(on, { tickets: { ...TICKETS_EMPTY, checks: [check] } })
   await start($)
   expect((await startSession($, IMPLEMENT)).deny).toBe(OFF_REFUSAL)

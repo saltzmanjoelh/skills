@@ -17,12 +17,14 @@ const isTime = (raw: unknown): raw is number => typeof raw === 'number' && Numbe
 
 // One stored check, or null unless its id is a whole desktop session id and
 // both its times are finite numbers. A mark reads as true only when it is
-// exactly true, and a record that was not nudged cannot have been answered.
+// exactly true, and a record that was not nudged cannot have been answered or
+// be sending its nudge. A record stored before the sending mark existed reads
+// as one whose nudge went.
 function checkIn(raw: unknown): ForemanCheck | null {
   const c = objectOf(raw)
   if (c === null || typeof c.id !== 'string' || !WHOLE_LOCAL_ID.test(c.id) || !isTime(c.notedAt) || !isTime(c.dueAt)) return null
   const nudged = c.nudged === true
-  return { id: c.id, notedAt: c.notedAt, dueAt: c.dueAt, nudged, answered: nudged && c.answered === true }
+  return { id: c.id, notedAt: c.notedAt, dueAt: c.dueAt, nudged, answered: nudged && c.answered === true, sending: nudged && c.sending === true }
 }
 
 // The stored checks read tolerantly: a value that is not a list reads as
@@ -58,15 +60,17 @@ export function clampedDue(checks: ForemanCheck[], now: number, idleMs: number):
 // read at `now`. A record that was not nudged, or a new one, takes the note's
 // time and a due time an idle period after it. The first note after the nudge
 // counts as the answer to the nudge, so it moves the times and keeps the
-// nudge. A second note after the nudge counts as new work and clears the
-// nudge. The record noted goes to the end, and only the newest MAX_CHECKS
+// nudge. That holds too for a note that comes while the nudge is still being
+// sent, since it is the turn the nudge started, and the note clears the
+// sending mark. A second note after the nudge counts as new work and clears
+// the nudge. The record noted goes to the end, and only the newest MAX_CHECKS
 // are kept. An id that is not a whole desktop session id leaves the checks as
 // they were.
 export function withNote(checks: ForemanCheck[], id: string, now: number, idleMs: number): ForemanCheck[] {
   if (!WHOLE_LOCAL_ID.test(id)) return checks
   const old = checks.find(c => c.id === id)
   const answers = old !== undefined && old.nudged && !old.answered
-  const noted: ForemanCheck = { id, notedAt: now, dueAt: now + idleMs, nudged: answers, answered: answers }
+  const noted: ForemanCheck = { id, notedAt: now, dueAt: now + idleMs, nudged: answers, answered: answers, sending: false }
   return [...checks.filter(c => c.id !== id), noted].slice(-MAX_CHECKS)
 }
 
@@ -115,14 +119,16 @@ export type CheckOutcome =
 // The outcome of the check of `record`, given the header read from the
 // desktop app or why it could not be read. Only the exact state `idle` counts
 // as idle. Every other state the header gives counts as inside a turn, since
-// the word for that state has not been seen.
+// the word for that state has not been seen. A record whose nudge was still
+// being sent, as one a hot reload cut off before the send, was never nudged,
+// so it is nudged again rather than woken about.
 export function checkOutcome(record: ForemanCheck, look: { header: string } | { reason: string }): CheckOutcome {
   if ('reason' in look) return { kind: 'drop-failed', reason: look.reason }
   const header = headerOf(look.header)
   if (header === null) return { kind: 'drop-failed', reason: REASONS.eventsUnreadable }
   if (header.archived) return { kind: 'drop-archived' }
   if (header.state !== 'idle') return { kind: 'later' }
-  return record.nudged ? { kind: 'wake' } : { kind: 'nudge' }
+  return record.nudged && !record.sending ? { kind: 'wake' } : { kind: 'nudge' }
 }
 
 // The earliest due time of the checks, or null when there are none.

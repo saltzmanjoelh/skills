@@ -124,8 +124,11 @@ export type ForemanOutbox = { logs: string[]; effects: ForemanEffect[]; lines: s
 // foreman read the last note about it, and `dueAt` when foreman next reads
 // its events. `nudged` says foreman sent it the nudge text, and `answered`
 // that the first note after the nudge has come, which counts as the answer
-// to the nudge. Only a nudged record is answered.
-export type ForemanCheck = { id: string; notedAt: number; dueAt: number; nudged: boolean; answered: boolean }
+// to the nudge. Only a nudged record is answered. `sending` says foreman
+// marked the record nudged but the nudge has not gone yet, so a record that a
+// hot reload left with it set was never nudged. Only a nudged record is
+// sending.
+export type ForemanCheck = { id: string; notedAt: number; dueAt: number; nudged: boolean; answered: boolean; sending: boolean }
 
 // Tokens in the four kinds the API reports: uncached input, output, input
 // read from the prompt cache and input written to it. Each is a whole number
