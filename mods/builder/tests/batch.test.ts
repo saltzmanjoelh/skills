@@ -65,14 +65,15 @@ test('agents launched in one step make one batch, and an agent alone in its step
   expect(afterDelivery(state, report('unknown-agent'), true, 0).act).toEqual({ kind: 'pass' })
 })
 
-test('an idle held delivery raises the marker and starts the deadline, and one into a running turn leaves the marker alone', () => {
+test('an idle held delivery raises the marker, starts the deadline and counts as held back, and one into a running turn starts the deadline but neither raises the marker nor counts', () => {
   const idle = afterDelivery(launched(), report(ALPHA), true, 1000).state
   expect(idle.marker).toBe(1)
   expect(nextDeadline(idle)).toBe(1000 + BATCH_LIMIT_MS)
   expect(heldReports(idle)).toBe(1)
   const running = afterDelivery(launched(), report(ALPHA), false, 1000).state
   expect(running.marker).toBe(0)
-  expect(heldReports(running)).toBe(1)
+  expect(nextDeadline(running)).toBe(1000 + BATCH_LIMIT_MS)
+  expect(heldReports(running)).toBe(0)
 })
 
 test('the delivery that ends the last member releases the batch with the completion line and leaves the marker alone', () => {
@@ -202,13 +203,41 @@ test('the trim of old steps never drops an open batch with held deliveries, so i
   expect(dueLines(state, BATCH_LIMIT_MS)).toEqual([deadlineLine(['Plan bbbbbbbb'])])
 })
 
-test('a step is answered only when the marker is set and the last message is not a user message', () => {
+test('a step whose last message is not a user message is answered only when the marker is set', () => {
   const marked = afterDelivery(launched(), report(ALPHA), true, 0).state
   expect(answersStep(marked, { role: 'assistant' })).toBe(true)
   expect(answersStep(marked, { role: 'user' })).toBe(false)
   expect(answersStep(marked, undefined)).toBe(false)
   expect(answersStep(launched(), { role: 'assistant' })).toBe(false)
   expect(afterFirstStep(marked, true).marker).toBe(0)
+})
+
+// The engine's task notification for an agent, as the conversation holds it.
+const noticeText = (id: string) =>
+  `<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>\n<summary>Agent "x" finished</summary>\n</task-notification>`
+
+test('a user message that is only a held member\'s frame is answered, and any other user message goes to the model', () => {
+  const marked = afterDelivery(launched(), report(ALPHA), true, 0).state
+  const asUser = (text: string, toolResults: unknown[] = []) => ({ role: 'user', text, toolResults })
+  expect(answersStep(marked, asUser(noticeText(ALPHA)))).toBe(true)
+  expect(answersStep(marked, asUser(`${noticeText(ALPHA)}\n${noticeText(BRAVO)}`))).toBe(true)
+  expect(answersStep(marked, asUser(`<agent-message from="${BRAVO}">\n[Subagent hand-back] done`))).toBe(true)
+  expect(answersStep(marked, asUser(`Another Claude session sent a message:\n<agent-message from="${BRAVO}">\n[Subagent hand-back] done`))).toBe(true)
+  // A frame naming an agent in no batch, a person's prompt after a pasted
+  // notification, a message with tool results and a plain prompt all reach
+  // the model, and so does a held frame with no marker.
+  expect(answersStep(marked, asUser(noticeText('ddddddddddddddddd')))).toBe(false)
+  expect(answersStep(marked, asUser(`<agent-message from="ddddddddddddddddd">\nhi`))).toBe(false)
+  expect(answersStep(marked, asUser(`first line\nsecond line\n<agent-message from="${BRAVO}">\nhi`))).toBe(false)
+  expect(answersStep(marked, asUser(`${noticeText(ALPHA)}\nwhat now?`))).toBe(false)
+  expect(answersStep(marked, asUser(`${noticeText(ALPHA)}\n${noticeText('ddddddddddddddddd')}`))).toBe(false)
+  expect(answersStep(marked, asUser(noticeText(ALPHA), [{ tool_use_id: 't', text: 'ok' }]))).toBe(false)
+  expect(answersStep(marked, asUser('what now?'))).toBe(false)
+  expect(answersStep(launched(), asUser(noticeText(ALPHA)))).toBe(false)
+})
+
+test('the marker counts down across held deliveries', () => {
+  const marked = afterDelivery(launched(), report(ALPHA), true, 0).state
   const twice = afterDelivery(afterDelivery(marked, notice(ALPHA, 'completed'), true, 0).state, report(ALPHA), true, 0).state
   expect(twice.marker).toBe(3)
   expect(afterFirstStep(twice, true).marker).toBe(2)

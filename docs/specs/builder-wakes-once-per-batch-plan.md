@@ -37,9 +37,10 @@ plan saw, which are the first two grafts below.
 - **The quiet answer.** `turn.step` at index 0 with no `agentId` reads the
   atom. When the marker is zero, it calls `next` without reading anything
   else. Otherwise it reads `$.session.messages()`, answers `Noted.` with a
-  stop chunk and no usage when the last message is not a user message, and
-  in the same write takes one off the marker, or sets it to zero when it
-  does not answer. Any throw lets the model answer.
+  stop chunk and no usage when the last message is not a user message, or
+  is only the frame of a held member's delivery, and in the same write
+  takes one off the marker, or sets it to zero when it does not answer.
+  Any throw lets the model answer.
 - **The deadline.** It follows the existing stuck-timer pattern of a module
   timer and a generation counter. `session.start` arms it again from the
   stored deadline after a hot reload. The batch is claimed inside `update`,

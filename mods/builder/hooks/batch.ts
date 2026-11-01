@@ -183,7 +183,9 @@ export function afterDelivery(state: BatchState, d: Delivery, isIdle: boolean, n
     if (!ends(d)) return { state: kept, act: { kind: 'pass' } }
     return { state: { ...kept, batches: kept.batches.map(b => (b === batch ? { ...batch, members } : b)) }, act: { kind: 'end' } }
   }
-  return held({ ...batch, members, heldReports: batch.heldReports + (d.isReport ? 1 : 0), deadline: batch.deadline ?? now + BATCH_LIMIT_MS })
+  // A report into a running turn is read by that turn's model, so only one
+  // that arrives while the session is idle counts as held back.
+  return held({ ...batch, members, heldReports: batch.heldReports + (d.isReport && isIdle ? 1 : 0), deadline: batch.deadline ?? now + BATCH_LIMIT_MS })
 }
 
 // A member as the lines name it: its agent type, made printable, and the
@@ -243,10 +245,39 @@ export function heldReports(state: BatchState): number {
 
 // Whether the first step of a turn of the session's own loop is answered
 // without the model: when the marker is set and the conversation's last
-// message is not a user message, so that no person's or plugin's prompt
-// started the turn.
-export function answersStep(state: BatchState, last: { role: string } | undefined): boolean {
-  return state.marker > 0 && last !== undefined && last.role !== 'user'
+// message is not a user message, or is a held delivery's own frame, so that
+// no person's or plugin's prompt started the turn. The engine adds each
+// agent's task notification to the conversation as a user message, often
+// without a turn of its own, so the next member's report finds it last.
+export function answersStep(state: BatchState, last: { role: string; text?: string; toolResults?: unknown[] } | undefined): boolean {
+  if (state.marker === 0 || last === undefined) return false
+  return last.role !== 'user' || isHeldFrame(state, last)
+}
+
+// A report as the conversation keeps it: the engine puts one line of its own,
+// such as "Another Claude session sent a message:", before the frame.
+const KEPT_REPORT = /^(?:[^\n<]*\n)?<agent-message from="([^"]+)">/
+
+// Whether a user message is only the engine's frame for a member of a batch
+// builder holds, open or remembered. A message in the conversation carries no
+// origin, so the frame has to name a member: a report's frame begins the
+// message, after at most the engine's own line, and task notifications fill
+// it whole, so a person's prompt with more text after a pasted notification
+// still reaches the model.
+function isHeldFrame(state: BatchState, last: { text?: string; toolResults?: unknown[] }): boolean {
+  if ((last.toolResults?.length ?? 0) > 0 || typeof last.text !== 'string') return false
+  const isMember = (id: string) => state.batches.some(b => b.members.some(m => m.id === id))
+  const reporter = KEPT_REPORT.exec(last.text)?.[1]
+  if (reporter !== undefined) return isMember(reporter)
+  let rest = last.text.trim()
+  if (!NOTICE.test(rest)) return false
+  while (rest !== '') {
+    const notice = NOTICE.exec(rest)
+    const id = notice === null ? undefined : /<task-id>([^<]+)<\/task-id>/.exec(notice[1] ?? '')?.[1]
+    if (notice === null || id === undefined || !isMember(id)) return false
+    rest = rest.slice(notice[0].length).trim()
+  }
+  return true
 }
 
 // The marker after such a first step: one less when the step was answered,

@@ -408,6 +408,25 @@ test('a first step whose last message is a user message goes to the model and cl
   expect(w.state.value?.marker).toBe(0)
 })
 
+// The engine adds each agent's task notification to the conversation as a
+// user message, so the next member's report finds it last.
+test('a report whose turn finds the last member\'s notification last is answered without the model, and a person\'s prompt after one is not', async ($, on) => {
+  const w = world(on)
+  await launched($, ['Explore', 'Plan', 'Explore'])
+  await deliver($, report(ALPHA))
+  await step($, { turnId: 't2', index: 0 })
+  w.talk.messages = [assistant('Launched them.'), assistant('Noted.'), user(notice(ALPHA, 'completed'))]
+  await deliver($, report(BRAVO))
+  const before = w.asked.calls
+  const { chunks } = await step($, { turnId: 't3', index: 0 })
+  expect(texts(chunks)).toEqual(['Noted.', 'stop'])
+  expect(w.asked.calls).toBe(before)
+  w.talk.messages = [...w.talk.messages, assistant('Noted.'), user(notice(BRAVO, 'completed')), user('what now?')]
+  await deliver($, 'what now?', 'composer')
+  await step($, { turnId: 't4', index: 0 })
+  expect(w.asked.calls).toBe(before + 1)
+})
+
 test('a later step, a subagent\'s step and a step with no marker go to the model and leave the marker as it is', async ($, on) => {
   const w = world(on)
   await launched($)

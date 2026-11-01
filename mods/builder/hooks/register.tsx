@@ -1102,12 +1102,12 @@ async function withBatch($: $, e: PromptSubmitInput): Promise<PromptSubmitInput>
 
 // Whether builder answers the first step of a turn of the session's own loop
 // itself: only when a held delivery raised the marker and the conversation's
-// last message is not a user message, so that no person's or plugin's prompt
-// started the turn. The marker is read first, so a turn with no marker set
-// reads nothing more and writes nothing. The step's decision and the marker's
-// change are one write: one less when the step is answered, and zero when it
-// goes to the model, which a failure also tries to write. Any failure means
-// the model answers.
+// last message is not a user message, or is only a held member's frame (see
+// answersStep), so that no person's or plugin's prompt started the turn. The
+// marker is read first, so a turn with no marker set reads nothing more and
+// writes nothing. The step's decision and the marker's change are one write:
+// one less when the step is answered, and zero when it goes to the model,
+// which a failure also tries to write. Any failure means the model answers.
 async function answersHeld($: $): Promise<boolean> {
   try {
     if ((await storedBatches($)).marker === 0) return false

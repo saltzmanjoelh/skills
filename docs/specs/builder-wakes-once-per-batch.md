@@ -59,6 +59,24 @@ own delivery was read in a desktop app session. They found:
 - **A plugin's own prompt** goes through that plugin's own `prompt.submit`
   hook, and at its turn's first step the last message is a user message
   that begins `The <plugin> plugin sent a message:`.
+- **A person's prompt is the last message at its first step.** Under
+  `claude -p --input-format stream-json`, each of three person's prompts,
+  sent while a batch was open and after it closed, was a user message
+  holding the prompt's own text at its turn's first step, and the model
+  answered each one.
+- **Each notification lands in the conversation as a user message.** After
+  a member's report, the engine adds that agent's `<task-notification>` to
+  the conversation as a user message, often without passing it through
+  `prompt.submit` as a turn of its own. The next member's report then finds
+  that notification last at its first step. A notification that does start
+  a turn shows as a user message too. With seven agents launched in one
+  step and only a last message that is not a user message answered, nine
+  deliveries made seven model turns and two `Noted.` turns.
+- **A report can be the last message too.** The transcript keeps a report
+  as a user message whose first line is the engine's own, "Another Claude
+  session sent a message:", with the `<agent-message from="<id>">` frame on
+  the next line, and in one run two reports' turns found their own report
+  last.
 - **Attached context is read.** Context added to a passed-on delivery is
   read by the model in that turn.
 
@@ -92,10 +110,16 @@ own delivery was read in a desktop app session. They found:
    a stop chunk with stop reason `end_turn` and no usage, without calling
    `next`, only when the marker is above zero, the step is the first of its
    turn (`index` 0), the step belongs to the session's own loop (no
-   `agentId`), and the conversation's last message is not a user message.
-   It then takes one off the marker. A first step of the session's own loop
-   that does not answer sets the marker to zero, so a marker can never
-   answer a turn that a person's or a plugin's prompt started. In every
+   `agentId`), and the conversation's last message is either not a user
+   message or a plain user message that is only the engine's frame for a
+   member of a batch builder holds, open or remembered: one that begins
+   with the `<agent-message from="<id>">` frame, after at most one line of
+   the engine's own that holds no `<`, or one made only of
+   `<task-notification>` elements whose `<task-id>` each names such a
+   member. It then takes one off the marker. A first step of the session's
+   own loop that does not answer sets the marker to zero, so a marker never
+   answers a turn that a person's or a plugin's prompt started, because
+   that prompt's own text is the last message. In every
    other case, and whenever anything throws, the step goes to the model
    through `next`. A delivery into a running turn needs no answer and
    leaves the marker alone. Builder's usage count counts an answered step
@@ -134,8 +158,16 @@ own delivery was read in a desktop app session. They found:
   first step sets the marker to zero, and the held delivery's turn then
   reaches the model, which costs one turn and loses nothing.
 - **Foreman is loaded too.** Foreman answers only a step whose last message
-  is its own exact line, which is a user message, and builder never answers
-  such a step, so neither answers a turn that belongs to the other.
+  is its own exact line, which is a user message and no delivery's frame,
+  and builder never answers such a step, so neither answers a turn that
+  belongs to the other.
+- **A person pastes a delivery's frame.** A message in the conversation
+  carries no origin, so a person's prompt that begins with an
+  `<agent-message from="<id>">` frame naming a member of a batch builder
+  holds, or is made only of such a member's notifications, is answered
+  `Noted.` while the marker is set. The person has to type an agent's
+  random id for this to happen, and the cost is one reply, so it is
+  accepted.
 - **An agent that is resumed after its batch was released** and reports
   again after ten minutes keeps today's handling; a resumed agent is
   forgotten as a member when it is launched again.
@@ -153,7 +185,8 @@ own delivery was read in a desktop app session. They found:
   held stay in the conversation, and the batch's agents do not survive the
   restart either.
 - Agents launched by a subagent (with a `parentAgentId`), foreground agents,
-  and agents launched in different steps, which keep today's handling.
+  teammates, agents a workflow launches, and agents launched in different
+  steps, which keep today's handling.
 - Messages from other sessions, which are not members of a batch.
 - Changing how the desktop app sends or draws deliveries, and removing the
   `Noted.` row that each held delivery adds to the transcript after the
@@ -188,13 +221,25 @@ own delivery was read in a desktop app session. They found:
   of these clears the marker; a lone agent's report after a batch delivery
   reaches the model; a person's prompt containing `<agent-message` and a
   delivery from an agent outside every batch keep today's handling; a hook
-  that throws passes the prompt on.
+  that throws passes the prompt on; a first step whose last message is only
+  a held member's notification, or a held member's report after the
+  engine's line, answers `Noted.`, and one whose last message is a person's
+  prompt, a frame naming an agent in no batch, a notification with more
+  text after it, or a message with tool results goes to the model.
 - The four gates pass for both mods.
 - In a real session with this change loaded, a counsel of seven starts one
   turn of the model instead of seven, and the transcript shows no red
   blocked-prompt row. That run also checks the two cases the probes read
-  only in part: the desktop app's notification after each report, and a
-  delivery that arrives while a turn is running.
+  only in part: the notification after each report, and a delivery that
+  arrives while a turn is running.
+- Measured on 2026-11-01 under `claude -p --input-format stream-json` on
+  Claude Code 2.1.314, with this change loaded: seven background agents
+  launched in one step made eight deliveries, seven reports and one early
+  notification. Seven turns were answered `Noted.` without the model, the
+  last report woke the model once with all seven reports read, and no
+  prompt was dropped. The engine's notification after each report was
+  among them. The same run in a desktop app session has not been made,
+  because this checkout's builder is not the one a desktop session loads.
 
 ## Decided by the counsel
 
