@@ -365,6 +365,36 @@ test('a turn the model answered clears the usage-limit hold and starts the turn-
   expect(holdWrites).toContain(null)
 })
 
+// A session with a batch delivery held that runs the turn `t2` with the
+// marker as it stands: answers how many times the end of that turn read the
+// session's usage, which is the read that measures the context before a
+// compaction.
+async function measuresAtTurnEnd($: Engine, on: On, isQuiet: boolean) {
+  const w = world(on)
+  const usage = { reads: 0 }
+  on('session.usage', () => {
+    usage.reads += 1
+    return { value: { tokens: 0, window: 1 } } as never
+  })
+  await launched($)
+  await deliver($, report(ALPHA))
+  if (!isQuiet) w.talk.messages = [user('what now?')]
+  await step($, { turnId: 't2', index: 0 })
+  await w.clock.settle()
+  const before = usage.reads
+  await turnEnds($, 't2')
+  await w.clock.settle()
+  return usage.reads - before
+}
+
+test('a turn answered without the model measures nothing at its end, so it never compacts', async ($, on) => {
+  expect(await measuresAtTurnEnd($, on, true)).toBe(0)
+})
+
+test('a turn the model answered measures the context at its end, as before', async ($, on) => {
+  expect(await measuresAtTurnEnd($, on, false)).toBeGreaterThan(0)
+})
+
 test('the pane shows how many reports are held back only while a batch holds some', async ($, on) => {
   const w = world(on)
   const pane = await $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'Pane', requestId: 'builder', props: { bodyColumns: 120 } as never })
