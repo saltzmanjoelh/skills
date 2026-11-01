@@ -71,9 +71,16 @@ session in foreman's list of unwatched sub sessions.
    the note, and a due time of that time plus its idle minutes (five unless
    the person set otherwise). The parent's model is not asked to do anything:
    a prompt that holds only such notes is answered "Noted." the way foreman
-   already answers notes it keeps, and a prompt with other parts gets foreman's
-   existing context line asking for "Noted." for the notes. The context line
-   that asked the model to schedule a check is removed.
+   already answers notes it keeps, whether the role is on or off. While the
+   role is on, a prompt with other parts gets foreman's existing context line
+   asking for "Noted." for the notes. While the role is off, only the model
+   reports the other sessions' outcomes, so a prompt with other parts gets a
+   context line that names the checked sub sessions by their `local_…` ids,
+   says foreman records the notes about them itself, so the model does not
+   reply to those, and asks the model for a brief reply to the rest of the
+   prompt in place of a bare "Noted.". That line names only ids that match the
+   whole `local_…` id shape and repeats no other text from the prompt. The
+   context line that asked the model to schedule a check is removed.
 7. A newer note replaces the record's note time and due time, with one
    exception. The first note after foreman's nudge counts as the answer to
    the nudge: it moves the due time to that note's time plus the idle minutes

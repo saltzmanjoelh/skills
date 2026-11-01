@@ -8,7 +8,7 @@ import { becameParentAnswer, COMMAND, commandOf, PASSED_ON, PASTED_LINE, pastedC
 import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, failureLine, linkedFamily, listSessions, NUDGE_TEXT, openSession, readHeader, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
 import { acceptedLog, beginFailedNotice, heldLine, heldLog, heldNotice, heldSentence, isHeldRefusal, isPersonPrompt, keyOfTitle } from './held'
 import { ignoredLine, readIssueLink } from './links'
-import { isAppParts, isStatusChanged, keptLine, keptNames, NOTED, NOTED_REPLY, NOTED_WHILE_OFF, notesIn } from './notes'
+import { checkedLine, isAppParts, isStatusChanged, keptLine, keptNames, NOTED, NOTED_REPLY, notesIn } from './notes'
 import { bandTree, PANE, paneTree, shownReport, type Elements, type View } from './pane'
 import type { ForemanCheck, ForemanEffect, ForemanParent, ForemanTickets } from '../types'
 import { PARENT_OFF, parentIn, slotsOf, storeKey } from './parent'
@@ -995,9 +995,11 @@ const isPlain = (e: PromptSubmitInput) => e.command === undefined && (e.attachme
 // parent tracks, is kept from the parent's model by rewriting it to the log
 // line for it, which names a checked one by its bare id. While the role is
 // on, any other such prompt goes on with the Noted line. While it is off, one
-// that holds a note about a sub session foreman checks goes on with the Noted
-// line without the sentences about foreman's reports, and every other prompt
-// goes on as it came, which withPasted or withHeld may give a line.
+// that holds a note about a sub session foreman checks beside anything else
+// goes on with the checked line, which names the checked ids and leaves the
+// rest of the prompt to the model, because only the model reports the other
+// sessions' outcomes then, and every other prompt goes on as it came, which
+// withPasted or withHeld may give a line.
 // The text is checked before any state is read, so a prompt the person typed
 // waits here on no read, and the ledger is read only for a prompt that holds
 // a turn-end note. A prompt the person typed that goes on does wait for
@@ -1029,7 +1031,7 @@ async function choiceFor($: $, e: PromptSubmitInput): Promise<Choice> {
     // reaches the parent's model, so the prompt is not kept.
   }
   if (on) return { kind: 'noted', context: NOTED, checks }
-  return checks.length === 0 ? { kind: 'pass' } : { kind: 'noted', context: NOTED_WHILE_OFF, checks }
+  return checks.length === 0 ? { kind: 'pass' } : { kind: 'noted', context: checkedLine(checks), checks }
 }
 
 // Records a turn-end note, read now, about each of the sub sessions `ids`

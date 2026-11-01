@@ -3,7 +3,7 @@ import type { On, SessionMessage, TurnStepChunk, TurnStepInput } from 'claude-co
 import type { Engine } from 'claude-code/testing'
 
 import { PASTED_LINE } from '../hooks/commands'
-import { NOTED, NOTED_WHILE_OFF } from '../hooks/notes'
+import { NOTED } from '../hooks/notes'
 import { newPairing, ticketsIn, ticketsKey } from '../hooks/tickets'
 import type { ForemanPairing } from '../types'
 import { ARCHIVED, EVENT, leftInState, MESSAGE, mountBoth, note, OTHER_EVENT, PROPOSAL, SENT, start, STATUS, T0, world, WORKTREE } from './world'
@@ -490,7 +490,11 @@ test('while the role is on, notes about tracked and untracked sub sessions are k
   await noted($, w, `${ARCHIVED}\n${note('local_z')}`)
 })
 
-test('while the role is off, a note about an unwatched sub session is kept under its id, a mixed prompt that names one gets the Noted line without the report sentences, and every other prompt passes unchanged', async ($, on) => {
+// The line foreman attaches, while its role is off, to a prompt that mixes a
+// note about the unwatched sub session local_u with other notes or messages.
+const CHECKED_U = 'From the foreman mod: foreman records the turn-end notes about the sub session local_u itself, so do not reply to them. Reply briefly to the rest of this prompt, not with a single word.'
+
+test('while the role is off, a note about an unwatched sub session is kept under its id, a mixed prompt that names one gets a line leaving the rest of the prompt to the model, and every other prompt passes unchanged', async ($, on) => {
   const w = world(on, { store: { 'parent:session-1': { isOn: false, slots: null }, [ticketsKey('session-1')]: { ...ledgerOf(PAIRINGS), unwatched: ['local_u'] } } })
   const marker = markerOf(on)
   await mountBoth($, on)
@@ -499,11 +503,26 @@ test('while the role is off, a note about an unwatched sub session is kept under
   await kept($, w, marker, note('local_u'), ALONE('local_u'))
   for (const text of [`${note('local_a')}\n${MESSAGE}\n${note('local_u')}`, `${note('local_a')}\n${note('local_u')}`]) {
     const out = await submit($, text)
-    expect([out.text, out.context]).toEqual([text, [NOTED_WHILE_OFF]])
+    expect([out.text, out.context]).toEqual([text, [CHECKED_U]])
+    expect(w.engine.prompts.at(-1)).toBe(text)
   }
   await passes($, w, note('local_a'))
   await passes($, w, note('local_z'))
   await passes($, w, SENT, { origin: { kind: 'sdk' } })
+})
+
+test('while the role is off, the line for a mixed prompt names only the sub session foreman checks, never the other session whose note the model reports, and asks for no "Noted."', async ($, on) => {
+  const w = world(on, { store: { 'parent:session-1': { isOn: false, slots: null }, [ticketsKey('session-1')]: { ...ledgerOf(PAIRINGS), unwatched: ['local_u'] } } })
+  await mountBoth($, on)
+  await start($)
+  await w.clock.settle()
+  const out = await submit($, `${note('local_u')}\n${note('local_z')}`)
+  expect(out.context).toHaveLength(1)
+  const [line] = out.context as string[]
+  expect(line).toContain('local_u')
+  expect(line).not.toContain('local_z')
+  expect(line).not.toContain('Noted.')
+  expect(ticketsIn(w.stored.get(ticketsKey('session-1'))).checks.map(c => c.id)).toEqual(['local_u'])
 })
 
 // A person's prompt that holds /start-foreman as text, as pasting it gives.
