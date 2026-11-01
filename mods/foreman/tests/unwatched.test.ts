@@ -326,6 +326,20 @@ test('a nudge that went while a note overtook it leaves the note as the answer',
   expect(w.engine.notices).toEqual([])
 })
 
+test('a note about a record a hot reload left marked as still sending is new work, so the next idle check nudges it rather than waking the parent', async ($, on) => {
+  const w = world(on, { store: { 'parent:session-1': { isOn: false, slots: null } } })
+  w.desktop.events.set('local_u', { state: 'idle' })
+  leftInState(on, { tickets: { ...TICKETS_EMPTY, unwatched: ['local_u'], checks: [check('local_u', T0, { nudged: true, sending: true })] } })
+  await start($)
+  await w.clock.settle()
+  await submit($, note('local_u'))
+  expect(ledger(w).checks).toEqual([check('local_u', T0)])
+  await pass(w, 5 * MINUTE)
+  expect(w.desktop.sent).toEqual([['local_u', 'what\'s next?']])
+  expect(w.engine.prompts).not.toContain(STILL_WAITS('local_u'))
+  expect(ledger(w).checks).toEqual([check('local_u', T0, { dueAt: T0 + 10 * MINUTE, nudged: true })])
+})
+
 test('a ledger left in state holding only a check survives a session start after a hot reload, and its timer is armed again', async ($, on) => {
   const w = world(on, { store: { 'parent:session-1': { isOn: false, slots: null }, [ticketsKey('session-1')]: { ...TICKETS_EMPTY, unwatched: ['local_old'] } } })
   w.desktop.events.set('local_u', { state: 'idle', archived: true })

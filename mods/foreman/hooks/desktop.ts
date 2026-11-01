@@ -81,15 +81,21 @@ async function answerOf(call: DesktopCall, server: string, tool: string, args: R
 // root stays `/`.
 const folderOf = (path: string) => path.replace(/\/+$/, '') || '/'
 
+// The text of an answer's first text block, or null when it has none.
+function firstTextOf(result: McpToolResult): string | null {
+  const block = result.content.find(b => b.type === 'text') as { text?: unknown } | undefined
+  return block === undefined || typeof block.text !== 'string' ? null : block.text
+}
+
 // The entries of the list's answer: its first text block parsed as a JSON
 // array, or null when the answer is not such a list. Each caller picks the
 // fields it needs from the entries.
 function entriesIn(result: McpToolResult): unknown[] | null {
-  const block = result.content.find(b => b.type === 'text') as { text?: unknown } | undefined
-  if (block === undefined || typeof block.text !== 'string') return null
+  const text = firstTextOf(result)
+  if (text === null) return null
   let raw: unknown
   try {
-    raw = JSON.parse(block.text)
+    raw = JSON.parse(text)
   } catch {
     return null
   }
@@ -185,7 +191,7 @@ export async function readHeader(call: DesktopCall, id: string): Promise<{ heade
   const answer = await answerOf(call, SESSIONS_SERVER, EVENTS_TOOL, { session_id: id, limit: 1 })
   if (answer === 'not-connected') return { reason: REASONS.notConnected }
   if (answer === 'refused') return { reason: REASONS.eventsRefused }
-  const block = answer.content.find(b => b.type === 'text') as { text?: unknown } | undefined
-  if (block === undefined || typeof block.text !== 'string') return { reason: REASONS.eventsUnreadable }
-  return { header: block.text.split(/\r?\n/, 1)[0]! }
+  const text = firstTextOf(answer)
+  if (text === null) return { reason: REASONS.eventsUnreadable }
+  return { header: text.split(/\r?\n/, 1)[0]! }
 }

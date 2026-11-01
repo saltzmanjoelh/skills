@@ -61,15 +61,18 @@ export function clampedDue(checks: ForemanCheck[], now: number, idleMs: number):
 // time and a due time an idle period after it. The first note after the nudge
 // counts as the answer to the nudge, so it moves the times and keeps the
 // nudge. That holds too for a note that comes while the nudge is still being
-// sent, since it is the turn the nudge started, and the note clears the
-// sending mark. A second note after the nudge counts as new work and clears
-// the nudge. The record noted goes to the end, and only the newest MAX_CHECKS
-// are kept. An id that is not a whole desktop session id leaves the checks as
-// they were.
-export function withNote(checks: ForemanCheck[], id: string, now: number, idleMs: number): ForemanCheck[] {
+// sent, which `inFlight` says this copy of the mod is doing right now, since
+// it is the turn the nudge started, and the note clears the sending mark. A
+// record marked as sending whose nudge is not in flight was left so by a hot
+// reload before the send, so it was never nudged, and a note about it counts
+// as new work and clears the nudge. A second note after the nudge counts as
+// new work and clears the nudge too. The record noted goes to the end, and
+// only the newest MAX_CHECKS are kept. An id that is not a whole desktop
+// session id leaves the checks as they were.
+export function withNote(checks: ForemanCheck[], id: string, now: number, idleMs: number, inFlight = false): ForemanCheck[] {
   if (!WHOLE_LOCAL_ID.test(id)) return checks
   const old = checks.find(c => c.id === id)
-  const answers = old !== undefined && old.nudged && !old.answered
+  const answers = old !== undefined && old.nudged && !old.answered && (!old.sending || inFlight)
   const noted: ForemanCheck = { id, notedAt: now, dueAt: now + idleMs, nudged: answers, answered: answers, sending: false }
   return [...checks.filter(c => c.id !== id), noted].slice(-MAX_CHECKS)
 }

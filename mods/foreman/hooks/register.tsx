@@ -569,6 +569,11 @@ async function runDueChecks($: $) {
   }
 }
 
+// The ids of the sub sessions whose nudge this copy of the module is sending
+// right now. A hot reload starts it empty, so a record left marked as sending
+// by the copy before is never taken for one whose nudge is still out.
+const nudgesOut = new Set<string>()
+
 // The check of one claimed record: its sub session's events header read
 // within CALL_TIMEOUT_MS, a read that did not answer in time counting as a
 // failed one, and what checkOutcome makes of it. A nudge first marks the
@@ -581,7 +586,8 @@ async function runDueChecks($: $) {
 // A record that a note overtook is not nudged. A nudge that went, or one left
 // out, leaves the record as it stands, and one that did not go is a failed
 // check, which endsOf honours even when a note overtook the record during the
-// send.
+// send. While the send is out, the id is in nudgesOut, so a note that comes
+// then counts as the answer to the nudge.
 async function checkOne($: $, claim: ForemanCheck): Promise<CheckDone> {
   const look = await within($, readHeader(desktopCall($), claim.id)).catch(() => ({ reason: REASONS.notConnected }))
   const outcome = checkOutcome(claim, look === TIMED_OUT ? { reason: NO_ANSWER } : look)
@@ -592,7 +598,10 @@ async function checkOne($: $, claim: ForemanCheck): Promise<CheckDone> {
     return marked ? { ...t, checks: t.checks.map(c => (isClaimed(c, claim) ? { ...c, nudged: true, answered: false, sending: true } : c)) } : t
   })
   if (!marked) return { claim, outcome: { kind: 'later' } }
-  const sent = await within($, sendMessage(desktopCall($), claim.id, NUDGE_TEXT)).catch((): SendResult => 'not-connected')
+  nudgesOut.add(claim.id)
+  const sent = await within($, sendMessage(desktopCall($), claim.id, NUDGE_TEXT))
+    .catch((): SendResult => 'not-connected')
+    .finally(() => nudgesOut.delete(claim.id))
   if (sent !== 'sent') return { claim, outcome: { kind: 'nudge-failed', reason: sendFailure(sent) } }
   await writeTickets($, t => (t.checks.some(c => isClaimed(c, claim) && c.sending)
     ? { ...t, checks: t.checks.map(c => (isClaimed(c, claim) ? { ...c, sending: false } : c)) }
@@ -1016,7 +1025,7 @@ async function noteChecks($: $, ids: readonly string[]) {
   if (ids.length === 0) return
   const now = await $.clock.now()
   const { idleMs } = limitsOf(currentOptions)
-  await writeTickets($, t => ({ ...t, checks: ids.reduce((checks, id) => withNote(checks, id, now, idleMs), t.checks) }))
+  await writeTickets($, t => ({ ...t, checks: ids.reduce((checks, id) => withNote(checks, id, now, idleMs, nudgesOut.has(id)), t.checks) }))
 }
 
 // The prompt with the pasted line added to its context, when it is the

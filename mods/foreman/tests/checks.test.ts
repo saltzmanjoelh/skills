@@ -93,7 +93,13 @@ test('the first note after the nudge is its answer and keeps the mark, and a sec
 
 test('a note that comes while the nudge is still being sent is its answer, keeps the mark and clears the sending mark', () => {
   const sending = [check('local_a', T0, { nudged: true, sending: true, dueAt: T0 + 10 * MINUTE })]
-  expect(withNote(sending, 'local_a', T0 + 5 * MINUTE, IDLE)).toEqual([check('local_a', T0 + 5 * MINUTE, { nudged: true, answered: true })])
+  expect(withNote(sending, 'local_a', T0 + 5 * MINUTE, IDLE, true)).toEqual([check('local_a', T0 + 5 * MINUTE, { nudged: true, answered: true })])
+})
+
+test('a note about a record marked as sending whose nudge is not being sent is new work and clears the nudge, as after a hot reload', () => {
+  const left = [check('local_a', T0, { nudged: true, sending: true, dueAt: T0 + 10 * MINUTE })]
+  expect(withNote(left, 'local_a', T0 + 5 * MINUTE, IDLE, false)).toEqual([check('local_a', T0 + 5 * MINUTE)])
+  expect(withNote(left, 'local_a', T0 + 5 * MINUTE, IDLE)).toEqual([check('local_a', T0 + 5 * MINUTE)])
 })
 
 test('the records past fifty drop the oldest when a note adds one', () => {
