@@ -79,17 +79,37 @@ session in foreman's list of unwatched sub sessions.
    the nudge: it moves the due time to that note's time plus the idle minutes
    but keeps the record's nudged mark. A second note after the nudge counts
    as new work and clears the mark.
-8. When a record's due time passes, foreman reads the sub session's last
+8. When a record's due time passes, foreman first reads this parent's family
+   of linked sessions once for the pass, with the desktop app's
+   `list_sessions` tool asked for the linked family alone, archived sessions
+   included, up to 100 entries. A note's id comes from text that a sub
+   session's title can forge, so only an id in that family reaches a read or
+   a nudge.
+   - The list cannot be read, because the tools are not connected, the call
+     is refused, the answer cannot be read, or no answer comes within the
+     call time limit: every record that fell due in that pass ends as a failed
+     read, below, with the list's reason.
+   - The list came back with fewer than 100 entries, so it is complete, and
+     the sub session's id is not in it: the record ends as a failed read with
+     the reason that it is not a session in this parent's family of linked
+     sessions.
+   - The list came back with 100 entries or more, so it may be incomplete:
+     an id missing from it is not dropped, and the sub session is checked as
+     usual.
+
+   For a sub session that passes the family check, foreman reads its last
    events with the desktop app's `list_events` tool through `$.mcp.call`,
    with a small limit, and reads only the header line of the answer, which
-   gives the session's state and whether it is archived. It never parses the
-   message blocks below the header.
+   gives the session's state and whether it is archived. The header names the
+   session only by its title, so foreman does not compare it with the sub
+   session. It never parses the message blocks below the header.
    - The header says archived: foreman writes one log line and drops the
      record. Nothing else happens.
-   - The call fails, is refused, or answers something whose header foreman
-     cannot read, or the header does not name the sub session: foreman raises
-     a notification naming the sub session's id and the reason, writes the
-     same sentence to the log, and drops the record. No model wakes.
+   - The call fails, is refused, does not answer within the call time limit,
+     or answers something whose header foreman cannot read: this is a failed
+     read. Foreman raises a notification naming the sub session's id and the
+     reason, writes the same sentence to the log, and drops the record. No
+     model wakes.
    - The header says the session is not idle, so it is inside a turn:
      foreman sets a new due time of now plus the idle minutes and does
      nothing else.
@@ -195,6 +215,12 @@ behavior breaks.
 - An archived header logs and drops the record with no notification; a failed
   call, a refused call and an unreadable answer each raise a notification,
   log, drop the record and wake no model.
+- A family of linked sessions that cannot be read ends every record due in
+  that pass as a failed read with the list's reason, and reads no header and
+  sends no nudge. An id missing from a complete family ends as a failed read
+  with the reason that it is not in the family, and reads no header and sends
+  no nudge. An id missing from a family of 100 entries or more is checked as
+  usual.
 - While the role is off, a timer runs only while a record is due; turning the
   role on stops it and the read loop handles the record, and the two never
   both handle one due record.
