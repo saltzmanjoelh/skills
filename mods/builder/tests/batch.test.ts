@@ -135,8 +135,10 @@ test('a claimed batch whose line is not taken is claimed again a minute later, n
   expect(afterDelivery(state, notice(BRAVO, 'completed'), true, BATCH_LIMIT_MS + 1).act).toEqual({ kind: 'pass' })
   expect(dueLines(passed.state, BATCH_LIMIT_MS + BATCH_RETRY_MS)).toEqual([deadlineLine(['Explore dddddddd'])])
   const last = afterDelivery(passed.state, report('ddddddddd'), true, BATCH_LIMIT_MS + 2)
-  expect(last.act).toEqual({ kind: 'end' })
+  expect(last.act).toEqual({ kind: 'release', line: completeLine(3) })
   expect(nextDeadline(last.state)).toBeNull()
+  expect(dueLines(last.state, BATCH_LIMIT_MS + BATCH_RETRY_MS)).toEqual([])
+  expect(afterDeadlineSent(last.state, ['t1:0'])).toEqual(last.state)
 })
 
 test('a fired mark in any other shape reads as empty', () => {

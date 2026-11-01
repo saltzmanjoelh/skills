@@ -156,10 +156,12 @@ const ends = (d: Delivery) => d.isReport || d.status === 'failed' || d.status ==
 // batch. Every other delivery from a member of an open or remembered batch is
 // held: it starts the batch's deadline if none is set, and raises the marker
 // when it arrives while the session is idle (`isIdle`), because only then does
-// it start a turn of its own. Once the deadline's line has been sent for a
-// batch, its deliveries pass but still end their members, so that a line sent
-// again names only those still running; the one that ends the last member
-// drops the batch.
+// it start a turn of its own. Once the deadline has claimed a batch, whether
+// or not the engine has taken its line yet, its deliveries pass but still end
+// their members, so that a line sent again names only those still running.
+// The one that ends the last member releases the batch as any batch is
+// released, so that the model is told the batch is complete even when its
+// deadline line never got through.
 export function afterDelivery(state: BatchState, d: Delivery, isIdle: boolean, now: number): { state: BatchState; act: DeliveryAct } {
   const kept = pruned(state, now)
   const batch = kept.batches.find(b => countsAsBatch(b) && b.members.some(m => m.id === d.id))
@@ -170,19 +172,16 @@ export function afterDelivery(state: BatchState, d: Delivery, isIdle: boolean, n
   })
   if (batch.releasedAt !== null) return held(batch)
   const members = batch.members.map(m => (m.id === d.id && ends(d) ? { ...m, ended: true } : m))
-  if (batch.fired === true) {
-    if (!ends(d)) return { state: kept, act: { kind: 'pass' } }
-    const batches = members.every(m => m.ended)
-      ? kept.batches.filter(b => b !== batch)
-      : kept.batches.map(b => (b === batch ? { ...batch, members } : b))
-    return { state: { ...kept, batches }, act: { kind: 'end' } }
-  }
   if (members.every(m => m.ended)) {
     const released = { ...batch, members, heldReports: 0, deadline: null, releasedAt: now }
     return {
       state: { ...kept, batches: kept.batches.map(b => (b === batch ? released : b)) },
       act: { kind: 'release', line: completeLine(members.length) },
     }
+  }
+  if (batch.fired === true) {
+    if (!ends(d)) return { state: kept, act: { kind: 'pass' } }
+    return { state: { ...kept, batches: kept.batches.map(b => (b === batch ? { ...batch, members } : b)) }, act: { kind: 'end' } }
   }
   return held({ ...batch, members, heldReports: batch.heldReports + (d.isReport ? 1 : 0), deadline: batch.deadline ?? now + BATCH_LIMIT_MS })
 }

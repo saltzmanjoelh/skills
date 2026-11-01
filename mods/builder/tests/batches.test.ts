@@ -331,6 +331,20 @@ test('a report that arrives while a deadline line the engine refuses is being su
   expect(lines).toEqual([deadlineLine(['Explore agent-3-'])])
 })
 
+test('the last report of a batch whose deadline line was refused carries the completion line, and no deadline line follows', async ($, on) => {
+  const w = world(on)
+  await launched($)
+  await deliver($, report(ALPHA))
+  w.refusing.on = true
+  await w.clock.advance(BATCH_LIMIT_MS)
+  await w.clock.settle()
+  w.refusing.on = false
+  expect(await deliver($, report(BRAVO))).toEqual({ text: report(BRAVO), context: [completeLine(2)] })
+  await w.clock.advance(5 * BATCH_RETRY_MS)
+  await w.clock.settle()
+  expect(w.passed.map(p => p.text).filter(t => t.startsWith('builder: the time limit'))).toEqual([])
+})
+
 test('a read refused while the deadline\'s timer is armed arms it again a minute later, so the deadline still fires', async ($, on) => {
   const w = world(on)
   await launched($)

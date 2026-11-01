@@ -519,7 +519,9 @@ export type BatchMember = { id: string; type: string; ended: boolean }
 // delivery held for the batch, or null before one. `releasedAt` is when the
 // last member ended, after which the batch is remembered for ten minutes, so
 // that a notification coming after the release is held too. `fired` is set
-// once the deadline's line has been sent, until the engine is seen to take it.
+// when the deadline claims the batch, before its line is submitted, and stays
+// set through a refused or failed submit until the batch is dropped once the
+// engine has taken the line.
 export type Batch = { step: string; members: BatchMember[]; heldReports: number; deadline: number | null; releasedAt: number | null; fired?: true }
 
 // The batches, oldest first, and the counter marker: how many held deliveries
