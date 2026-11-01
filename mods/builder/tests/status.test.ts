@@ -4,8 +4,8 @@ import { snapshotOf } from '../hooks/github'
 import {
   afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite,
   backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, ERROR_CHARS, errorLineOf, firstPromptOf, FOREMAN_NUDGE_TEXTS, generationIn, HUNG_AFTER_MS, hungAtOf, isBackgroundOnly, isCleanupSkill,
-  isForemanNudge, isProbablyHung, issueOf, newMemo, oldestTaskOf, recordOf, shownOrWithheld, startOf, startsBackgrounded, startsIn, startsPruned, startsSeen, startsWithout, STATE_RULES, stateOf,
-  statusMemoIn, TASK_CHARS, taskKeyOf, taskKeyOfId, ticketIn, WITHHELD, type StatusFacts,
+  isForemanNudge, isProbablyHung, issueOf, newMemo, oldestTaskOf, parentIn, recordOf, shownOrWithheld, startOf, startsBackgrounded, startsIn, startsPruned, startsSeen, startsWithout, STATE_RULES, stateOf,
+  STATUS_CHANGED_TEXT, statusMemoIn, TASK_CHARS, taskKeyOf, taskKeyOfId, ticketIn, WITHHELD, type StatusFacts,
 } from '../hooks/status'
 import { afterCost, afterStep, emptyUsage } from '../hooks/usage'
 import type { AgentCard, BackgroundTask, StatusMemo } from '../types'
@@ -51,6 +51,32 @@ test('a prompt with no ticket line, an empty ticket, or the words inside a line 
   expect(ticketIn('foreman-ticket:    \nmore')).toBeNull()
   expect(ticketIn('see foreman-ticket: abc')).toBeNull()
   expect(ticketIn(undefined as unknown as string)).toBeNull()
+})
+
+test('a parent is the value of the first foreman-parent line, with the white space around it removed', () => {
+  expect(parentIn('Implement the thing.\nforeman-ticket: t-1\nforeman-parent: parent-1')).toBe('parent-1')
+  expect(parentIn('  foreman-parent:   Parent_2  \nmore')).toBe('Parent_2')
+  expect(parentIn('first\r\nforeman-parent: p-3\r\n')).toBe('p-3')
+  expect(parentIn('foreman-parent: one\nforeman-parent: two')).toBe('one')
+})
+
+test('a parent id with a space or a slash, an empty one, the words inside a line, or a prompt with no parent line holds no parent', () => {
+  expect(parentIn('foreman-parent: parent 1')).toBeNull()
+  expect(parentIn('foreman-parent: ../parent-1')).toBeNull()
+  expect(parentIn('foreman-parent:')).toBeNull()
+  expect(parentIn('foreman-parent:    \nmore')).toBeNull()
+  expect(parentIn('see foreman-parent: parent-1')).toBeNull()
+  // Only the first line counts, so a bad first line is not saved by a good
+  // second one.
+  expect(parentIn('foreman-parent: bad id\nforeman-parent: parent-1')).toBeNull()
+  expect(parentIn('foreman-ticket: t-1')).toBeNull()
+  expect(parentIn(undefined as unknown as string)).toBeNull()
+})
+
+test('the status changed marker does not begin as a foreman line and holds no character an entity could stand for', () => {
+  expect(STATUS_CHANGED_TEXT.startsWith('foreman: ')).toBe(false)
+  for (const character of ['&', '<', '>', '"', '\'']) expect(STATUS_CHANGED_TEXT.includes(character)).toBe(false)
+  expect(STATUS_CHANGED_TEXT).toBe(STATUS_CHANGED_TEXT.trim())
 })
 
 test('the first prompt is the first user message with text, and the prompt being submitted when the transcript holds none', () => {
@@ -440,6 +466,24 @@ test('a stored last turn reads back, and a memo without the nudge flag or the la
   for (const bad of ['soon', [], { endedAt: 'now', answeredNudge: false }, { endedAt: Number.NaN, answeredNudge: false }, { endedAt: Number.POSITIVE_INFINITY, answeredNudge: true }, { endedAt: NOW }, { endedAt: NOW, answeredNudge: 'yes' }, { answeredNudge: true }]) {
     expect(statusMemoIn({ ...good, lastTurn: bad }, 'session-1')).toEqual({ ...good, lastTurn: null })
   }
+})
+
+test('a stored parent reads back, and a memo without one or with a damaged one reads with none and is kept', () => {
+  const good = memo({ state: 'idle', parentSessionId: 'parent-1' })
+  expect(statusMemoIn(good, 'session-1')).toEqual(good)
+  expect(statusMemoIn(memo({ state: 'idle' }), 'session-1')).toEqual(memo({ state: 'idle' }))
+  for (const bad of [3, null, '', 'parent 1', '../parent-1', {}]) {
+    expect(statusMemoIn({ ...good, parentSessionId: bad }, 'session-1')).toEqual(memo({ state: 'idle' }))
+  }
+})
+
+test('a new memo carries the parent it was given, and the record never holds it', () => {
+  const found = { sessionId: 'session-1', ticket: 't-1', path: null, cwd: '/repo', generation: 1 }
+  expect(newMemo({ ...found, parentSessionId: 'parent-1' }).parentSessionId).toBe('parent-1')
+  expect('parentSessionId' in newMemo(found)).toBe(false)
+  const record = recordOf(facts({ memo: memo({ parentSessionId: 'parent-1' }) }), NOW)
+  expect('parentSessionId' in record).toBe(false)
+  expect(JSON.stringify(record).includes('parent-1')).toBe(false)
 })
 
 test('the record carries the last turn right after the background-only wait, copied field by field, and leaves it out when the memo holds none', () => {

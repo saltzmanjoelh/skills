@@ -10,7 +10,7 @@
 
 import type { SessionMessage } from 'claude-code'
 
-import type { AgentCard, BackgroundTask, BuilderRun, BuildState, BuildStatus, ForegroundCall, ForemanNudgeText, LastTurn, NextLook, OpenPrompt, Progress, Question, StatusMemo, UsageHold, UsageLedger, Verdicts } from '../types'
+import type { AgentCard, BackgroundTask, BuilderRun, BuildState, BuildStatus, ForegroundCall, ForemanNudgeText, LastTurn, NextLook, OpenPrompt, Progress, Question, StatusChangedText, StatusMemo, UsageHold, UsageLedger, Verdicts } from '../types'
 import { ciOf, type Snapshot } from './github'
 import { barOf } from './progress'
 import { secretIn } from './review'
@@ -41,6 +41,25 @@ export function ticketIn(text: string): string | null {
   const value = match?.[1]?.trim() ?? ''
   return value === '' ? null : value
 }
+
+// The line the foreman adds right after the ticket line, which names the
+// parent session. Its value is read as the ticket line's is.
+const PARENT_LINE = /^[ \t]*foreman-parent:(.*)$/m
+
+// The parent session a prompt's text names, or null when it holds no parent
+// line or the first one's value, with the white space around it removed, is
+// not a safe id: letters, digits, underscores and hyphens only, the rule a
+// session id must pass to name a status file.
+export function parentIn(text: string): string | null {
+  const match = PARENT_LINE.exec(typeof text === 'string' ? text : '')
+  const value = match?.[1]?.trim() ?? ''
+  return SAFE_ID.test(value) ? value : null
+}
+
+// The message builder sends the parent after each write whose record changed,
+// word for word. Foreman's constant is typed with the same contract type, so
+// the two cannot differ.
+export const STATUS_CHANGED_TEXT: StatusChangedText = 'A builder status file changed. This message is for the foreman mod, which reads it; there is nothing to do.'
 
 // The nudges foreman sends a sub session, word for word. The type check
 // requires the object to name every text of ForemanNudgeText and nothing
@@ -579,9 +598,10 @@ function lastTurnIn(raw: unknown): LastTurn | null {
 // A stored memo, or null when it belongs to another session than
 // `sessionId`, as after a /clear whose end was cut off, or when any field is
 // not what the mod writes, so a value an older build saved reads as none.
-// Three fields are the exceptions: the background-only wait, the flag for a
-// turn a nudge started and the last turn. Their readers read a value they
-// cannot read as none, or as false for the flag, and the memo is kept.
+// Four fields are the exceptions: the background-only wait, the flag for a
+// turn a nudge started, the last turn and the parent's session id. Their
+// readers read a value they cannot read as none, or as false for the flag,
+// and the memo is kept.
 export function statusMemoIn(raw: unknown, sessionId: string): StatusMemo | null {
   if (typeof raw !== 'object' || raw === null) return null
   const m = raw as Record<string, unknown>
@@ -601,6 +621,7 @@ export function statusMemoIn(raw: unknown, sessionId: string): StatusMemo | null
     ticket: m.ticket as string | null,
     path: m.path as string | null,
     ...(typeof m.desktopSessionId === 'string' ? { desktopSessionId: m.desktopSessionId } : {}),
+    ...(typeof m.parentSessionId === 'string' && SAFE_ID.test(m.parentSessionId) ? { parentSessionId: m.parentSessionId } : {}),
     cwd: m.cwd,
     state: m.state as BuildState | null,
     stateSince: m.stateSince,
@@ -626,12 +647,13 @@ export function generationIn(raw: unknown): number | null {
 
 // A new memo for a session whose first prompt was just looked at, with
 // nothing written yet and nothing open.
-export function newMemo(found: Pick<StatusMemo, 'sessionId' | 'ticket' | 'path' | 'cwd' | 'generation'> & { desktopSessionId?: string }): StatusMemo {
+export function newMemo(found: Pick<StatusMemo, 'sessionId' | 'ticket' | 'path' | 'cwd' | 'generation'> & { desktopSessionId?: string; parentSessionId?: string }): StatusMemo {
   return {
     sessionId: found.sessionId,
     ticket: found.ticket,
     path: found.path,
     ...(found.desktopSessionId === undefined || found.desktopSessionId === '' ? {} : { desktopSessionId: found.desktopSessionId }),
+    ...(found.parentSessionId === undefined ? {} : { parentSessionId: found.parentSessionId }),
     cwd: found.cwd,
     state: null,
     stateSince: 0,
