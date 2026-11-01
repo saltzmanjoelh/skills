@@ -21,10 +21,10 @@ const startSession = ($: Engine, args: Record<string, unknown>) => $.tool.call({
 const keyed = (key: string) => ({ prompt: `/implement ${key}`, context: 'fresh', title: `${key}: short` })
 const answer = (n: number) => `Started session (session_id: local_new${n}, name: example).`
 
-// The ticket a start's brief carried, which is how its brief ends.
+// The ticket a start's brief carried, on the line before the parent line that ends it.
 const ticketOf = (w: World, n: number) => {
   const prompt = String(w.engine.started[n]!.prompt)
-  return prompt.slice(prompt.indexOf('foreman-ticket: ') + 'foreman-ticket: '.length)
+  return prompt.slice(prompt.indexOf('foreman-ticket: ') + 'foreman-ticket: '.length).split('\n')[0]!
 }
 
 // The status file builder writes for a sub session that has begun its issue,
@@ -82,8 +82,8 @@ test('with one slot, three keyed starts in turn give one plain brief and two tha
   const outs = []
   for (const key of ['ABC-1', 'ABC-2', 'ABC-3']) outs.push(await startSession($, keyed(key)))
   const prompts = w.engine.started.map(s => String(s.prompt))
-  expect(prompts[0]).toMatch(/^\/implement ABC-1\n\nforeman-ticket: ft-[0-9a-f-]{36}$/)
-  expect(prompts[1]).toMatch(/\n\n\/implement ABC-2\n\nforeman-ticket: ft-[0-9a-f-]{36}$/)
+  expect(prompts[0]).toMatch(/^\/implement ABC-1\n\nforeman-ticket: ft-[0-9a-f-]{36}\nforeman-parent: session-1$/)
+  expect(prompts[1]).toMatch(/\n\n\/implement ABC-2\n\nforeman-ticket: ft-[0-9a-f-]{36}\nforeman-parent: session-1$/)
   expect(prompts[1]!.startsWith(`${WAIT_LINE('ABC-2')}\n\n/implement ABC-2\n\n`)).toBe(true)
   expect(prompts[2]!.startsWith(`${WAIT_LINE('ABC-3')}\n\n/implement ABC-3\n\n`)).toBe(true)
   expect(outs.map(o => o.context)).toEqual([undefined, [WAITING_SENTENCE('ABC-2')], [WAITING_SENTENCE('ABC-3')]])

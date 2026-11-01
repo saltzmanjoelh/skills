@@ -1,9 +1,11 @@
 import { expect, test } from 'claude-code/testing'
-import type { On } from 'claude-code'
+import type { On, SessionReceiveOrigin } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
 
 import { REASONS } from '../hooks/desktop'
+import { STATUS_CHANGED_TEXT } from '../hooks/notes'
 import { ticketsIn, ticketsKey, TICKETS_EMPTY } from '../hooks/tickets'
-import { foreman, HOME, MINUTE, SECOND, SECRET, SURFACES, T0, leftInState, mountBoth, record, start, statusFolder, world } from './world'
+import { CHANGED, CHANGED_AS_RECEIVED, CHANGED_ELEMENT, foreman, HOME, MINUTE, SECOND, SECRET, SURFACES, T0, leftInState, mountBoth, record, SENT, start, statusFolder, world } from './world'
 
 // Two sub sessions: one working at the plan stage with three stages done and
 // a pull request, and one that needs the person.
@@ -639,4 +641,123 @@ test('after a reload, a ledger left in $.state that holds only readings outweigh
   await start($)
   expect(await linesOf(ui, 'Sub sessions spent: ')).toEqual([`Sub sessions spent: ${USAGE_WORDS}`])
   expect(w.store.writes.get(ticketsKey('session-1'))).toBeUndefined()
+})
+
+// A delivery that reaches the parent, from a peer whose plugin claim is
+// builder's unless another origin is given.
+const BUILDER: SessionReceiveOrigin = { kind: 'peer', plugin: 'builder' }
+const receive = ($: Engine, text: string, origin: SessionReceiveOrigin = BUILDER) => $.session.receive({ origin, text })
+
+test('builder\'s message that a status file changed, in either shape the app delivers it, is consumed and reads the folder at once', async ($, on) => {
+  const w = world(on)
+  w.folder.put('a.json', record('ABC-1', 'working'))
+  await mountBoth($, on)
+  await start($)
+  await foreman($)
+  expect(w.folder.lists).toBe(1)
+  for (const [n, text] of [CHANGED, CHANGED_ELEMENT, `\n ${CHANGED}\n\n`].entries()) {
+    const out = await receive($, text)
+    expect(out.consumed).toBeDefined()
+    expect(out.text).toBeUndefined()
+    await w.clock.settle()
+    expect(w.folder.lists).toBe(n + 2)
+  }
+  // The read re-arms the timer, so the next read comes 30 seconds after it.
+  await w.clock.advance(29 * SECOND)
+  expect(w.folder.lists).toBe(4)
+  await w.clock.advance(SECOND)
+  expect(w.folder.lists).toBe(5)
+})
+
+test('builder\'s message that a status file changed, in the shape a receive hook really gets it, is consumed and reads the folder at once', async ($, on) => {
+  const w = world(on)
+  w.folder.put('a.json', record('ABC-1', 'working'))
+  await mountBoth($, on)
+  await start($)
+  await foreman($)
+  expect(w.folder.lists).toBe(1)
+  const out = await receive($, CHANGED_AS_RECEIVED)
+  expect(out.consumed).toBeDefined()
+  expect(out.text).toBeUndefined()
+  await w.clock.settle()
+  expect(w.folder.lists).toBe(2)
+})
+
+test('a peer\'s message that a status file changed is consumed whatever plugin it claims, or with no claim at all', async ($, on) => {
+  const w = world(on)
+  await mountBoth($, on)
+  await start($)
+  await foreman($)
+  for (const [n, origin] of ([{ kind: 'peer', plugin: 'another' }, { kind: 'peer' }] as SessionReceiveOrigin[]).entries()) {
+    expect((await receive($, CHANGED, origin)).consumed).toBeDefined()
+    await w.clock.settle()
+    expect(w.folder.lists).toBe(n + 2)
+  }
+})
+
+test('while foreman is off, builder\'s message that a status file changed is consumed and reads nothing', async ($, on) => {
+  const w = world(on)
+  w.folder.put('a.json', record('ABC-1', 'working'))
+  await mountBoth($, on)
+  await start($)
+  const out = await receive($, CHANGED)
+  expect(out.consumed).toBeDefined()
+  await w.clock.settle()
+  await w.clock.advance(5 * MINUTE)
+  expect(w.folder.lists).toBe(0)
+})
+
+test('a message that a status file changed during a folder read that has not finished reuses that read', async ($, on) => {
+  const w = world(on)
+  w.folder.put('a.json', record('ABC-1', 'working'))
+  await mountBoth($, on)
+  await start($)
+  await foreman($)
+  const release = w.folder.hold()
+  await w.clock.advance(30 * SECOND)
+  expect(w.folder.lists).toBe(2)
+  expect((await receive($, CHANGED)).consumed).toBeDefined()
+  await w.clock.settle()
+  expect(w.folder.lists).toBe(2)
+  release()
+  await w.clock.settle()
+  expect(w.folder.lists).toBe(2)
+})
+
+test('a peer\'s question, the marker among other words, two elements and the marker from any origin but a peer pass on unchanged and read nothing', async ($, on) => {
+  const w = world(on)
+  w.folder.put('a.json', record('ABC-1', 'working'))
+  await mountBoth($, on)
+  await start($)
+  await foreman($)
+  const element = (body: string) => `<cross-session-message from="local_a" name="example">\n${body}\n</cross-session-message>`
+  const passed: [string, SessionReceiveOrigin][] = [
+    [SENT, BUILDER],
+    [element(`${STATUS_CHANGED_TEXT} Should I merge?`), BUILDER],
+    [`${CHANGED_ELEMENT}\n${CHANGED_ELEMENT}`, BUILDER],
+    [CHANGED, { kind: 'coordinator', plugin: 'builder' }],
+    [CHANGED, { kind: 'peer-send-message' }],
+    [CHANGED, { kind: 'bridge' }],
+    [CHANGED, { kind: 'unclassified' }],
+  ]
+  for (const [text, origin] of passed) expect(await receive($, text, origin)).toEqual({ text })
+  await w.clock.settle()
+  expect(w.folder.lists).toBe(1)
+})
+
+test('with no message at all, the timer reads the folder 30 seconds on while a sub session works, and 2 minutes on once none does', async ($, on) => {
+  const w = world(on)
+  w.folder.put('a.json', record('ABC-1', 'working'))
+  await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await w.clock.advance(30 * SECOND)
+  expect(w.folder.lists).toBe(2)
+  w.folder.put('a.json', record('ABC-1', 'idle'))
+  await w.clock.advance(30 * SECOND)
+  expect(w.folder.lists).toBe(3)
+  await w.clock.advance(2 * MINUTE - SECOND)
+  expect(w.folder.lists).toBe(3)
+  await w.clock.advance(SECOND)
+  expect(w.folder.lists).toBe(4)
 })

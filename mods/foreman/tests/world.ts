@@ -6,6 +6,7 @@ import { mock } from 'claude-code/testing'
 import type { McpToolResult, On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
+import { STATUS_CHANGED_TEXT } from '../hooks/notes'
 import { newPairing, ticketsIn, ticketsKey } from '../hooks/tickets'
 
 export const T0 = Date.UTC(2026, 9, 20, 12, 0, 0)
@@ -30,7 +31,9 @@ export const record = (issueKey: string | null, state: string, over: Record<stri
 // parent in `stored`, as though the parent had started that sub session,
 // unless `pair` is false. `project` holds the text of files outside the
 // folder by their full path, such as a project's CLAUDE.md, and
-// `projectReads` records the path of every read outside the folder.
+// `projectReads` records the path of every read outside the folder. `hold`
+// makes every listing wait, after it is counted, until the function it
+// returns is called.
 export function statusFolder(on: On, at = FOLDER, stored = new Map<string, unknown>()) {
   const w = {
     files: new Map<string, { text: string; mtimeMs: number }>(),
@@ -40,6 +43,17 @@ export function statusFolder(on: On, at = FOLDER, stored = new Map<string, unkno
     lists: 0,
     reads: 0,
     projectReads: [] as string[],
+    held: null as Promise<void> | null,
+    hold() {
+      let release = () => {}
+      w.held = new Promise<void>(resolve => {
+        release = () => {
+          w.held = null
+          resolve()
+        }
+      })
+      return release
+    },
     put(name: string, text: string, mtimeMs = T0, pair = true) {
       w.files.set(name, { text, mtimeMs })
       let ticket: unknown
@@ -54,8 +68,9 @@ export function statusFolder(on: On, at = FOLDER, stored = new Map<string, unkno
       stored.set(ticketsKey('session-1'), { ...ledger, pairings: [...ledger.pairings, newPairing(ticket, null, T0)] })
     },
   }
-  on('fs.list', ($, e) => {
+  on('fs.list', async ($, e) => {
     w.lists += 1
+    if (w.held !== null) await w.held
     if (w.listFails !== null) return { deny: w.listFails }
     if (!w.exists || e.path !== at) return { deny: `ENOENT: no such file or directory, scandir '${e.path}'` }
     return { value: [...w.files].map(([name, f]) => ({ name, kind: 'file' as const, size: f.text.length, mtimeMs: f.mtimeMs, isLink: false })) }
@@ -112,11 +127,12 @@ export function desktopApp(on: On) {
 
 // What the engine answers beneath the mod in a session. It records the
 // toasts, the panes opened, the notifications, the prompts submitted, the
-// rows appended and the start_session calls. `notify` and `submit` say how a
-// notification and a prompt fare, `toastThrows` makes every toast throw, and
-// `startAnswer` is the text start_session answers, unless `startAnswers`
-// holds a text for this start, which each start takes in turn, with
-// `startFails` making it answer an error and `startThrows` making it throw.
+// rows appended and the start_session calls, and queues every delivery that
+// reaches it as it came. `notify` and `submit` say how a notification and a
+// prompt fare, `toastThrows` makes every toast throw, and `startAnswer` is
+// the text start_session answers, unless `startAnswers` holds a text for this
+// start, which each start takes in turn, with `startFails` making it answer
+// an error and `startThrows` making it throw.
 // `onStart` is awaited as each start runs, before it answers, so a test can
 // look at the ledger, or change what happens, while the call is out.
 export function engine(on: On) {
@@ -177,6 +193,7 @@ export function engine(on: On) {
     return { result, text, ...(answers.startFails ? { isError: true } : {}) } as never
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('session.receive', ($, e) => ({ text: e.text }))
   on('session.id', () => ({ value: answers.sessionId }))
   on('command.run', () => ({ text: '' }))
   on('ui.open', ($, e) => {
@@ -281,6 +298,17 @@ export const SENT = 'Another Claude session sent a message:\n<cross-session-mess
 // A message a sub session sent, as the app bundles it with notes: the element
 // alone, with no header or trailer.
 export const MESSAGE = '<cross-session-message from="local_a" name="example">\nI opened the pull request.\n</cross-session-message>'
+
+// Builder's message that a status file changed, as the app delivers it on
+// its own, between the header and the trailer, and as the bare element.
+export const CHANGED_ELEMENT = `<cross-session-message from="local_a" name="example">\n${STATUS_CHANGED_TEXT}\n</cross-session-message>`
+export const CHANGED = `Another Claude session sent a message:\n${CHANGED_ELEMENT}\n\nThis came from another Claude session.`
+
+// Builder's message that a status file changed exactly as a session.receive
+// hook got it in a real headless parent: the bare element with the three
+// attributes the app writes, whose sender is a socket address, with no header
+// or trailer. The ids are invented.
+export const CHANGED_AS_RECEIVED = `<cross-session-message from="uds:/tmp/cc-socks/12345.sock" from-name="example" from-mode="prompting">\n${STATUS_CHANGED_TEXT}\n</cross-session-message>`
 
 // The element the app puts after the notes when none of the parent's sessions
 // is working.

@@ -18,6 +18,7 @@
 // alone or between a header line and a trailer line. A prompt in any other
 // shape, such as one the person typed into, reaches the model as before.
 
+import type { StatusChangedText } from 'builder'
 import type { ForemanPairing } from '../types'
 import { listOf, plural } from './text'
 import { LOCAL_ID } from './tickets'
@@ -65,6 +66,12 @@ const MESSAGE_CLOSE = '</cross-session-message>'
 const MESSAGE_HEAD = 'Another Claude session sent a message:'
 const MESSAGE_TAIL = 'This came from another Claude session'
 
+// The message builder sends the parent each time a sub session's status file
+// changes. It is typed with StatusChangedText from builder's state contract,
+// which builder's own copy is checked against too, so a message reworded on
+// one side alone fails the type check.
+export const STATUS_CHANGED_TEXT: StatusChangedText = 'A builder status file changed. This message is for the foreman mod, which reads it; there is nothing to do.'
+
 // What follows the first `you started (` in a turn-end note: the id, which
 // the app writes itself, and the words that make it a turn's end.
 const FINISHED = new RegExp(`^(${LOCAL_ID.source})\\) finished a turn`)
@@ -83,9 +90,15 @@ function blockOf(body: string): Block {
   return text.includes(ANY_NOTE) ? { kind: 'other-note' } : null
 }
 
-// What a prompt is made of: the ids of its turn-end notes in order, and how
-// many other notes and messages it holds.
-type Parts = { turnEnds: string[]; otherNotes: number; messages: number }
+// One message element: its body, between the end of its opening tag and its
+// closing tag, and whether the header line came before it and the trailer
+// line after it.
+type Message = { body: string; isHeaded: boolean; isTrailed: boolean }
+
+// What a prompt is made of: the ids of its turn-end notes in order, how many
+// other notes and status blocks it holds, whether it ends with the
+// side-sessions element, and its messages in order.
+type Parts = { turnEnds: string[]; otherNotes: number; statusBlocks: number; hasEvent: boolean; messages: Message[] }
 
 // The parts `text` is made of, or null when anything in it is not one of the
 // app's parts. Only white space may come between the parts; each reminder
@@ -100,7 +113,7 @@ type Parts = { turnEnds: string[]; otherNotes: number; messages: number }
 // outside every part and always makes the text answer null.
 function partsOf(text: string): Parts | null {
   if (typeof text !== 'string') return null
-  const parts: Parts = { turnEnds: [], otherNotes: 0, messages: 0 }
+  const parts: Parts = { turnEnds: [], otherNotes: 0, statusBlocks: 0, hasEvent: false, messages: [] }
   let at = 0
   const skipSpace = () => {
     while (at < text.length && /\s/.test(text[at]!)) at += 1
@@ -113,14 +126,19 @@ function partsOf(text: string): Parts | null {
     return end + close.length
   }
   const isMessageAt = () => text.startsWith(MESSAGE_OPEN, at) && /[\s>]/.test(text[at + MESSAGE_OPEN.length] ?? '')
-  // Reads the message element that starts at `at` and counts it, or answers
-  // false when it does not close or holds a second opening tag.
-  const takeMessage = (): boolean => {
+  // Reads the message element that starts at `at` and keeps it, or answers
+  // null when it does not close or holds a second opening tag. Its body
+  // starts after the first `>`, which ends the opening tag; when that `>` is
+  // the closing tag's own, the opening tag never ended and the body is empty.
+  const takeMessage = (isHeaded: boolean): Message | null => {
     const end = elementEnd(MESSAGE_OPEN, MESSAGE_CLOSE)
-    if (end === -1) return false
-    parts.messages += 1
+    if (end === -1) return null
+    const closeAt = end - MESSAGE_CLOSE.length
+    const tagEnd = text.indexOf('>', at + MESSAGE_OPEN.length)
+    const message = { body: tagEnd < closeAt ? text.slice(tagEnd + 1, closeAt) : '', isHeaded, isTrailed: false }
+    parts.messages.push(message)
     at = end
-    return true
+    return message
   }
   for (;;) {
     skipSpace()
@@ -130,6 +148,7 @@ function partsOf(text: string): Parts | null {
       if (end === -1) return null
       const block = blockOf(text.slice(at + OPEN.length, end - CLOSE.length))
       if (block === null) return null
+      if (block.kind === 'status') parts.statusBlocks += 1
       if (block.kind === 'turn-end') parts.turnEnds.push(block.id)
       if (block.kind === 'other-note') parts.otherNotes += 1
       at = end
@@ -139,17 +158,20 @@ function partsOf(text: string): Parts | null {
       const body = text.slice(at + EVENT_OPEN.length, end - EVENT_CLOSE.length)
       if (!body.trimStart().startsWith(EVENT_HEAD) || [OPEN, MESSAGE_OPEN].some(tag => body.includes(tag))) return null
       if (text.slice(end).trim() !== '') return null
+      parts.hasEvent = true
       return parts
     } else if (isMessageAt()) {
-      if (!takeMessage()) return null
+      if (takeMessage(false) === null) return null
     } else if (text.startsWith(MESSAGE_HEAD, at)) {
       at += MESSAGE_HEAD.length
       skipSpace()
-      if (!isMessageAt() || !takeMessage()) return null
+      const message = isMessageAt() ? takeMessage(true) : null
+      if (message === null) return null
       skipSpace()
       if (text.startsWith(MESSAGE_TAIL, at)) {
         const line = text.indexOf('\n', at)
         at = line === -1 ? text.length : line
+        message.isTrailed = true
       }
     } else {
       return null
@@ -170,11 +192,11 @@ function partsOf(text: string): Parts | null {
 export function notesIn(text: string): { turnEnds: string[] | null; allTurnEnds: string[]; wantsNoted: boolean } {
   const parts = partsOf(text)
   if (parts === null) return { turnEnds: null, allTurnEnds: [], wantsNoted: false }
-  const isOnlyTurnEnds = parts.turnEnds.length > 0 && parts.otherNotes === 0 && parts.messages === 0
+  const isOnlyTurnEnds = parts.turnEnds.length > 0 && parts.otherNotes === 0 && parts.messages.length === 0
   return {
     turnEnds: isOnlyTurnEnds ? parts.turnEnds : null,
     allTurnEnds: parts.turnEnds,
-    wantsNoted: parts.turnEnds.length + parts.otherNotes + parts.messages > 0,
+    wantsNoted: parts.turnEnds.length + parts.otherNotes + parts.messages.length > 0,
   }
 }
 
@@ -185,6 +207,22 @@ export const isAppParts = (text: string) => partsOf(text) !== null
 
 export const turnEndIds = (text: string) => notesIn(text).turnEnds
 export const wantsNoted = (text: string) => notesIn(text).wantsNoted
+
+// Whether `text` is builder's message that a status file changed: made of
+// exactly one message element and nothing else, in either shape the app
+// delivers a message in, the element alone or the element between the header
+// line and the trailer line, and that element's body, trimmed, is the marker.
+// partsOf also accepts a header with no trailer, which neither shape is, so
+// that is refused here. The marker holds no character the app writes as an
+// entity, so the body is compared as it came. A message with other words
+// beside the marker, or beside any other part, reaches the model.
+export function isStatusChanged(text: string): boolean {
+  const parts = partsOf(text)
+  if (parts === null || parts.messages.length !== 1) return false
+  if (parts.turnEnds.length > 0 || parts.otherNotes > 0 || parts.statusBlocks > 0 || parts.hasEvent) return false
+  const [message] = parts.messages
+  return message!.isHeaded === message!.isTrailed && message!.body.trim() === STATUS_CHANGED_TEXT
+}
 
 // The names of the sub sessions the notes are about, as foreman names them
 // elsewhere, without repeats and sorted, so the same sub sessions always give

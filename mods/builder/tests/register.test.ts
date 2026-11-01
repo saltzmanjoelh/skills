@@ -7,7 +7,7 @@ import { RUNS_JQ, snapshotOf, type GhPullRequest } from '../hooks/github'
 import { NOTHING_WATCHED, STALE_WARNING } from '../hooks/pane'
 import { RELOAD_LINE, REREAD_CLOSING } from '../hooks/prompts'
 import { INSTRUCTION_PATHSPECS } from '../hooks/review'
-import { FOREMAN_NUDGE_TEXTS } from '../hooks/status'
+import { FOREMAN_NUDGE_TEXTS, STATUS_CHANGED_TEXT } from '../hooks/status'
 import type { BuildStatus, Compactions } from '../types'
 import { CROSS_SESSION_SHAPES } from './cross-session-fixture'
 
@@ -11391,6 +11391,252 @@ test('a write that never settles is given up on after its timeout, and the next 
   await s.clock.advance(MINUTE)
   expect(s.writesOf()).toBeGreaterThan(writes)
   expect(s.statusAt()).toMatchObject({ state: 'working', writtenAt: S0 + MINUTE })
+})
+
+// A first prompt from a foreman that names its own session as the parent.
+const PARENTED = `${TICKETED}foreman-parent: parent-1\n`
+
+// What a send to the parent answers: delivered, not delivered, refused as a
+// permission check refuses it, a throw, or no answer ever.
+type SendAnswer = 'delivered' | 'undelivered' | 'refused' | 'throws' | 'hangs'
+
+// Answers the mod's sends beneath it and records each one: whom it went to,
+// its text, and how many writes of the status file had begun by then.
+// `answers` holds the answers of the next sends in order, and a send past
+// the end of the list is delivered. `hold`, when set, keeps the next send
+// waiting until it resolves, and it is then delivered.
+function parentSends(on: On, s: ReturnType<typeof foremanSession>) {
+  const sends = { log: [] as { to: unknown; text: string; writes: number }[], answers: [] as SendAnswer[], hold: null as Promise<void> | null }
+  on('session.send', async ($, e) => {
+    sends.log.push({ to: e.to, text: e.text, writes: s.writesOf() })
+    const hold = sends.hold
+    sends.hold = null
+    if (hold !== null) await hold
+    const answer = sends.answers.shift() ?? 'delivered'
+    if (answer === 'hangs') await new Promise(() => {})
+    if (answer === 'throws') throw new Error('the socket closed')
+    if (answer === 'undelivered') return { isDelivered: false as const, reason: 'the recipient is not running' }
+    if (answer === 'refused') return { isDelivered: false as const, reason: 'SendMessage needs the person\'s approval' }
+    return { isDelivered: true as const }
+  })
+  return sends
+}
+
+test('a ticketed first prompt with a parent line sends the marker to the parent once the first write has finished', async ($, on) => {
+  const s = foremanSession(on)
+  const sends = parentSends(on, s)
+  await firstPrompt($, s.clock, PARENTED)
+
+  expect(s.statusAt()?.ticket).toBe('slot-1')
+  expect(sends.log).toEqual([{ to: expect.stringContaining('parent-1'), text: STATUS_CHANGED_TEXT, writes: 1 }])
+  expect(s.files.get(BUILD)).not.toContain('parent-1')
+})
+
+test('a parent id with other characters counts as no parent line, so the file is written and nothing is sent', async ($, on) => {
+  const s = foremanSession(on)
+  const sends = parentSends(on, s)
+  await firstPrompt($, s.clock, `${TICKETED}foreman-parent: parent/1\n`)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+
+  expect(s.statusAt()?.state).toBe('working')
+  expect(sends.log).toEqual([])
+})
+
+test('a ticketed prompt with no parent line writes the file and sends nothing', async ($, on) => {
+  const s = foremanSession(on)
+  const sends = parentSends(on, s)
+  await firstPrompt($, s.clock)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+
+  expect(s.statusAt()?.state).toBe('working')
+  expect(sends.log).toEqual([])
+})
+
+test('a hot reload keeps the parent from the memo, and the next changed write sends to it', async ($, on) => {
+  const s = foremanSession(on)
+  const sends = parentSends(on, s)
+  await firstPrompt($, s.clock, PARENTED)
+  await reloads($, s.clock)
+  await $.prompt.submit({ text: 'Carry on.', origin: { kind: 'composer' } } as never)
+  await s.clock.settle()
+  const before = sends.log.length
+
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  expect(s.transcriptReads()).toBe(1)
+  expect(sends.log.length).toBe(before + 1)
+  expect(sends.log.at(-1)?.to).toEqual(expect.stringContaining('parent-1'))
+})
+
+test('a resumed transcript whose first prompt holds the ticket and the parent sends to the parent', async ($, on) => {
+  const s = foremanSession(on, { messages: [
+    { role: 'assistant', text: 'Resumed.', toolUses: [] },
+    { role: 'user', text: PARENTED, toolUses: [] },
+  ] })
+  const sends = parentSends(on, s)
+  await firstPrompt($, s.clock, 'Carry on.')
+
+  expect(sends.log).toEqual([{ to: expect.stringContaining('parent-1'), text: STATUS_CHANGED_TEXT, writes: 1 }])
+})
+
+test('a later changed write, such as a turn starting, sends again after it is written', async ($, on) => {
+  const s = foremanSession(on)
+  const sends = parentSends(on, s)
+  await firstPrompt($, s.clock, PARENTED)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+
+  expect(s.statusAt()?.state).toBe('working')
+  expect(sends.log.map(send => send.writes)).toEqual([1, 2])
+  expect(sends.log.every(send => send.text === STATUS_CHANGED_TEXT)).toBe(true)
+})
+
+test('the minute\'s rewrite of an unchanged record sends nothing, and a minute\'s rewrite whose record changed sends', async ($, on) => {
+  const s = foremanSession(on)
+  const sends = parentSends(on, s)
+  modelSteps(on)
+  await firstPrompt($, s.clock, PARENTED)
+  const writes = s.writesOf()
+
+  await s.clock.advance(MINUTE)
+  expect(s.writesOf()).toBe(writes + 1)
+  expect(sends.log.length).toBe(1)
+
+  // A counted step changes the record without asking for a write, so only
+  // the minute's write carries it.
+  await modelStep($, 'turn-1', 0)
+  await s.clock.settle()
+  expect(sends.log.length).toBe(1)
+  await s.clock.advance(MINUTE)
+  expect(s.writesOf()).toBe(writes + 2)
+  expect(sends.log.length).toBe(2)
+})
+
+test('three changed writes while one send is held give exactly one more send once it is released, and the writes go on meanwhile', async ($, on) => {
+  const s = foremanSession(on)
+  const sends = parentSends(on, s)
+  let release = () => {}
+  sends.hold = new Promise(resolve => {
+    release = resolve
+  })
+  await firstPrompt($, s.clock, PARENTED)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  await turnEnds($, 't1')
+  await s.clock.settle()
+  await $.skill.prompt({ skill: 'cleanup', text: 'clean' } as never)
+  await s.clock.settle()
+  expect(s.writesOf()).toBe(4)
+  expect(s.statusAt()?.state).toBe('in-cleanup')
+  expect(sends.log.length).toBe(1)
+
+  release()
+  await s.clock.settle()
+  expect(sends.log.map(send => send.writes)).toEqual([1, 4])
+  await s.clock.advance(MINUTE)
+  expect(sends.log.length).toBe(2)
+})
+
+test('a send owed when a /clear ends the conversation is not sent once the held send is released', async ($, on) => {
+  const s = foremanSession(on)
+  const sends = parentSends(on, s)
+  let release = () => {}
+  sends.hold = new Promise(resolve => {
+    release = resolve
+  })
+  await firstPrompt($, s.clock, PARENTED)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  expect(s.writesOf()).toBe(2)
+  expect(sends.log.length).toBe(1)
+
+  await endSession($, 'clear')
+  s.ids.current = 'session-2'
+  release()
+  await s.clock.settle()
+  expect(sends.log.length).toBe(1)
+})
+
+test('a send owed by the new conversation after a /clear goes to the new parent once the old send is released', async ($, on) => {
+  const s = foremanSession(on)
+  const sends = parentSends(on, s)
+  let release = () => {}
+  sends.hold = new Promise(resolve => {
+    release = resolve
+  })
+  await firstPrompt($, s.clock, PARENTED)
+  expect(sends.log.length).toBe(1)
+
+  await endSession($, 'clear')
+  s.ids.current = 'session-2'
+  await $.prompt.submit({ text: 'foreman-ticket: slot-2\nforeman-parent: parent-2\n', origin: { kind: 'composer' } } as never)
+  await s.clock.settle()
+  expect(s.statusAt('/home/me/.claude/foreman/builds/session-2.json')?.ticket).toBe('slot-2')
+  expect(sends.log.length).toBe(1)
+
+  release()
+  await s.clock.settle()
+  expect(sends.log.length).toBe(2)
+  expect(sends.log[1]?.to).toEqual(expect.stringContaining('parent-2'))
+})
+
+test('a send that hangs is dropped after 10 seconds while the writes go on, and the next change sends again', async ($, on) => {
+  const s = foremanSession(on)
+  const sends = parentSends(on, s)
+  sends.answers = ['hangs']
+  await firstPrompt($, s.clock, PARENTED)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('working')
+  expect(sends.log.length).toBe(1)
+
+  // The change made while the send hung is owed and goes once it is dropped.
+  await s.clock.advance(9_999)
+  expect(sends.log.length).toBe(1)
+  await s.clock.advance(1)
+  expect(sends.log.length).toBe(2)
+
+  await turnEnds($, 't1')
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('idle')
+  expect(sends.log.length).toBe(3)
+})
+
+test('an undelivered, a refused and a throwing send are each dropped, the file keeps updating, and each later change sends', async ($, on) => {
+  const s = foremanSession(on)
+  const sends = parentSends(on, s)
+  sends.answers = ['undelivered', 'refused', 'throws']
+  await firstPrompt($, s.clock, PARENTED)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('working')
+  await turnEnds($, 't1')
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('idle')
+  await $.skill.prompt({ skill: 'cleanup', text: 'clean' } as never)
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('in-cleanup')
+
+  expect(sends.log.map(send => send.writes)).toEqual([1, 2, 3, 4])
+  expect(sends.answers).toEqual([])
+})
+
+test('a write that gives up after 30 seconds sends nothing, and the next write that lands sends', async ($, on) => {
+  const s = foremanSession(on)
+  const sends = parentSends(on, s)
+  await firstPrompt($, s.clock, PARENTED)
+  expect(sends.log.length).toBe(1)
+  s.files.writes.hold = new Promise(() => {})
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+
+  await s.clock.advance(31_000)
+  expect(sends.log.length).toBe(1)
+  await s.clock.advance(MINUTE)
+  expect(s.statusAt()).toMatchObject({ state: 'working', writtenAt: S0 + MINUTE })
+  expect(sends.log.length).toBe(2)
 })
 
 test('after a merge, a write whose read is held across the end of a session ended by /clear never writes once the read answers', async ($, on) => {

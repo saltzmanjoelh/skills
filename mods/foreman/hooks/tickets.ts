@@ -12,6 +12,11 @@ import { byTicket, isTicket, isWholeKey, isWhoName, KEY, TICKET_PREFIX } from '.
 // The line builder looks for in a sub session's first prompt.
 export const TICKET_LINE = 'foreman-ticket:'
 
+// The line after the ticket line that names the parent's session id, so the
+// sub session's builder knows where to send its message that its status file
+// changed. Builder reads it from the same first prompt as the ticket line.
+export const PARENT_LINE = 'foreman-parent:'
+
 // Why a start_session call with forked context is refused. Builder reads the
 // ticket from the first user message of the transcript, which in a forked
 // session is the parent's own, so such a sub session would never show.
@@ -93,7 +98,8 @@ export const KEYED_TITLE = new RegExp(`^(${KEY})[ :]`)
 // What a start_session call's arguments become: refused when the context is
 // fork or the title has the wrong shape, passed unchanged when there is no
 // brief to carry the line, or given the ticket line after a blank line at the
-// end of the brief, with a "No issue: " title's marker replaced by the ticket.
+// end of the brief and the parent line right after it, with a "No issue: "
+// title's marker replaced by the ticket.
 export type Brief =
   | { kind: 'deny'; text: string; log: string }
   | { kind: 'pass' }
@@ -101,7 +107,7 @@ export type Brief =
 
 // Every check reads its argument's type first, because the hook passes a call
 // on unchanged when it throws, which would let a bad title through.
-export function briefFor(args: Record<string, unknown>, uuid: string): Brief {
+export function briefFor(args: Record<string, unknown>, uuid: string, parentId: string): Brief {
   if (args.context === 'fork') return { kind: 'deny', text: FORK_REFUSAL, log: FORK_LOG }
   const title = typeof args.title === 'string' ? args.title : null
   const brief = typeof args.prompt === 'string' && args.prompt.trim() !== '' ? args.prompt : null
@@ -118,7 +124,7 @@ export function briefFor(args: Record<string, unknown>, uuid: string): Brief {
   }
   if (brief === null) return { kind: 'pass' }
   const ticket = `${TICKET_PREFIX}${uuid}`
-  const prompt = `${brief.replace(/\s+$/, '')}\n\n${TICKET_LINE} ${ticket}`
+  const prompt = `${brief.replace(/\s+$/, '')}\n\n${TICKET_LINE} ${ticket}\n${PARENT_LINE} ${parentId}`
   if (title === null || !isMarked) return { kind: 'add', ticket, prompt }
   return { kind: 'add', ticket, prompt, title: `${ticket}: ${title.slice(NO_ISSUE_MARKER.length)}` }
 }
@@ -131,7 +137,8 @@ export function briefFor(args: Record<string, unknown>, uuid: string): Brief {
 export const WAIT_LINE = (key: string) => `Wait for foreman before you begin: run /implement ${key} only once foreman's begin message arrives, which reads exactly "${BEGIN_TEXT}" Until then, reply only that you wait, and make no change to any file, branch or issue.`
 
 // The brief a waiting start goes on with: the wait line, a blank line, and
-// the prompt briefFor made, which already ends with the ticket line.
+// the prompt briefFor made, which already ends with the ticket line and the
+// parent line.
 export const waitingBrief = (key: string, prompt: string) => `${WAIT_LINE(key)}\n\n${prompt}`
 
 // The sentence added to the answer of a start that waits, so the parent does
