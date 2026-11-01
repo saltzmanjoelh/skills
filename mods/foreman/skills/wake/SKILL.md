@@ -97,7 +97,14 @@ not type.
    mod issues a ticket only with a brief, so a title-only offer card cannot
    use it. The brief covers the issue as it is, with the sub-issues the
    tracker already lists under it, and never folds in an edge case or
-   follow-up from another issue; the follow-up stays its own issue.
+   follow-up from another issue; the follow-up stays its own issue. The mod
+   adds two lines to the end of every brief, `foreman-ticket: <ticket>` and
+   right after it `foreman-parent: <this parent's session id>`, which the sub
+   session's builder reads; never write either line yourself. Builder uses
+   the parent line to send this parent the message "A builder status file
+   changed. This message is for the foreman mod, which reads it; there is
+   nothing to do." The mod takes that message before it reaches you, and if
+   it ever does reach you, there is nothing to do for it.
 
    When the answer carries foreman's sentence "<key> waits in foreman's
    queue: its sub session begins by itself once a slot frees, so tell the
