@@ -188,3 +188,16 @@ test('an outcome whose record no longer holds its claimed times is thrown away',
   expect(got.checks).toBe(checks)
   expect(got.work).toEqual({ logs: [], effects: [], lines: [] })
 })
+
+test('a nudge that did not go ends the record of its sub session while it carries the nudge mark, even when a note moved its times', () => {
+  const failed = { claim: check('local_a'), outcome: { kind: 'nudge-failed', reason: REASONS.sendRefused } } as const
+  const line = `Stopped checking the sub session local_a, because ${REASONS.sendRefused}.`
+  const answered = check('local_a', T0 + MINUTE, { nudged: true, answered: true })
+  const got = endsOf([failed], [answered, check('local_b')])
+  expect(got.checks).toEqual([check('local_b')])
+  expect(got.work).toEqual({ logs: [line], effects: [{ kind: 'notify', text: line, quiet: true }], lines: [] })
+  const cleared = [check('local_a', T0 + MINUTE)]
+  expect(endsOf([failed], cleared).checks).toBe(cleared)
+  const moved = [check('local_a', T0 + MINUTE, { nudged: true, answered: true })]
+  expect(endsOf([{ claim: check('local_a'), outcome: { kind: 'drop-failed', reason: REASONS.notConnected } }], moved).checks).toBe(moved)
+})

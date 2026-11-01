@@ -101,10 +101,13 @@ export function headerOf(text: string): { state: string; archived: boolean } | n
 // drop the record of a session whose events could not be read, with the
 // reason; check again later when the session is inside a turn; nudge an idle
 // session that was not nudged yet; or wake the parent about an idle session
-// that still waits after the nudge.
+// that still waits after the nudge. checkOutcome never gives `nudge-failed`:
+// checkOne gives it when the nudge it sent did not go, and it drops the record
+// with the reason, as `drop-failed` does.
 export type CheckOutcome =
   | { kind: 'drop-archived' }
   | { kind: 'drop-failed'; reason: string }
+  | { kind: 'nudge-failed'; reason: string }
   | { kind: 'later' }
   | { kind: 'nudge' }
   | { kind: 'wake' }
@@ -129,6 +132,14 @@ export const soonestDue = (checks: readonly ForemanCheck[]): number | null => (c
 // came in since then changed its times, and a pass that dropped it left none.
 export const isClaimed = (check: ForemanCheck, claim: ForemanCheck) => check.id === claim.id && check.notedAt === claim.notedAt && check.dueAt === claim.dueAt
 
+// Whether `check` is the record the outcome `done` ends. A nudge that did not
+// go ends the record of its sub session while that record still carries the
+// nudge mark checkOne wrote before sending, even when a note moved its times
+// during the send, because the note then took the mark for the answer to a
+// nudge that never arrived. Every other outcome ends only a record that still
+// holds its claimed times.
+const isEndedBy = (check: ForemanCheck, done: CheckDone) => (done.outcome.kind === 'nudge-failed' ? check.id === done.claim.id && check.nudged : isClaimed(check, done.claim))
+
 // The sentence that says foreman stopped checking the sub session `id`, and
 // why.
 const stoppedLine = (id: string, why: string) => `Stopped checking the sub session ${id}, because ${why}.`
@@ -138,21 +149,22 @@ export type CheckDone = { claim: ForemanCheck; outcome: CheckOutcome }
 
 // The checks after the outcomes `done` of one pass, and the work they leave
 // for the outbox. Only an outcome whose record still holds its claimed times
-// counts, so the outcome of a check that a newer note overtook is thrown away.
-// Every outcome but `later` ends its record, and checkOne has already turned a
-// nudge into `later` or a failure. An archived sub session gets a log line.
-// Each failure gets a log line, and all the failures share one quiet
+// counts, so the outcome of a check that a newer note overtook is thrown away,
+// except for a nudge that did not go, which isEndedBy matches by the nudge
+// mark. Every outcome but `later` ends its record, and checkOne has already
+// turned a nudge into `later` or a failure. An archived sub session gets a log
+// line. Each failure, of a read or of a nudge, gets a log line, and all the failures share one quiet
 // notification, whose text the log already holds. The sub sessions that still
 // wait after the nudge share one line that wakes the parent. The same checks
 // and empty work come back when no record ends.
 export function endsOf(done: readonly CheckDone[], checks: ForemanCheck[]): { checks: ForemanCheck[]; work: Omit<ForemanOutbox, 'reports'> } {
-  const ends = done.filter(d => d.outcome.kind !== 'later' && checks.some(c => isClaimed(c, d.claim)))
+  const ends = done.filter(d => d.outcome.kind !== 'later' && checks.some(c => isEndedBy(c, d)))
   if (ends.length === 0) return { checks, work: { logs: [], effects: [], lines: [] } }
-  const failed = ends.flatMap(d => (d.outcome.kind === 'drop-failed' ? [stoppedLine(d.claim.id, d.outcome.reason)] : []))
+  const failed = ends.flatMap(d => (d.outcome.kind === 'drop-failed' || d.outcome.kind === 'nudge-failed' ? [stoppedLine(d.claim.id, d.outcome.reason)] : []))
   const archived = ends.flatMap(d => (d.outcome.kind === 'drop-archived' ? [stoppedLine(d.claim.id, 'its session is archived')] : []))
   const line = wakeLine(ends.flatMap(d => (d.outcome.kind === 'wake' ? [{ kind: 'still-waits' as const, id: d.claim.id }] : [])))
   return {
-    checks: checks.filter(c => !ends.some(d => isClaimed(c, d.claim))),
+    checks: checks.filter(c => !ends.some(d => isEndedBy(c, d))),
     work: {
       logs: [...archived, ...failed],
       effects: failed.length === 0 ? [] : [{ kind: 'notify', text: failed.join(' '), quiet: true }],

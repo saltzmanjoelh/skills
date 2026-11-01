@@ -294,6 +294,37 @@ test('a note that arrives while the read is out throws its outcome away', async 
   expect(ledger(w).checks).toEqual([check('local_u', T0 + 5 * MINUTE)])
 })
 
+test('a refused nudge that a note overtakes while the send is out still gives one notification, a log line, the record dropped and no wake', async ($, on) => {
+  const { w, seen } = await notedOff($, on)
+  w.desktop.sendTo.set('local_u', 'error')
+  w.desktop.beforeSend = async () => {
+    await w.clock.advance(SECOND)
+    await submit($, note('local_u'))
+  }
+  await pass(w, 5 * MINUTE)
+  await pass(w, 30 * SECOND)
+  const line = 'Stopped checking the sub session local_u, because the desktop app refused the message.'
+  expect(w.engine.notices).toEqual([line])
+  expect(seen.texts().filter(t => t.includes('local_u') && !t.startsWith('Kept'))).toEqual([line])
+  expect(ledger(w).checks).toEqual([])
+  await pass(w, 30 * MINUTE)
+  expect(eventCalls(w)).toHaveLength(1)
+  expect(w.engine.prompts).toEqual([ALONE('local_u'), ALONE('local_u')])
+  expect(w.engine.notices).toHaveLength(1)
+})
+
+test('a nudge that went while a note overtook it leaves the note as the answer', async ($, on) => {
+  const { w } = await notedOff($, on)
+  w.desktop.beforeSend = async () => {
+    await w.clock.advance(SECOND)
+    await submit($, note('local_u'))
+  }
+  await pass(w, 5 * MINUTE)
+  expect(w.desktop.sent).toEqual([['local_u', 'what\'s next?']])
+  expect(ledger(w).checks).toEqual([check('local_u', T0 + 5 * MINUTE + SECOND, { nudged: true, answered: true })])
+  expect(w.engine.notices).toEqual([])
+})
+
 test('a ledger left in state holding only a check survives a session start after a hot reload, and its timer is armed again', async ($, on) => {
   const w = world(on, { store: { 'parent:session-1': { isOn: false, slots: null }, [ticketsKey('session-1')]: { ...TICKETS_EMPTY, unwatched: ['local_old'] } } })
   w.desktop.events.set('local_u', { state: 'idle', archived: true })

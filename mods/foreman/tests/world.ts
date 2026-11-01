@@ -105,6 +105,8 @@ export const eventsAnswer = (header: string) => `${header}\nOlder messages exist
 // is given), with the tool error the app gives for a session it does not
 // know, not at all, with text that is not a header, or never. A session id
 // that `events` does not hold answers as one the app does not know.
+// `beforeSend`, when set, is awaited once, by the next send_message call
+// before it answers, so a test can change what happens while the send is out.
 export function desktopApp(on: On) {
   const d = {
     calls: [] as { server: string; tool: string; args: Record<string, unknown> }[],
@@ -116,6 +118,7 @@ export function desktopApp(on: On) {
     events: new Map<string, { state: string; archived?: boolean; title?: string } | 'error' | 'not-connected' | 'garbage' | 'hang'>(),
     // The messages send_message delivered, as [session id, text].
     sent: [] as [string, string][],
+    beforeSend: undefined as undefined | (() => Promise<void>),
   }
   const answer = (result: McpToolResult) => ({ value: result })
   on('mcp.call', ($, e) => {
@@ -130,6 +133,12 @@ export function desktopApp(on: On) {
       const header = `Session "${events.title ?? 'example'}" (${events.state}${events.archived === true ? ', archived' : ''}) — showing 1 of 1972 messages`
       return answer({ content: [{ type: 'text', text: eventsAnswer(header) }], isError: false })
     }
+    const before = e.tool === 'send_message' ? d.beforeSend : undefined
+    d.beforeSend = e.tool === 'send_message' ? undefined : d.beforeSend
+    return before === undefined ? other(e) : before().then(() => other(e))
+  })
+  // How every tool but list_events answers.
+  function other(e: { server: string; tool: string; args: Record<string, unknown> }) {
     const how = e.tool === 'list_sessions' ? d.list : e.tool === 'send_message' ? d.sendTo.get(String(e.args.session_id)) ?? d.send : d.open
     if (how === 'hang') return new Promise<never>(() => {})
     if (how === 'ok' && e.tool === 'send_message') {
@@ -142,7 +151,7 @@ export function desktopApp(on: On) {
     if (how === 'garbage') return answer({ content: [{ type: 'text', text: SECRET }], isError: false })
     if (e.tool === 'list_sessions') return answer({ content: [{ type: 'text', text: JSON.stringify(d.sessions) }], isError: false })
     return answer({ content: [{ type: 'text', text: 'Opened in split view.' }], isError: false })
-  })
+  }
   return d
 }
 

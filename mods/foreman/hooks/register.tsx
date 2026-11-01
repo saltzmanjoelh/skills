@@ -576,7 +576,8 @@ async function runDueChecks($: $) {
 // the nudge starts finds the mark even when it comes before the send answers,
 // and then sends the nudge text. A record that a note overtook is not nudged.
 // A nudge that went, or one left out, leaves the record as it stands, and one
-// that did not go is a failed check.
+// that did not go is a failed check, which endsOf honours even when a note
+// overtook the record during the send.
 async function checkOne($: $, claim: ForemanCheck): Promise<CheckDone> {
   const look = await within($, readHeader(desktopCall($), claim.id)).catch(() => ({ reason: REASONS.notConnected }))
   const outcome = checkOutcome(claim, look === TIMED_OUT ? { reason: NO_ANSWER } : look)
@@ -588,7 +589,7 @@ async function checkOne($: $, claim: ForemanCheck): Promise<CheckDone> {
   })
   if (!marked) return { claim, outcome: { kind: 'later' } }
   const sent = await within($, sendMessage(desktopCall($), claim.id, NUDGE_TEXT)).catch((): SendResult => 'not-connected')
-  if (sent !== 'sent') return { claim, outcome: { kind: 'drop-failed', reason: sendFailure(sent) } }
+  if (sent !== 'sent') return { claim, outcome: { kind: 'nudge-failed', reason: sendFailure(sent) } }
   await addLog($, `Nudged the sub session ${claim.id} with "${NUDGE_TEXT}", because it has been idle.`)
   return { claim, outcome: { kind: 'later' } }
 }
