@@ -3272,11 +3272,12 @@ async function agentType($: $, id: string): Promise<string | undefined> {
 
 // What the band and the panes draw from. A value an older build stored in
 // another shape is read as its default: no progress, not started, folded.
-// The spending is read only when `withUsage` is set, which only the pane
-// sets, because the band never shows it, and reading it while drawing would
-// subscribe the band to the usage value, which changes after every counted
-// model step. Without the flag the usage is null.
-async function view($: $, withUsage: boolean): Promise<View> {
+// The spending and the count of held reports are read only when `isPane` is
+// set, which only the pane sets, because the band never shows them, and
+// reading them while drawing would subscribe the band to values that change
+// after every counted model step and every batch delivery. Without the flag
+// the usage is null and the count is zero.
+async function view($: $, isPane: boolean): Promise<View> {
   const s = await read($, pr)
   const shown = isDrawable(s) ? s : null
   const cards = await read($, agents)
@@ -3303,8 +3304,8 @@ async function view($: $, withUsage: boolean): Promise<View> {
     issueLink: issueAddress,
     context: await storedMeasure($),
     compactions: await storedCompactions($),
-    usage: withUsage ? await storedUsage($) : null,
-    heldReports: heldReports(batchStateIn(await read($, batches))),
+    usage: isPane ? await storedUsage($) : null,
+    heldReports: isPane ? heldReports(batchStateIn(await read($, batches))) : 0,
   }
 }
 

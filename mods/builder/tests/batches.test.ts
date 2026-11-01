@@ -75,8 +75,9 @@ function spawns(on: On) {
 // the batches fail.
 function stateOf(on: On, seeded: Record<string, unknown>) {
   const left = new Map(Object.entries(seeded))
-  const seen = { value: seeded.batches as BatchState | undefined, refuses: false, holdWrites: [] as unknown[] }
+  const seen = { value: seeded.batches as BatchState | undefined, refuses: false, holdWrites: [] as unknown[], reads: [] as string[] }
   on('state.get', ($, e, next) => {
+    if (e.plugin === 'builder') seen.reads.push(e.key)
     if (e.plugin !== 'builder' || !left.has(e.key)) return next(e)
     return { value: { value: left.get(e.key), version: 0 } } as never
   })
@@ -321,6 +322,7 @@ test('a write of the batches that fails passes the delivery on unchanged, and a 
   const before = w.asked.calls
   await step($, { turnId: 't2', index: 0 })
   expect(w.asked.calls).toBe(before + 1)
+  expect(w.state.value?.marker).toBe(0)
 })
 
 // A session watching #7, with a usage-limit hold on, that has a batch
@@ -388,4 +390,18 @@ test('a member resumed by the session is forgotten, so its later report passes a
   expect(await deliver($, report(ALPHA))).toEqual({ text: report(ALPHA) })
   expect(w.state.value?.marker).toBe(0)
   expect(w.state.value?.batches.flatMap(b => b.members.map(m => m.id))).not.toContain(ALPHA)
+})
+
+test('the band above the prompt never reads the batches, so a batch write does not draw it again, and the pane does', async ($, on) => {
+  const w = world(on)
+  await launched($)
+  await deliver($, report(ALPHA))
+  await w.clock.settle()
+  const band = await $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false } as never })
+  const pane = await $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'Pane', requestId: 'builder', props: { bodyColumns: 120 } as never })
+  w.state.reads.length = 0
+  await band.redraw()
+  expect(w.state.reads).not.toContain('batches')
+  await pane.redraw()
+  expect(w.state.reads).toContain('batches')
 })
