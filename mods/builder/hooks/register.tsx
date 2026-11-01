@@ -3,7 +3,7 @@ import type { EngineInterface, Next, PromptOrigin, PromptSubmitInput, Register, 
 
 import type { AgentCard, BackgroundTask, BatchState, BuilderRun, Compactions, ContextMeasure, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, StatusMemo, UsageLedger, Wake } from '../types'
 import { isSvgSurface } from './art'
-import { afterDeadline, afterDelivery, afterLaunch, afterResume, afterFirstStep, answersStep, batchStateIn, deliveryOf, heldReports, isBatchLaunch, nextDeadline, NOTED_REPLY, runningLines, type DeliveryAct } from './batch'
+import { afterDeadline, afterDelivery, BATCH_RETRY_MS, afterLaunch, afterResume, afterFirstStep, answersStep, batchStateIn, deliveryOf, heldReports, isBatchLaunch, nextDeadline, NOTED_REPLY, runningLines, type DeliveryAct } from './batch'
 import { checkoutSentence, otherRepositorySentence, worktreeWithBranch, type Checkout } from './checkout'
 // The context module's `told` is the compaction record after a reload was
 // announced; it is renamed here because `told` below is the snapshot last
@@ -1003,7 +1003,25 @@ async function armBatch($: $) {
   const now = await $.clock.now()
   if (gen !== batchGen || due === null) return
   batchTimer = $.clock.after(stepDelay(due, now), () => {
-    void fireBatch($).catch(() => undefined).then(() => armBatch($)).catch(() => undefined)
+    void fireBatch($).then(() => armBatch($)).catch(() => rearmBatch($, gen)).catch(() => undefined)
+  })
+}
+
+// Arms the deadline's timer again BATCH_RETRY_MS from now after its work
+// failed, as when a write of the batches is refused. As in rearmStuck, it
+// counts from now rather than from the deadline, because the deadline has
+// passed, so a timer counted from it would fire at once and spin for as long
+// as the write stays refused. A timer numbered `gen` whose number has moved
+// on has given way to a newer arming, which is left alone when it armed a
+// timer. When it armed none, because its own read failed, this one arms in
+// its place.
+function rearmBatch($: $, gen: number) {
+  if (gen !== batchGen && batchTimer !== undefined) return
+  batchGen += 1
+  const retryGen = batchGen
+  batchTimer?.cancel()
+  batchTimer = $.clock.after(BATCH_RETRY_MS, () => {
+    void armBatch($).catch(() => rearmBatch($, retryGen)).catch(() => undefined)
   })
 }
 
@@ -4306,8 +4324,6 @@ export const register: Register = on => {
       // tell that a later turn replied while this end was still under way,
       // and with the clear a reply makes, so that the clear can tell that a
       // later turn started and leave that turn's hold alone.
-      // The last turn that replied is set so that a hold whose save is under
-      // way sees that this turn replied (see saveHoldOrTakeItOff).
       const turnsStarted = ownTurnsStarted
       // A turn builder answered without the model is not a reply: its end
       // measures and compacts nothing, leaves a usage-limit hold and a held
@@ -4317,6 +4333,8 @@ export const register: Register = on => {
       if (isNoted) notedTurn = undefined
       ownStep = undefined
       const isReplied = !isNoted && (e.reason === 'answer' || e.reason === 'refusal')
+      // The last turn that replied is set so that a hold whose save is under
+      // way sees that this turn replied (see saveHoldOrTakeItOff).
       if (isReplied) repliedTurn = ownTurnsStarted
       // A turn that replied is passed on to the engine first, then measured,
       // and then, when the context is at or above the threshold, compacted

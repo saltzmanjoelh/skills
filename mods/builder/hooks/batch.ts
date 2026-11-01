@@ -13,6 +13,9 @@ import { printable } from './text'
 // How long a batch with held deliveries waits for its other members, counted
 // from the first delivery held for it.
 export const BATCH_LIMIT_MS = 10 * 60_000
+// How long the deadline's timer waits before it tries again when its work
+// failed, as when a write of the batches is refused.
+export const BATCH_RETRY_MS = 60_000
 // How long a released batch's members are remembered, so that a notification
 // coming after the release is held too.
 export const REMEMBER_MS = 10 * 60_000

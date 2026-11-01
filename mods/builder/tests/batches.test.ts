@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On, SessionMessage, TurnStepChunk, TurnStepInput } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
-import { BATCH_LIMIT_MS, completeLine, deadlineLine, incompleteLine } from '../hooks/batch'
+import { BATCH_LIMIT_MS, BATCH_RETRY_MS, completeLine, deadlineLine, incompleteLine } from '../hooks/batch'
 import { heldLine } from '../hooks/pane'
 import type { BatchState } from '../types'
 
@@ -72,10 +72,10 @@ function spawns(on: On) {
 // hooks would have left it, until the mod writes that key, and follows the
 // mod's writes: `value` is the batch state it last wrote, `holdWrites` every
 // value it wrote for the usage-limit hold, and `refuses` makes every write of
-// the batches fail.
+// the batches fail, which `refusals` counts.
 function stateOf(on: On, seeded: Record<string, unknown>) {
   const left = new Map(Object.entries(seeded))
-  const seen = { value: seeded.batches as BatchState | undefined, refuses: false, holdWrites: [] as unknown[], reads: [] as string[] }
+  const seen = { value: seeded.batches as BatchState | undefined, refuses: false, refusals: 0, holdWrites: [] as unknown[], reads: [] as string[] }
   on('state.get', ($, e, next) => {
     if (e.plugin === 'builder') seen.reads.push(e.key)
     if (e.plugin !== 'builder' || !left.has(e.key)) return next(e)
@@ -83,7 +83,10 @@ function stateOf(on: On, seeded: Record<string, unknown>) {
   })
   on('state.set', async ($, e, next) => {
     if (e.plugin !== 'builder') return next(e)
-    if (e.key === 'batches' && seen.refuses) return { deny: 'the state could not be written' } as never
+    if (e.key === 'batches' && seen.refuses) {
+      seen.refusals += 1
+      return { deny: 'the state could not be written' } as never
+    }
     left.delete(e.key)
     const out = await next(e)
     if (e.key === 'batches') seen.value = e.value as BatchState
@@ -239,6 +242,25 @@ test('the deadline submits builder\'s line naming the members still running, and
   expect(w.passed.map(p => p.text)).toContain(deadlineLine(['Plan agent-2-']))
   expect(await deliver($, report(BRAVO))).toEqual({ text: report(BRAVO) })
   expect(w.state.value?.marker).toBe(0)
+})
+
+test('a deadline whose write is refused tries again a minute later rather than at once, and fires once the write goes through', async ($, on) => {
+  const w = world(on)
+  await launched($)
+  await deliver($, report(ALPHA))
+  w.state.refuses = true
+  await w.clock.advance(BATCH_LIMIT_MS)
+  await w.clock.settle()
+  const tries = w.state.refusals
+  expect(tries).toBeGreaterThan(0)
+  await w.clock.advance(BATCH_RETRY_MS - 1000)
+  await w.clock.settle()
+  expect(w.state.refusals).toBe(tries)
+  expect(w.passed.map(p => p.text)).not.toContain(deadlineLine(['Plan agent-2-']))
+  w.state.refuses = false
+  await w.clock.advance(1000)
+  await w.clock.settle()
+  expect(w.passed.map(p => p.text)).toContain(deadlineLine(['Plan agent-2-']))
 })
 
 // A stored batch with ALPHA's report held, BRAVO still running and a
