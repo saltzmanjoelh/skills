@@ -595,7 +595,7 @@ test('work a read decided before a reload dropped its timer is carried out once 
   expect(w.desktop.sent).toEqual([['local_a', NUDGE]])
   expect(w.engine.prompts).toEqual(['foreman: one slot free; pick the next issue and start it.'])
   expect(await ui.paneText()).toContain('A line decided before the reload.')
-  expect(ledger(w).outbox).toEqual({ logs: [], effects: [], lines: [] })
+  expect(ledger(w).outbox).toEqual({ logs: [], effects: [], lines: [], reports: [] })
 })
 
 test('a read that changes nothing writes nothing to the store, and a store write that fails is logged', async ($, on) => {
@@ -965,6 +965,22 @@ test('a ledger left in $.state that holds only kept slots outweighs an older sto
   await start($)
   expect((await startSession($, IMPLEMENT)).deny).toBe(OFF_REFUSAL)
   expect(ledger(w).keptSlots).toEqual(['ABC-1'])
+})
+
+test('a ledger left in $.state that holds only checks outweighs an older stored one', async ($, on) => {
+  const w = world(on, { store: { [ticketsKey('session-1')]: { ...TICKETS_EMPTY, offRefusedFor: 'session-1' } } })
+  const check = { id: 'local_old', notedAt: T0, dueAt: T0 + 5 * MINUTE, nudged: false, answered: false }
+  leftInState(on, { tickets: { ...TICKETS_EMPTY, checks: [check] } })
+  await start($)
+  expect((await startSession($, IMPLEMENT)).deny).toBe(OFF_REFUSAL)
+  expect(ledger(w).checks).toEqual([check])
+})
+
+test('a ledger left in $.state whose outbox holds only reports outweighs an older stored one', async ($, on) => {
+  const w = world(on, { store: { [ticketsKey('session-1')]: { ...TICKETS_EMPTY, offRefusedFor: 'session-1' } } })
+  leftInState(on, { tickets: { ...TICKETS_EMPTY, outbox: { logs: [], effects: [], lines: [], reports: ['ABC-1 merged.'] } } })
+  await start($)
+  expect((await startSession($, IMPLEMENT)).deny).toBe(OFF_REFUSAL)
 })
 
 test('two /implement starts at once while off give exactly one refusal', async ($, on) => {

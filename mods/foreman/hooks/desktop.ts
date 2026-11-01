@@ -15,6 +15,15 @@ export const OPEN_TOOL = 'open_session_in'
 export const SESSIONS_SERVER = 'ccd_session_mgmt'
 export const LIST_TOOL = 'list_sessions'
 export const SEND_TOOL = 'send_message'
+export const EVENTS_TOOL = 'list_events'
+
+// The shape of a desktop session id, such as local_ab-12_c. The turn-end
+// notes in hooks/notes.ts read ids with it too, so the two cannot drift.
+export const LOCAL_ID = /local_[A-Za-z0-9_-]+/
+
+// A whole desktop session id with nothing around it, which is all an
+// unwatched entry, a check's id and a begin message's target may be.
+export const WHOLE_LOCAL_ID = new RegExp(`^${LOCAL_ID.source}$`)
 
 // The nudge foreman sends an idle sub session. Both nudges are typed with
 // ForemanNudgeText from builder's state contract, which builder's recogniser
@@ -47,6 +56,8 @@ export const REASONS = {
   listUnreadable: 'the desktop app\'s list of sessions could not be read',
   openRefused: 'the desktop app refused to open it, as it does for a session this one did not start or while this session is not on screen',
   sendRefused: 'the desktop app refused the message',
+  eventsRefused: 'the desktop app could not read its events',
+  eventsUnreadable: 'the desktop app\'s answer about its events could not be read',
 } as const
 
 export type OpenResult = { opened: string } | { reason: string }
@@ -163,4 +174,18 @@ export async function listSessions(call: DesktopCall): Promise<{ sessions: Liste
     }),
     complete: raw.length < LIST_LIMIT,
   }
+}
+
+// The first line of a session's events as the desktop app's list_events tool
+// answers them, asking for a single event, since only the header line that
+// opens the answer is read. Answers that line, or why it could not be read.
+// A session the app does not know answers a tool error, which reads as
+// refused. Nothing below the first line is ever returned.
+export async function readHeader(call: DesktopCall, id: string): Promise<{ header: string } | { reason: string }> {
+  const answer = await answerOf(call, SESSIONS_SERVER, EVENTS_TOOL, { session_id: id, limit: 1 })
+  if (answer === 'not-connected') return { reason: REASONS.notConnected }
+  if (answer === 'refused') return { reason: REASONS.eventsRefused }
+  const block = answer.content.find(b => b.type === 'text') as { text?: unknown } | undefined
+  if (block === undefined || typeof block.text !== 'string') return { reason: REASONS.eventsUnreadable }
+  return { header: block.text.split(/\r?\n/, 1)[0]! }
 }

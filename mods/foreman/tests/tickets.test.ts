@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import { recordIn } from '../hooks/record'
 import type { SubRow } from '../hooks/subs'
 import {
-  carriesTicket, fallbackOf, noTicketLog,
+  addWork, carriesTicket, fallbackOf, hasWork, noTicketLog, OUTBOX_EMPTY,
   briefFor, capped, FORK_REFUSAL, isOffRefused, joinOwners, localIdIn, MAX_PAIRINGS, newPairing, nextPlace, NO_TICKET_SENTENCE, OFF_REFUSAL, queueOf, runsImplement, shownRows, ticketsIn,
   TICKETS_EMPTY, TITLE_REFUSAL, WAIT_LINE, waitingBrief, WAITING_SENTENCE, withOffRefusal, withUnwatched,
 } from '../hooks/tickets'
@@ -89,8 +89,8 @@ test('a stored ledger in any other shape reads as empty, and a pairing with a ba
   expect(read.pairings[0]!.standing).toBe('active')
   expect(read.pairings[0]!.localId).toBeNull()
   expect(read.pairings[0]!.acts.stretch).toBeNull()
-  const outbox = ticketsIn({ outbox: { logs: ['a', 3], effects: [{ kind: 'notify', text: 'n' }, { kind: 'nudge', to: 'x' }], lines: 'no' } }).outbox
-  expect(outbox).toEqual({ logs: ['a'], effects: [{ kind: 'notify', text: 'n' }], lines: [] })
+  const outbox = ticketsIn({ outbox: { logs: ['a', 3], effects: [{ kind: 'notify', text: 'n' }, { kind: 'nudge', to: 'x' }], lines: 'no', reports: ['r', null] } }).outbox
+  expect(outbox).toEqual({ logs: ['a'], effects: [{ kind: 'notify', text: 'n' }], lines: [], reports: ['r'] })
 })
 
 test('a new pairing has announced nothing, with the number, the state and the verdicts all null', () => {
@@ -179,12 +179,31 @@ test('a ticket carried by many fork files settles after one read, logging each f
   expect(second.tickets).toEqual(first.tickets)
 })
 
-test('an old ledger reads with no refusal given and no unwatched sub sessions', () => {
+test('an old ledger reads with no refusal given, no unwatched sub sessions, no checks and no reports', () => {
   const old = ticketsIn({ pairings: [], folderMissing: false, outbox: { logs: [], effects: [], lines: [] }, held: [] })
   expect(old.offRefusedFor).toBeNull()
   expect(old.unwatched).toEqual([])
+  expect(old.checks).toEqual([])
+  expect(old.outbox.reports).toEqual([])
   expect(TICKETS_EMPTY.offRefusedFor).toBeNull()
   expect(TICKETS_EMPTY.unwatched).toEqual([])
+  expect(TICKETS_EMPTY.checks).toEqual([])
+  expect(OUTBOX_EMPTY.reports).toEqual([])
+})
+
+test('the ledger reads its checks tolerantly, keeping the sound ones', () => {
+  const sound = { id: 'local_a', notedAt: T0, dueAt: T0 + 5 * 60 * 1000, nudged: true, answered: false }
+  expect(ticketsIn({ checks: [sound, { id: 'nope', notedAt: T0, dueAt: T0 }, 7] }).checks).toEqual([sound])
+  expect(ticketsIn({ checks: 'local_a' }).checks).toEqual([])
+})
+
+test('an outbox that holds only reports has work, and adding work keeps the reports in order, with or without reports of its own', () => {
+  expect(hasWork(OUTBOX_EMPTY)).toBe(false)
+  expect(hasWork({ ...OUTBOX_EMPTY, reports: ['ABC-1 merged.'] })).toBe(true)
+  const one = addWork(OUTBOX_EMPTY, { ...OUTBOX_EMPTY, reports: ['first'] })
+  expect(addWork(one, { ...OUTBOX_EMPTY, reports: ['second'] }).reports).toEqual(['first', 'second'])
+  expect(addWork(one, { logs: ['a log'], effects: [], lines: [] })).toEqual({ logs: ['a log'], effects: [], lines: [], reports: ['first'] })
+  expect(addWork(one, { logs: [], effects: [], lines: [] })).toBe(one)
 })
 
 test('old acts read with no unseen wake given and a stretch without a wait as an idle one', () => {

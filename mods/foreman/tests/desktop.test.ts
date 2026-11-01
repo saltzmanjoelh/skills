@@ -1,7 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 import type { McpToolResult } from 'claude-code'
 
-import { failureLine, LIST_LIMIT, listSessions, openSession, REASONS, type DesktopCall } from '../hooks/desktop'
+import { EVENTS_TOOL, failureLine, LIST_LIMIT, listSessions, openSession, readHeader, REASONS, type DesktopCall } from '../hooks/desktop'
+import { desktopApp, eventsAnswer } from './world'
 
 const SECRET = 'SECRET-ERROR-TEXT'
 
@@ -9,12 +10,13 @@ const text = (value: string): McpToolResult => ({ content: [{ type: 'text', text
 const sessions = (list: unknown) => text(JSON.stringify(list))
 
 // A desktop app that answers from a script and records each call.
-function desktop(answers: { list?: () => Promise<McpToolResult>; open?: () => Promise<McpToolResult> }) {
+function desktop(answers: { list?: () => Promise<McpToolResult>; open?: () => Promise<McpToolResult>; events?: () => Promise<McpToolResult> }) {
   const calls: { server: string; tool: string; args: Record<string, unknown> }[] = []
   const call: DesktopCall = async (server, tool, args = {}) => {
     calls.push({ server, tool, args })
     if (tool === 'list_sessions') return (answers.list ?? (async () => sessions([])))()
     if (tool === 'open_session_in') return (answers.open ?? (async () => text('Opened.')))()
+    if (tool === 'list_events') return (answers.events ?? (async () => text('Session "t" (idle) — showing 1 of 2 messages')))()
     throw new Error(`unexpected ${server} ${tool}`)
   }
   return { call, calls }
@@ -113,4 +115,83 @@ test('a list is complete only when it came back shorter than the most foreman as
   expect(await of(LIST_LIMIT - 1)).toBe(true)
   expect(await of(LIST_LIMIT)).toBe(false)
   expect(await of(LIST_LIMIT, i => (i === 0 ? { sessionId: 7 } : { sessionId: `local_${i}` }) as never)).toBe(false)
+})
+
+test('the header is read with list_events for the one session, asking for a single event, and is the first line of the first text block', async () => {
+  const d = desktop({ events: async () => ({ content: [{ type: 'image', data: '', mimeType: 'image/png' } as never, { type: 'text', text: eventsAnswer('Session "t" (idle) — showing 1 of 1972 messages') }, { type: 'text', text: 'other' }], isError: false }) })
+  expect(EVENTS_TOOL).toBe('list_events')
+  expect(await readHeader(d.call, 'local_a')).toEqual({ header: 'Session "t" (idle) — showing 1 of 1972 messages' })
+  expect(d.calls).toEqual([{ server: 'ccd_session_mgmt', tool: 'list_events', args: { session_id: 'local_a', limit: 1 } }])
+})
+
+test('a header read that is refused, not connected or has no text answers its own reason and never the tool\'s error text', async () => {
+  const cases: [string, () => Promise<McpToolResult>][] = [
+    [REASONS.eventsRefused, async () => ({ content: [{ type: 'text', text: `Session local_a not found. ${SECRET}` }], isError: true })],
+    [REASONS.notConnected, async () => { throw new Error(SECRET) }],
+    [REASONS.eventsUnreadable, async () => ({ content: [], isError: false })],
+    [REASONS.eventsUnreadable, async () => ({ content: [{ type: 'text', text: 7 }], isError: false }) as never],
+  ]
+  for (const [reason, events] of cases) {
+    const got = await readHeader(desktop({ events }).call, 'local_a')
+    expect(got).toEqual({ reason })
+    expect(JSON.stringify(got)).not.toContain(SECRET)
+  }
+  expect(new Set(Object.values(REASONS)).size).toBe(Object.values(REASONS).length)
+})
+
+// Whether `promise` settles within a few turns of the event loop's microtask
+// queue, which a call that hangs never does.
+async function settles<T>(promise: Promise<T>): Promise<{ value: T } | 'hung'> {
+  const hung = (async () => {
+    for (let i = 0; i < 50; i++) await null
+    return 'hung' as const
+  })()
+  return Promise.race([promise.then(value => ({ value })), hung])
+}
+
+// The desktop app of the engine tests, driven without the engine: its
+// mcp.call hook is called the way the engine calls it, and a deny is thrown as
+// the engine's $.mcp.call throws it.
+function engineDesktop() {
+  let hook: ((e: { server: string; tool: string; args: Record<string, unknown> }) => unknown) | undefined
+  const on = ((name: string, handler: ($: unknown, e: never) => unknown) => {
+    if (name === 'mcp.call') hook = e => handler(undefined, e as never)
+  }) as unknown as Parameters<typeof desktopApp>[0]
+  const d = desktopApp(on)
+  const call: DesktopCall = async (server, tool, args = {}) => {
+    const got = await hook!({ server, tool, args }) as { value?: McpToolResult; deny?: string }
+    if (got.deny !== undefined) throw new Error(got.deny)
+    return got.value!
+  }
+  return { d, call }
+}
+
+test('the desktop app of the engine tests answers list_events for each session as the test sets it', async () => {
+  const { d, call } = engineDesktop()
+  d.events.set('local_idle', { state: 'idle' })
+  d.events.set('local_old', { state: 'idle', archived: true, title: 'ABC-1: "quoted" (and more)' })
+  d.events.set('local_gone', 'not-connected')
+  d.events.set('local_bad', 'garbage')
+  d.events.set('local_hang', 'hang')
+  d.events.set('local_err', 'error')
+  expect(await readHeader(call, 'local_idle')).toEqual({ header: 'Session "example" (idle) — showing 1 of 1972 messages' })
+  expect(await readHeader(call, 'local_old')).toEqual({ header: 'Session "ABC-1: "quoted" (and more)" (idle, archived) — showing 1 of 1972 messages' })
+  expect(await readHeader(call, 'local_gone')).toEqual({ reason: REASONS.notConnected })
+  expect(await readHeader(call, 'local_bad')).toEqual({ header: SECRET })
+  expect(await readHeader(call, 'local_err')).toEqual({ reason: REASONS.eventsRefused })
+  expect(await readHeader(call, 'local_unknown')).toEqual({ reason: REASONS.eventsRefused })
+  expect(await settles(readHeader(call, 'local_hang'))).toBe('hung')
+  expect(d.calls.filter(c => c.tool === 'list_events').map(c => c.args.session_id))
+    .toEqual(['local_idle', 'local_old', 'local_gone', 'local_bad', 'local_err', 'local_unknown', 'local_hang'])
+})
+
+test('the list_events answer of the engine tests holds the paging line, the warning and an empty body below its header', async () => {
+  const { d, call } = engineDesktop()
+  d.events.set('local_a', { state: 'idle' })
+  const got = await call('ccd_session_mgmt', 'list_events', { session_id: 'local_a', limit: 1 })
+  const lines = (got.content[0] as { text: string }).text.split('\n')
+  expect(lines).toHaveLength(4)
+  expect(lines[3]).toBe('(no messages)')
+  const unknown = await call('ccd_session_mgmt', 'list_events', { session_id: 'local_b', limit: 1 })
+  expect(unknown).toEqual({ content: [{ type: 'text', text: 'Session local_b not found.' }], isError: true })
 })

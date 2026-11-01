@@ -4,7 +4,8 @@
 // and which rows show. Every function is pure.
 
 import type { ForemanActs, ForemanEffect, ForemanOutbox, ForemanPairing, ForemanSpend, ForemanSpent, ForemanStanding, ForemanTickets } from '../types'
-import { BEGIN_TEXT } from './desktop'
+import { checksIn } from './checks'
+import { BEGIN_TEXT, LOCAL_ID, WHOLE_LOCAL_ID } from './desktop'
 import { countsIn, isDollars, isPullRequestNumber, isPullRequestState, verdictsIn } from './record'
 import { byKeyThenFile, keyOf, nameOf, type SubRow } from './subs'
 import { byTicket, isTicket, isWholeKey, isWhoName, KEY, TICKET_PREFIX } from './wake'
@@ -145,9 +146,10 @@ export const waitingBrief = (key: string, prompt: string) => `${WAIT_LINE(key)}\
 // not tell the person that the issue started.
 export const WAITING_SENTENCE = (key: string) => `${key} waits in foreman's queue: its sub session begins by itself once a slot frees, so tell the person that ${key} is queued, not that it started.`
 
-// The shape of a desktop session id, such as local_ab-12_c. The turn-end
-// notes in hooks/notes.ts read ids with it too, so the two cannot drift.
-export const LOCAL_ID = /local_[A-Za-z0-9_-]+/
+// The shape of a desktop session id lives in hooks/desktop.ts, so that
+// hooks/checks.ts can read it without importing this module. It is passed on
+// from here for the modules that already read it here.
+export { LOCAL_ID }
 
 // The first desktop session id in a start_session answer, or null when it
 // names none, as for a proposal card, which starts no session yet.
@@ -165,17 +167,24 @@ export function runsImplement(args: Record<string, unknown>): boolean {
 // The store key that holds a parent's ledger.
 export const ticketsKey = (sessionId: string) => `tickets:${sessionId}`
 
-export const OUTBOX_EMPTY: ForemanOutbox = { logs: [], effects: [], lines: [] }
+export const OUTBOX_EMPTY: ForemanOutbox = { logs: [], effects: [], lines: [], reports: [] }
 
-export const TICKETS_EMPTY: ForemanTickets = { pairings: [], folderMissing: false, outbox: OUTBOX_EMPTY, held: [], offRefusedFor: null, unwatched: [], spent: [], earlier: null, keptSlots: [] }
+export const TICKETS_EMPTY: ForemanTickets = { pairings: [], folderMissing: false, outbox: OUTBOX_EMPTY, held: [], offRefusedFor: null, unwatched: [], spent: [], earlier: null, keptSlots: [], checks: [] }
 
 // Whether the outbox holds anything to carry out.
-export const hasWork = (o: ForemanOutbox) => o.logs.length > 0 || o.effects.length > 0 || o.lines.length > 0
+export const hasWork = (o: ForemanOutbox) => o.logs.length > 0 || o.effects.length > 0 || o.lines.length > 0 || o.reports.length > 0
+
+// Work to add to the outbox. Its reports may be left out, since most work
+// holds none.
+export type Work = Omit<ForemanOutbox, 'reports'> & { reports?: string[] }
 
 // The outbox with `more` added after what it already holds.
-export const addWork = (o: ForemanOutbox, more: ForemanOutbox): ForemanOutbox => (hasWork(more)
-  ? { logs: [...o.logs, ...more.logs], effects: [...o.effects, ...more.effects], lines: [...o.lines, ...more.lines] }
-  : o)
+export function addWork(o: ForemanOutbox, more: Work): ForemanOutbox {
+  const full: ForemanOutbox = { ...more, reports: more.reports ?? [] }
+  return hasWork(full)
+    ? { logs: [...o.logs, ...full.logs], effects: [...o.effects, ...full.effects], lines: [...o.lines, ...full.lines], reports: [...o.reports, ...full.reports] }
+    : o
+}
 
 const strings = (raw: unknown): string[] => (Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : [])
 
@@ -203,7 +212,7 @@ function effectIn(raw: unknown): ForemanEffect | null {
 function outboxIn(raw: unknown): ForemanOutbox {
   const o = objectOf(raw)
   if (o === null) return OUTBOX_EMPTY
-  return { logs: strings(o.logs), effects: Array.isArray(o.effects) ? o.effects.flatMap(e => effectIn(e) ?? []) : [], lines: strings(o.lines) }
+  return { logs: strings(o.logs), effects: Array.isArray(o.effects) ? o.effects.flatMap(e => effectIn(e) ?? []) : [], lines: strings(o.lines), reports: strings(o.reports) }
 }
 
 // The milestone memory of a pairing that has announced nothing: no pull
@@ -345,10 +354,6 @@ const heldIn = (raw: unknown): string[] => [...new Set(strings(raw).filter(isWho
 // The most unwatched sub sessions kept, the newest ones.
 export const MAX_UNWATCHED = 50
 
-// A whole desktop session id with nothing around it, which is all an
-// unwatched entry and a begin message's target may be.
-const WHOLE_LOCAL_ID = new RegExp(`^${LOCAL_ID.source}$`)
-
 // The unwatched ids read tolerantly: only whole desktop session ids, each
 // once, the newest MAX_UNWATCHED, so a ledger from before the list existed
 // reads as holding none.
@@ -386,6 +391,8 @@ const spentIn = (raw: unknown): ForemanSpent[] => (Array.isArray(raw)
 // A ledger from before the role-off facts were kept reads with no refusal
 // given and no unwatched sub sessions, and one from before foreman kept
 // spending reads with none, and one from before slots were kept keeps none.
+// One from before foreman checked sub sessions itself holds no checks, and an
+// outbox from before reports were kept holds none.
 export function ticketsIn(raw: unknown): ForemanTickets {
   const t = objectOf(raw)
   if (t === null) return TICKETS_EMPTY
@@ -400,6 +407,7 @@ export function ticketsIn(raw: unknown): ForemanTickets {
     spent: spentIn(t.spent),
     earlier: spendIn(t.earlier),
     keptSlots: keptSlotsIn(t.keptSlots),
+    checks: checksIn(t.checks),
   }
 }
 
