@@ -12,7 +12,7 @@
 // it.
 
 import type { BaseFacts, Snapshot } from '../types'
-import { ciOf, countingRuns, failedCheckNames, failedRunsOf, headRunsIn, isUnfinished, roundInProgress } from './github'
+import { ciOf, countingRuns, failedCheckNames, failedRunsOf, headRunsIn, isChangesRequested, isUnfinished, roundInProgress } from './github'
 import { factIn } from './review'
 
 export type Limit = { which: 'pushes' | 'rounds'; count: number; max: number }
@@ -122,7 +122,7 @@ export function chooseStep(s: Snapshot, isAsking: boolean): Step {
   const failedRuns = failedRunsOf(headRuns ?? []).map(run => run.id).sort((a, b) => a - b)
   if (failedCheckNames(s.checks).length > 0 || failedRuns.length > 0) return { kind: 'failed', runs: failedRuns }
   if (s.verdicts === null) return { kind: 'review', head: s.head }
-  if (s.verdicts.spec === 'REQUEST_CHANGES' || s.verdicts.adversarial === 'REQUEST_CHANGES') return { kind: 'changes-requested' }
+  if (isChangesRequested(s.verdicts)) return { kind: 'changes-requested' }
   // Both verdicts approve. A snapshot without the runs at the head, as one an
   // older build stored, holds as if the runs could not be read, so it never
   // leads to a merge.
@@ -299,11 +299,13 @@ function runsReadOf(repo: string | null, head: string): string {
 }
 
 // What the fetched base CLAUDE.md must still say for the merge this step
-// chose: `Checks: none` when it merges with no checks, and no merge command
-// of the project's own when it runs the default one.
+// chose: that it counts as `Checks: none` when it merges with no checks,
+// whether the file says so or takes the default because the base has no
+// workflow files, and no merge command of the project's own when it runs the
+// default one.
 function baseChecks(step: Extract<Step, { kind: 'merge' | 'ask-merge' }>): string {
   const changes = [
-    ...(step.kind === 'merge' && step.checks === 'none' ? [' If the fetched file no longer says `Checks: none`, do not merge: call `mcp__builder__watch` and follow the step it names.'] : []),
+    ...(step.kind === 'merge' && step.checks === 'none' ? [' If the fetched file no longer counts as `Checks: none`, because it names `Checks:` with another value, or has no `Checks:` line while `git ls-tree --full-tree origin/<base> .github/workflows` lists anything, do not merge: call `mcp__builder__watch` and follow the step it names.'] : []),
     ...(step.command === 'default' ? [' If the fetched file now names a `Merge command:`, do not merge: call `mcp__builder__watch` and follow the step it names.'] : []),
   ]
   return changes.join('')
@@ -330,13 +332,13 @@ function mergeLines(step: Extract<Step, { kind: 'merge' | 'ask-merge' }>): strin
 function mergeText(step: Extract<Step, { kind: 'merge' }>): string[] {
   const why = step.checks === 'passed'
     ? 'at least one check exists and every check passed'
-    : 'there are no checks, and the base branch\'s CLAUDE.md says `Checks: none`'
+    : 'there are no checks, and the base branch\'s CLAUDE.md counts as `Checks: none`: it says so, or it has no `Checks:` line and the base has no files under `.github/workflows`'
   return [`Both verdicts approve at this head, ${step.head}, and ${why}. Merge it.`, ...mergeLines(step)]
 }
 
 function askMergeText(step: Extract<Step, { kind: 'ask-merge' }>): string[] {
   const checks = step.isClaudeRead
-    ? 'the base branch\'s CLAUDE.md says `Checks: expected`'
+    ? 'the base branch\'s CLAUDE.md counts as `Checks: expected`: it says so, or it has no `Checks:` line and the base has workflow files, or they could not be listed'
     : 'the base branch\'s CLAUDE.md could not be read, which counts as `Checks: expected`'
   return [
     `Both verdicts approve at this head, ${step.head}, but it has no checks, and ${checks}. Nothing will change to start another turn, so the person decides whether to merge this head without checks. An answer covers this head and the set of workflow runs at it, which is ${runsText(step.runs)}; it lapses when either changes. A session that restarts has no record of answers and asks again, which is the safe direction.`,

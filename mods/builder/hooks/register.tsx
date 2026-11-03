@@ -366,6 +366,8 @@ async function readBaseFacts($: $, dir: string | null, base: string | null): Pro
   if (dir === null || base === null) return UNREAD_FACTS
   const claude = await git($, dir, ['show', `origin/${base}:CLAUDE.md`])
   if (claude === null) return UNREAD_FACTS
+  // The file's own `Checks:` line decides, so no listing is made, and
+  // baseFactsOf ignores the listing argument, here null.
   if (factIn(claude, 'Checks') !== null) return baseFactsOf(claude, null)
   // --full-tree reads the path from the top of the checkout, because without
   // it git reads the path relative to `dir`, and a session that started in a

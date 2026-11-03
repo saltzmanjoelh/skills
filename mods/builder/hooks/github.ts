@@ -105,7 +105,7 @@ export function verdictsOf(review: GhReview): Verdicts | null {
   return { sha, spec: match[2] as Verdict, adversarial: match[3] as Verdict }
 }
 
-function isChangesRequested(verdicts: Verdicts) {
+export function isChangesRequested(verdicts: Verdicts) {
   return verdicts.spec === 'REQUEST_CHANGES' || verdicts.adversarial === 'REQUEST_CHANGES'
 }
 
@@ -436,7 +436,7 @@ export function fingerprintOf(s: Omit<Snapshot, 'fingerprint'>): string {
     s.mergeable === 'CONFLICTING' ? 'conflicting' : 'no-conflict',
     (s.runs ?? []).map(run => `${run.id}.${run.attempt}`).join(','),
   ]
-  if (s.runsCarriedOver === true && s.verdicts?.spec === 'APPROVE' && s.verdicts.adversarial === 'APPROVE') parts.push('runs-unread')
+  if (s.runsCarriedOver === true && s.verdicts !== null && !isChangesRequested(s.verdicts)) parts.push('runs-unread')
   const failed = failedRunsOf(headRunsIn(s) ?? [])
   if (failed.length > 0) parts.push(`failed-runs:${failed.map(run => `${run.id}.${run.attempt}`).join(',')}`)
   return parts.join('|')

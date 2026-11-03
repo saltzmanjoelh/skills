@@ -357,7 +357,10 @@ test('the custom and unread merge texts say to read Merge command: from the base
 test('the merge text under Checks: none says there are no checks and does not claim they passed', () => {
   const text = textOf({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'none', runs: [] })
   expect(text).toContain('Checks: none')
-  expect(text).not.toContain('every check passed')
+  expect(text).not.toContain('every check passed')  // The file can count as none by the default, with no `Checks:` line of
+  // its own, so the text never claims the file says so.
+  expect(text).toContain('or it has no `Checks:` line and the base has no files under `.github/workflows`')
+  expect(text).not.toContain('CLAUDE.md says `Checks: none`')
 })
 
 test('every merge text fetches the base and reads its CLAUDE.md again before merging, because the mod read a local copy', () => {
@@ -368,10 +371,10 @@ test('every merge text fetches the base and reads its CLAUDE.md again before mer
     expect(text).toContain('If the fetch fails, do not merge')
   }
   const none = textOf({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'none', runs: [] })
-  expect(none).toContain('If the fetched file no longer says `Checks: none`')
+  expect(none).toContain('If the fetched file no longer counts as `Checks: none`, because it names `Checks:` with another value, or has no `Checks:` line while `git ls-tree --full-tree origin/<base> .github/workflows` lists anything, do not merge')
   expect(none).toContain('If the fetched file now names a `Merge command:`')
   const passed = textOf({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'custom', checks: 'passed', runs: [] })
-  expect(passed).not.toContain('no longer says `Checks: none`')
+  expect(passed).not.toContain('no longer counts as `Checks: none`')
   expect(passed).not.toContain('now names a `Merge command:`')
 })
 
@@ -410,7 +413,7 @@ test('the question for a merge without checks says the base CLAUDE.md could not 
   expect(textOf({ ...step, command: 'unread', isClaudeRead: false })).toContain('could not be read, which counts as `Checks: expected`')
   // A file that was read and names a merge command of its own says what it says.
   const read = textOf({ ...step, command: 'custom', isClaudeRead: true })
-  expect(read).toContain('the base branch\'s CLAUDE.md says `Checks: expected`')
+  expect(read).toContain('the base branch\'s CLAUDE.md counts as `Checks: expected`: it says so, or it has no `Checks:` line and the base has workflow files, or they could not be listed')
   expect(read).not.toContain('which counts as `Checks: expected`')
 })
 
