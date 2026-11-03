@@ -50,7 +50,9 @@ that chooses a merge step or the Merged step.
     `ready-to-merge`.
   - "Over a limit" and "Closed" give `stuck`.
   - "Merged" and "An open question" give no label, and the mod changes
-    nothing.
+    nothing. "The runs could not be read" gives no label either: it is not one
+    of the four approving outcomes, because it exists only when the runs read
+    failed, so a `ready-to-merge` there would rest on a failed read.
 - The mod keeps a record of the last label it set on each pull request, in a
   store keyed by repository and number, persisted like the questions store, so
   that it survives a restart.
