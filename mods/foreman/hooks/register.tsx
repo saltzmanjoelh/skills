@@ -141,19 +141,24 @@ async function readLinkFact($: $, dir: string | null) {
   const found = await readIssueLink(path => $.fs.read(path), dir)
   issueAddress = found.address
   if (found.ignored === null) return
-  const line = ignoredLine('foreman', found.ignored)
   // The toast and the line are only a courtesy, since the keys are plain
-  // either way. Each has its own try, so a refused toast still leaves the
-  // line in the log.
+  // either way.
+  await toastAndLog($, ignoredLine('foreman', found.ignored))
+}
+
+// Shows `line` as a toast and writes the same line to the log, for something
+// the person should see without the pane. Each has its own try, so a refused
+// toast still leaves the line in the log, and it never throws.
+async function toastAndLog($: $, line: string) {
   try {
     $.ui.toast(line)
   } catch {
-    // The log line below still says why.
+    // The log line below still says it.
   }
   try {
     await addLog($, line)
   } catch {
-    // The toast above already said why.
+    // The toast above already said it.
   }
 }
 
@@ -210,7 +215,13 @@ async function persistTickets($: $) {
 // An error as the log gives its reason: its message, cleaned and cut, or
 // words saying that it gave none.
 function reasonOf(error: unknown): string {
-  const why = printable(error instanceof Error ? error.message : String(error), 160)
+  return whyOf(error instanceof Error ? error.message : String(error))
+}
+
+// Text the engine gave as a reason, cleaned and cut, or words saying that it
+// gave none.
+function whyOf(text: string): string {
+  const why = printable(text, 160)
   return why === '' ? 'no reason was given' : why
 }
 
@@ -1151,17 +1162,15 @@ async function applyCommand($: $, command: Exclude<Command, { kind: 'refused' }>
       later($, () => readNow($))
       return slotsAnswer(command.count)
     }
-    await becomeParent($)
-    return becameParentAnswer(command.count)
+    return becameParentAnswer(command.count, await becomeParent($))
   }
-  await becomeParent($)
-  return 'This session is now the parent, and foreman shows its sub sessions above the prompt and in its pane.'
+  return becameParentAnswer(null, await becomeParent($))
 }
 
 // Turns the role on, reads the Issue link fact when the session was not
 // already the parent, reads the status folder, hands the checks to the read
-// loop and opens the pane.
-async function becomeParent($: $) {
+// loop and opens the pane. It answers what openPane answers.
+async function becomeParent($: $): Promise<string | null> {
   const wasOn = await isOn($)
   await writeParent($, p => ({ ...p, isOn: true }))
   if (!wasOn) await readLinkFact($, workingFolder)
@@ -1170,7 +1179,24 @@ async function becomeParent($: $) {
   // all and say that the folder holds no sub sessions until the read landed.
   await ensureArmed($)
   await ensureOffRoleWork($).catch(() => undefined)
-  await $.ui.open({ id: PANE, title: 'foreman' }).catch(() => undefined)
+  return openPane($)
+}
+
+// Opens foreman's pane. When the engine does not place it, or the open
+// throws, it shows the sentence that says so as a toast and writes it to the
+// log, and answers it; it answers null when the pane is placed. It never
+// throws.
+async function openPane($: $): Promise<string | null> {
+  let line: string
+  try {
+    const answer = await $.ui.open({ id: PANE, title: 'foreman' })
+    if (answer.isPlaced) return null
+    line = `foreman's pane waits and is not drawn yet. The engine says: "${whyOf(answer.reason)}"`
+  } catch (error) {
+    line = `Could not open foreman's pane (${reasonOf(error)}).`
+  }
+  await toastAndLog($, line)
+  return line
 }
 
 // What the start_session hook answers when it failed, as fallbackOf decides.
@@ -1362,6 +1388,9 @@ export const register: Register = (on, options) => {
     const presses = {
       open: (file: string) => {
         void openRow($, file).catch(() => undefined)
+      },
+      pane: () => {
+        void openPane($)
       },
     }
     return bandTree(elementsOf($, e), v, columnsOf(e.props.bodyColumns), presses) ?? next(e)

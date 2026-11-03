@@ -28,7 +28,7 @@ Foreman does nothing in a session until that session runs `/start-foreman`, apar
 
 | Command | What it does |
 |---|---|
-| `/start-foreman` | Makes this session the parent, reads the status folder at once and opens the pane. |
+| `/start-foreman` | Makes this session the parent, reads the status folder at once and opens the pane. When the engine does not place the pane, or the open fails, the answer says so with the engine's reason and says that pressing the band's head opens the pane. |
 | `/start-foreman <n>` | Does the same, and sets how many sub sessions this parent runs at once, a whole number from 1 to 20. In a session that is already the parent, it only changes the count. Any other count is refused with the range and changes nothing. |
 | `/start-foreman [n] <words>` | Does what the command does without the words, and then sends the words to this session's model as the person's own prompt, for example `/start-foreman 2 clean up the worktrees, then start the next two issues`. The words are not sent when the count is refused. |
 
@@ -92,7 +92,9 @@ A file whose modification time is more than three minutes older than the read th
 
 ## The band
 
-The band is one row, in the parent only, such as `foreman: 2 of 2 slots busy · ABC-123 build · ABC-124 needs you · next read in 30s`. It counts every listed sub session whose state is not done as busy, and shows a chip for each sub session: its issue key with its stage while it works or waits on builder, or its state in words otherwise. Only `needs you` is red, and only `idle` and `in cleanup` are amber. When the chips do not all fit, the band ends with `+N more`. Pressing a chip opens that sub session. When the project names an issue address (see **The issue link** below), each chip's key is a link that opens the issue in its tracker, and the rest of the chip is the button that opens the sub session. The chips are fitted to the band by their whole text, key included, as without a link.
+The band is one row, in the parent only, such as `foreman: 2 of 2 slots busy · ABC-123 build · ABC-124 needs you · next read in 30s`. It counts every listed sub session whose state is not done as busy, and shows a chip for each sub session: its issue key with its stage while it works or waits on builder, or its state in words otherwise. Only `needs you` is red, and only `idle` and `in cleanup` are amber. When the chips do not all fit, the band ends with `+N more`. Pressing the head, `foreman: 2 of 2 slots busy`, opens foreman's pane, and pressing it again never closes the pane; the engine's own pane controls do that. Pressing a chip opens that sub session. When the project names an issue address (see **The issue link** below), each chip's key is a link that opens the issue in its tracker, and the rest of the chip is the button that opens the sub session. The chips are fitted to the band by their whole text, key included, as without a link.
+
+Whenever foreman opens its pane, from `/start-foreman` or from a press on the head, and the engine does not place it, foreman shows the toast `foreman's pane waits and is not drawn yet. The engine says: "<reason>"` and writes the same line to its log. The engine places an open made in answer to a press at any width, but one that the mod makes on its own waits undrawn below 144 columns, so this is common for `/start-foreman` in a narrow window. When the open fails outright, the toast and the log line say `Could not open foreman's pane (<error message>).` instead. A pane that is placed shows no toast.
 
 For ten minutes after foreman shows a report (see **Reports** below), the band also shows the newest report sentence as one extra line beside the chips, and a newer report replaces it and starts its ten minutes again. The line is cut to fit the band's width, and on a band too narrow for both it is shortened or dropped, so the chips keep their space. The line is not kept across a restart of the parent.
 

@@ -1,0 +1,204 @@
+import { expect, test } from 'claude-code/testing'
+
+import { foreman, mountBoth, record, SURFACES, start, world } from './world'
+
+// The reason the engine gives when an open the mod made on its own waits.
+const NARROW = 'The terminal is 100 columns wide, under the 144 a pane opened unasked needs.'
+const WAITS = `foreman's pane waits and is not drawn yet. The engine says: "${NARROW}"`
+// The engine names the mod and the call before the message of an open it
+// refused, and foreman quotes the whole message.
+const FAILED = 'Could not open foreman\'s pane (foreman: $.ui.open: the engine fell over).'
+const HEAD = 'Pressing the band\'s head opens the pane.'
+
+for (const surface of SURFACES) {
+  test(`on the ${surface}, pressing the head of a band with chips opens foreman's pane and leaves the band as it was`, async ($, on) => {
+    const w = world(on)
+    w.folder.put('a.json', record('ABC-1', 'working'))
+    const ui = await mountBoth($, on, surface)
+    await start($)
+    await foreman($)
+    const before = await ui.bandText()
+    w.toasts.length = 0
+    w.panes.length = 0
+
+    await ui.band.press({ key: 'foreman-head' })
+
+    expect(w.panes).toEqual(['foreman'])
+    expect(await ui.bandText()).toBe(before)
+    expect(before).toStartWith('foreman: 1 of 2 slots busy · ')
+    expect(w.toasts).toEqual([])
+  })
+
+  test(`on the ${surface}, pressing the head of a band with no sub sessions opens foreman's pane and leaves the band as it was`, async ($, on) => {
+    const w = world(on)
+    const ui = await mountBoth($, on, surface)
+    await start($)
+    await foreman($)
+    w.panes.length = 0
+
+    await ui.band.press({ key: 'foreman-head' })
+
+    expect(w.panes).toEqual(['foreman'])
+    expect(await ui.bandText()).toBe('foreman: 0 of 2 slots busy · no sub sessions · next read in 2m')
+  })
+}
+
+test('pressing the head while the engine lists the pane as open opens it again and closes nothing', async ($, on) => {
+  const w = world(on)
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  expect(w.engine.listed).toEqual(['foreman'])
+  w.panes.length = 0
+
+  await ui.band.press({ key: 'foreman-head' })
+  await ui.band.press({ key: 'foreman-head' })
+
+  expect(w.panes).toEqual(['foreman', 'foreman'])
+  expect(w.engine.closed).toEqual([])
+  expect(w.engine.listed).toEqual(['foreman'])
+})
+
+test('a press whose open waits shows the waits toast with the engine\'s reason and writes the same log line', async ($, on) => {
+  const w = world(on)
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  w.toasts.length = 0
+  w.engine.open = { isPlaced: false, reason: NARROW }
+
+  await ui.band.press({ key: 'foreman-head' })
+
+  expect(w.toasts).toEqual([WAITS])
+  expect(await ui.newestLog()).toBe(WAITS)
+})
+
+test('a press whose open throws shows the "Could not open" toast and writes the same log line', async ($, on) => {
+  const w = world(on)
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  w.toasts.length = 0
+  w.engine.open = { throws: 'the engine fell over' }
+
+  await ui.band.press({ key: 'foreman-head' })
+
+  expect(w.toasts).toEqual([FAILED])
+  expect(await ui.newestLog()).toBe(FAILED)
+})
+
+test('the engine\'s reason is cleaned of control characters, and an empty reason reads "no reason was given"', async ($, on) => {
+  const w = world(on)
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  w.toasts.length = 0
+
+  w.engine.open = { isPlaced: false, reason: 'too\u001b[31m narrow\nnow' }
+  await ui.band.press({ key: 'foreman-head' })
+  w.engine.open = { isPlaced: false, reason: '' }
+  await ui.band.press({ key: 'foreman-head' })
+
+  expect(w.toasts).toHaveLength(2)
+  expect(w.toasts[0]).not.toContain('\u001b')
+  expect(w.toasts[0]).not.toContain('\n')
+  expect(w.toasts[0]).toStartWith('foreman\'s pane waits and is not drawn yet. The engine says: "too')
+  expect(w.toasts[1]).toBe('foreman\'s pane waits and is not drawn yet. The engine says: "no reason was given"')
+})
+
+test('a placed open shows no toast and writes no line about the pane', async ($, on) => {
+  const w = world(on)
+  const ui = await mountBoth($, on)
+  await start($)
+  const answer = await foreman($)
+  await ui.band.press({ key: 'foreman-head' })
+
+  expect(answer.text).toBe('This session is now the parent, and foreman shows its sub sessions above the prompt and in its pane.')
+  expect(w.toasts).toEqual([])
+  expect(await ui.paneText()).not.toContain('foreman\'s pane')
+})
+
+for (const [name, open, sentence] of [
+  ['waits', { isPlaced: false, reason: NARROW }, WAITS],
+  ['throws', { throws: 'the engine fell over' }, FAILED],
+] as const) {
+  test(`when the open of /start-foreman ${name}, the answer without a count says so and points at the band's head, and the toast and log line follow`, async ($, on) => {
+    const w = world(on)
+    w.engine.open = open
+    const ui = await mountBoth($, on)
+    await start($)
+
+    const answer = await foreman($)
+
+    expect(answer.text).toBe(`This session is now the parent, and foreman shows its sub sessions above the prompt. ${sentence} ${HEAD}`)
+    expect(w.toasts).toEqual([sentence])
+    expect(await ui.newestLog()).toBe(sentence)
+    expect(await ui.bandText()).toStartWith('foreman: 0 of 2 slots busy')
+  })
+
+  test(`when the open of /start-foreman <n> ${name}, the answer with a count says so and points at the band's head`, async ($, on) => {
+    const w = world(on)
+    w.engine.open = open
+    await mountBoth($, on)
+    await start($)
+
+    const answer = await foreman($, '3')
+
+    expect(answer.text).toBe(`This session is now the parent and runs 3 sub sessions at once, and foreman shows its sub sessions above the prompt. ${sentence} ${HEAD}`)
+    expect(w.toasts).toEqual([sentence])
+  })
+}
+
+test('when the open waits, the words after /start-foreman are still passed on after the pointer to the head', async ($, on) => {
+  const w = world(on)
+  w.engine.open = { isPlaced: false, reason: NARROW }
+  await mountBoth($, on)
+  await start($)
+
+  const answer = await foreman($, 'start the next issue')
+
+  expect(answer.text).toBe(`This session is now the parent, and foreman shows its sub sessions above the prompt. ${WAITS} ${HEAD} It passes the rest of your line to this session as your prompt.`)
+})
+
+test('/start-foreman again in a parent reports an open that waits', async ($, on) => {
+  const w = world(on)
+  await mountBoth($, on)
+  await start($)
+  await foreman($)
+  w.engine.open = { isPlaced: false, reason: NARROW }
+
+  const answer = await foreman($)
+
+  expect(answer.text).toBe(`This session is now the parent, and foreman shows its sub sessions above the prompt. ${WAITS} ${HEAD}`)
+})
+
+test('/start-foreman <n> in a session that is already the parent makes no open, and its answer does not change', async ($, on) => {
+  const w = world(on)
+  await mountBoth($, on)
+  await start($)
+  await foreman($)
+  w.panes.length = 0
+  w.engine.open = { isPlaced: false, reason: NARROW }
+
+  const answer = await foreman($, '3')
+
+  expect(w.panes).toEqual([])
+  expect(answer.text).toBe('This parent now runs 3 sub sessions at once.')
+})
+
+// The test engine swallows a throw from a ui.toast hook before it reaches the
+// mod, as issue-links.test.ts notes, so this test shows that a refused toast
+// does no harm in the engine as it is, not that the try around the toast works.
+test('a toast the engine refuses does not stop the log line, the role or the answer', async ($, on) => {
+  const w = world(on)
+  w.engine.toastThrows = true
+  w.engine.open = { isPlaced: false, reason: NARROW }
+  const ui = await mountBoth($, on)
+  await start($)
+
+  const answer = await foreman($)
+
+  expect(answer.text).toContain(WAITS)
+  expect(await ui.newestLog()).toBe(WAITS)
+  expect(await ui.bandText()).toStartWith('foreman: 0 of 2 slots busy')
+})
