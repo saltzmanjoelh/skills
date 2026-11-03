@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { countingRuns, failedRunsOf, hasFailed, isReplaced, isUnfinished, needsJobs, snapshotOf, type GhPullRequest } from '../hooks/github'
-import { baseFactsOf, chooseStep, CLEANUP_SECTIONS, DEFAULT_MERGE_COMMAND, labelActionOf, labelFor, labelRecordIn, needsListing, SKILL_POINTS, SKILL_SECTIONS, stepFor, stepLines, unpushedIn, type Step } from '../hooks/step'
+import { baseFactsOf, chooseStep, CLEANUP_SECTIONS, DEFAULT_MERGE_COMMAND, labelActionOf, labelFor, labelRecordIn, labelsToRemoveAfterEdit, needsListing, SKILL_POINTS, SKILL_SECTIONS, stepFor, stepLines, unpushedIn, type Step } from '../hooks/step'
 import type { BaseFacts, HeadRun, Snapshot, Unpushed } from '../types'
 
 const ME = 'owner'
@@ -582,6 +582,17 @@ test('otherwise the derived label is written, removing only the other state labe
   expect(labelActionOf('ready-to-merge', 'in-review', ['bug', 'in-review', 'needs-decision'])).toEqual({ kind: 'write', remove: ['in-review'] })
   // With a record, a stuck the session set comes off once the derived label changes.
   expect(labelActionOf('waiting-on-author', 'ready-to-merge', ['stuck', 'ready-to-merge', 'waiting-on-author'])).toEqual({ kind: 'write', remove: ['ready-to-merge', 'stuck'] })
+})
+
+test('after the edit, every other state label comes off, unless a stuck appeared since the read before it, which stays while the added label comes off', () => {
+  expect(labelsToRemoveAfterEdit('in-review', [], ['in-review'])).toEqual([])
+  expect(labelsToRemoveAfterEdit('in-review', [], ['in-review', 'waiting-on-author'])).toEqual(['waiting-on-author'])
+  // A stuck the session set while the edit ran stays, and the added label goes.
+  expect(labelsToRemoveAfterEdit('in-review', [], ['bug', 'in-review', 'stuck'])).toEqual(['in-review'])
+  expect(labelsToRemoveAfterEdit('ready-to-merge', ['in-review'], ['ready-to-merge', 'stuck', 'waiting-on-author'])).toEqual(['waiting-on-author', 'ready-to-merge'])
+  // A stuck the read before the edit already saw is one the write chose to remove.
+  expect(labelsToRemoveAfterEdit('waiting-on-author', ['stuck'], ['stuck', 'waiting-on-author'])).toEqual(['stuck'])
+  expect(labelsToRemoveAfterEdit('stuck', [], ['in-review', 'stuck'])).toEqual(['in-review'])
 })
 
 test('a stored label record reads back only in the shape the mod writes', () => {

@@ -220,6 +220,16 @@ export function otherStateLabelsOf(kept: StateLabel, liveLabels: readonly string
   return STATE_LABELS.filter(label => label !== kept && liveLabels.includes(label))
 }
 
+// The state labels to remove after the edit that added `added`, given the
+// labels read before that edit and after it. A `stuck` that only the read
+// after the edit saw was set by the session's judgement while the edit ran,
+// so it stays and every other state label comes off, `added` included: the
+// mod leaves a judgement `stuck` alone until the label it derives changes.
+export function labelsToRemoveAfterEdit(added: StateLabel, before: readonly string[], after: readonly string[]): StateLabel[] {
+  const isStuckSetMeanwhile = added !== 'stuck' && after.includes('stuck') && !before.includes('stuck')
+  return otherStateLabelsOf(isStuckSetMeanwhile ? 'stuck' : added, after)
+}
+
 // The record of the label the mod last set on a pull request, as it is
 // stored: the label and when it was set. Any other shape counts as no record.
 export type LabelRecord = { label: StateLabel; at: number }

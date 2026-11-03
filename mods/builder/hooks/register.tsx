@@ -19,7 +19,7 @@ import { changePrompt, ciEventContext, GITHUB_NAMES_LINE, resumePrompt, stateLin
 import { changedKinds, commitRecordsOf, decidedItems, factIn, INSTRUCTION_PATHSPECS, instructionFileIsLink, isFullSha, isUpForCheck, LATER_CONTEXT_LINES, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pluginRootsOf, reviewedHeadOf, secretIn, specDirOf, trendOf, trendStopLine, underRoot, verdictHeadOf, verdictsLine, type CommitRecord, type EarlierRound, type FileKind, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isMerge, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
 import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isForemanNudge, newMemo, parentIn, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, STATUS_CHANGED_TEXT, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
-import { baseFactsOf, chooseStep, labelActionOf, labelFor, labelRecordIn, needsListing, otherStateLabelsOf, SHORT_HASH, stepFor, UNPUSHED_KEPT, UNREAD_FACTS } from './step'
+import { baseFactsOf, chooseStep, labelActionOf, labelFor, labelRecordIn, labelsToRemoveAfterEdit, needsListing, SHORT_HASH, stepFor, UNPUSHED_KEPT, UNREAD_FACTS } from './step'
 import { timeOfDay } from './text'
 import { afterCost, afterStep, emptyUsage, usageIn } from './usage'
 
@@ -3119,23 +3119,24 @@ async function settleStateLabel($: $) {
   if (action.kind === 'none') return
   if (action.kind === 'write') {
     if (!(await addLabel($, r, derived, action.remove))) return
-    if (!(await removeOtherStateLabels($, r, derived))) return
+    if (!(await removeOtherStateLabels($, r, derived, live))) return
   }
   await $.store.set(key, { label: derived, at: await $.clock.now() })
 }
 
-// Reads the labels again after the edit that added `kept`, and removes every
-// other state label on the pull request in one more edit. A second session on
-// the same pull request, or the session setting `stuck` by hand, can put one
-// on between the first read and the edit, and once the record is saved no
-// later look reads the labels again. True when the read shows no other state
-// label or the removal succeeded, and false when either failed, so the record
-// is not saved and the next look tries again. The labels removed are on the
-// pull request, so they exist in the repository.
-async function removeOtherStateLabels($: $, r: BuilderRun, kept: StateLabel): Promise<boolean> {
+// Reads the labels again after the edit that added `added`, and removes in one
+// more edit the state labels that labelsToRemoveAfterEdit names. A second
+// session on the same pull request can put one on between the first read
+// (`before`) and the edit, and once the record is saved no later look reads
+// the labels again. A `stuck` the session set by hand in that time stays, and
+// `added` comes off instead. True when the read shows nothing to remove or the
+// removal succeeded, and false when either failed, so the record is not saved
+// and the next look tries again. The labels removed are on the pull request,
+// so they exist in the repository.
+async function removeOtherStateLabels($: $, r: BuilderRun, added: StateLabel, before: readonly string[]): Promise<boolean> {
   const live = await liveLabelNames($, r)
   if (live === null) return false
-  const others = otherStateLabelsOf(kept, live)
+  const others = labelsToRemoveAfterEdit(added, before, live)
   if (others.length === 0) return true
   return (await gh($, r.cwd, ['pr', 'edit', String(r.number), '--repo', r.repo, '--remove-label', others.join(',')])) !== null
 }

@@ -13756,6 +13756,32 @@ test('a state label put on between the read and the edit is removed by one more 
   expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'in-review', at: clock.now() })
 })
 
+test('a stuck the session puts on between the read and the edit stays, the added label comes off, and later looks leave it alone', async ($, on) => {
+  const clock = mock.clock(on)
+  const stored = memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  // The read of the labels answers before the session sets stuck by its own
+  // judgement, so the edit that adds in-review leaves two state labels on.
+  let release = () => {}
+  world.labelsHold = new Promise(resolve => { release = resolve })
+  await watch($)
+  await clock.settle()
+  world.pr.labels = [{ name: 'stuck' }]
+  release()
+  await clock.settle()
+  expect(labelEdits(world)).toEqual([
+    'gh pr edit 7 --repo o/r --add-label in-review',
+    'gh pr edit 7 --repo o/r --remove-label in-review',
+  ])
+  expect(world.pr.labels).toEqual([{ name: 'stuck' }])
+  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'in-review', at: clock.now() })
+
+  await clock.advance(30 * 60_000)
+  expect(labelEdits(world).length).toBe(2)
+  expect(world.pr.labels).toEqual([{ name: 'stuck' }])
+})
+
 test('a failed read of the labels after the edit, or a failed removal after it, saves no record', async ($, on) => {
   const clock = mock.clock(on)
   const stored = memoryStore(on)
@@ -13771,12 +13797,12 @@ test('a failed read of the labels after the edit, or a failed removal after it, 
   expect(labelEdits(world)).toEqual(['gh pr edit 7 --repo o/r --add-label in-review'])
   expect(stored.get(STATE_LABEL_KEY)).toBeUndefined()
 
-  world.labelAnswers = ['[]', '["in-review","stuck"]']
+  world.labelAnswers = ['[]', '["in-review","waiting-on-author"]']
   world.removalsToFail = 1
   await clock.advance(30 * 60_000)
   expect(labelEdits(world).slice(1)).toEqual([
     'gh pr edit 7 --repo o/r --add-label in-review',
-    'gh pr edit 7 --repo o/r --remove-label stuck',
+    'gh pr edit 7 --repo o/r --remove-label waiting-on-author',
   ])
   expect(stored.get(STATE_LABEL_KEY)).toBeUndefined()
 })

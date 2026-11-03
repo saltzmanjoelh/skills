@@ -79,11 +79,12 @@ adds an await between choosing a read and handing it over.
   needed, `--remove-label`, through `addLabel` generalised to take removals
   and keeping its create-and-retry. After the edit succeeds, the job reads
   the live labels again and removes, in one more `gh pr edit` with
-  `--remove-label`, any other state label that a second session or the
-  session's own `stuck` put on between the first read and the edit. The
-  record is saved only when that second read shows no other state label or
-  the removal succeeds, so a failed read or removal is tried again at the
-  next look.
+  `--remove-label`, any other state label that a second session put on
+  between the first read and the edit. A `stuck` the session set by hand in
+  that time stays, and the label the job added comes off instead, through a
+  pure `labelsToRemoveAfterEdit` in `hooks/step.ts`. The record is saved only
+  when that second read shows nothing to remove or the removal succeeds, so
+  a failed read or removal is tried again at the next look.
 - `requestStateLabel` is called in `lookAt`'s branch for a look that was not
   overtaken, next to `takeOffAnsweredLabels`, and in `watch()` after the
   snapshot is stored.
