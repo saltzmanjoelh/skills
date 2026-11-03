@@ -144,19 +144,24 @@ async function readLinkFact($: $, dir: string | null) {
   const found = await readIssueLink(path => $.fs.read(path), dir)
   issueAddress = found.address
   if (found.ignored === null) return
-  const line = ignoredLine('foreman', found.ignored)
   // The toast and the line are only a courtesy, since the keys are plain
-  // either way. Each has its own try, so a refused toast still leaves the
-  // line in the log.
+  // either way.
+  await toastAndLog($, ignoredLine('foreman', found.ignored))
+}
+
+// Shows `line` as a toast and writes the same line to the log, for something
+// the person should see without the pane. Each has its own try, so a refused
+// toast still leaves the line in the log, and it never throws.
+async function toastAndLog($: $, line: string) {
   try {
     $.ui.toast(line)
   } catch {
-    // The log line below still says why.
+    // The log line below still says it.
   }
   try {
     await addLog($, line)
   } catch {
-    // The toast above already said why.
+    // The toast above already said it.
   }
 }
 
@@ -1181,9 +1186,8 @@ async function becomeParent($: $): Promise<string | null> {
 
 // Opens foreman's pane. When the engine does not place it, or the open
 // throws, it shows the sentence that says so as a toast and writes it to the
-// log, and answers it; it answers null when the pane is placed. The toast and
-// the log line each have their own try, so neither stops the other, and it
-// never throws.
+// log, and answers it; it answers null when the pane is placed. It never
+// throws.
 async function openPane($: $): Promise<string | null> {
   let line: string
   try {
@@ -1193,12 +1197,7 @@ async function openPane($: $): Promise<string | null> {
   } catch (error) {
     line = `Could not open foreman's pane (${reasonOf(error)}).`
   }
-  try {
-    $.ui.toast(line)
-  } catch {
-    // The log line below still says it.
-  }
-  await addLog($, line).catch(() => undefined)
+  await toastAndLog($, line)
   return line
 }
 
