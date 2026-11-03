@@ -3919,10 +3919,8 @@ let parentSendOwedTo: string | null = null
 // cause a status write or another send. The session's start sets it to null,
 // so the count starts at zero on every load of the hooks.
 let sends: SendsRecord | null = null
-// The chain the record's store writes go through, one after another, and the
-// text of the record last stored, so a record equal to it is not written again.
+// The chain the record's store writes go through, one after another.
 let sendsWrites: Promise<void> = Promise.resolve()
-let lastStoredSends: string | undefined
 // The minute's tick, and whether the session has ended, after which nothing
 // more is written.
 let statusTick: { cancel: () => void } | undefined
@@ -4115,19 +4113,20 @@ function startSends($: $, memo: StatusMemo) {
 // go one after another, as the spending ledger's do (see persistUsage), and
 // each takes the newest record when its turn comes. A stored copy with a
 // later load time belongs to a newer load of the hooks, so it is left as it
-// is. A record equal to the one last stored is not written again, and a
-// refused write is ignored: the next send writes the record again.
+// is. A record equal to the stored copy is not written again. The skip
+// compares with the stored copy rather than with what this load last wrote,
+// because the hooks from before a hot reload can finish a send they had under
+// way after this load's write and leave their older copy in the store; the
+// next copy this load makes then writes its own again. A refused write is
+// ignored: the next send writes the record again.
 async function copySends($: $) {
   const next = sendsWrites.then(async () => {
     const record = sends
     if (record === null) return
-    const text = JSON.stringify(record)
-    if (text === lastStoredSends) return
     const key = sendsKey(record.sessionId)
     const stored = sendsIn(await $.store.get(key), record.sessionId)
-    if (stored !== null && stored.since > record.since) return
+    if (stored !== null && (stored.since > record.since || JSON.stringify(stored) === JSON.stringify(record))) return
     await $.store.set(key, record)
-    lastStoredSends = text
   })
   sendsWrites = next.catch(() => undefined)
   await next

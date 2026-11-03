@@ -54,7 +54,8 @@ export function markersIn(raw: unknown, sessionId: string): MarkersRecord | null
   if (r.version !== 1 || r.sessionId !== sessionId || !isTime(r.since)) return null
   const { consumed, first, last } = r
   if (typeof consumed !== 'number' || !Number.isInteger(consumed) || consumed < 0) return null
-  if (consumed === 0 ? first !== null || last !== null : !isTime(first) || !isTime(last)) return null
+  if (consumed === 0 && (first !== null || last !== null)) return null
+  if (consumed > 0 && (!isTime(first) || !isTime(last))) return null
   return { version: 1, sessionId, since: r.since, consumed, first: first as number | null, last: last as number | null }
 }
 

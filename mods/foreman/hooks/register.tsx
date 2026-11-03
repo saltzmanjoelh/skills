@@ -108,11 +108,9 @@ let issueAddress: string | null = null
 // second first line.
 let markers: MarkersRecord | null = null
 let markerLogged = false
-// The store write of the count under way, so the copies go in order, and the
-// copy this module last stored, as JSON, so a change that left it the same
-// writes nothing.
+// The store writes of the count under way, so the copies and the prune go
+// in order.
 let markerWrites: Promise<void> = Promise.resolve()
-let lastStoredMarkers: string | undefined
 
 // The status folder: under CLAUDE_CONFIG_DIR when it is set, else under the
 // home folder's `.claude`.
@@ -1259,21 +1257,22 @@ async function noteConsumed($: $) {
 // Writes the count to the store under the session id the record carries,
 // after any write already under way, so the last write to land carries the
 // newest count. Each write reads the newest record when its turn comes. A
-// record the same as the one last stored is not written again, and neither is
-// one whose stored copy a later load of the hooks wrote, which owns the key
-// now. A write that fails is ignored, and the next change writes the copy
-// again. It never throws.
+// record the same as the stored copy is not written again, and neither is one
+// whose stored copy a later load of the hooks wrote, which owns the key now.
+// The skip compares with the stored copy rather than with what this load
+// last wrote, because the hooks from before a hot reload can finish a write
+// they had under way after this load's write and leave their older copy in
+// the store; the next copy this load makes then writes its own again. A
+// write that fails is ignored, and the next change writes the copy again.
+// It never throws.
 async function copyMarkers($: $) {
   const next = markerWrites.then(async () => {
     const record = markers
     if (record === null) return
-    const text = JSON.stringify(record)
-    if (text === lastStoredMarkers) return
     const key = markersKey(record.sessionId)
     const stored = markersIn(await $.store.get(key), record.sessionId)
-    if (stored !== null && stored.since > record.since) return
+    if (stored !== null && (stored.since > record.since || JSON.stringify(stored) === JSON.stringify(record))) return
     await $.store.set(key, record)
-    lastStoredMarkers = text
   })
   markerWrites = next.catch(() => undefined)
   await markerWrites
@@ -1282,13 +1281,19 @@ async function copyMarkers($: $) {
 // Deletes every stored count whose newest time is more than two weeks old,
 // whichever session wrote it, and at once one that reads as damaged or as
 // another session's, as builder prunes its copies of what a session spent.
+// It runs in the chain of the count's writes, so it never deletes a copy
+// that this load wrote while the prune ran.
 async function pruneMarkers($: $) {
-  const now = await $.clock.now()
-  for (const key of await $.store.keys()) {
-    if (!key.startsWith(MARKERS_PREFIX)) continue
-    const record = markersIn(await $.store.get(key), key.slice(MARKERS_PREFIX.length))
-    if (record === null || now - markersNewest(record) > MARKERS_KEPT_MS) await $.store.delete(key)
-  }
+  const next = markerWrites.then(async () => {
+    const now = await $.clock.now()
+    for (const key of await $.store.keys()) {
+      if (!key.startsWith(MARKERS_PREFIX)) continue
+      const record = markersIn(await $.store.get(key), key.slice(MARKERS_PREFIX.length))
+      if (record === null || now - markersNewest(record) > MARKERS_KEPT_MS) await $.store.delete(key)
+    }
+  })
+  markerWrites = next.catch(() => undefined)
+  await next
 }
 
 // What the start_session hook answers when it failed, as fallbackOf decides.
@@ -1319,11 +1324,11 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     workingFolder = e.cwd
     const id = await $.session.id()
-    // The count of status messages starts again at zero on every load, and
-    // the stored copies too old to keep are deleted before this load's copy
-    // is written.
+    // The count of status messages starts again at zero on every load. The
+    // stored copies too old to keep are deleted in the chain of the count's
+    // writes, ahead of this load's copy, and the start does not wait for it.
     await startMarkers($, id).catch(() => undefined)
-    await pruneMarkers($).catch(() => undefined)
+    void pruneMarkers($).catch(() => undefined)
     const rawParent = await $.store.get(storeKey(id))
     const rawTickets = await $.store.get(ticketsKey(id))
     // The stored ledger is taken only while $.state holds none of its own,

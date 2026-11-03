@@ -845,6 +845,19 @@ test('a stored copy that a newer load wrote is not overwritten', async ($, on) =
   expect(markersCopy(w)).toEqual(newer)
 })
 
+test('a copy that the hooks from before a reload wrote over this load\'s copy is written again by this load\'s next copy, though the count is unchanged', async ($, on) => {
+  const w = world(on, { store: { 'parent:session-1': { isOn: true, slots: null } } })
+  await mountBoth($, on)
+  await start($)
+  await w.clock.settle()
+  const ours = markersCopy(w)
+  expect(ours).toEqual({ version: 1, sessionId: 'session-1', since: T0, consumed: 0, first: null, last: null })
+  w.stored.set(markersKey('session-1'), { version: 1, sessionId: 'session-1', since: T0 - DAY, consumed: 2, first: T0 - DAY, last: T0 - MINUTE })
+  await foreman($)
+  await w.clock.settle()
+  expect(markersCopy(w)).toEqual(ours)
+})
+
 test('when the hooks load, a copy whose newest time is 15 days old and a damaged one are deleted, and one 13 days old is kept', async ($, on) => {
   const copy = (id: string, since: number, last: number | null) => ({ version: 1, sessionId: id, since, consumed: last === null ? 0 : 1, first: last, last })
   const w = world(on, { store: {
