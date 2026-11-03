@@ -1203,13 +1203,16 @@ async function withBatch($: $, e: PromptSubmitInput): Promise<PromptSubmitInput>
 // for its first step reads nothing more and writes nothing. The step's
 // decision and the marker's change are one write: one less when the step is
 // answered, and zero when it goes to the model, which a failure also tries to
-// write. The write also clears the releasing mark, and a turn whose marker is
-// zero still goes to the model. Any failure means the model answers.
+// write. The write also clears the releasing mark. A turn whose marker is
+// zero goes to the model without reading the conversation, because no last
+// message can change that; should a held delivery raise the marker before the
+// write, the turn still goes to the model, which costs one model turn. Any
+// failure means the model answers.
 async function answersHeld($: $): Promise<boolean> {
   try {
     const stored = await storedBatches($)
     if (stored.marker === 0 && stored.releasing !== true) return false
-    const messages = await $.session.messages()
+    const messages = stored.marker === 0 ? [] : await $.session.messages()
     const last = Array.isArray(messages) ? messages.at(-1) : undefined
     let answered = false
     await changeBatches($, state => {

@@ -742,7 +742,8 @@ test('a woken member that ends with only a finished notification and no second r
 // second and starts one turn for all of them, so fewer first steps run than
 // held deliveries raised the marker. Answers the world after the last
 // member's report released the batch and the release turn's first step ran,
-// with how many times the model was asked in that step. `after`, when given,
+// with how many times the model was asked and the conversation was read in
+// that step. `after`, when given,
 // is a notification from the last member that arrives while the session is
 // still idle, after its report and before the release turn's first step, and
 // is then the conversation's last message.
@@ -765,8 +766,9 @@ async function releasedAfterBurst($: Engine, on: On, after?: string) {
     w.talk.messages = [...w.talk.messages, user(after)]
   }
   const before = w.asked.calls
+  const readsBefore = w.talk.reads
   const release = await step($, { turnId: 't3', index: 0 })
-  return { w, asked: w.asked.calls - before, chunks: release.chunks }
+  return { w, asked: w.asked.calls - before, reads: w.talk.reads - readsBefore, chunks: release.chunks }
 }
 
 test('the turn that releases a batch after a burst of held notifications goes to the model with the completion line', async ($, on) => {
@@ -774,6 +776,12 @@ test('the turn that releases a batch after a burst of held notifications goes to
   expect(asked).toBe(1)
   expect(texts(chunks)).toEqual(['From the model.', 'stop'])
   expect(w.state.value?.marker).toBe(0)
+})
+
+test('the release turn\'s first step clears the releasing mark without reading the conversation', async ($, on) => {
+  const { w, reads } = await releasedAfterBurst($, on)
+  expect(reads).toBe(0)
+  expect(w.state.value?.releasing).toBeUndefined()
 })
 
 test('the releasing member\'s completed notification before the release turn\'s first step leaves that turn to the model', async ($, on) => {
