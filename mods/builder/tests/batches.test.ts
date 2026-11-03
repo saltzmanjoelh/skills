@@ -709,3 +709,28 @@ test('a deadline line the engine takes after refusals is not sent before its dou
   expect(lines()).toBe(1)
   expect(await deliver($, report(BRAVO))).toEqual({ text: report(BRAVO) })
 })
+
+// The engine's completed notification about the agent `id` when it parks to
+// wait on its own background work, and when it finished, in its own shape.
+const parkNotice = (id: string) => `<task-notification>\n<task-id>${id}</task-id>\n<tool-use-id>toolu_example</tool-use-id>\n<status>completed</status>\n<summary>Agent "Example agent" is waiting on its own background work</summary>\n<result>This agent has not reported yet.\n</result>\n</task-notification>`
+const finishedNotice = (id: string) => `<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>\n<summary>Agent "Example agent" finished</summary>\n<result>done</result>\n</task-notification>`
+
+test('a woken member that ends with only a finished notification and no second report releases the batch once, with the completion line, without waiting for the deadline', async ($, on) => {
+  const w = world(on)
+  await launched($)
+  const contexts: (readonly string[] | undefined)[] = []
+  const sent = async (text: string, kind: 'peer' | 'task-notification' = 'peer') => {
+    const out = await deliver($, text, kind)
+    contexts.push(out.context)
+    return out
+  }
+  await sent(report(ALPHA))
+  expect(await sent(parkNotice(ALPHA), 'task-notification')).toEqual({ text: parkNotice(ALPHA) })
+  await wake($, w, ALPHA)
+  expect(await sent(report(BRAVO))).toEqual({ text: report(BRAVO) })
+  expect(await sent(finishedNotice(ALPHA), 'task-notification')).toEqual({ text: finishedNotice(ALPHA), context: [completeLine(2)] })
+  expect(contexts.filter(c => c !== undefined)).toEqual([[completeLine(2)]])
+  await w.clock.advance(2 * BATCH_LIMIT_MS)
+  await w.clock.settle()
+  expect(w.passed.map(p => p.text).filter(t => t.startsWith('builder: the time limit'))).toEqual([])
+})

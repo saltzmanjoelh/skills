@@ -14,8 +14,8 @@ const CHARLIE = 'ccccccccccccccccc'
 
 const SESSION = 'session-1'
 
-const report = (id: string): Delivery => ({ id, isReport: true, status: null })
-const notice = (id: string, status: string): Delivery => ({ id, isReport: false, status })
+const report = (id: string): Delivery => ({ id, isReport: true, status: null, finished: false })
+const notice = (id: string, status: string): Delivery => ({ id, isReport: false, status, finished: false })
 // The deadline lines due at `now`.
 const dueLines = (state: BatchState, now: number) => afterDeadline(state, now).due.map(d => d.line)
 
@@ -30,7 +30,7 @@ function launched(): BatchState {
 
 test('a report is read only from an agent-message that begins the text under origin peer', () => {
   const text = `<agent-message from="${ALPHA}">\n[Subagent hand-back] the report`
-  expect(deliveryOf(PEER, text)).toEqual({ id: ALPHA, isReport: true, status: null })
+  expect(deliveryOf(PEER, text)).toEqual({ id: ALPHA, isReport: true, status: null, finished: false })
   expect(deliveryOf(COMPOSER, text)).toBeNull()
   expect(deliveryOf(NOTICE, text)).toBeNull()
   expect(deliveryOf(PEER, ` ${text}`)).toBeNull()
@@ -40,7 +40,7 @@ test('a report is read only from an agent-message that begins the text under ori
 
 test('a notification is read only from a task-notification that begins the text under its own origin', () => {
   const text = `<task-notification>\n<task-id>${BRAVO}</task-id>\n<status>failed</status>\n<summary>x</summary>\n</task-notification>`
-  expect(deliveryOf(NOTICE, text)).toEqual({ id: BRAVO, isReport: false, status: 'failed' })
+  expect(deliveryOf(NOTICE, text)).toEqual({ id: BRAVO, isReport: false, status: 'failed', finished: false })
   expect(deliveryOf(PEER, text)).toBeNull()
   expect(deliveryOf(COMPOSER, text)).toBeNull()
   expect(deliveryOf(NOTICE, `hello ${text}`)).toBeNull()
@@ -374,4 +374,67 @@ test('a deadline line the engine takes after refusals ends the batch, and the me
   expect(nextDeadline(sent)).toBeNull()
   expect(sent.batches.some(b => b.step === 't1:0')).toBe(false)
   expect(afterDelivery(sent, report(BRAVO), true, (times[2] as number) + 1).act).toEqual({ kind: 'pass' })
+})
+
+// The two kinds of completed notification the engine sends about an agent,
+// in its own shape: one when the agent parks to wait on its own background
+// work, and one when it finished. `result` stands for the agent's own text.
+const parkText = (id: string, result = 'This agent has not reported yet: it is waiting on its own background work.') => `<task-notification>
+<task-id>${id}</task-id>
+<tool-use-id>toolu_example</tool-use-id>
+<output-file>/tmp/example/tasks/${id}.output</output-file>
+<status>completed</status>
+<summary>Agent "Example agent" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports; the result below may be interim.</note>
+<result>${result}
+</result>
+<usage><subagent_tokens>1</subagent_tokens><tool_uses>1</tool_uses><duration_ms>1</duration_ms></usage>
+</task-notification>`
+const finishedText = (id: string, summary = 'Agent "Example agent" finished') => `<task-notification>
+<task-id>${id}</task-id>
+<output-file>/tmp/example/tasks/${id}.output</output-file>
+<status>completed</status>
+<summary>${summary}</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own.</note>
+<result>done</result>
+<usage><subagent_tokens>1</subagent_tokens><tool_uses>1</tool_uses><duration_ms>1</duration_ms></usage>
+</task-notification>`
+
+test('a notification is read as finished only when its summary says the agent finished', () => {
+  expect(deliveryOf(NOTICE, parkText(ALPHA))).toEqual({ id: ALPHA, isReport: false, status: 'completed', finished: false })
+  expect(deliveryOf(NOTICE, finishedText(ALPHA))).toEqual({ id: ALPHA, isReport: false, status: 'completed', finished: true })
+})
+
+test('the word finished in the result or the note, outside the summary, is not read as finished', () => {
+  expect(deliveryOf(NOTICE, parkText(ALPHA, 'The build finished.'))?.finished).toBe(false)
+  expect(deliveryOf(NOTICE, parkText(ALPHA, 'Agent "x" finished'))?.finished).toBe(false)
+  expect(deliveryOf(NOTICE, parkText(ALPHA, '<summary>Agent "x" finished</summary>'))?.finished).toBe(false)
+  const inNote = parkText(ALPHA).replace('the result below may be interim.', 'Agent "x" finished')
+  expect(inNote).toContain('Agent "x" finished</note>')
+  expect(deliveryOf(NOTICE, inNote)?.finished).toBe(false)
+})
+
+test('a summary with other text around the finished wording is not read as finished', () => {
+  expect(deliveryOf(NOTICE, finishedText(ALPHA, 'Agent "x" finished early'))?.finished).toBe(false)
+  expect(deliveryOf(NOTICE, finishedText(ALPHA, 'Note: Agent "x" finished'))?.finished).toBe(false)
+  expect(deliveryOf(NOTICE, finishedText(ALPHA, ' Agent "x" finished'))?.finished).toBe(false)
+  expect(deliveryOf(NOTICE, finishedText(ALPHA, 'Agent x finished'))?.finished).toBe(false)
+})
+
+test('a finished notification ends its member, and as the last one releases the batch with the completion line', () => {
+  const finished = deliveryOf(NOTICE, finishedText(BRAVO)) as Delivery
+  const state = afterDelivery(launched(), report(ALPHA), true, 0).state
+  expect(afterDelivery(state, finished, true, 1).act).toEqual({ kind: 'release', line: completeLine(2) })
+  const first = afterDelivery(launched(), finished, true, 0)
+  expect(first.act).toEqual({ kind: 'hold' })
+  expect(runningLines(first.state)).toEqual([incompleteLine(['Explore aaaaaaaa'])])
+  expect(afterDelivery(first.state, report(ALPHA), true, 1).act).toEqual({ kind: 'release', line: completeLine(2) })
+})
+
+test('a notification that the agent parked to wait on its own work ends nothing', () => {
+  const parked = deliveryOf(NOTICE, parkText(BRAVO)) as Delivery
+  const state = afterDelivery(launched(), report(ALPHA), true, 0).state
+  const out = afterDelivery(state, parked, true, 1)
+  expect(out.act).toEqual({ kind: 'hold' })
+  expect(runningLines(out.state)).toEqual([incompleteLine(['Plan bbbbbbbb'])])
 })

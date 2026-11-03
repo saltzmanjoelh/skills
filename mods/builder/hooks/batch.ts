@@ -31,8 +31,10 @@ export const BATCHES_KEPT = 20
 export const NOTED_REPLY = 'Noted.'
 
 // One delivery from a finishing agent: its report, or the notification about
-// it with the status the notification gives.
-export type Delivery = { id: string; isReport: boolean; status: string | null }
+// it with the status the notification gives. `finished` says whether the
+// notification's own summary says the agent finished, and is false for a
+// report.
+export type Delivery = { id: string; isReport: boolean; status: string | null; finished: boolean }
 
 // What register.tsx does with a prompt: pass it on as it came, pass it on as
 // it came and record that its member ended, pass it on as it came and count
@@ -158,21 +160,30 @@ export function afterWake(state: BatchState, id: string): BatchState {
   return { ...state, batches: batches.filter(b => b.members.length > 0) }
 }
 
+// The summary the engine writes when an agent finished, as the whole text of
+// the notification's summary element.
+const FINISHED = /^Agent ".*" finished$/
+
 // The delivery a prompt is, read only under an origin the engine sets and a
 // person cannot type: under `peer`, the sender of the agent-message element
 // that begins the text; under `task-notification`, the task id and status of
-// the task-notification element that begins the text. Every other prompt is
-// no delivery.
+// the task-notification element that begins the text, and whether its
+// summary element says the agent finished. Only the summary is read for
+// that, never the result or the note, because those can carry the agent's
+// own text. The engine writes the summary before the note and the result, so
+// the first summary element is the engine's. Every other prompt is no
+// delivery.
 export function deliveryOf(origin: PromptOrigin, text: string): Delivery | null {
   if (origin.kind === 'peer') {
     const id = REPORT.exec(text)?.[1]
-    return id === undefined ? null : { id, isReport: true, status: null }
+    return id === undefined ? null : { id, isReport: true, status: null, finished: false }
   }
   if (origin.kind === 'task-notification') {
     const body = NOTICE.exec(text)?.[1]
     const id = body === undefined ? undefined : /<task-id>([^<]+)<\/task-id>/.exec(body)?.[1]
     if (body === undefined || id === undefined) return null
-    return { id, isReport: false, status: /<status>([^<]*)<\/status>/.exec(body)?.[1] ?? null }
+    const summary = /<summary>([^<]*)<\/summary>/.exec(body)?.[1]
+    return { id, isReport: false, status: /<status>([^<]*)<\/status>/.exec(body)?.[1] ?? null, finished: summary !== undefined && FINISHED.test(summary) }
   }
   return null
 }
@@ -187,11 +198,18 @@ const pruned = (state: BatchState, now: number): BatchState => ({
 // delivery, so that the members left still release it.
 const countsAsBatch = (b: Batch) => b.members.length >= 2 || b.deadline !== null || b.releasedAt !== null
 
-const ends = (d: Delivery) => d.isReport || d.status === 'failed' || d.status === 'killed'
+// Whether a delivery ends its member: a report, a notification that the agent
+// failed or was killed, or one whose summary says the agent finished. The
+// engine accepts one report from each agent, so an agent that reported before
+// it parked often ends its woken run with no second report, and the finished
+// notification is its only sign of ending. Every other completed
+// notification, such as the one sent when an agent parks to wait on its own
+// background work, ends nothing.
+const ends = (d: Delivery) => d.isReport || d.status === 'failed' || d.status === 'killed' || d.finished
 
 // What a delivery does to the batches. A delivery from an agent in no batch of
-// two or more passes. A report, or a notification that its agent failed or was
-// killed, ends its member; the one that ends the last member releases the
+// two or more passes. A report, a notification that its agent failed or was
+// killed, or one whose summary says the agent finished, ends its member; the one that ends the last member releases the
 // batch. Every other delivery from a member of an open or remembered batch is
 // held: it starts the batch's deadline if none is set, and raises the marker
 // when it arrives while the session is idle (`isIdle`), because only then does
