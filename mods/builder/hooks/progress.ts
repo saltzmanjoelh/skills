@@ -99,7 +99,7 @@ export function afterReport(prev: Progress | null, report: Report, now: number):
 
 // The work after a stage the mod saw for itself, or null when it changes
 // nothing: with no record, when the watch began before the record's start, so
-// the record belongs to earlier work, when the stage is behind the furthest
+// the record belongs to later work, when the stage is behind the furthest
 // one reached, so the bar never moves back, or when the stage and note are the
 // ones shown. Otherwise it is a report under the record's own title, so the
 // session's title is kept. `watchSince` is when the watch of the pull request
