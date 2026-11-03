@@ -131,7 +131,10 @@ function fakeGitHub(on: On) {
   // edits, `gh pr edit` with `--add-label`, fail as gh offline does.
   // `labelsHold`, when set, keeps the next read of the labels of #7 waiting
   // until it resolves, and `labelsAnswer`, when set, is what every read of
-  // the labels prints instead of the list of names.
+  // the labels prints instead of the list of names. `labelAnswers` answers
+  // the next reads of the labels in turn before either, and a null in it
+  // makes that read exit with an error. A label edit that succeeds changes
+  // the labels the pull request carries, as it does on GitHub.
   const world = {
     pr: openPullRequest(), calls: [] as string[], removalsToFail: 0, labelMissing: false, head: C,
     hold: null as Promise<void> | null, cutDiff: false, otherNumber: 0, readsToFail: 0,
@@ -151,7 +154,7 @@ function fakeGitHub(on: On) {
     messages: [{ sha: A, message: 'Build it' }] as { sha: string; message: string }[], messagesFail: false,
     ancestorExit: 0, ancestorFail: null as null | 'throw' | 'cut', merges: '', mergesFail: null as null | 'exit' | 'throw' | 'cut', baseClaude: null as string | null, grep: '', grepFail: false, objectFormat: 'sha1', links: '', linksFail: false, marketplace: null as string | null, nameStatus: '', nameStatusFail: false, sinceDiffFail: false,
     missing: [] as string[], pullFetchFails: false, unpushed: '', unpushedFail: null as null | 'exit' | 'throw', editsToFail: 0,
-    labelsHold: null as Promise<void> | null, labelsAnswer: null as string | null,
+    labelsHold: null as Promise<void> | null, labelsAnswer: null as string | null, labelAnswers: [] as (string | null)[],
   }
   on('process.run', async ($, e) => {
     const argv = e.argv.join(' ')
@@ -288,6 +291,9 @@ function fakeGitHub(on: On) {
     if (argv.startsWith('gh api user') && world.loginThrows) throw new Error('the process could not be started')
     if (argv.startsWith('gh api user')) return out('owner\n')
     if (/^gh pr view \d+ /.test(argv) && argv.includes('--json labels ')) {
+      const next = world.labelAnswers.shift()
+      if (next === null) return { value: { exitCode: 1, stdout: '', stderr: 'network', isStdoutTruncated: false, isStderrTruncated: false } }
+      if (next !== undefined) return out(next)
       const seen = world.labelsAnswer ?? JSON.stringify((world.pr.labels ?? []).map(label => label.name))
       const hold = world.labelsHold
       world.labelsHold = null
@@ -322,10 +328,27 @@ function fakeGitHub(on: On) {
     if (argv.includes('--add-label') && world.labelMissing) {
       return { value: { exitCode: 1, stdout: '', stderr: 'label not found', isStdoutTruncated: false, isStderrTruncated: false } }
     }
-    if (argv.startsWith('gh pr edit')) return out('')
+    if (argv.startsWith('gh pr edit')) {
+      applyLabelEdit(world.pr, e.argv)
+      return out('')
+    }
     return { value: { exitCode: 1, stdout: '', stderr: `unexpected: ${argv}`, isStdoutTruncated: false, isStderrTruncated: false } }
   })
   return world
+}
+
+// Changes the labels the pull request carries as `gh pr edit` with
+// `--add-label` and `--remove-label` does: the removed labels come off, and
+// the added one goes on once.
+function applyLabelEdit(pr: GhPullRequest, argv: readonly string[]) {
+  const valueOf = (flag: string) => {
+    const at = argv.indexOf(flag)
+    return at === -1 ? [] : (argv[at + 1] ?? '').split(',')
+  }
+  const removed = valueOf('--remove-label')
+  const kept = (pr.labels ?? []).filter(label => !removed.includes(label.name))
+  const added = valueOf('--add-label').filter(name => !kept.some(label => label.name === name))
+  pr.labels = [...kept, ...added.map(name => ({ name }))]
 }
 
 // Whether `git diff --quiet <a> <b> -- <pathspecs>` finds a difference in the
@@ -13465,6 +13488,20 @@ test('the merge step states that the worktree holds no commits the pull request 
   expect(world.calls.some(call => call.startsWith('git merge-base --is-ancestor'))).toBe(false)
 })
 
+test('with a checkout given to the watch tool, the commits are listed in the worktree of that checkout that has the head branch, not in the session\'s folder', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  sessionInAnotherRepository(world, files)
+  world.pr = approvedAndPassed()
+  const ran = String((await watchFromApi($, { repo: 'o/r', checkout: '/web' })).result)
+  expect(ran).toContain('The step that applies: Both verdicts approve at this head, merge.')
+  expect(ran).toContain('The mod listed the commits the head branch\'s worktree holds that the pull request\'s head lacks, and found none.')
+  expect(world.ran.filter(r => /^git rev-list [0-9a-f]+\.\.HEAD$/.test(r.argv))).toEqual([{ argv: `git rev-list ${C}..HEAD`, cwd: '/web-wt' }])
+})
+
 test('commits the pull request lacks are named by short hash with the ancestor answer, on the merge, ask-merge and Merged steps', async ($, on) => {
   mock.clock(on)
   mock.store(on)
@@ -13610,6 +13647,53 @@ test('a failed label edit saves no record, and the next look tries again', async
   expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ label: 'in-review' })
 })
 
+test('a state label put on between the read and the edit is removed by one more edit, and only then is the record saved', async ($, on) => {
+  const clock = mock.clock(on)
+  const stored = memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  // The read of the labels answers before a second session puts on
+  // waiting-on-author, so the edit that adds in-review does not remove it.
+  let release = () => {}
+  world.labelsHold = new Promise(resolve => { release = resolve })
+  await watch($)
+  await clock.settle()
+  world.pr.labels = [{ name: 'waiting-on-author' }]
+  release()
+  await clock.settle()
+  expect(labelEdits(world)).toEqual([
+    'gh pr edit 7 --repo o/r --add-label in-review',
+    'gh pr edit 7 --repo o/r --remove-label waiting-on-author',
+  ])
+  expect(world.pr.labels).toEqual([{ name: 'in-review' }])
+  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'in-review', at: clock.now() })
+})
+
+test('a failed read of the labels after the edit, or a failed removal after it, saves no record', async ($, on) => {
+  const clock = mock.clock(on)
+  const stored = memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  // A job reads the labels before its edit and again after it. Every read
+  // past the ones listed answers something that is not a list, so a second
+  // job stops at its first read.
+  world.labelsAnswer = 'not a list'
+  world.labelAnswers = ['[]', null]
+  await watch($)
+  await clock.settle()
+  expect(labelEdits(world)).toEqual(['gh pr edit 7 --repo o/r --add-label in-review'])
+  expect(stored.get(STATE_LABEL_KEY)).toBeUndefined()
+
+  world.labelAnswers = ['[]', '["in-review","stuck"]']
+  world.removalsToFail = 1
+  await clock.advance(30 * 60_000)
+  expect(labelEdits(world).slice(1)).toEqual([
+    'gh pr edit 7 --repo o/r --add-label in-review',
+    'gh pr edit 7 --repo o/r --remove-label stuck',
+  ])
+  expect(stored.get(STATE_LABEL_KEY)).toBeUndefined()
+})
+
 test('a state label the repository lacks is created, and the edit is tried again', async ($, on) => {
   const clock = mock.clock(on)
   const stored = memoryStore(on)
@@ -13735,6 +13819,25 @@ test('the watch tool reports pr, and the package tool review with the round from
   // A later watch never moves the bar back to pr.
   await loose($)({ tool: 'mcp__builder__watch', number: 7 })
   expect(shownStage(state)).toMatchObject({ stage: 'review', note: 'round 2' })
+})
+
+test('watching a merged or closed pull request reports no pr stage', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  fakePanes(on)
+  fakeFiles(on)
+  const state = writtenState(on)
+  await startOnly($)
+  await report($, 'verify')
+  await clock.advance(1000)
+  world.pr = openPullRequest({ state: 'MERGED' })
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  expect(shownStage(state)).toMatchObject({ title: TITLE, stage: 'verify' })
+  world.pr = openPullRequest({ state: 'CLOSED' })
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  expect(shownStage(state)).toMatchObject({ title: TITLE, stage: 'verify' })
 })
 
 test('a session Bash merge reports merge before the command runs, and a push or a subagent\'s merge reports nothing', async ($, on) => {

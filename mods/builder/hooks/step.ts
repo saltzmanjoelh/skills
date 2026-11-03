@@ -210,7 +210,12 @@ export type LabelAction = { kind: 'none' } | { kind: 'record' } | { kind: 'write
 export function labelActionOf(derived: StateLabel | null, record: StateLabel | null, liveLabels: readonly string[]): LabelAction {
   if (derived === null || derived === record) return { kind: 'none' }
   if (record === null && liveLabels.includes('stuck')) return { kind: 'record' }
-  return { kind: 'write', remove: STATE_LABELS.filter(label => label !== derived && liveLabels.includes(label)) }
+  return { kind: 'write', remove: otherStateLabelsOf(derived, liveLabels) }
+}
+
+// The state labels among `liveLabels` other than `kept`.
+export function otherStateLabelsOf(kept: StateLabel, liveLabels: readonly string[]): StateLabel[] {
+  return STATE_LABELS.filter(label => label !== kept && liveLabels.includes(label))
 }
 
 // The record of the label the mod last set on a pull request, as it is

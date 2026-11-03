@@ -10,7 +10,7 @@ import { checkoutSentence, otherRepositorySentence, worktreeWithBranch, type Che
 // handed to the session.
 import { afterCompaction, afterFailure, checkoutIn, compactionFacts, compactionsIn, isDue, measureIn, measureOf, owing, told as afterReloadTold, withFacts, type UsageRead } from './context'
 import { afterAskAgain, afterTally, askAgainAnswer, briefAnswer, briefFactsOf, briefRefusal, briefText, counselAnswer, decisionLine, destinationOf, endedDecisionLines, FOLLOW_UP_OPTIONS, followUpAnswer, followUpAskAgainAnswer, followUpsInput, followUpsRefusal, followUpStepOf, followUpVotesOf, keepCounsel, MAX_BRIEF_OPTIONS, MAX_FOLLOW_UPS, MIN_OPTIONS, neverStartedCandidatesOf, neverStartedOf, type PullRequestRef, reviewParagraph, stepOf, type UnreadableVote, votesOf } from './counsel'
-import { carriedHeadRuns, carriedRuns, changesBetween, DECISION_LABEL, headRunsOf, isCiMonitorEvent, isSameState, JOBS_JQ, needsJobs, PR_FIELDS, pullRequestStateIn, realWorkOf, roundInProgress, RUNS_JQ, snapshotIn, snapshotOf, unfinishedOf, verdictsOf, type BaseFacts, type GhPullRequest, type HeadRun, type Snapshot, type SnapshotExtras, type Unpushed, type Verdict } from './github'
+import { carriedHeadRuns, carriedRuns, changesBetween, DECISION_LABEL, headRunsOf, isCiMonitorEvent, isSameState, JOBS_JQ, needsJobs, PR_FIELDS, pullRequestStateIn, realWorkOf, roundInProgress, RUNS_JQ, snapshotIn, snapshotOf, unfinishedOf, verdictsOf, type BaseFacts, type GhPullRequest, type HeadRun, type Snapshot, type SnapshotExtras, type StateLabel, type Unpushed, type Verdict } from './github'
 import { ignoredLine, readIssueLink } from './links'
 import { afterComparison, afterLoad, dueComparisons, isStale, LOADED_PATHS, loadBegunAs, loadBegunIn, loadedIn, type Found } from './loaded'
 import { AGENT_PANE, agentPaneTree, bandTree, isDrawable, messagesReadOf, NAMED_AFTER_MS, PANE, paneTree, secondRow, type Elements, type MessagesRead, type View } from './pane'
@@ -19,7 +19,7 @@ import { changePrompt, ciEventContext, GITHUB_NAMES_LINE, resumePrompt, stateLin
 import { changedKinds, commitRecordsOf, decidedItems, factIn, INSTRUCTION_PATHSPECS, instructionFileIsLink, isFullSha, isUpForCheck, LATER_CONTEXT_LINES, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pluginRootsOf, reviewedHeadOf, secretIn, specDirOf, trendOf, trendStopLine, underRoot, verdictHeadOf, verdictsLine, type CommitRecord, type EarlierRound, type FileKind, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isMerge, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
 import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isForemanNudge, newMemo, parentIn, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, STATUS_CHANGED_TEXT, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
-import { baseFactsOf, chooseStep, labelActionOf, labelFor, labelRecordIn, needsListing, SHORT_HASH, stepFor, UNPUSHED_KEPT, UNREAD_FACTS } from './step'
+import { baseFactsOf, chooseStep, labelActionOf, labelFor, labelRecordIn, needsListing, otherStateLabelsOf, SHORT_HASH, stepFor, UNPUSHED_KEPT, UNREAD_FACTS } from './step'
 import { timeOfDay } from './text'
 import { afterCost, afterStep, emptyUsage, usageIn } from './usage'
 
@@ -372,7 +372,10 @@ async function listUnpushed($: $, r: SnapshotTarget, live: GhPullRequest): Promi
   const dir = checkout.dir
   const present = await gitRun($, dir, ['cat-file', '-e', `${head}^{commit}`])
   if (present === null) return unlisted
-  if (present.exitCode !== 0 && (await git($, dir, ['fetch', '-q', 'origin', `pull/${live.number}/head`])) === null) return unlisted
+  if (present.exitCode !== 0) {
+    const fetched = await git($, dir, ['fetch', '-q', 'origin', `pull/${live.number}/head`])
+    if (fetched === null) return unlisted
+  }
   const listed = await git($, dir, ['rev-list', `${head}..HEAD`])
   if (listed === null) return unlisted
   const commits = listed.split('\n').map(line => line.trim()).filter(line => line !== '')
@@ -3070,9 +3073,9 @@ function requestStateLabel($: $) {
 // an older label: the watch, the stored snapshot, whether a question is open,
 // the record, and the labels the pull request carries now, read fresh as for
 // a question's label because the snapshot can be minutes old. It stops when
-// the snapshot is of another pull request or the watch moved on, and the
-// record is saved only after the edit succeeded, so a failed edit is tried
-// again at the next look.
+// the snapshot is of another pull request or the watch moved on. The record
+// is saved only after the edit succeeded and a read after it shows no other
+// state label on, so a failed edit is tried again at the next look.
 async function settleStateLabel($: $) {
   const r = await read($, run)
   const s = snapshotIn(await read($, pr))
@@ -3087,8 +3090,27 @@ async function settleStateLabel($: $) {
   if (live === null || !(await stillWatching($, r))) return
   const action = labelActionOf(derived, record, live)
   if (action.kind === 'none') return
-  if (action.kind === 'write' && !(await addLabel($, r, derived, action.remove))) return
+  if (action.kind === 'write') {
+    if (!(await addLabel($, r, derived, action.remove))) return
+    if (!(await removeOtherStateLabels($, r, derived))) return
+  }
   await $.store.set(key, { label: derived, at: await $.clock.now() })
+}
+
+// Reads the labels again after the edit that added `kept`, and removes every
+// other state label on the pull request in one more edit. A second session on
+// the same pull request, or the session setting `stuck` by hand, can put one
+// on between the first read and the edit, and once the record is saved no
+// later look reads the labels again. True when the read shows no other state
+// label or the removal succeeded, and false when either failed, so the record
+// is not saved and the next look tries again. The labels removed are on the
+// pull request, so they exist in the repository.
+async function removeOtherStateLabels($: $, r: BuilderRun, kept: StateLabel): Promise<boolean> {
+  const live = await liveLabelNames($, r)
+  if (live === null) return false
+  const others = otherStateLabelsOf(kept, live)
+  if (others.length === 0) return true
+  return (await gh($, r.cwd, ['pr', 'edit', String(r.number), '--repo', r.repo, '--remove-label', others.join(',')])) !== null
 }
 
 // The labels the pull request carries now, read fresh, or null when the read
