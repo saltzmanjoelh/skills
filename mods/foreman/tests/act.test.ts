@@ -237,6 +237,11 @@ test('a stale record whose gone wake went needs the session list at most once ev
   expect(needsList(failed, [row()], first + GONE_MS)).toBe(true)
   const unread = read(wokeFor, [row()], first, { sessions: { kind: 'unread' } }).tickets
   expect(needsList(unread, [row()], first + MINUTE)).toBe(true)
+  // A later read inside the same gone wait keeps the time, so a read that
+  // changes nothing else leaves the ledger as it was.
+  const again = read(checked, [row()], first + MINUTE, { sessions: running }).tickets
+  expect(again.pairings[0]!.acts.listCheckedAt).toBe(first)
+  expect(read(checked, [row()], first + GONE_MS, { sessions: running }).tickets.pairings[0]!.acts.listCheckedAt).toBe(first + GONE_MS)
   // A record still due its gone wake, and a done one, ask on every read.
   const due = read(paired(), [row()], first, { sessions: running }).tickets
   expect(needsList(due, [row()], first + MINUTE)).toBe(true)
