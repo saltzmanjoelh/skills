@@ -103,22 +103,42 @@ export function endedCards(before: readonly AgentCard[], after: readonly AgentCa
   return after.filter(card => !isRunning(card) && runningBefore.has(card.id))
 }
 
-// The session's background work as the session's own Stop and each subagent's
-// SubagentStop report it. Anything that is not a list, or an entry that is not
-// an object, is dropped, and so is a subagent, which the line and the pane
-// already show as an agent. Only the fields the mod draws are kept.
-export function backgroundOf(raw: unknown): BackgroundTask[] {
+// The entries of the engine's list of background work, which the session's
+// own Stop and each subagent's SubagentStop carry, each with its id read as a
+// string, or '' when it has none. Anything that is not a list, or an entry
+// that is not an object, is dropped. Every reader of that list starts here,
+// so they all read an entry and its id the same way.
+export function backgroundEntriesOf(raw: unknown): { id: string; task: Record<string, unknown> }[] {
   if (!Array.isArray(raw)) return []
-  const tasks: BackgroundTask[] = []
-  for (const entry of raw as unknown[]) {
-    if (typeof entry !== 'object' || entry === null) continue
+  return (raw as unknown[]).flatMap(entry => {
+    if (typeof entry !== 'object' || entry === null) return []
     const task = entry as Record<string, unknown>
+    return [{ id: String(task.id ?? ''), task }]
+  })
+}
+
+// The session's background work as the line and the pane draw it, read from
+// the list above. A subagent is dropped, because the line and the pane
+// already show it as an agent. Only the fields the mod draws are kept.
+export function backgroundOf(raw: unknown): BackgroundTask[] {
+  const tasks: BackgroundTask[] = []
+  for (const { id, task } of backgroundEntriesOf(raw)) {
     if (task.type === 'subagent') continue
-    const kept: BackgroundTask = { id: String(task.id ?? ''), type: String(task.type ?? ''), status: String(task.status ?? ''), description: String(task.description ?? '') }
+    const kept: BackgroundTask = { id, type: String(task.type ?? ''), status: String(task.status ?? ''), description: String(task.description ?? '') }
     if (typeof task.command === 'string') kept.command = task.command
     tasks.push(kept)
   }
   return tasks
+}
+
+// The background task id a tool call's result carries, which it does when the
+// call was moved to the background, or undefined when it carries none. The
+// field is returned as the engine sent it, and it is read here alone, so
+// whether a call went to the background and which task it became are read
+// the same way. A caller that needs a task id takes only a string that is not
+// empty.
+export function backgroundTaskIdOf(result: unknown): unknown {
+  return typeof result === 'object' && result !== null ? (result as { backgroundTaskId?: unknown }).backgroundTaskId : undefined
 }
 
 // Tools whose calls the line does not name while they run. The line already

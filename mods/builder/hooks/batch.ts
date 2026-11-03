@@ -8,6 +8,7 @@
 import type { PromptOrigin } from 'claude-code'
 
 import type { Batch, BatchMember, BatchState } from '../types'
+import { backgroundEntriesOf, backgroundTaskIdOf } from './state'
 import { printable } from './text'
 
 // How long a batch with held deliveries waits for its other members, counted
@@ -201,20 +202,23 @@ export function afterWake(state: BatchState, id: string): BatchState {
 }
 
 // The background task id that a tool call's result carries: a Bash call's
-// `backgroundTaskId` when the engine moved it to the background, or a
-// Monitor's `taskId`. Any other result carries none.
+// `backgroundTaskId` when the engine moved it to the background (see
+// backgroundTaskIdOf), or a Monitor's `taskId`. An empty id, and any other
+// result, carries none.
 export function taskIdOf(result: unknown): string | undefined {
-  if (typeof result !== 'object' || result === null) return undefined
-  const r = result as { backgroundTaskId?: unknown; taskId?: unknown }
-  const id = typeof r.backgroundTaskId === 'string' ? r.backgroundTaskId : r.taskId
-  return typeof id === 'string' && id !== '' ? id : undefined
+  const background = backgroundTaskIdOf(result)
+  if (typeof background === 'string') return background === '' ? undefined : background
+  const monitor = typeof result === 'object' && result !== null ? (result as { taskId?: unknown }).taskId : undefined
+  return typeof monitor === 'string' && monitor !== '' ? monitor : undefined
 }
 
 // The ids in a turn end's list of background work, which holds only work
-// still in flight, for the whole session and with no owner named.
+// still in flight, for the whole session and with no owner named. The list is
+// read by backgroundEntriesOf, as the line reads it, but a subagent is kept,
+// because a member's own background agent may be listed that way. An entry
+// with no id is left out, so it matches no task.
 export function listedIdsOf(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return []
-  return raw.flatMap(t => (typeof t === 'object' && t !== null && typeof (t as { id?: unknown }).id === 'string' ? [(t as { id: string }).id] : []))
+  return backgroundEntriesOf(raw).flatMap(({ id }) => (id === '' ? [] : [id]))
 }
 
 // The batch not yet released that has the agent as a member.

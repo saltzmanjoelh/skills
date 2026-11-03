@@ -519,6 +519,7 @@ test('a background task id is read from a Bash result\'s backgroundTaskId or a M
   expect(taskIdOf(null)).toBeUndefined()
   expect(listedIdsOf(listing(MONITOR, SLEEP))).toEqual([MONITOR, SLEEP])
   expect(listedIdsOf([{ status: 'running' }, null, 'x', { id: SLEEP }])).toEqual([SLEEP])
+  expect(listedIdsOf([{ id: MONITOR, type: 'subagent', status: 'running' }, { id: '', type: 'shell' }])).toEqual([MONITOR])
   expect(listedIdsOf('not a list')).toEqual([])
 })
 

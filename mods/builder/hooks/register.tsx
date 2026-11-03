@@ -17,7 +17,7 @@ import { AGENT_PANE, agentPaneTree, bandTree, isDrawable, messagesReadOf, NAMED_
 import { ADVERSARIAL_REVIEWER, afterReport, afterSeen, endedOf, FOCUSED_REVIEWERS, focusedReviewersFor, plannedOf, progressIn, reportAnswer, reportOf, stageLabel, STAGES, type ReportInput, type StageId } from './progress'
 import { changePrompt, ciEventContext, GITHUB_NAMES_LINE, resumePrompt, stateLines, stuckPrompt } from './prompts'
 import { changedKinds, commitRecordsOf, decidedItems, factIn, INSTRUCTION_PATHSPECS, instructionFileIsLink, isFullSha, isUpForCheck, LATER_CONTEXT_LINES, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pluginRootsOf, reviewedHeadOf, secretIn, specDirOf, trendOf, trendStopLine, underRoot, verdictHeadOf, verdictsLine, type CommitRecord, type EarlierRound, type FileKind, type PackageInput } from './review'
-import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isMerge, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
+import { AGENTS_KEPT, backgroundOf, backgroundTaskIdOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isMerge, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
 import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isForemanNudge, newMemo, parentIn, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, STATUS_CHANGED_TEXT, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
 import { baseFactsOf, chooseStep, labelActionOf, labelFor, labelRecordIn, labelsToRemoveAfterEdit, needsListing, SHORT_HASH, stepFor, UNPUSHED_KEPT, UNREAD_FACTS } from './step'
 import { timeOfDay } from './text'
@@ -3653,7 +3653,7 @@ async function foreground($: $, e: { tool: string; tool_use_id?: string }, call:
   ensureLive($)
   try {
     const ran = await call()
-    const taskId = backgroundTaskIdOf(ran)
+    const taskId = backgroundTaskIdOf(ran.result)
     if (typeof taskId === 'string' && taskId !== '') {
       await changeStarts($, starts => startsBackgrounded(starts, taskKeyOfId(taskId), record.startedAt)).catch(() => undefined)
     }
@@ -3870,20 +3870,11 @@ async function route($: $, e: ToolCallInput, next: Next<'tool.call'>): Promise<T
   return next(e)
 }
 
-// The background task id a call's result carries, which it does when the call
-// was moved to the background, or undefined when it carries none. It is read
-// here alone, so whether a call went to the background and which task it
-// became are read the same way.
-function backgroundTaskIdOf(ran: ToolCallResult): unknown {
-  const result = ran.result as { backgroundTaskId?: unknown } | null | undefined
-  return typeof result === 'object' && result !== null ? result.backgroundTaskId : undefined
-}
-
 // Whether a call succeeded: it was not refused, did not end in an error, and
 // was not moved to the background, where a command has not finished yet.
 function succeeded(ran: ToolCallResult): boolean {
   if (ran.deny !== undefined || ran.isError === true) return false
-  return backgroundTaskIdOf(ran) === undefined
+  return backgroundTaskIdOf(ran.result) === undefined
 }
 
 // The status file for the foreman. A session whose first prompt holds a
