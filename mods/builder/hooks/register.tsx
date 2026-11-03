@@ -237,11 +237,13 @@ let holdTimer: { cancel: () => void; work: HoldWork } | undefined
 let holdGen = 0
 // Whether the session's own turn runs, as `busy` says, but kept here so the
 // check that must sit right before a prompt needs no await. It is set first
-// when a turn starts and cleared first when it ends. A hot reload sets it
-// false, and the read of `busy` beside it decides.
+// when a turn of the session's own starts and cleared first when it ends; a
+// subagent's start leaves it alone. A hot reload sets it false, and the read
+// of `busy` beside it decides.
 let turnRunning = false
 // The StopFailure hook reported `rate_limit` for the session's turn under way
-// or just ended. A turn's start clears it.
+// or just ended. Only the start of a turn of the session's own clears it, not
+// a subagent's start.
 let rateLimitSeen = false
 // The number of the person's prompts so far. Each one moves it on before its
 // first await, so a hold decided for a turn that ended before the prompt can
@@ -249,10 +251,12 @@ let rateLimitSeen = false
 let personPrompts = 0
 // The number of the session's own turns that have started, and the number of
 // the last of them that ended with an answer or a refusal, the two reasons
-// that mean the API replied. Each turn moves the first on before its first
-// await, and its end sets the second before its first await, so a hold saved
-// for an error turn can tell that a turn which started after that error turn
-// ended has replied, and that the limit has lifted since (see
+// that mean the API replied. Each turn of the session's own moves the first
+// on before its first await, and a subagent's start does not move it, so a
+// subagent that starts while a turn's end is under way is not taken for a
+// later turn. The turn's end sets the second before its first await, so a
+// hold saved for an error turn can tell that a turn which started after that
+// error turn ended has replied, and that the limit has lifted since (see
 // saveHoldOrTakeItOff). The first also lets the end of a turn that replied
 // tell that a later turn has started since, and leave the hold that later
 // turn may have saved alone (see repliedTurnClearsHold). A hot reload sets
@@ -264,8 +268,8 @@ let repliedTurn = 0
 // The session's own turn that an error ended and that no hold has come of
 // yet, for a StopFailure that arrives after the turn's end, with the number
 // of the person's prompts at its end and the number of the session's own
-// turns started when its end began. A turn's start clears it, and so does a
-// hold.
+// turns started when its end began. The start of a turn of the session's own
+// clears it, and so does a hold; a subagent's start leaves it alone.
 let pendingErrorTurn: { endedAt: number; personPrompts: number; turnsStarted: number } | null = null
 // A hold is being decided, so the end of a turn and the StopFailure hook
 // cannot both start one. A decision asked for meanwhile sets isHoldOwed, and
@@ -4313,23 +4317,29 @@ export const register: Register = on => {
   })
 
   // The session's own turn raises turn.start, and so can a subagent's run,
-  // which carries its agentId.
+  // which carries its agentId. Only a turn of the session's own changes the
+  // session's own state: the number of turns started, turnRunning, busy,
+  // rateLimitSeen, the pending error turn and the status memo. A subagent
+  // can start after the session's own turn ended, as a background agent
+  // does, or while that turn's end is still under way, and the turn.complete
+  // handler ignores a subagent's end, so nothing would clear what its start
+  // set. Its start only schedules the pane's refresh, before any await, and
+  // passes the event on.
   on('turn.start', async ($, e, next) => {
+    if (e.agentId !== undefined) {
+      refreshLater($)
+      return next(e)
+    }
     ownTurnsStarted += 1
     turnRunning = true
     rateLimitSeen = false
     pendingErrorTurn = null
     // A new turn means the last one ended, so the session's own permission
     // prompts are closed for the status file. The memo also keeps whether a
-    // foreman nudge started this turn, which its end records. A subagent's
-    // start, which carries its agentId, leaves that alone, because its prompt
-    // is never a nudge and the session's own turn is still running. The
-    // change is not awaited, so busy is set as soon as before; the end's own
-    // change to the memo is queued after this one.
-    void changeMemo($, memo => {
-      const closed = afterLoopEnd(memo, '')
-      return e.agentId === undefined ? afterTurnStart(closed, isForemanNudge(e.text)) : closed
-    }).catch(() => undefined)
+    // foreman nudge started this turn, which its end records. The change is
+    // not awaited, so busy is set as soon as before; the end's own change to
+    // the memo is queued after this one.
+    void changeMemo($, memo => afterTurnStart(afterLoopEnd(memo, ''), isForemanNudge(e.text))).catch(() => undefined)
     await update($, busy, () => true)
     refreshLater($)
     return next(e)
