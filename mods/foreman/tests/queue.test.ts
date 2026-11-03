@@ -166,6 +166,15 @@ test('two freed slots with one claim give the kept sentence while a second sub s
   expect(d.reasons).toEqual([{ kind: 'slot-kept', whos: ['ABC-3'] }])
 })
 
+test('one freed slot while two sub sessions wait unseen gives the kept sentence naming only the first in the queue', () => {
+  const t = ledger(ahead('ft-a', 'ABC-1'), ahead('ft-x', 'ABC-4'), waiting('ft-b', 'ABC-2', 1), waiting('ft-c', 'ABC-3', 2))
+  const sessions = list([listed('local_ft-a', { isArchived: true, isRunning: false, surelyUnarchived: false }), listed('local_ft-x')])
+  const rows = [row('ft-a', { issueKey: 'ABC-1', state: 'done' }), busyRow('ft-x', 'ABC-4'), row('ft-b'), row('ft-c')]
+  const d = read(t, rows, T0 + MINUTE, { sessions, slots: 2 })
+  expect(begins(d)).toEqual([])
+  expect(d.reasons).toEqual([{ kind: 'slot-kept', whos: ['ABC-2'] }])
+})
+
 test('a waiting sub session whose name a wake line may not carry is left out of the kept sentence', () => {
   const t = ledger(ahead('ft-a', 'ABC-1'), waiting('bad ticket', 'not a key', 1))
   const sessions = list([listed('local_ft-a', { isArchived: true, isRunning: false, surelyUnarchived: false })], false)

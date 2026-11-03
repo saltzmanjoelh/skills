@@ -745,10 +745,14 @@ export function decide(input: DecideInput): Decision {
   // proposal card that has not started. The parent is woken for it, so a
   // freed slot is never lost: with the kept sentence while someone still
   // waits unclaimed, naming each waiting issue whose name a wake line may
-  // carry, and with the slot-free sentence otherwise.
+  // carry, and with the slot-free sentence otherwise. The kept sentence
+  // names only as many waiting issues, in the queue's order, as there are
+  // free slots, because the parent begins each one it names, and naming more
+  // would run more sub sessions than the slots allow.
   if (freed > 0 && left.length > 0) {
-    const waiting = unclaimed.length === 0 ? null : [...new Set(unclaimed.map(p => whoOf(p.issueKey, p.ticket)).filter(isWhoName))]
-    const outcome = slotOutcome(freeSlots(tickets, rows, now, input.slots), waiting)
+    const free = freeSlots(tickets, rows, now, input.slots)
+    const waiting = unclaimed.length === 0 ? null : [...new Set(unclaimed.slice(0, Math.max(free, 0)).map(p => whoOf(p.issueKey, p.ticket)).filter(isWhoName))]
+    const outcome = slotOutcome(free, waiting)
     if (outcome.kind === 'wake') reasons.push(outcome.reason)
   }
   return { tickets, effects, reasons, logs, nextDueAt: due.length === 0 ? null : Math.min(...due) }

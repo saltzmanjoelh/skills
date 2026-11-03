@@ -95,6 +95,10 @@ which runs on a timer and on every status file change.
   already requires, and the failure notification covers the person.
 - The list is full (100 entries) and an open but quiet sub session falls
   outside it. Its slot is not freed.
+- One slot frees while two sessions wait unclaimed and the list shows
+  neither. The new sentence names only the first of them in the queue's
+  order, because the parent begins each issue it names, and naming both would
+  run more sub sessions than the slots allow.
 
 ## Non-goals
 

@@ -199,8 +199,11 @@ and reads "whose waiting sessions it could not find in the desktop app's
 list; send each of those sessions foreman's begin message by hand or release
 its issue". When foreman could not name the issues safely, the line reads
 "keeps it for the issues waiting in its queue" in place of the keys; then
-take as named each key for which this conversation shows foreman's sentence
-"<key> waits in foreman's queue", and that has not started since.
+take as named only the first key, in the order foreman put them in its
+queue, for which this conversation shows foreman's sentence "<key> waits in
+foreman's queue", and that has not started since. The line names only as
+many issues as there are free slots, so beginning more than it names would
+run more sub sessions than foreman's slots allow.
 
 A slot freed while issues still wait in foreman's queue, and foreman could
 not begin any of them, because the desktop app's list did not show their
