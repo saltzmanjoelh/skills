@@ -40,7 +40,12 @@ no new module and no new module variable.
    load stamp. A fence on `statusClosed` and the generation alone would then
    let a refresh that started before the end store a merged session's record
    again. So the check right before the store write also requires
-   `ticketFor === memo.sessionId`. This came from the extensible plan.
+   `ticketFor === memo.sessionId`. This came from the extensible plan. The
+   first review round replaced it with a fresh read of the memo from the
+   state, requiring the writer's generation, as the file write does. That
+   read also stops the ended session's refresh after a `/clear`, because its
+   memo is gone by then, and it stops a copy from before a hot reload, which
+   the session id alone could not.
 2. **The store calls in the refresh have a time limit.** The refresh is
    awaited inside the status write, so a store call that never settled
    would hold that write forever and freeze the file, which is the failure
@@ -83,7 +88,11 @@ no new module and no new module variable.
 - **Caching the stamp in a module variable.** Both larger plans did this to
   save one store read per file write. A local store read once a minute is
   cheap, and the cache is state that a hot reload loses and a `/clear` must
-  reset.
+  reset. The first review round reversed this choice. The refresh's store
+  read sat on the status writer's path, so a slow store held the file still
+  for up to its time limit. The refresh now runs beside the writer, one at
+  a time, and remembers when the record falls due, so most writes make no
+  store call at all.
 - **Storing the record in `lookForTicket` at the moment of the find.** The
   extensible plan did this, which matches Behavior 1 most literally. The
   write that `adoptMemo` forces runs at once after the find, so storing it

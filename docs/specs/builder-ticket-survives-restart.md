@@ -84,9 +84,18 @@ and starts again. Foreman reads the file; the person reads foreman's pane.
   read the same record; it only seeds a memo, and the memo's existing
   ownership rule decides which copy writes.
 - **A session resumed after its merge** finds no record, because the merge
-  deleted it, and writes nothing, which matches the file being gone.
+  deleted it. When its transcript begins with a compaction summary, it
+  writes nothing, which matches the file being gone. When its transcript
+  still begins with the first prompt, it finds the ticket line there again
+  and writes the file once more, as it did before this change (see
+  Non-goals).
 
 ## Non-goals
+
+- Remembering that a session's pull request merged. A session resumed after
+  its merge whose transcript still holds the ticket line writes its status
+  file again, as it does without this change, because the store keeps only
+  a ticket that was found and never a mark that a session is finished.
 
 - Foreman acting on a status file whose write time has stopped moving. Its
   pane already shows such a file as stale, but no rule wakes the parent.

@@ -12886,25 +12886,72 @@ test('a read of the kept record that never answers is given up on, and the next 
   expect(keptAt(s)).toBe(S0 + MINUTE)
 })
 
+test('a read of the kept record that has not answered holds no status write back', async ($, on) => {
+  const s = foremanSession(on)
+  // The hooks' start and the prompt each read the record before the first
+  // write's refresh does, and the refresh's read never answers.
+  Object.assign(s.stored.hold, { prefix: 'ticket:', skip: 2, until: new Promise(() => {}) })
+  await firstPrompt($, s.clock)
+  expect(s.statusAt()?.state).toBe('idle')
+
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('working')
+})
+
+test('a refresh whose memo a newer copy of the module took up while its read was held stores no record', async ($, on) => {
+  const memo = raisedMemo(on)
+  const s = foremanSession(on)
+  let release = () => {}
+  Object.assign(s.stored.hold, { prefix: 'ticket:', skip: 2, until: new Promise<void>(resolve => {
+    release = resolve
+  }) })
+  await firstPrompt($, s.clock)
+  expect(s.statusAt()?.ticket).toBe('slot-1')
+
+  memo.raise()
+  release()
+  await s.clock.settle()
+  expect(ticketSets(s)).toEqual([])
+  expect(s.stored.has('ticket:session-1')).toBe(false)
+})
+
+test('the first refresh waits for the sweep of the kept records that the hooks\' start began', async ($, on) => {
+  const s = foremanSession(on, { stored: [['ticket:other', 'an older shape']] })
+  let release = () => {}
+  Object.assign(s.stored.hold, { prefix: 'ticket:other', skip: 0, until: new Promise<void>(resolve => {
+    release = resolve
+  }) })
+  await firstPrompt($, s.clock)
+  expect(s.statusAt()?.ticket).toBe('slot-1')
+  expect(ticketSets(s)).toEqual([])
+
+  release()
+  await s.clock.settle()
+  expect(s.stored.has('ticket:other')).toBe(false)
+  expect(s.stored.get('ticket:session-1')).toEqual(UNPARENTED)
+})
+
 test('after a merge and a /clear, a refresh of the kept record whose read was held across the end never stores the record again', async ($, on) => {
-  const s = foremanSession(on, { stored: [['ticket:session-1', UNPARENTED]], messages: COMPACTED })
+  // The kept record falls due eleven minutes after the hooks start, a
+  // minute after the watch has seen the merge, and the refresh's read at
+  // the twelfth minute is held.
+  const s = foremanSession(on, { stored: [['ticket:session-1', { ...UNPARENTED, at: S0 - DAY + 11 * MINUTE }]], messages: COMPACTED })
   await startsAgain($, s)
   await watchUntilMerged($, s)
-  // The stamp is made due again, and the next refresh's read is held.
-  s.stored.set('ticket:session-1', { ...UNPARENTED, at: S0 - 2 * DAY })
   let release = () => {}
   Object.assign(s.stored.hold, { prefix: 'ticket:', skip: 0, until: new Promise<void>(resolve => {
     release = resolve
   }) })
-  await s.clock.advance(MINUTE)
+  await s.clock.advance(2 * MINUTE)
   const ended = endSession($, 'clear')
   await s.clock.advance(1000)
   await ended
   expect(s.stored.has('ticket:session-1')).toBe(false)
 
   // The new conversation's take-up sets the generation back to this copy's
-  // load stamp and opens writing again, so only the session id tells the
-  // ended conversation's refresh apart.
+  // load stamp and opens writing again, so only the ended session's memo,
+  // which is gone by then, tells the ended conversation's refresh apart.
   s.ids.current = 'session-2'
   await $.prompt.submit({ text: 'Something new.', origin: { kind: 'composer' } } as never)
   await s.clock.settle()
