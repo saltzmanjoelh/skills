@@ -65,10 +65,12 @@ function promptsBelow(on: On, refusing: { on: boolean; then?: () => unknown }) {
 }
 
 // Answers each spawn with the next id, which is long enough to be named by
-// its first eight characters.
+// its first eight characters. A resume is answered with the resumed agent's
+// own id and leaves the count alone, as the engine does.
 function spawns(on: On) {
   let n = 0
-  on('agent.spawn', () => {
+  on('agent.spawn', ($, e) => {
+    if (e.resume !== undefined) return { model: 'test', agentId: e.resume.agentId }
     n += 1
     return { model: 'test', agentId: `agent-${n}-xxxxxxxxxx` }
   })
@@ -410,7 +412,7 @@ test('a first step whose last message is a user message goes to the model and cl
 
 // The engine adds each agent's task notification to the conversation as a
 // user message, so the next member's report finds it last.
-test('a report whose turn finds the last member\'s notification last is answered without the model, and a person\'s prompt after one is not', async ($, on) => {
+test('a report whose turn finds the last member\'s notification last is answered without the model', async ($, on) => {
   const w = world(on)
   await launched($, ['Explore', 'Plan', 'Explore'])
   await deliver($, report(ALPHA))
@@ -421,10 +423,6 @@ test('a report whose turn finds the last member\'s notification last is answered
   const { chunks } = await step($, { turnId: 't3', index: 0 })
   expect(texts(chunks)).toEqual(['Noted.', 'stop'])
   expect(w.asked.calls).toBe(before)
-  w.talk.messages = [...w.talk.messages, assistant('Noted.'), user(notice(BRAVO, 'completed')), user('what now?')]
-  await deliver($, 'what now?', 'composer')
-  await step($, { turnId: 't4', index: 0 })
-  expect(w.asked.calls).toBe(before + 1)
 })
 
 test('a later step, a subagent\'s step and a step with no marker go to the model and leave the marker as it is', async ($, on) => {
@@ -590,4 +588,124 @@ test('the band above the prompt never reads the batches, so a batch write does n
   expect(w.state.reads).not.toContain('batches')
   await pane.redraw()
   expect(w.state.reads).toContain('batches')
+})
+
+// The engine waking the parked agent `id` once the work it moved into the
+// background has finished: a resume whose prompt begins with the
+// notification about the agent's own shell task, which builder never sees.
+async function wake($: Engine, w: { clock: { settle: () => Promise<void> } }, id: string) {
+  await $.agent.spawn(launch('Explore', { resume: { agentId: id }, prompt: notice('shell-task-1', 'completed') }))
+  await w.clock.settle()
+}
+
+test('a member that reports, parks and is woken twice is held, and the batch is released once, with the completion line, at its final report', async ($, on) => {
+  const w = world(on)
+  await launched($)
+  const contexts: (readonly string[] | undefined)[] = []
+  const sent = async (text: string, kind: 'peer' | 'task-notification' = 'peer') => {
+    const out = await deliver($, text, kind)
+    contexts.push(out.context)
+    return out
+  }
+  await sent(report(ALPHA))
+  await sent(notice(ALPHA, 'completed'), 'task-notification')
+  await wake($, w, ALPHA)
+  expect(await sent(report(ALPHA))).toEqual({ text: report(ALPHA) })
+  expect(w.state.value?.marker).toBe(3)
+  await sent(notice(ALPHA, 'completed'), 'task-notification')
+  await wake($, w, ALPHA)
+  expect(await sent(report(BRAVO))).toEqual({ text: report(BRAVO) })
+  expect(w.state.value?.marker).toBe(5)
+  expect(await sent(report(ALPHA))).toEqual({ text: report(ALPHA), context: [completeLine(2)] })
+  expect(contexts.filter(c => c !== undefined)).toEqual([[completeLine(2)]])
+})
+
+test('a member that the session resumes with its own text is forgotten, and the rest are released as one batch', async ($, on) => {
+  const w = world(on)
+  await launched($, ['Explore', 'Plan', 'Explore'])
+  await deliver($, report(ALPHA))
+  await $.agent.spawn(launch('Explore', { resume: { agentId: ALPHA }, prompt: 'Also check the tests.' }))
+  await w.clock.settle()
+  expect(w.state.value?.batches.flatMap(b => b.members.map(m => m.id))).not.toContain(ALPHA)
+  expect(await deliver($, report(BRAVO))).toEqual({ text: report(BRAVO) })
+  expect(await deliver($, report(CHARLIE))).toEqual({ text: report(CHARLIE), context: [completeLine(2)] })
+  const marker = w.state.value?.marker
+  expect(await deliver($, report(ALPHA))).toEqual({ text: report(ALPHA) })
+  expect(w.state.value?.marker).toBe(marker)
+})
+
+test('a member that the engine wakes after its batch was released has its final report reach the model', async ($, on) => {
+  const w = world(on)
+  await launched($)
+  await deliver($, report(ALPHA))
+  await step($, { turnId: 't2', index: 0 })
+  expect(await deliver($, report(BRAVO))).toEqual({ text: report(BRAVO), context: [completeLine(2)] })
+  await step($, { turnId: 't3', index: 0 })
+  await wake($, w, ALPHA)
+  expect(await deliver($, report(ALPHA))).toEqual({ text: report(ALPHA) })
+  expect(w.state.value?.marker).toBe(0)
+  const before = w.asked.calls
+  await step($, { turnId: 't4', index: 0 })
+  expect(w.asked.calls).toBe(before + 1)
+})
+
+// The times, in minutes, at which the engine refused builder's deadline
+// line, from a world whose engine refuses every prompt.
+function refusalsOf(w: ReturnType<typeof world>) {
+  const minutes: number[] = []
+  w.refusing.on = true
+  w.refusing.then = () => { minutes.push(w.clock.now() / 60_000) }
+  return minutes
+}
+
+const gapsOf = (times: number[]) => times.slice(1).map((t, i) => t - (times[i] as number))
+
+test('a refused deadline line is tried again after 1, 2, 4, 8, 16, 32, 60 and 60 minutes, and a person\'s prompt during a long wait names the members still running', async ($, on) => {
+  const w = world(on)
+  await launched($)
+  await deliver($, report(ALPHA))
+  const refused = refusalsOf(w)
+  await w.clock.advance(BATCH_LIMIT_MS + 150 * 60_000)
+  await w.clock.settle()
+  expect(refused).toEqual([10, 11, 13, 17, 25, 41, 73, 133])
+  w.refusing.on = false
+  expect(await deliver($, 'how is it going?', 'composer')).toEqual({ text: 'how is it going?', context: [incompleteLine(['Plan agent-2-'])] })
+  w.refusing.on = true
+  await w.clock.advance(60 * 60_000)
+  await w.clock.settle()
+  expect(gapsOf(refused)).toEqual([1, 2, 4, 8, 16, 32, 60, 60])
+  expect(w.passed.map(p => p.text)).not.toContain(deadlineLine(['Plan agent-2-']))
+})
+
+test('a claimed batch stored without a wait, as the previous build stored it, is tried one minute and then two minutes on', async ($, on) => {
+  const w = world(on, { batches: { ...heldBatchOf('session-1'), batches: heldBatchOf('session-1').batches.map(b => ({ ...b, fired: true })) } })
+  const refused = refusalsOf(w)
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await w.clock.settle()
+  await w.clock.advance(9 * 60_000)
+  await w.clock.settle()
+  expect(refused).toEqual([5, 6, 8])
+})
+
+test('a deadline line the engine takes after refusals is not sent before its doubled wait, ends the batch, and nothing more is sent two hours later', async ($, on) => {
+  const w = world(on)
+  await launched($)
+  await deliver($, report(ALPHA))
+  const refused = refusalsOf(w)
+  await w.clock.advance(BATCH_LIMIT_MS + 60_000)
+  await w.clock.settle()
+  expect(refused).toEqual([10, 11])
+  w.refusing.on = false
+  await w.clock.advance(2 * 60_000 - 1000)
+  await w.clock.settle()
+  const lines = () => w.passed.filter(p => p.text === deadlineLine(['Plan agent-2-'])).length
+  expect(lines()).toBe(0)
+  await w.clock.advance(1000)
+  await w.clock.settle()
+  expect(lines()).toBe(1)
+  expect(w.state.value?.batches.some(b => b.deadline !== null)).toBe(false)
+  await w.clock.advance(2 * 60 * 60_000)
+  await w.clock.settle()
+  expect(lines()).toBe(1)
+  expect(await deliver($, report(BRAVO))).toEqual({ text: report(BRAVO) })
 })

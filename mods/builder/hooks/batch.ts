@@ -14,8 +14,13 @@ import { printable } from './text'
 // from the first delivery held for it.
 export const BATCH_LIMIT_MS = 10 * 60_000
 // How long the deadline's timer waits before it tries again when its work
-// failed, as when a write of the batches is refused.
+// failed, as when a write of the batches is refused, and the first wait
+// before a deadline line that the engine refused is tried again. That wait
+// doubles after each refusal, up to BATCH_RETRY_CEILING_MS, so a line the
+// engine keeps refusing for hours costs one try an hour rather than one a
+// minute.
 export const BATCH_RETRY_MS = 60_000
+export const BATCH_RETRY_CEILING_MS = 60 * 60_000
 // How long a released batch's members are remembered, so that a notification
 // coming after the release is held too.
 export const REMEMBER_MS = 10 * 60_000
@@ -34,6 +39,12 @@ export type Delivery = { id: string; isReport: boolean; status: string | null }
 // it as held, or pass it on with the completion line added.
 export type DeliveryAct = { kind: 'pass' } | { kind: 'end' } | { kind: 'hold' } | { kind: 'release'; line: string }
 
+// The state stays at version 1 although a batch may now carry `retryMs`.
+// The previous build reads a batch with that field as it reads any other,
+// and this build reads a batch without it as one whose wait starts at one
+// minute. A new version would make the old and the new build read each
+// other's state as empty across a hot reload, so a batch whose reports were
+// answered "Noted." would never get its line.
 export const emptyBatchState = (sessionId: string): BatchState => ({ version: 1, sessionId, batches: [], marker: 0 })
 
 const isMember = (raw: unknown): raw is BatchMember => {
@@ -47,7 +58,8 @@ const isBatch = (raw: unknown): raw is Batch => {
   const b = raw as Batch | null
   return typeof b === 'object' && b !== null && typeof b.step === 'string' && Array.isArray(b.members) && b.members.every(isMember) &&
     Number.isInteger(b.heldReports) && b.heldReports >= 0 && isTime(b.deadline) && isTime(b.releasedAt) &&
-    (b.fired === undefined || b.fired === true)
+    (b.fired === undefined || b.fired === true) &&
+    (b.retryMs === undefined || (typeof b.retryMs === 'number' && Number.isFinite(b.retryMs) && b.retryMs > 0))
 }
 
 // The stored state of the conversation `sessionId` names, or the empty state
@@ -104,11 +116,12 @@ export function afterLaunch(state: BatchState, step: string, agent: { id: string
   return { ...state, batches: trimmed(next.filter(b => b.members.length > 0)) }
 }
 
-// Forgets a resumed agent as a member. A batch that holds deliveries keeps
-// counting as a batch whatever its size (see countsAsBatch). One whose other
-// members have all ended is released at `now` with no line, because the
-// session's own turn that resumes the agent already has the held reports in
-// its conversation.
+// Forgets an agent that the session resumed as a member. A resume the
+// engine makes to wake a parked agent goes through afterWake instead. A
+// batch that holds deliveries keeps counting as a batch whatever its size
+// (see countsAsBatch). One whose other members have all ended is released at
+// `now` with no line, because the session's own turn that resumes the agent
+// already has the held reports in its conversation.
 export function afterResume(state: BatchState, id: string, now: number): BatchState {
   const batches = withoutMember(state.batches, id).map(b => (isOpenWithHeld(b) && b.members.every(m => m.ended)
     ? { ...b, heldReports: 0, deadline: null, releasedAt: now }
@@ -118,6 +131,32 @@ export function afterResume(state: BatchState, id: string, now: number): BatchSt
 
 const REPORT = /^<agent-message from="([^"]+)">/
 const NOTICE = /^<task-notification>([\s\S]*?)<\/task-notification>/
+
+// Whether a resume is the engine waking a parked agent rather than one the
+// session asked for. An agent that moves its work into the background parks,
+// and when that work finishes the engine starts it again with a prompt that
+// begins with the notification about the agent's own background task. The
+// task id in it names a task builder never sees, so only the shape is
+// checked, with the same anchored pattern that deliveryOf reads: a whole
+// element, closing tag included, at the very start of the text.
+export function isEngineWake(prompt: string): boolean {
+  return NOTICE.test(prompt)
+}
+
+// Keeps an agent that the engine woke as a member of a batch that is not
+// released, fired or not, and counts it as running again, because the
+// report it sent before it parked ended it. Its later report and
+// notifications are then held, or end the batch, as any member's are. In a
+// released batch, which is only remembered, the agent is forgotten as
+// afterResume forgets it, so that its final report reaches the model, and a
+// batch left with no members is dropped. It never releases a batch, because
+// the woken agent is still running.
+export function afterWake(state: BatchState, id: string): BatchState {
+  const batches = state.batches.map(b => (b.releasedAt === null
+    ? { ...b, members: b.members.map(m => (m.id === id ? { ...m, ended: false } : m)) }
+    : { ...b, members: b.members.filter(m => m.id !== id) }))
+  return { ...state, batches: batches.filter(b => b.members.length > 0) }
+}
 
 // The delivery a prompt is, read only under an origin the engine sets and a
 // person cannot type: under `peer`, the sender of the agent-message element
@@ -211,16 +250,31 @@ export function runningLines(state: BatchState): string[] {
   return state.batches.filter(isOpenWithHeld).map(b => incompleteLine(runningOf(b)))
 }
 
+// The wait after a refused deadline line that follows a wait of `ms`: twice
+// that, up to the ceiling.
+export function nextBatchRetry(ms: number): number {
+  return Math.min(ms * 2, BATCH_RETRY_CEILING_MS)
+}
+
+// The wait before a claimed batch is claimed again: the stored one, or one
+// minute for a batch the previous build stored without it, held between one
+// minute and one hour so that a malformed value can neither retry in a burst
+// nor wait for days.
+const retryOf = (b: Batch) => Math.min(Math.max(b.retryMs ?? BATCH_RETRY_MS, BATCH_RETRY_MS), BATCH_RETRY_CEILING_MS)
+
 // Claims every open batch whose deadline has passed, and answers the line to
 // submit for each, beside the step that names the batch. A claimed batch is
-// marked as fired and stays in the state with its deadline moved
-// BATCH_RETRY_MS on, so that no other timer claims it in the meantime, and so
-// that a line the engine refuses, or a removal that fails, leaves it to be
-// claimed again with the members still running at that time.
+// marked as fired and stays in the state with its deadline moved on by its
+// wait, so that no other timer claims it in the meantime, and so that a line
+// the engine refuses, or a removal that fails, leaves it to be claimed again
+// with the members still running at that time. The wait starts at one minute
+// and doubles at each claim, up to one hour, so the claims of a line the
+// engine keeps refusing fall 1, 2, 4, 8, 16, 32 and then 60 minutes apart.
 export function afterDeadline(state: BatchState, now: number): { state: BatchState; due: { step: string; line: string }[] } {
   const isDue = (b: Batch) => isOpenWithHeld(b) && (b.deadline as number) <= now
+  const claimed = (b: Batch): Batch => ({ ...b, fired: true, deadline: now + retryOf(b), retryMs: nextBatchRetry(retryOf(b)) })
   return {
-    state: { ...state, batches: state.batches.map(b => (isDue(b) ? { ...b, fired: true as const, deadline: now + BATCH_RETRY_MS } : b)) },
+    state: { ...state, batches: state.batches.map(b => (isDue(b) ? claimed(b) : b)) },
     due: state.batches.filter(isDue).map(b => ({ step: b.step, line: deadlineLine(runningOf(b)) })),
   }
 }

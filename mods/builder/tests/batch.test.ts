@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { PromptOrigin } from 'claude-code'
 
-import { afterDeadline, afterDeadlineSent, afterDelivery, afterLaunch, afterResume, afterFirstStep, answersStep, BATCH_LIMIT_MS, BATCH_RETRY_MS, BATCHES_KEPT, batchStateIn, completeLine, deadlineLine, deliveryOf, emptyBatchState, heldReports, incompleteLine, isBatchLaunch, nextDeadline, REMEMBER_MS, runningLines, type Delivery } from '../hooks/batch'
+import { afterDeadline, afterDeadlineSent, afterDelivery, afterLaunch, afterResume, afterWake, afterFirstStep, answersStep, BATCH_LIMIT_MS, BATCH_RETRY_CEILING_MS, BATCH_RETRY_MS, BATCHES_KEPT, batchStateIn, completeLine, deadlineLine, deliveryOf, emptyBatchState, heldReports, incompleteLine, isBatchLaunch, isEngineWake, nextBatchRetry, nextDeadline, REMEMBER_MS, runningLines, type Delivery } from '../hooks/batch'
 import type { BatchState } from '../types'
 
 const PEER: PromptOrigin = { kind: 'peer' } as PromptOrigin
@@ -264,4 +264,114 @@ test('a member is named by its printable type and the first eight characters of 
   state = afterLaunch(state, 's', { id: BRAVO, type: 'Plan' })
   state = afterDelivery(state, report(BRAVO), true, 0).state
   expect(runningLines(state)).toEqual([incompleteLine(['xred type aaaaaaaa'])])
+})
+
+test('only a prompt that begins with a whole task-notification element is the engine waking a parked agent', () => {
+  expect(isEngineWake(noticeText('shell-task-1'))).toBe(true)
+  expect(isEngineWake(`${noticeText('shell-task-1')}\nThe command finished.`)).toBe(true)
+  expect(isEngineWake(`please look at this: ${noticeText('shell-task-1')}`)).toBe(false)
+  expect(isEngineWake(` ${noticeText('shell-task-1')}`)).toBe(false)
+  expect(isEngineWake('<task-notification>\n<task-id>shell-task-1</task-id>\n<status>completed</status>')).toBe(false)
+  expect(isEngineWake('')).toBe(false)
+  expect(isEngineWake('Also check the tests.')).toBe(false)
+})
+
+test('an engine wake opens again a member that reported before it parked, so the other member\'s report is held and the woken member\'s final report releases the batch', () => {
+  let state = afterDelivery(launched(), report(ALPHA), true, 0).state
+  state = afterDelivery(state, notice(ALPHA, 'completed'), true, 1).state
+  state = afterWake(state, ALPHA)
+  expect(runningLines(state)).toEqual([incompleteLine(['Explore aaaaaaaa', 'Plan bbbbbbbb'])])
+  const other = afterDelivery(state, report(BRAVO), true, 2)
+  expect(other.act).toEqual({ kind: 'hold' })
+  const last = afterDelivery(other.state, report(ALPHA), true, 3)
+  expect(last.act).toEqual({ kind: 'release', line: completeLine(2) })
+})
+
+test('an engine wake keeps a member of a batch whose deadline claimed it, and marks it running', () => {
+  let state = afterDelivery(launched(), report(ALPHA), true, 0).state
+  state = afterDeadline(state, BATCH_LIMIT_MS).state
+  state = afterWake(state, ALPHA)
+  expect(state.batches[0]?.members).toEqual([{ id: ALPHA, type: 'Explore', ended: false }, { id: BRAVO, type: 'Plan', ended: false }])
+  expect(state.batches[0]?.fired).toBe(true)
+  expect(dueLines(state, BATCH_LIMIT_MS + BATCH_RETRY_MS)).toEqual([deadlineLine(['Explore aaaaaaaa', 'Plan bbbbbbbb'])])
+})
+
+test('an engine wake after the batch was released forgets the member there, so its final report passes, and drops a batch left empty', () => {
+  let state = afterDelivery(launched(), report(ALPHA), true, 0).state
+  state = afterDelivery(state, report(BRAVO), true, 1).state
+  const woken = afterWake(state, ALPHA)
+  expect(afterDelivery(woken, report(ALPHA), true, 2).act).toEqual({ kind: 'pass' })
+  expect(afterDelivery(woken, notice(BRAVO, 'completed'), true, 2).act).toEqual({ kind: 'hold' })
+  expect(afterWake(woken, BRAVO).batches.some(b => b.step === 't1:0')).toBe(false)
+})
+
+test('an engine wake never releases a batch, even when every other member has ended', () => {
+  const state = afterDelivery(launched(), report(ALPHA), true, 0).state
+  const woken = afterWake(state, BRAVO)
+  expect(woken.batches[0]?.releasedAt).toBeNull()
+  expect(nextDeadline(woken)).toBe(BATCH_LIMIT_MS)
+  expect(heldReports(woken)).toBe(1)
+  expect(afterDelivery(woken, report(BRAVO), true, 1).act).toEqual({ kind: 'release', line: completeLine(2) })
+})
+
+// The times at which the deadline claims a batch whose line is refused every
+// time, from its first claim on.
+function claimTimes(state: BatchState, claims: number): number[] {
+  const times: number[] = []
+  for (let i = 0; i < claims; i++) {
+    const at = nextDeadline(state) as number
+    times.push(at)
+    state = afterDeadline(state, at).state
+  }
+  return times
+}
+
+const gapsOf = (times: number[]) => times.slice(1).map((t, i) => (t - (times[i] as number)) / 60_000)
+
+test('a refused deadline line is claimed again after a wait that doubles from one minute up to one hour', () => {
+  const state = afterDelivery(launched(), report(ALPHA), true, 0).state
+  expect(gapsOf(claimTimes(state, 9))).toEqual([1, 2, 4, 8, 16, 32, 60, 60])
+  expect(nextBatchRetry(BATCH_RETRY_MS)).toBe(2 * BATCH_RETRY_MS)
+  expect(nextBatchRetry(BATCH_RETRY_CEILING_MS)).toBe(BATCH_RETRY_CEILING_MS)
+  expect(BATCH_RETRY_CEILING_MS).toBe(60 * 60_000)
+})
+
+// A stored batch that the deadline already claimed, with its retry wait
+// set to `retryMs`, or with none when it is undefined, as the previous
+// build stored it.
+const firedWith = (retryMs: unknown): BatchState => {
+  const state = afterDelivery(launched(), report(ALPHA), true, 0).state
+  return {
+    ...state,
+    batches: state.batches.map(b => (b.step === 't1:0' ? { ...b, fired: true as const, ...(retryMs === undefined ? {} : { retryMs: retryMs as number }) } : b)),
+  }
+}
+
+test('a stored claimed batch without a wait is claimed again one minute and then two minutes on', () => {
+  const stored = batchStateIn(firedWith(undefined), SESSION)
+  expect(stored.batches[0]?.fired).toBe(true)
+  expect(gapsOf(claimTimes(stored, 3))).toEqual([1, 2])
+})
+
+test('a stored wait that is not a number above zero reads as the empty state', () => {
+  expect(batchStateIn(firedWith(120_000), SESSION)).toEqual(firedWith(120_000))
+  for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, '120000', null]) {
+    expect(batchStateIn(firedWith(bad), SESSION)).toEqual(emptyBatchState(SESSION))
+  }
+})
+
+test('a stored wait above an hour or below a minute is held to that range', () => {
+  expect(gapsOf(claimTimes(firedWith(5 * 60 * 60_000), 3))).toEqual([60, 60])
+  expect(gapsOf(claimTimes(firedWith(1000), 3))).toEqual([1, 2])
+})
+
+test('a deadline line the engine takes after refusals ends the batch, and the member\'s later report passes', () => {
+  let state = afterDelivery(launched(), report(ALPHA), true, 0).state
+  const times = claimTimes(state, 3)
+  expect(gapsOf(times)).toEqual([1, 2])
+  for (const at of times) state = afterDeadline(state, at).state
+  const sent = afterDeadlineSent(state, ['t1:0'])
+  expect(nextDeadline(sent)).toBeNull()
+  expect(sent.batches.some(b => b.step === 't1:0')).toBe(false)
+  expect(afterDelivery(sent, report(BRAVO), true, (times[2] as number) + 1).act).toEqual({ kind: 'pass' })
 })

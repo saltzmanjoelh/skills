@@ -560,8 +560,10 @@ export type BatchMember = { id: string; type: string; ended: boolean }
 // that a notification coming after the release is held too. `fired` is set
 // when the deadline claims the batch, before its line is submitted, and stays
 // set through a refused or failed submit until the batch is dropped once the
-// engine has taken the line.
-export type Batch = { step: string; members: BatchMember[]; heldReports: number; deadline: number | null; releasedAt: number | null; fired?: true }
+// engine has taken the line. `retryMs` is how long the next claim of the
+// batch waits before it is claimed again. It doubles at each claim from one
+// minute up to one hour, and a batch stored without it waits one minute.
+export type Batch = { step: string; members: BatchMember[]; heldReports: number; deadline: number | null; releasedAt: number | null; fired?: true; retryMs?: number }
 
 // The batches, oldest first, and the counter marker: how many held deliveries
 // have arrived while the session was idle and still owe a turn answered

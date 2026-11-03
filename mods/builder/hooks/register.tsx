@@ -3,7 +3,7 @@ import type { EngineInterface, Next, PromptOrigin, PromptSubmitInput, Register, 
 
 import type { AgentCard, BackgroundTask, BatchState, BuilderRun, Compactions, ContextMeasure, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, StatusMemo, UsageLedger, Wake } from '../types'
 import { isSvgSurface } from './art'
-import { afterDeadline, afterDeadlineSent, afterDelivery, BATCH_RETRY_MS, afterLaunch, afterResume, afterFirstStep, answersStep, batchStateIn, deliveryOf, heldReports, isBatchLaunch, nextDeadline, NOTED_REPLY, runningLines, type DeliveryAct } from './batch'
+import { afterDeadline, afterDeadlineSent, afterDelivery, BATCH_RETRY_MS, afterLaunch, afterResume, afterWake, afterFirstStep, answersStep, batchStateIn, deliveryOf, heldReports, isBatchLaunch, isEngineWake, nextDeadline, NOTED_REPLY, runningLines, type DeliveryAct } from './batch'
 import { checkoutSentence, otherRepositorySentence, worktreeWithBranch, type Checkout } from './checkout'
 // The context module's `told` is the compaction record after a reload was
 // announced; it is renamed here because `told` below is the snapshot last
@@ -1134,9 +1134,12 @@ function rearmBatch($: $, gen: number) {
 // the engine has taken its line, because the held reports were each answered
 // with "Noted.", so nothing else may wake the model for them: a line the
 // engine refuses, a submit that throws, a removal that fails and a hot reload
-// in the middle all leave the batch to be claimed again a minute later, with
-// the members still running then. The cost is that a removal that fails after
-// the engine took the line sends the line a second time.
+// in the middle all leave the batch to be claimed again after its wait, with
+// the members still running then. The wait starts at one minute and doubles
+// at each claim up to one hour (see afterDeadline), so a line the engine
+// keeps refusing is tried once an hour rather than once a minute. The cost is
+// that a removal that fails after the engine took the line sends the line a
+// second time.
 // The deadline is first worked out from a plain read, so that a timer step
 // that finds nothing due writes nothing, and then again inside the write,
 // because the batches may have changed in between.
@@ -4433,8 +4436,12 @@ export const register: Register = on => {
     const spawned = await next(e)
     const id = spawned.agentId
     const resumed = e.resume?.agentId
+    // A resume whose prompt begins with a task notification is the engine
+    // waking a parked agent, which stays a member of its open batch. Any
+    // other resume is one the session asked for, which forgets the member.
     if (resumed !== undefined) {
-      void $.clock.now().then(now => changeBatches($, state => afterResume(state, resumed, now))).catch(() => undefined)
+      const isWake = isEngineWake(e.prompt)
+      void $.clock.now().then(now => changeBatches($, state => (isWake ? afterWake(state, resumed) : afterResume(state, resumed, now)))).catch(() => undefined)
     }
     if (id !== undefined && step !== undefined && isBatchLaunch(e)) {
       void changeBatches($, state => afterLaunch(state, step, { id, type: e.subagentType })).catch(() => undefined)
