@@ -568,8 +568,14 @@ export type Batch = { step: string; members: BatchMember[]; heldReports: number;
 // The batches, oldest first, and the counter marker: how many held deliveries
 // have arrived while the session was idle and still owe a turn answered
 // without the model, stamped with the session id of the conversation they
-// belong to. Read through batchStateIn in hooks/batch.ts.
-export type BatchState = { version: 1; sessionId: string; batches: Batch[]; marker: number }
+// belong to. `releasing` is set when a delivery that arrives while the
+// session is idle releases a batch, and cleared by the next first step of a
+// turn of the session's loop, so that a held delivery in between does not
+// raise the marker and answer the release turn with "Noted.". The state stays
+// at version 1 with this field, because an older build ignores it and a
+// state without it reads as not releasing. Read through batchStateIn in
+// hooks/batch.ts.
+export type BatchState = { version: 1; sessionId: string; batches: Batch[]; marker: number; releasing?: true }
 
 declare module 'claude-code' {
   interface PluginState {

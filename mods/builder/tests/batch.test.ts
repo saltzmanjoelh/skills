@@ -94,9 +94,10 @@ test('a completed notification ends nothing, before or after the report, and is 
   expect(heldReports(early.state)).toBe(0)
   state = afterDelivery(early.state, report(ALPHA), true, 1).state
   state = afterDelivery(state, report(BRAVO), true, 2).state
-  const late = afterDelivery(state, notice(BRAVO, 'completed'), true, 3)
+  const stepped = afterFirstStep(state, false)
+  const late = afterDelivery(stepped, notice(BRAVO, 'completed'), true, 3)
   expect(late.act).toEqual({ kind: 'hold' })
-  expect(late.state.marker).toBe(state.marker + 1)
+  expect(late.state.marker).toBe(stepped.marker + 1)
   expect(afterDelivery(state, notice(BRAVO, 'completed'), true, 2 + REMEMBER_MS + 1).act).toEqual({ kind: 'pass' })
 })
 
@@ -448,4 +449,48 @@ test('the delivery that releases a batch clears the marker that the held idle de
   const out = afterDelivery(state, report(CHARLIE), true, 3)
   expect(out.act).toEqual({ kind: 'release', line: completeLine(3) })
   expect(out.state.marker).toBe(0)
+})
+
+// The state after BRAVO's report released the batch of ALPHA and BRAVO,
+// delivered while the session was idle unless `isIdle` says otherwise.
+const releasedBy = (isIdle: boolean) => afterDelivery(afterDelivery(launched(), report(ALPHA), true, 0).state, report(BRAVO), isIdle, 1)
+
+test('a release while the session is idle marks the state as releasing, and one into a running turn does not', () => {
+  const idle = releasedBy(true)
+  expect(idle.act).toEqual({ kind: 'release', line: completeLine(2) })
+  expect(idle.state.releasing).toBe(true)
+  expect(idle.state.marker).toBe(0)
+  const running = releasedBy(false)
+  expect(running.act).toEqual({ kind: 'release', line: completeLine(2) })
+  expect(running.state.releasing).toBeUndefined()
+  expect(running.state.marker).toBe(0)
+})
+
+test('a held delivery from a released batch before the release turn\'s first step leaves the marker at zero, and one after that step raises it', () => {
+  const { state } = releasedBy(true)
+  const early = afterDelivery(state, notice(BRAVO, 'completed'), true, 2)
+  expect(early.act).toEqual({ kind: 'hold' })
+  expect(early.state.marker).toBe(0)
+  expect(early.state.releasing).toBe(true)
+  const finished = afterDelivery(state, deliveryOf(NOTICE, finishedText(BRAVO)) as Delivery, true, 2)
+  expect(finished.act).toEqual({ kind: 'hold' })
+  expect(finished.state.marker).toBe(0)
+  const late = afterDelivery(afterFirstStep(early.state, false), notice(BRAVO, 'completed'), true, 3)
+  expect(late.act).toEqual({ kind: 'hold' })
+  expect(late.state.marker).toBe(1)
+})
+
+test('the first step of a turn clears the releasing mark whether or not it was answered', () => {
+  const { state } = releasedBy(true)
+  expect(afterFirstStep(state, false)).not.toHaveProperty('releasing')
+  expect(afterFirstStep({ ...state, marker: 2 }, true)).not.toHaveProperty('releasing')
+  expect(afterFirstStep({ ...state, marker: 2 }, true).marker).toBe(1)
+})
+
+test('a stored releasing mark reads back when it is true, and any other value reads as the empty state', () => {
+  const { state } = releasedBy(true)
+  expect(batchStateIn(state, SESSION)).toEqual(state)
+  for (const bad of [false, 1, 'yes', null]) {
+    expect(batchStateIn({ ...state, releasing: bad }, SESSION)).toEqual(emptyBatchState(SESSION))
+  }
 })

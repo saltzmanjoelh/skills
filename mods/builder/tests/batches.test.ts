@@ -220,9 +220,10 @@ test('a completed notification before or after the report is held and ends nothi
   await deliver($, notice(ALPHA, 'completed'), 'task-notification')
   expect(w.state.value?.marker).toBe(3)
   expect(await deliver($, notice(BRAVO, 'failed'), 'task-notification')).toEqual({ text: notice(BRAVO, 'failed'), context: [completeLine(2)] })
-  // The release cleared the marker, and a notification after it is held
-  // too, which raises the marker again.
+  // The release cleared the marker, and a notification after the release
+  // turn's first step is held too, which raises the marker again.
   expect(w.state.value?.marker).toBe(0)
+  await step($, { turnId: 't2', index: 0 })
   await deliver($, notice(BRAVO, 'completed'), 'task-notification')
   expect(w.state.value?.marker).toBe(1)
 })
@@ -741,8 +742,11 @@ test('a woken member that ends with only a finished notification and no second r
 // second and starts one turn for all of them, so fewer first steps run than
 // held deliveries raised the marker. Answers the world after the last
 // member's report released the batch and the release turn's first step ran,
-// with how many times the model was asked in that step.
-async function releasedAfterBurst($: Engine, on: On) {
+// with how many times the model was asked in that step. `after`, when given,
+// is a notification from the last member that arrives while the session is
+// still idle, after its report and before the release turn's first step, and
+// is then the conversation's last message.
+async function releasedAfterBurst($: Engine, on: On, after?: string) {
   const w = world(on)
   await launched($, ['Explore', 'Plan', 'Explore'])
   await deliver($, report(ALPHA))
@@ -756,6 +760,10 @@ async function releasedAfterBurst($: Engine, on: On) {
   expect(await deliver($, report(CHARLIE))).toEqual({ text: report(CHARLIE), context: [completeLine(3)] })
   expect(w.passed.at(-1)).toEqual({ text: report(CHARLIE), context: [completeLine(3)] })
   w.talk.messages = [...w.talk.messages, assistant('Noted.'), user(report(CHARLIE))]
+  if (after !== undefined) {
+    expect(await deliver($, after, 'task-notification')).toEqual({ text: after })
+    w.talk.messages = [...w.talk.messages, user(after)]
+  }
   const before = w.asked.calls
   const release = await step($, { turnId: 't3', index: 0 })
   return { w, asked: w.asked.calls - before, chunks: release.chunks }
@@ -766,6 +774,32 @@ test('the turn that releases a batch after a burst of held notifications goes to
   expect(asked).toBe(1)
   expect(texts(chunks)).toEqual(['From the model.', 'stop'])
   expect(w.state.value?.marker).toBe(0)
+})
+
+test('the releasing member\'s completed notification before the release turn\'s first step leaves that turn to the model', async ($, on) => {
+  const { w, asked, chunks } = await releasedAfterBurst($, on, notice(CHARLIE, 'completed'))
+  expect(asked).toBe(1)
+  expect(texts(chunks)).toEqual(['From the model.', 'stop'])
+  expect(w.state.value?.marker).toBe(0)
+})
+
+test('the releasing member\'s finished notification before the release turn\'s first step leaves that turn to the model', async ($, on) => {
+  const { w, asked, chunks } = await releasedAfterBurst($, on, finishedNotice(CHARLIE))
+  expect(asked).toBe(1)
+  expect(texts(chunks)).toEqual(['From the model.', 'stop'])
+  expect(w.state.value?.marker).toBe(0)
+})
+
+test('after the release turn\'s first step, a held notification from the releasing member is answered without the model again', async ($, on) => {
+  const { w } = await releasedAfterBurst($, on, notice(CHARLIE, 'completed'))
+  await turnEnds($, 't3')
+  expect(await deliver($, finishedNotice(CHARLIE), 'task-notification')).toEqual({ text: finishedNotice(CHARLIE) })
+  expect(w.state.value?.marker).toBe(1)
+  w.talk.messages = [...w.talk.messages, assistant('From the model.'), user(finishedNotice(CHARLIE))]
+  const before = w.asked.calls
+  const { chunks } = await step($, { turnId: 't4', index: 0 })
+  expect(texts(chunks)).toEqual(['Noted.', 'stop'])
+  expect(w.asked.calls).toBe(before)
 })
 
 test('a held notification from a member of a released batch is still answered without the model', async ($, on) => {

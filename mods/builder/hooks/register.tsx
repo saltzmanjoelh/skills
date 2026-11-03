@@ -1199,13 +1199,16 @@ async function withBatch($: $, e: PromptSubmitInput): Promise<PromptSubmitInput>
 // itself: only when a held delivery raised the marker and the conversation's
 // last message is not a user message, or is only a held member's frame (see
 // answersStep), so that no person's or plugin's prompt started the turn. The
-// marker is read first, so a turn with no marker set reads nothing more and
-// writes nothing. The step's decision and the marker's change are one write:
-// one less when the step is answered, and zero when it goes to the model,
-// which a failure also tries to write. Any failure means the model answers.
+// marker is read first, so a turn with no marker set and no release waiting
+// for its first step reads nothing more and writes nothing. The step's
+// decision and the marker's change are one write: one less when the step is
+// answered, and zero when it goes to the model, which a failure also tries to
+// write. The write also clears the releasing mark, and a turn whose marker is
+// zero still goes to the model. Any failure means the model answers.
 async function answersHeld($: $): Promise<boolean> {
   try {
-    if ((await storedBatches($)).marker === 0) return false
+    const stored = await storedBatches($)
+    if (stored.marker === 0 && stored.releasing !== true) return false
     const messages = await $.session.messages()
     const last = Array.isArray(messages) ? messages.at(-1) : undefined
     let answered = false

@@ -77,6 +77,7 @@ export function batchStateIn(raw: unknown, sessionId: string): BatchState {
   if (typeof s !== 'object' || s === null || s.version !== 1 || s.sessionId !== sessionId) return emptyBatchState(sessionId)
   if (!Array.isArray(s.batches) || !s.batches.every(isBatch)) return emptyBatchState(sessionId)
   if (!Number.isInteger(s.marker) || s.marker < 0) return emptyBatchState(sessionId)
+  if (s.releasing !== undefined && s.releasing !== true) return emptyBatchState(sessionId)
   return s
 }
 
@@ -224,14 +225,20 @@ const ends = (d: Delivery) => d.isReport || d.status === 'failed' || d.status ==
 // fraction of a second and start one turn for all of them, so the marker can
 // count more held deliveries than turns, and the spare counts would otherwise
 // answer the release turn with "Noted.", because its last message is a report
-// from a member of the batch just released, which is still remembered. A held
-// delivery after the release raises the marker again as usual.
+// from a member of the batch just released, which is still remembered. A
+// release while the session is idle also marks the state as releasing until
+// the release turn's first step, and a held delivery from a released batch in
+// between leaves the marker alone, because the releasing member's own
+// notification can arrive before that step and would otherwise answer it. A
+// release into a running turn marks nothing, because that turn has already
+// taken its first step and reads the line itself. A held delivery after the
+// first step raises the marker again as usual.
 export function afterDelivery(state: BatchState, d: Delivery, isIdle: boolean, now: number): { state: BatchState; act: DeliveryAct } {
   const kept = pruned(state, now)
   const batch = kept.batches.find(b => countsAsBatch(b) && b.members.some(m => m.id === d.id))
   if (batch === undefined) return { state: kept, act: { kind: 'pass' } }
   const held = (changed: Batch): { state: BatchState; act: DeliveryAct } => ({
-    state: { ...kept, batches: kept.batches.map(b => (b === batch ? changed : b)), marker: kept.marker + (isIdle ? 1 : 0) },
+    state: { ...kept, batches: kept.batches.map(b => (b === batch ? changed : b)), marker: kept.marker + (isIdle && !(changed.releasedAt !== null && kept.releasing === true) ? 1 : 0) },
     act: { kind: 'hold' },
   })
   if (batch.releasedAt !== null) return held(batch)
@@ -239,7 +246,7 @@ export function afterDelivery(state: BatchState, d: Delivery, isIdle: boolean, n
   if (members.every(m => m.ended)) {
     const released = { ...batch, members, heldReports: 0, deadline: null, releasedAt: now }
     return {
-      state: { ...kept, batches: kept.batches.map(b => (b === batch ? released : b)), marker: 0 },
+      state: { ...kept, batches: kept.batches.map(b => (b === batch ? released : b)), marker: 0, ...(isIdle ? { releasing: true as const } : {}) },
       act: { kind: 'release', line: completeLine(members.length) },
     }
   }
@@ -363,7 +370,9 @@ function isHeldFrame(state: BatchState, last: { text?: string; toolResults?: unk
 }
 
 // The marker after such a first step: one less when the step was answered,
-// and zero when it went to the model.
+// and zero when it went to the model. Either way the step clears the
+// releasing mark, so that a held delivery after it raises the marker again.
 export function afterFirstStep(state: BatchState, answered: boolean): BatchState {
-  return { ...state, marker: answered ? Math.max(state.marker - 1, 0) : 0 }
+  const { releasing: _, ...rest } = state
+  return { ...rest, marker: answered ? Math.max(state.marker - 1, 0) : 0 }
 }
