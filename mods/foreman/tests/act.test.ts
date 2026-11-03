@@ -33,18 +33,25 @@ function read(tickets: ForemanTickets, rows: SubRow[], now: number, over: Partia
   return decide({ tickets: joined, rows, now, limits: LIMITS, sessions: { kind: 'unread' }, folderExists: true, listed: true, slots: 2, ...over })
 }
 
-// Reads every minute from T0 to `until`, with `rowAt` giving the rows at each
-// moment, and answers what each read did.
-function readEvery(tickets: ForemanTickets, rowAt: (now: number) => SubRow[], until: number, over: Partial<DecideInput> = {}) {
+// Reads every minute from T0 to `until`, with `rowAt` giving the rows and
+// `sessionsAt` the desktop app's list at each moment, and answers what each
+// read did and the tickets after the last read.
+function readEach(tickets: ForemanTickets, rowAt: (now: number) => SubRow[], until: number, sessionsAt: (now: number) => SessionsLook, over: Partial<DecideInput> = {}) {
   const seen: { at: number; nudges: number; reasons: string[] }[] = []
   let t = tickets
   for (let now = T0; now <= until; now += MINUTE) {
-    const d = read(t, rowAt(now), now, over)
+    const d = read(t, rowAt(now), now, { sessions: sessionsAt(now), ...over })
     t = d.tickets
     const nudges = d.effects.filter(e => e.kind === 'nudge').length
     if (nudges > 0 || d.reasons.length > 0) seen.push({ at: (now - T0) / MINUTE, nudges, reasons: d.reasons.map(r => r.kind) })
   }
-  return seen
+  return { seen, tickets: t }
+}
+
+// The same reads with no list read, unless `over` gives one, answering only
+// what each read did.
+function readEvery(tickets: ForemanTickets, rowAt: (now: number) => SubRow[], until: number, over: Partial<DecideInput> = {}) {
+  return readEach(tickets, rowAt, until, () => ({ kind: 'unread' }), over).seen
 }
 
 test('an idle sub session that never answers is nudged at one and two thresholds, the parent is woken at three, and no third nudge comes', () => {
@@ -861,48 +868,33 @@ test('a freed slot leads to nothing when none is free, the kept sentence while s
 const stalledRow = (over: Record<string, unknown> = {}, mtimeMs = T0) => row({ state: 'working', stateSince: T0 - 60 * MINUTE, ...over }, 'a.json', mtimeMs)
 const listing = (entry: Partial<{ isArchived: boolean; isRunning: boolean }>): SessionsLook =>
   ({ kind: 'read', sessions: [{ sessionId: 'local_a', isArchived: false, isRunning: false, title: null, surelyUnarchived: true, ...entry }] })
-const stopped = listing({})
+const stoppedListing = listing({})
 
-// Reads every minute from T0 to `until`, like readEvery, with the list of
-// each read given by `sessionsAt`, and answers what each read did, its gone
-// reasons included.
-function readEach(tickets: ForemanTickets, rowAt: (now: number) => SubRow[], until: number, sessionsAt: (now: number) => SessionsLook, over: Partial<DecideInput> = {}) {
-  const seen: { at: number; nudges: number; reasons: string[] }[] = []
-  let t = tickets
-  for (let now = T0; now <= until; now += MINUTE) {
-    const d = read(t, rowAt(now), now, { sessions: sessionsAt(now), ...over })
-    t = d.tickets
-    const nudges = d.effects.filter(e => e.kind === 'nudge').length
-    if (nudges > 0 || d.reasons.length > 0) seen.push({ at: (now - T0) / MINUTE, nudges, reasons: d.reasons.map(r => r.kind) })
-  }
-  return { seen, tickets: t }
-}
-
-test('a working record whose file stopped and whose session the list shows not running is nudged as idle, counted from the file\'s last change, with no gone wake', () => {
-  expect(readEach(paired(), () => [stalledRow()], T0 + 40 * MINUTE, () => stopped).seen).toEqual([
+test('a working record whose file stoppedListing and whose session the list shows not running is nudged as idle, counted from the file\'s last change, with no gone wake', () => {
+  expect(readEach(paired(), () => [stalledRow()], T0 + 40 * MINUTE, () => stoppedListing).seen).toEqual([
     { at: 6, nudges: 1, reasons: [] },
     { at: 11, nudges: 1, reasons: [] },
     { at: 16, nudges: 0, reasons: ['idle'] },
   ])
   // With a ten-minute threshold the first nudge waits for ten minutes after
   // the file's last change, not for the stall to begin at six.
-  expect(readEach(paired(), () => [stalledRow()], T0 + 50 * MINUTE, () => stopped, { limits: { ...LIMITS, idleMs: 10 * MINUTE } }).seen).toEqual([
+  expect(readEach(paired(), () => [stalledRow()], T0 + 50 * MINUTE, () => stoppedListing, { limits: { ...LIMITS, idleMs: 10 * MINUTE } }).seen).toEqual([
     { at: 10, nudges: 1, reasons: [] },
     { at: 20, nudges: 1, reasons: [] },
     { at: 30, nudges: 0, reasons: ['idle'] },
   ])
-  const d = read(paired(), [stalledRow()], T0 + GONE_MS + MINUTE, { sessions: stopped })
+  const d = read(paired(), [stalledRow()], T0 + GONE_MS + MINUTE, { sessions: stoppedListing })
   expect(d.effects).toEqual([{ kind: 'nudge', to: 'local_a', name: 'ABC-1' }])
 })
 
-test('a working record whose file stopped gets no nudge and no wake while the list shows it running, fails or is not read', () => {
+test('a working record whose file stoppedListing gets no nudge and no wake while the list shows it running, fails or is not read', () => {
   for (const look of [running, { kind: 'failed' } as const, { kind: 'unread' } as const]) {
     expect(readEach(paired(), () => [stalledRow()], T0 + 40 * MINUTE, () => look).seen).toEqual([])
   }
 })
 
 test('a failed read of the list in the middle of a stall neither nudges nor moves the next nudge', () => {
-  const at8 = (now: number): SessionsLook => (now === T0 + 8 * MINUTE ? { kind: 'failed' } : stopped)
+  const at8 = (now: number): SessionsLook => (now === T0 + 8 * MINUTE ? { kind: 'failed' } : stoppedListing)
   expect(readEach(paired(), () => [stalledRow()], T0 + 20 * MINUTE, at8).seen).toEqual([
     { at: 6, nudges: 1, reasons: [] },
     { at: 11, nudges: 1, reasons: [] },
@@ -913,7 +905,7 @@ test('a failed read of the list in the middle of a stall neither nudges nor move
 test('a nudged turn that shows the session running but changes nothing keeps the stall\'s count, so the second nudge and the wake come on time', () => {
   // Each nudge starts a turn, which the list shows running for two minutes,
   // and the turn ends without changing the file.
-  const turns = (now: number): SessionsLook => ([7, 8, 12, 13].includes((now - T0) / MINUTE) ? running : stopped)
+  const turns = (now: number): SessionsLook => ([7, 8, 12, 13].includes((now - T0) / MINUTE) ? running : stoppedListing)
   const run = readEach(paired(), () => [stalledRow()], T0 + 30 * MINUTE, turns)
   expect(run.seen).toEqual([
     { at: 6, nudges: 1, reasons: [] },
@@ -922,7 +914,7 @@ test('a nudged turn that shows the session running but changes nothing keeps the
   ])
   // A read whose list shows the session running neither nudges nor wakes,
   // and keeps the stall's stretch as it was.
-  const nudged = readEach(paired(), () => [stalledRow()], T0 + 6 * MINUTE, () => stopped).tickets
+  const nudged = readEach(paired(), () => [stalledRow()], T0 + 6 * MINUTE, () => stoppedListing).tickets
   const during = read(nudged, [stalledRow()], T0 + 7 * MINUTE, { sessions: running })
   expect({ effects: during.effects, reasons: during.reasons }).toEqual({ effects: [], reasons: [] })
   expect(during.tickets.pairings[0]!.acts.stretch).toMatchObject({ nudges: 1, lastNudgeAt: T0 + 6 * MINUTE, woke: false })
@@ -938,12 +930,12 @@ test('a stalled-shaped record whose session is over, missing from a short list o
   expect({ effects: missing.effects, standing: missing.tickets.pairings[0]!.standing }).toEqual({ effects: [], standing: 'freed' })
   const unsure = read(paired(), [stalledRow()], later, { sessions: { kind: 'read', sessions: [] } })
   expect({ effects: unsure.effects, reasons: unsure.reasons.map(r => r.kind) }).toEqual({ effects: [], reasons: ['gone'] })
-  const noDesktop = readEach(paired(null), () => [stalledRow({ desktopSessionId: undefined })], T0 + 30 * MINUTE, () => stopped).seen
+  const noDesktop = readEach(paired(null), () => [stalledRow({ desktopSessionId: undefined })], T0 + 30 * MINUTE, () => stoppedListing).seen
   expect(noDesktop).toEqual([{ at: 6, nudges: 0, reasons: ['gone'] }])
 })
 
 test('a working record that waits only on background work keeps the background wait\'s nudge and the gone wake', () => {
-  const d = read(paired(), [stalledRow({ backgroundOnly: { since: T0, tasks: ['run the tests'] } })], T0 + GONE_MS + MINUTE, { sessions: stopped })
+  const d = read(paired(), [stalledRow({ backgroundOnly: { since: T0, tasks: ['run the tests'] } })], T0 + GONE_MS + MINUTE, { sessions: stoppedListing })
   expect(d.effects).toEqual([{ kind: 'nudge', to: 'local_a', name: 'ABC-1', about: 'background' }])
   expect(d.reasons.map(r => r.kind)).toEqual(['gone'])
 })
@@ -955,21 +947,21 @@ test('an old idle stretch that already woke the parent does not silence a stall'
     return { ...t, pairings: t.pairings.map(p => ({ ...p, acts: { ...p.acts, stretch } })) }
   }
   const nudgedBefore = withStretch({ progress, nudges: 2, lastNudgeAt: T0 - 20 * MINUTE, countFrom: null, woke: true, wait: null, turnProgress: false })
-  expect(read(nudgedBefore, [stalledRow()], T0 + GONE_MS + MINUTE, { sessions: stopped }).effects).toEqual([{ kind: 'nudge', to: 'local_a', name: 'ABC-1' }])
+  expect(read(nudgedBefore, [stalledRow()], T0 + GONE_MS + MINUTE, { sessions: stoppedListing }).effects).toEqual([{ kind: 'nudge', to: 'local_a', name: 'ABC-1' }])
   const wokeUnnudged = withStretch({ progress, nudges: 0, lastNudgeAt: null, countFrom: null, woke: true, wait: null, turnProgress: false })
-  expect(read(wokeUnnudged, [stalledRow()], T0 + GONE_MS + MINUTE, { sessions: stopped }).effects).toEqual([{ kind: 'nudge', to: 'local_a', name: 'ABC-1' }])
+  expect(read(wokeUnnudged, [stalledRow()], T0 + GONE_MS + MINUTE, { sessions: stoppedListing }).effects).toEqual([{ kind: 'nudge', to: 'local_a', name: 'ABC-1' }])
 })
 
 test('a file that changes again after a stall\'s nudge stops the nudges', () => {
   const rowAt = (now: number) => [now < T0 + 8 * MINUTE ? stalledRow() : stalledRow({}, now)]
-  expect(readEach(paired(), rowAt, T0 + 30 * MINUTE, () => stopped).seen).toEqual([{ at: 6, nudges: 1, reasons: [] }])
+  expect(readEach(paired(), rowAt, T0 + 30 * MINUTE, () => stoppedListing).seen).toEqual([{ at: 6, nudges: 1, reasons: [] }])
 })
 
 test('a stalled record whose pull request is closed gets no nudge and no gone wake, and needs the list only once every gone wait', () => {
   const closed = () => [stalledRow({ pr: pr(7, 'CLOSED') })]
-  const run = readEach(paired(), closed, T0 + 30 * MINUTE, () => stopped)
+  const run = readEach(paired(), closed, T0 + 30 * MINUTE, () => stoppedListing)
   expect(run.seen).toEqual([{ at: 0, nudges: 0, reasons: ['opened', 'closed'] }])
-  const checked = read(run.tickets, closed(), T0 + 31 * MINUTE, { sessions: stopped }).tickets
+  const checked = read(run.tickets, closed(), T0 + 31 * MINUTE, { sessions: stoppedListing }).tickets
   const at = checked.pairings[0]!.acts.listCheckedAt!
   expect(needsList(checked, closed(), at + MINUTE)).toBe(false)
   expect(needsList(checked, closed(), at + GONE_MS)).toBe(true)
@@ -978,13 +970,13 @@ test('a stalled record whose pull request is closed gets no nudge and no gone wa
 test('a stall needs the list on every read until its idle wake, even after a gone wake for the same file, and then once every gone wait', () => {
   const rows = [stalledRow()]
   const first = T0 + GONE_MS + MINUTE
-  let t = read(paired(), rows, first, { sessions: stopped }).tickets
+  let t = read(paired(), rows, first, { sessions: stoppedListing }).tickets
   expect(t.pairings[0]!.acts.listCheckedAt).toBe(first)
   expect(needsList(t, rows, first + MINUTE)).toBe(true)
   expect(keptByUnreadList(t, rows, first + MINUTE)).toBe('no stalled sub session was nudged')
   const goneWoke = { ...t, pairings: t.pairings.map(p => ({ ...p, acts: { ...p.acts, goneWokeFor: T0 } })) }
   expect(needsList(goneWoke, rows, first + MINUTE)).toBe(true)
-  for (let now = first + MINUTE; now <= T0 + 16 * MINUTE; now += MINUTE) t = read(t, rows, now, { sessions: stopped }).tickets
+  for (let now = first + MINUTE; now <= T0 + 16 * MINUTE; now += MINUTE) t = read(t, rows, now, { sessions: stoppedListing }).tickets
   expect(t.pairings[0]!.acts.stretch?.woke).toBe(true)
   const at = t.pairings[0]!.acts.listCheckedAt!
   expect(needsList(t, rows, at + MINUTE)).toBe(false)
