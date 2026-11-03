@@ -8,6 +8,32 @@ export type Check = { name: string; state: CheckState; completedAt?: string }
 // One of the head's GitHub Actions workflow runs that has not completed.
 // `attempt` is GitHub's run_attempt, which a rerun raises while the id stays.
 export type WorkflowRun = { id: number; attempt: number; name: string }
+// One of the head's GitHub Actions workflow runs, finished or not, as the
+// runs read gives it. `workflow` is GitHub's workflow_id, `event` the event
+// that started the run and `number` its run_number; a field GitHub left out
+// is null, and a run with one is never compared with another for replacement.
+// `conclusion` is GitHub's, in its lower-case words, and null until the run
+// completes. `realWork` is there only when the mod read the run's jobs: it
+// says whether at least one of them ended other than skipped.
+export type HeadRun = {
+  id: number
+  workflow: number | null
+  event: string | null
+  number: number | null
+  attempt: number
+  name: string
+  completed: boolean
+  conclusion: string | null
+  realWork?: boolean
+}
+// The facts of the base branch's CLAUDE.md that decide the step: the two
+// limits, the Checks: fact, and the kind of merge command. `merge` is
+// `default` when the file names no merge command or names the default one,
+// `custom` when it names another, and `unread` when the file could not be
+// read, in which case the other facts are the defaults. `isClaudeRead` says
+// whether the file was read at all, so a text that has to say so does not
+// infer it from another fact.
+export type BaseFacts = { maxPushes: number; maxRounds: number; checks: 'none' | 'expected'; merge: 'default' | 'custom' | 'unread'; isClaudeRead: boolean }
 export type Verdict = 'APPROVE' | 'REQUEST_CHANGES'
 export type Verdicts = { sha: string; spec: Verdict; adversarial: Verdict }
 
@@ -26,15 +52,25 @@ export type Snapshot = {
   // How many heads drew a verdict review from this login, whichever way the
   // verdicts went. roundInProgress turns it into the round in progress.
   headsReviewed: number
-  // Commits pushed since the newest changes-requested verdict review.
+  // Commits pushed since the newest changes-requested verdict review, or,
+  // before the first one, the commits committed after the pull request was
+  // opened.
   pushesSinceVerdict: number
   // The head's unfinished workflow runs, sorted by id and then attempt. A
   // snapshot an older build stored has none, and every reader takes a
   // missing field as no runs.
   runs?: WorkflowRun[]
+  // Every workflow run at the head, finished or not, sorted by id. A
+  // snapshot an older build stored has none, and the step chooser then holds
+  // any merge as if the runs could not be read.
+  headRuns?: HeadRun[]
   // Set when the runs read failed at this look, so the runs are the ones the
-  // stored snapshot had. It is left out of the fingerprint.
+  // stored snapshot had. While both verdicts approve at the head it is part
+  // of the fingerprint, so the first look that reads the runs again is news.
   runsCarriedOver?: true
+  // The facts read from the base branch's CLAUDE.md at this look. A snapshot
+  // an older build stored has none, and the facts then take their defaults.
+  facts?: BaseFacts
   fingerprint: string
 }
 
@@ -45,7 +81,10 @@ export type Snapshot = {
 // watch tool was given inside a checkout of the pull request's repository,
 // for a session whose folder belongs to another repository; the package and
 // review tools list the worktrees from it instead of from `cwd`.
-export type BuilderRun = { repo: string; number: number; cwd: string; login: string; since: number; checkout?: string }
+// `repoFromCwd` says the watch took the repository from the session's folder,
+// which makes that folder a checkout of it, so the base branch's CLAUDE.md
+// can be read there when no checkout was given.
+export type BuilderRun = { repo: string; number: number; cwd: string; login: string; since: number; checkout?: string; repoFromCwd?: true }
 
 // The engine's words for where an agent's loop stands, as `$.agent.list()`
 // gives them. A card an older build saved may still hold 'done' or 'aborted';

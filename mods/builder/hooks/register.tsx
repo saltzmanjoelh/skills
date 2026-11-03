@@ -10,15 +10,16 @@ import { checkoutSentence, otherRepositorySentence, worktreeWithBranch, type Che
 // handed to the session.
 import { afterCompaction, afterFailure, checkoutIn, compactionFacts, compactionsIn, isDue, measureIn, measureOf, owing, told as afterReloadTold, withFacts, type UsageRead } from './context'
 import { afterAskAgain, afterTally, askAgainAnswer, briefAnswer, briefFactsOf, briefRefusal, briefText, counselAnswer, decisionLine, destinationOf, endedDecisionLines, FOLLOW_UP_OPTIONS, followUpAnswer, followUpAskAgainAnswer, followUpsInput, followUpsRefusal, followUpStepOf, followUpVotesOf, keepCounsel, MAX_BRIEF_OPTIONS, MAX_FOLLOW_UPS, MIN_OPTIONS, neverStartedCandidatesOf, neverStartedOf, type PullRequestRef, reviewParagraph, stepOf, type UnreadableVote, votesOf } from './counsel'
-import { carriedRuns, changesBetween, DECISION_LABEL, isCiMonitorEvent, isSameState, PR_FIELDS, pullRequestStateIn, roundInProgress, RUNS_JQ, runsOf, snapshotIn, snapshotOf, verdictsOf, type GhPullRequest, type Snapshot, type Verdict, type WorkflowRun } from './github'
+import { carriedHeadRuns, carriedRuns, changesBetween, DECISION_LABEL, headRunsOf, isCiMonitorEvent, isSameState, JOBS_JQ, needsJobs, PR_FIELDS, pullRequestStateIn, realWorkOf, roundInProgress, RUNS_JQ, snapshotIn, snapshotOf, unfinishedOf, verdictsOf, type BaseFacts, type GhPullRequest, type HeadRun, type Snapshot, type SnapshotExtras, type Verdict } from './github'
 import { ignoredLine, readIssueLink } from './links'
 import { afterComparison, afterLoad, dueComparisons, isStale, LOADED_PATHS, loadBegunAs, loadBegunIn, loadedIn, type Found } from './loaded'
 import { AGENT_PANE, agentPaneTree, bandTree, isDrawable, messagesReadOf, NAMED_AFTER_MS, PANE, paneTree, secondRow, type Elements, type MessagesRead, type View } from './pane'
 import { ADVERSARIAL_REVIEWER, afterReport, endedOf, FOCUSED_REVIEWERS, focusedReviewersFor, plannedOf, progressIn, reportAnswer, reportOf, stageLabel, STAGES, type ReportInput } from './progress'
-import { changePrompt, ciEventContext, resumePrompt, stateLines, stuckPrompt } from './prompts'
+import { changePrompt, ciEventContext, GITHUB_NAMES_LINE, resumePrompt, stateLines, stuckPrompt } from './prompts'
 import { changedKinds, commitRecordsOf, decidedItems, factIn, INSTRUCTION_PATHSPECS, instructionFileIsLink, isFullSha, isUpForCheck, LATER_CONTEXT_LINES, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pluginRootsOf, reviewedHeadOf, secretIn, specDirOf, trendOf, trendStopLine, underRoot, verdictHeadOf, verdictsLine, type CommitRecord, type EarlierRound, type FileKind, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
 import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isForemanNudge, newMemo, parentIn, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, STATUS_CHANGED_TEXT, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
+import { baseFactsOf, stepFor, UNREAD_FACTS } from './step'
 import { timeOfDay } from './text'
 import { afterCost, afterStep, emptyUsage, usageIn } from './usage'
 
@@ -307,20 +308,73 @@ async function gh($: $, dir: string | null, args: string[]): Promise<string | nu
   }
 }
 
-// A look reads the pull request, and then the unfinished workflow runs at
-// the head that read gave. When the runs read fails, for any reason, the look
-// carries on with the pull request's other facts and keeps the runs the
-// stored snapshot had (see carriedRuns), so a failed read never changes the
-// fingerprint. The mark that says so is set after the fingerprint is made,
-// which keeps it out of the fingerprint.
-async function fetchSnapshot($: $, r: Pick<BuilderRun, 'repo' | 'number' | 'cwd' | 'login'>): Promise<Snapshot | null> {
+// A look reads the pull request, then every workflow run at the head that
+// read gave, with the jobs of the runs whose replacing of an older run is in
+// question, and then the facts of the base branch's CLAUDE.md. Everything the
+// step chooser needs is read here and stored on the snapshot, because a turn
+// chooses its step from the snapshot it hands over with no await between.
+// When the runs read fails, for any reason, the look carries on with the pull
+// request's other facts and keeps the runs the stored snapshot had (see
+// carriedRuns and carriedHeadRuns), and marks the snapshot as carried over.
+// While both verdicts approve at the head, the mark is part of the
+// fingerprint (see fingerprintOf), so the first look that reads the runs
+// again is news. The two reads after the pull request's own do not depend
+// on each other, so they run together.
+type SnapshotTarget = Pick<BuilderRun, 'repo' | 'number' | 'cwd' | 'login' | 'checkout' | 'repoFromCwd'>
+
+async function fetchSnapshot($: $, r: SnapshotTarget): Promise<Snapshot | null> {
   const out = await gh($, r.cwd, ['pr', 'view', String(r.number), '--repo', r.repo, '--json', PR_FIELDS])
   if (out === null) return null
   const live = JSON.parse(out) as GhPullRequest
-  const runs = await readRuns($, r, live.headRefOid)
-  if (runs !== null) return snapshotOf(r.repo, live, r.login, runs)
-  const s = snapshotOf(r.repo, live, r.login, carriedRuns(await read($, pr), r.repo, live.number, live.headRefOid))
-  return { ...s, runsCarriedOver: true }
+  const base = plainBranchOf(live.baseRefName)
+  const [headRuns, facts] = await Promise.all([readHeadRuns($, r, live.headRefOid), readBaseFacts($, baseFolderOf(r), base)])
+  const extras: SnapshotExtras = { facts }
+  if (headRuns !== null) return snapshotOf(r.repo, live, r.login, unfinishedOf(headRuns), { ...extras, headRuns })
+  const stored = await read($, pr)
+  return snapshotOf(r.repo, live, r.login, carriedRuns(stored, r.repo, live.number, live.headRefOid), {
+    ...extras,
+    headRuns: carriedHeadRuns(stored, r.repo, live.number, live.headRefOid),
+    runsCarriedOver: true,
+  })
+}
+
+// The base branch's name when it is a plain branch name, which is safe to put
+// in a git argument, and null otherwise. A name that starts with a dash or
+// holds two dots in a row is refused, so it can never read as an option or a
+// range.
+function plainBranchOf(name: unknown): string | null {
+  if (typeof name !== 'string' || name.length > 200 || name.startsWith('-') || name.includes('..')) return null
+  return /^[A-Za-z0-9._/-]+$/.test(name) ? name : null
+}
+
+// The folder the base branch's CLAUDE.md is read in: the checkout the watch
+// tool was given, or the session's folder only when the watch took the
+// repository from that folder. Anything else is null and counts as unread,
+// because another project's `Checks: none` could allow a merge without
+// checks.
+function baseFolderOf(r: SnapshotTarget): string | null {
+  if (r.checkout !== undefined) return r.checkout
+  return r.repoFromCwd === true && r.cwd.startsWith('/') ? r.cwd : null
+}
+
+// The facts of the base branch's CLAUDE.md, read with
+// `git show origin/<base>:CLAUDE.md` in `dir`. There is no fetch and no
+// cache: it is one local read per look. A file without a `Checks:` line asks
+// whether the base has workflow files. When the file cannot be read, or there
+// is no folder or base to read it from, the facts are the unread defaults.
+async function readBaseFacts($: $, dir: string | null, base: string | null): Promise<BaseFacts> {
+  if (dir === null || base === null) return UNREAD_FACTS
+  const claude = await git($, dir, ['show', `origin/${base}:CLAUDE.md`])
+  if (claude === null) return UNREAD_FACTS
+  // The file's own `Checks:` line decides, so no listing is made, and
+  // baseFactsOf ignores the listing argument, here null.
+  if (factIn(claude, 'Checks') !== null) return baseFactsOf(claude, null)
+  // --full-tree reads the path from the top of the checkout, because without
+  // it git reads the path relative to `dir`, and a session that started in a
+  // subfolder would find no workflow files and take the base for one without
+  // checks.
+  const tree = await git($, dir, ['ls-tree', '--full-tree', `origin/${base}`, '.github/workflows'])
+  return baseFactsOf(claude, tree === null ? null : tree.trim() !== '')
 }
 
 // The state GitHub gives now for a pull request, or null when it could not be
@@ -333,12 +387,44 @@ async function readPullRequestState($: $, target: Pick<BuilderRun, 'repo' | 'num
   return pullRequestStateIn(out)
 }
 
-// The head's unfinished workflow runs, or null when they could not be read:
-// gh failed, threw or had its output cut off (the gh helper refuses all
-// three), or a line was not a run.
-async function readRuns($: $, r: Pick<BuilderRun, 'repo' | 'cwd'>, head: string): Promise<WorkflowRun[] | null> {
+// Every workflow run at the head, or null when they could not be read: gh
+// failed, threw or had its output cut off (the gh helper refuses all three),
+// or a line was not a run. A run whose replacing of an older run is in
+// question (see needsJobs) gets `realWork` from its jobs when they could be
+// read, and none when they could not, which counts as no real work and keeps
+// the older run counting, the safe direction. The jobs reads run at the same
+// time, and the runs keep the order the runs read gave.
+async function readHeadRuns($: $, r: Pick<BuilderRun, 'repo' | 'cwd'>, head: string): Promise<HeadRun[] | null> {
   const out = await gh($, r.cwd, ['api', '--paginate', `repos/${r.repo}/actions/runs?head_sha=${head}&per_page=100`, '--jq', RUNS_JQ])
-  return out === null ? null : runsOf(out)
+  const runs = out === null ? null : headRunsOf(out)
+  if (runs === null) return null
+  return await Promise.all(runs.map(async run => {
+    if (!needsJobs(run, runs)) return run
+    const realWork = await jobsWork($, r, run)
+    return realWork === null ? run : { ...run, realWork }
+  }))
+}
+
+// Whether a completed run's jobs include one that ended other than skipped,
+// read once for each repository, run id and attempt that gives an answer,
+// because the jobs of a completed attempt never change. A read already under
+// way is shared by a look that asks at the same moment. A failed read is not
+// kept, so it counts as no real work for this look and the next look tries
+// again. The cache lives as long as the module, so a hot reload empties it.
+const jobsReads = new Map<string, Promise<boolean | null>>()
+
+function jobsWork($: $, r: Pick<BuilderRun, 'repo' | 'cwd'>, run: HeadRun): Promise<boolean | null> {
+  const key = `${r.repo}:${run.id}.${run.attempt}`
+  let reading = jobsReads.get(key)
+  if (reading === undefined) {
+    const path = `repos/${r.repo}/actions/runs/${run.id}/attempts/${run.attempt}/jobs?per_page=100`
+    reading = gh($, r.cwd, ['api', '--paginate', path, '--jq', JOBS_JQ]).then(out => (out === null ? null : realWorkOf(out)))
+    jobsReads.set(key, reading)
+    void reading.then(work => {
+      if (work === null && jobsReads.get(key) === reading) jobsReads.delete(key)
+    })
+  }
+  return reading
 }
 
 // What this session was last told, per pull request, and when it last
@@ -812,6 +898,10 @@ async function deliver($: $, r: BuilderRun, s: Snapshot, seq: number, compacted:
     // The owed reload is read here too, before the read is chosen again, so
     // the submit still follows that choice with no await between.
     const owedAt = await reloadOwed($)
+    // Whether a question is open is read here too, for the step the prompt
+    // names, so the step is chosen from the read handed over with no await
+    // between.
+    const asking = await isAsking($)
     // The read is chosen again here, after the last await, and every guard is
     // checked again with no await before the submit, because a newer look can
     // store a newer read, the desktop app's CI event or the look after a
@@ -841,7 +931,7 @@ async function deliver($: $, r: BuilderRun, s: Snapshot, seq: number, compacted:
       listed = owed
       decisions = endedDecisionLines(r, chosen.s.state, owed.map(d => d.line))
     }
-    const submitted = await $.prompt.submit({ text: changePrompt(chosen.s, changesBetween(last, chosen.s), decisions, compacted || owedAt !== null) })
+    const submitted = await $.prompt.submit({ text: changePrompt(chosen.s, changesBetween(last, chosen.s), decisions, compacted || owedAt !== null, asking) })
     // Recorded only once the prompt is accepted, so a refused one is retried,
     // and its decisions are listed again, as is the reload line.
     if (submitted.drop !== undefined) {
@@ -1187,18 +1277,21 @@ async function resetStuckInterval($: $) {
 // What the stuck prompt is timed from, read from the atoms, or null when no
 // stuck prompt is due at all: a hold is on, nothing is watched, the pull
 // request is not open, or the session has not gone quiet since it started.
+// The stored snapshot counts only when it is of the watched pull request,
+// because a new watch saves its run record before its snapshot, and a stuck
+// prompt between the two would carry the other pull request's state and step.
 // `quietFrom` is a quiet time that could not be saved, which counts when it
 // is later than the saved one.
-async function stuckDue($: $, quietFrom?: number): Promise<{ r: BuilderRun; since: number; every: number; now: number } | null> {
+async function stuckDue($: $, quietFrom?: number): Promise<{ r: BuilderRun; s: Snapshot; since: number; every: number; now: number } | null> {
   const r = await read($, run)
-  const s = await read($, pr)
+  const s = watchedSnapshotOf(r, await read($, pr))
   const hold = holdIn(await read($, usageHold))
   const saved = quietIn(await read($, quietSince))
   const since = quietFrom === undefined ? saved : Math.max(saved ?? quietFrom, quietFrom)
   const every = stuckEveryIn(await read($, stuckEvery))
   const now = await $.clock.now()
   if (hold !== null || r === null || s === null || s.state !== 'OPEN' || since === null) return null
-  return { r, since, every, now }
+  return { r, s, since, every, now }
 }
 
 // Stops the stuck timer: moves its number on, so a stuck timer whose work is
@@ -1280,12 +1373,12 @@ async function fireStuck($: $, gen: number) {
   if (gen !== stuckGen) return
   const due = await stuckDue($)
   if (gen !== stuckGen || due === null) return
-  const { r, since, every, now } = due
+  const { r, s, since, every, now } = due
   // A wait taken in steps arms the next step.
   if (now - since < every) return armStuck($)
   const isWaiting = (await read($, busy))
     || (await read($, agents)).some(isRunning)
-    || (await read($, questions)).some(q => !q.answered)
+    || (await isAsking($))
   const owedAt = await reloadOwed($)
   // Checked with no await before the submit, as deliver does. A turn about a
   // real change is already coming when one is being handed over, one waits
@@ -1300,7 +1393,9 @@ async function fireStuck($: $, gen: number) {
     isWaiting || turnRunning || isDelivering || isHeld || toldWrites > 0 ||
     untoldOwnReads.size > 0 || !isCurrentWatch(r)
   ) return markQuiet($)
-  const isAccepted = await submitClaimed($, stuckPrompt(r.number, now - since, owedAt !== null), owedAt)
+  // A question being open makes the session waiting above, so the step is
+  // chosen with none open.
+  const isAccepted = await submitClaimed($, stuckPrompt(s, now - since, owedAt !== null), owedAt)
   // This timer has fired, so the stuck prompt is armed again even when the
   // doubled interval cannot be saved.
   try {
@@ -1924,9 +2019,15 @@ async function resumeAfterClear($: $, cleared: number) {
   // the clear, so lookAt's hold guard does not stop it. With nothing watched,
   // as in a hold during the spec or the build, there is nothing to read. A
   // look that fails leaves the decision to the stored pull request.
-  if ((await read($, run)) !== null) await look($, 'resume', 'observe').catch(() => null)
+  const watched = await read($, run)
+  if (watched !== null) await look($, 'resume', 'observe').catch(() => null)
   const stage = progressIn(await read($, progress))?.stage
   if (!(await isImplementing($)) || (await read($, busy))) return
+  // While a pull request is watched, the prompt carries its state and the
+  // step that applies, chosen from the snapshot the look above stored, or
+  // the one stored before when that look failed.
+  const shown = watched === null ? null : watchedSnapshotOf(watched, snapshotIn(await read($, pr)))
+  const watchedStep = shown === null ? null : { s: shown, isAsking: await isAsking($) }
   const owedAt = await reloadOwed($)
   // The checks and the claim follow each other with no await between, so the
   // resume prompt goes out only if, at that moment, no person's prompt has
@@ -1938,7 +2039,7 @@ async function resumeAfterClear($: $, cleared: number) {
   if (cleared !== holdGen || turnRunning || isDelivering) return
   const prompted = personPrompts
   const turnsStarted = ownTurnsStarted
-  const isAccepted = await submitClaimed($, resumePrompt(stage === undefined ? null : stageLabel(stage), owedAt !== null), owedAt)
+  const isAccepted = await submitClaimed($, resumePrompt(stage === undefined ? null : stageLabel(stage), owedAt !== null, watchedStep), owedAt)
   if (!isAccepted) await startHold($, (await $.clock.now()) + RESUME_FALLBACK_MS, prompted, turnsStarted)
 }
 
@@ -2095,7 +2196,11 @@ async function serveWatch($: $, asked: WatchInput): Promise<string> {
     gh($, dir, ['api', 'user', '--jq', '.login']),
   ])
   if (!repo || !login) return 'Could not read the repository or the gh login from this folder.'
-  const target = { repo, number: input.number, cwd: dir ?? '.', login }
+  // The repository came from the session's folder only when neither a
+  // repository nor a checkout was given, and only then may the base
+  // branch's CLAUDE.md be read in that folder.
+  const fromCwd = input.repo === undefined && given === undefined ? { repoFromCwd: true as const } : {}
+  const target = { repo, number: input.number, cwd: dir ?? '.', login, ...fromCwd }
   const s = await watch($, given === undefined ? target : { ...target, checkout: given })
   if (s === null) return `gh could not read ${repo}#${input.number}; still watching what was watched before.`
   const lines = ['Watching this pull request.', ...stateLines(s)]
@@ -2110,7 +2215,14 @@ async function serveWatch($: $, asked: WatchInput): Promise<string> {
     if (ended.length > 0) lines.push('', ...ended)
     await forgetListed($, owed)
   }
+  lines.push('', ...stepFor(s, await isAsking($)), '', GITHUB_NAMES_LINE)
   return lines.join('\n')
+}
+
+// Whether a question to the person is open, which the step chooser reads
+// apart from the snapshot.
+async function isAsking($: $): Promise<boolean> {
+  return (await read($, questions)).some(q => !q.answered)
 }
 
 // The engine keeps only the first 4 MiB of a command's output. A cut-off
@@ -2316,7 +2428,8 @@ async function counselDir($: $, dir: string): Promise<string | null> {
 type PrForReview = GhPullRequest & { baseRefName: string; headRefName: string }
 
 async function livePullRequest($: $, r: BuilderRun): Promise<PrForReview | null> {
-  const out = await gh($, r.cwd, ['pr', 'view', String(r.number), '--repo', r.repo, '--json', `${PR_FIELDS},baseRefName,headRefName`])
+  // PR_FIELDS already asks for baseRefName, so it is not asked for twice.
+  const out = await gh($, r.cwd, ['pr', 'view', String(r.number), '--repo', r.repo, '--json', `${PR_FIELDS},headRefName`])
   if (out === null) return null
   try {
     return JSON.parse(out) as PrForReview
@@ -4286,7 +4399,7 @@ export const register: Register = on => {
       const seen = await lookAt($, 'ci-monitor', 'observe', { actsOnRead: true, ownRead })
       if (seen === null) return next(e)
       const { r, s, seq } = seen
-      const passed = await next({ ...e, context: [...(e.context ?? []), ciEventContext(s, owedAt !== null)] })
+      const passed = await next({ ...e, context: [...(e.context ?? []), ciEventContext(s, owedAt !== null, await isAsking($))] })
       // Recorded as told only once the prompt goes on to start its turn, under
       // the watch it was read under, and only if nothing else recorded a
       // different state for that watch meanwhile. `tell` also refuses the read

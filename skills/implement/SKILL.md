@@ -82,8 +82,8 @@ wait; if the tool is refused, carry on.
 
 When a usage limit stops a turn, the mod starts a turn once the limit
 resets, and that turn carries on the stage it names. With the pull request
-open, such a turn enters the list in "With the pull request open" from the
-top.
+open, such a turn follows the step it names, as "With the pull request open"
+says.
 
 ### 1. Ground
 
@@ -156,235 +156,63 @@ for credentials (see "Rules"), then push and open it with
 was measured, written once; history goes in the reviews, not the body. If
 the project's `CLAUDE.md` says the body must begin with particular lines,
 write them. Set the state label to `in-review` (see "State labels"), then
-call `mcp__builder__watch` with the number, and go straight on into the list
-below, from the top, in the same turn: the watch records the state at
-opening as already told, so no turn may come for it. From here the pull
-request drives the session. When the pull request is in a different
+call `mcp__builder__watch` with the number, and follow the step its answer
+names in the same turn: the watch records the state at opening as already
+told, so no turn may come for it. From here the pull request drives the
+session. When the pull request is in a different
 repository from the session's folder, also give the watch tool `repo` and
 `checkout`, a folder inside a checkout of that repository, so the package and
 review tools can find the worktree of its head branch.
 
 ## With the pull request open
 
-On every turn that starts from the pull request's state (a turn the mod
-starts, the mod's stuck prompt, the desktop app's CI event, a reviewer
-finishing, or resuming), read the state from the mod's last report or
-`mcp__builder__watch`, and take the first of these that applies. Decide from
-the reviews, checks, commits and mergeability, never from the state labels,
-which are for the person to read.
+The builder mod chooses which step applies. Every turn that starts from the
+pull request's state carries the state lines, then a line that begins
+"The step that applies:" and names the step, then that step's whole text:
+the change prompt the mod submits, the context it adds to the desktop app's
+CI event, its stuck prompt, the answer of `mcp__builder__watch`, and the
+prompt that resumes after a usage limit. The mod decides from the reviews,
+checks, workflow runs, commits and mergeability, never from the state
+labels, which are for the person to read. It reads the limits, the
+`Checks:` line and whether a merge command of the project's own is named
+from the base branch's `CLAUDE.md`.
+Follow the step's text. It tells the session what to do, and every
+judgement in it, such as which half of a review round is due or what to
+ask the person, stays with the session.
+
+On a turn that starts some other way, such as a reviewer finishing, call
+`mcp__builder__watch` with the pull request's number and follow the step
+its answer names.
 
 The mod sends the stuck prompt when the session has been quiet for a long
-time with the pull request open. That turn enters the list from the top
-like any other, after first checking with `gh` whether what the session
-waits on is real; if the wait is real, the session ends the turn.
+time with the pull request open. That turn first checks with `gh` whether
+what the session waits on is real; if the wait is real, the session ends
+the turn, and otherwise it follows the step the prompt names.
 
-1. **Merged.** First update the linked checkout (see "Updating the
-   linked checkout" below). Then move the issue to done. Then list the
-   commits the worktree holds and the pull request lacks, as "Commits the
-   pull request lacks" below says, before anything is filed. Then file at
-   most one issue for the follow-ups. The list to file is the `To file:` list
-   of the last verdict review, together with the `To file:` items of any
-   cheap-fix commit that no verdict review lists, whether it is on the
-   pull request or only in the worktree (see "Commits the pull request
-   lacks" below). That list holds what the counsel decided to file,
-   together with the fix decisions and the visible problems that the
-   limit rule of the second half's point 4 moved there, what the person
-   decided when the counsel could not sit, and items carried over from
-   reviews posted before the counsel decided follow-ups. So nothing new
-   reaches the issue tracker on the session's judgement alone, except a
-   visible problem it meant to fix in this pull request and could not.
-   Take the first of these that applies:
-   - The last verdict review has no **Follow-ups** section, because a
-     session that predates it posted the review: file nothing, and say in
-     the report which review holds the follow-ups.
-   - The list to file is empty: file nothing.
-   - The project names no issue tracker and the session has none
-     connected: file nothing, and say in the report that the list is in
-     the last review.
-   - A search of the issue tracker for the exact title
-     `Follow-ups from <owner>/<name>#<n>`, with the repository's owner
-     and name as GitHub gives them, finds an issue, because an earlier
-     session filed it: file nothing.
-   - The search fails: file nothing, and say so in the report, because
-     filing twice is what this step exists to prevent.
-   - Otherwise file one issue with that title in the issue tracker, with a
-     link to the pull request, holding every item of the list, each in one
-     sentence saying what a person would see.
-
-   Then, when the worktree held commits the pull request lacks, do what
-   "Commits the pull request lacks" says for a merged pull request, and
-   stop. Otherwise run `/cleanup`, report, and stop.
-   The person's request for `/implement` already counts as their agreement
-   to the archive that ends `/cleanup`, whether they started this session
-   directly or through a foreman parent session that they started, so never
-   wait for, or ask for, a second agreement. When that archive, or the call
-   that turns Remote Control off before it, is refused, do what step 7 of
-   `/cleanup` says, and nothing more.
-   **Closed without merging:** set `stuck`, say so, stop.
-2. **An open question** to the person: wait for the answer.
-3. **Over a limit.** Set `stuck`, ask the person once with a summary of
-   what keeps failing, tell the session that started this one as
-   **The line to the starting session** says, and wait, when either of
-   these holds:
-   - **Pushes:** more commits since the last changes-requested verdict
-     than `Max pushes per round`. Before the first such verdict, count the
-     commits committed after the pull request was opened, from
-     `gh pr view <n> --json createdAt,commits`; commit dates only
-     approximate when a commit was pushed, which is close enough for a
-     limit.
-   - **Rounds:** the round the mod reports ("Round N") is past
-     `Max rounds`.
-4. **Conflicting.** Merge the base in (never rebase), rerun the gates the
-   merge could move, push.
-5. **A check or a workflow run failed at the head.** What counts as a
-   failed run is defined in the step **Both verdicts approve at this
-   head**; a run can fail without registering any check. Read it with
-   `gh run view <id> --log-failed`, or `gh run view <id>` for a run that
-   failed before its first job, and establish why it is red before
-   changing anything.
-   - **The code is wrong**, including a workflow file that is broken and so
-     failed at startup: fix it, set `waiting-on-author`, push. A run that
-     failed at startup is never rerun; rerunning cannot fix its file.
-   - **The check never really ran** (it was not scheduled, or it timed out
-     waiting for a machine): if `gh run view <id> --json attempt` says
-     this is its first attempt, rerun it with `gh run rerun <id> --failed`
-     and end the turn; otherwise set `stuck` and ask the person.
-   - **Something outside the code stopped it** (Actions is disabled, a
-     billing or spending limit refused it, or it ended `action_required`,
-     waiting for someone to approve it): neither a fix nor a rerun helps.
-     Set `stuck` and ask the person.
-6. **The focused reviewers have not run at this head.** Run a review
-   round's first half (below), whether or not checks are still running.
-   The focused reviewers run at every head that changes the pull request's
-   own diff; a head that only merged the base in counts them as run if
-   they ran at the head before it. A head that a review was carried over
-   to, with the verdicts of the approved head before it (see the second
-   half's point 6), counts them as run too. The first half launches only
-   the focused reviewers that the package tool's answer names, and the
-   ones it does not name count as run at this head. A head that the answer
-   says is up for the check after approval runs the check instead (see
-   **The check after approval** below).
-7. **No verdict review at this head.** Run the review round's second half
-   and post the review, whether or not checks are still running. A review
-   carried over to this head from the approved head before it is this
-   head's verdict review.
-8. **The newest verdict at this head requests changes.** Fix its blocking
-   findings, except those outside the spec and those the owner's answer
-   dropped, in a commit that carries the fix lines (see "A review round"),
-   set `waiting-on-author`, push. The push also carries the cheap fixes
-   that the second half committed, and the next round reviews them. If it
-   has no blocking finding left to fix, which should not happen (see the
-   second half's point 3), set `stuck` and ask the person rather than wait
-   for a change that will not come.
-9. **Both verdicts approve at this head.** Waiting on checks happens here,
-   and only here, so reviews and fixes never wait on them. Read the pull
-   request again (`gh pr view <n> --json headRefOid,statusCheckRollup`) and
-   every workflow run on the head, keeping only the fields this step uses:
-   `gh api --paginate "repos/<repo>/actions/runs?head_sha=<head sha>"
-   --jq '.workflow_runs[] | {id, workflow_id, event, run_number, status,
-   conclusion, run_attempt}'` (`gh run list` stops at 20 runs). The step
-   uses four definitions:
-   - **When a run is replaced.** An older run is replaced, and stops
-     counting, when any run of the same `workflow_id`, started by the same
-     `event`, with a higher `run_number`, has not completed or did real
-     work. Runs of one workflow from different events all count. A
-     completed run did real work when its conclusion is not `skipped` and
-     at least one of its jobs ended other than `skipped`, read with
-     `gh api --paginate "repos/<repo>/actions/runs/<id>/jobs"
-     --jq '.jobs[].conclusion'`. An empty jobs list, or a jobs read that
-     fails, means the run did no real work. This holds whatever the older
-     run ended as, cancelled, failed or passed. A run that did no real
-     work replaces nothing and still counts itself by its own conclusion,
-     so a run that skipped every job counts as passed. A newer run that
-     has not completed replaces the older one only until it completes, and
-     then this rule decides again. Read the jobs only for a completed run
-     whose replacing of an older run is in question, so a head with one
-     run per workflow and event reads no jobs.
-   - **When a check passed.** A check counts as passed when it succeeded,
-     or was skipped or neutral.
-   - **When a run is unfinished.** A run is unfinished until its status is
-     `completed`, whether it is queued, in progress, requested, waiting
-     for an approval or pending in a concurrency group.
-   - **When a run failed.** A completed run failed when its conclusion is
-     anything other than success, skipped or neutral.
-
-   For example, take a workflow that listens for `labeled`, skips its jobs
-   on that action, and cancels pending runs through a concurrency group.
-   Run #40, started by a push to the pull request, is cancelled before any
-   of its jobs start, because setting `ready-to-merge` started run #41,
-   which skipped every job. Both report `event: pull_request`. Run #41 did
-   no real work, so it replaces nothing: #40 still counts, as failed, #41
-   counts as passed, and the step reaches **A check failed, or a run
-   failed**. The same holds when #40 failed rather than being cancelled.
-   A push would move the head, so a later run on this head comes from
-   another event of the same kind, such as closing and reopening the pull
-   request. When that starts run #42 and it passes, #42 did real work and
-   replaces both #40 and #41. While #42 is still running, it replaces them
-   for now and is unfinished, so the step waits for it.
-
-   Take the first of these cases that applies; where one says to start the
-   list again, decide the list from this read, not from the mod's earlier
-   report:
-   - **The head moved:** set `in-review` and start the list again from
-     **Merged**.
-   - **A check failed, or a run failed:** set `waiting-on-author` and
-     start the list again from **Merged**, which reaches **A check or a
-     workflow run failed at the head**.
-   - **A check is pending, or a run is unfinished:** set `ready-to-merge`,
-     say "waiting on checks" and end the turn; the mod starts a turn when
-     they finish.
-   - **At least one check exists, and every check passed:** merge (below).
-   - **No checks at all, with `Checks: none`:** merge.
-   - **No checks at all, with `Checks: expected`:** nothing will change to
-     start another turn, so the person decides whether to merge this head
-     without checks. An answer covers the head and the set of workflow
-     runs that this read found; it lapses when either changes. A session
-     that restarts has no record of answers and asks again, which is the
-     safe direction.
-     - **They already said no to this head and these runs:** leave
-       `stuck` as it is and end the turn.
-     - **They already said yes to this head and these runs:** merge after
-       **Read again before merging on a yes**.
-     - **Otherwise,** ask. On a no, set `stuck`, say what it waits for,
-       and end the turn. On a yes, merge after **Read again before
-       merging on a yes**.
-
-     **Read again before merging on a yes.** Read the pull request and its
-     runs again, as above. Merge only if it is still this head with no
-     checks, no unfinished run and no new run; otherwise take this step's
-     cases again from **The head moved**.
-
-   Before merging, when the worktree holds commits the pull request
-   lacks, do not merge: do what "Commits the pull request lacks" says,
-   and after a push go on as **When a turn ends** says.
-   To merge, set `ready-to-merge` and run the merge command with the pull
-   request's number and the head the verdicts approved. Never merge any
-   other way: a project that names a gate means no session merges around
-   it. If the command refuses, say why and wait.
-
-**When a turn ends.** After any push, what follows depends on `Checks:`,
-and either way **Over a limit** is checked after every push:
+**When a turn ends.** After any push, what follows depends on `Checks:`.
+Either way the mod counts the pushes and rounds again from the new state,
+and names the step **Over a limit** when a limit is passed:
 
 - **`Checks: expected`:** end the turn. The mod looks at the pull request
   about 10 seconds after the turn ends, which only shows it the new head;
   it hands the new head over at its next poll, 90 seconds after that look,
-  so the next turn comes within about two minutes of the push and starts
-  the list again from **Merged**.
+  so the next turn comes within about two minutes of the push and names
+  the step that applies.
 - **`Checks: none`:** there are no checks to wait for, so do not wait for
   the mod to hand the push over: call `mcp__builder__watch` with the pull
   request's number, which reads the new state and records it as told.
-  Then start the list again from **Merged** in the same turn. If the watch
+  Then follow the step its answer names in the same turn. If the watch
   fails, or the head it reports is not the commit just pushed (GitHub has
   not shown the push yet), end the turn as under `Checks: expected`
   instead, and say why; the mod hands the new head over once it sees it.
 
 After a review round's first half finds nothing to fix, and after its
-second half posts the review without pushing, start the list again from
-**Merged** in the same turn: the mod does not start a turn for a review
-the session posted itself, and going through the list again is what
-reaches **Both verdicts approve at this head** and the merge. When
-nothing applies but waiting, say what the session waits on and end the
-turn. Never sleep or poll inside a tool call.
+second half posts the review without pushing, call `mcp__builder__watch`
+with the pull request's number and follow the step it names, in the same
+turn: the mod does not start a turn for a review the session posted
+itself, and the watch is what reaches **Both verdicts approve at this
+head** and the merge. When nothing applies but waiting, say what the
+session waits on and end the turn. Never sleep or poll inside a tool call.
 
 ### Commits the pull request lacks
 
@@ -406,8 +234,9 @@ person, and never run `/cleanup`.
   cheap-fix commits already on the pull request, look for that first line
   in `gh pr view <n> --json commits`.
 - While the pull request is open and the newest verdict at its head
-  requests changes, push nothing here: step 8 pushes the commits with the
-  blocking fixes, so the next round reviews both together.
+  requests changes, push nothing here: the step **The newest verdict at
+  this head requests changes** pushes the commits with the blocking fixes,
+  so the next round reviews both together.
 - Otherwise, while the pull request is open, push the commits when the
   head is an ancestor of the worktree's `HEAD`
   (`git merge-base --is-ancestor <head> HEAD`), checking for credentials
@@ -502,7 +331,8 @@ then one line per item starting `- `, and a blank line after the last
 item. An item repeated from an earlier list is copied word for word.
 
 The fix lines: every commit that fixes review findings, in the first half's
-point 4 or for a blocking verdict in step 8 of "With the pull request open",
+point 4 or for a blocking verdict in the step **The newest verdict at this
+head requests changes**,
 carries the line `Reviewed: <head>`, naming the head the findings were
 raised at, and one line for each area a fixed finding lies in, in the form
 `<file>: <function or mechanism>`:
@@ -594,8 +424,8 @@ answers that it cannot settle. This holds at
 every stage, from the spec to the merge. A session whose first message
 holds no such line is not affected by this paragraph.
 
-**First half, at a head where the focused reviewers have not run** (**The
-focused reviewers have not run at this head** says which heads those are).
+**First half, at a head where the focused reviewers have not run** (the
+mod's step **Review this head** says which heads those are).
 
 1. Call `mcp__builder__package` with the issue in a few lines, the spec and
    plan paths, and the test summary line. It answers with the package
@@ -633,9 +463,10 @@ focused reviewers have not run at this head** says which heads those are).
    agent. Commit with the fix lines and the round's lists, rerun the gates
    the fixes could move, push, and go on as **When a turn ends** says for a
    push: end the turn under `Checks: expected`, or re-read with
-   `mcp__builder__watch` and start the list again under `Checks: none`.
-5. With nothing to fix, start the list again from **Merged** in the same
-   turn (see "When a turn ends"). The head's lists then go in its review.
+   `mcp__builder__watch` and follow the step it names under `Checks: none`.
+5. With nothing to fix, call `mcp__builder__watch` and follow the step it
+   names in the same turn (see "When a turn ends"). The head's lists then
+   go in its review.
 
 **Second half, once the focused reviewers found nothing to fix at the head.**
 
@@ -720,8 +551,8 @@ focused reviewers have not run at this head** says which heads those are).
      did not decide", and is filed nowhere.
 
    When committing the fixes would take the pull request past
-   `Max rounds` or `Max pushes per round`, counted as **Over a limit**
-   counts them, and nothing else in this round needs a push, make no
+   `Max rounds` or `Max pushes per round`, counted as the mod counts them
+   for the step **Over a limit**, and nothing else in this round needs a push, make no
    commit. List every cheap follow-up as dropped, renames and rewrapping
    included as well as wording and test tightening, because none of them
    is worth a push past the limit. The one exception is a visible problem
@@ -745,8 +576,9 @@ focused reviewers have not run at this head** says which heads those are).
    dropped, so that the follow-up issue carries it into a spec.
 5. The round's review is always posted at the reviewed head. Choose what
    follows it:
-   - **A verdict requests changes:** push nothing here. Step 8 pushes
-     point 4's commit with the blocking fixes.
+   - **A verdict requests changes:** push nothing here. The mod's step
+     **The newest verdict at this head requests changes** pushes point 4's
+     commit with the blocking fixes.
    - **Both approve and point 4 committed nothing:** nothing follows.
    - **Both approve and every line the commit changed is inert** (defined
      below): push, then post at the new head a short review whose
@@ -841,8 +673,8 @@ focused reviewers have not run at this head** says which heads those are).
    - If a push fails, do what "Commits the pull request lacks" says: the
      review would otherwise list fixes that never reached the pull
      request.
-7. After a push, go on as **When a turn ends** says. Otherwise start the
-   list again from **Merged** in the same turn.
+7. After a push, go on as **When a turn ends** says. Otherwise call
+   `mcp__builder__watch` and follow the step it names in the same turn.
 
 **The check after approval.** The package tool says a head is up for the
 check after approval when both verdicts approved the verdict head, the
@@ -892,7 +724,7 @@ second half's point 5 says.
 
 ### Updating the linked checkout
 
-The **Merged** step does this first, before anything else. Skills, agents
+The mod's step **Merged** does this first, before anything else. Skills, agents
 and the builder mod load through symlinks under `~/.claude` into a
 repository's main checkout, not from this worktree, so a session started a
 moment after the merge runs whatever that checkout holds. The session
@@ -1278,8 +1110,8 @@ request's branch and its worktree (make one from the branch if there is
 none), call `mcp__builder__watch`, and read the spec and plan paths from the
 spec directory on the branch (never from the pull request body). When the
 worktree holds commits the pull request lacks, do what "Commits the pull
-request lacks" says. Then enter the list above from the top, reporting
-`merge` when it runs the merge command. A verdict review at the head means
+request lacks" says. Then follow the step that the watch tool's answer
+names, reporting `merge` when it runs the merge command. A verdict review at the head means
 its first half finished there, and its body names the focused reviewers that
 ran; without one, assume they have not run. A review whose verdicts are
 carried over to the head from the approved head before it counts both
@@ -1300,7 +1132,8 @@ again with the Skill tool before anything else. Do not repeat step 1: the
 pane, Remote Control and the watch are still there. Read the pull request's
 state with `mcp__builder__watch`, and when the summary does not name the
 spec and plan paths, read them from the spec directory on the branch. Then
-enter the list above from the top as "Resuming" says, counting a round's
+follow the step that the watch tool's answer names, as "Resuming" says,
+counting a round's
 first half as run at a head only when a verdict review at that head names
 the focused reviewers that ran. Before the pull request is open there is
 nothing to watch, so carry on the stage the summary names.
@@ -1322,11 +1155,12 @@ nothing to watch, so carry on the stage the summary names.
 - **Everything posted goes under the gh login and reads as plain prose.**
   Agents report to the session; the session alone writes to the pull
   request, through the mod's review tool.
-- **The session merges only from the step "Both verdicts approve at this
-  head", and only on the cases that step says merge.** That step, not this
-  rule, is where the conditions are written; this rule only says there is
-  no other way, and that the merge goes through the project's merge
-  command, read from the base branch.
+- **The session merges only when the mod names the step "Both verdicts
+  approve at this head" with a merge, or with the question about merging
+  without checks and the person said yes.** That step's text, which the mod
+  hands over, is where the conditions are written; this rule only says
+  there is no other way, and that the merge goes through the project's
+  merge command, read from the base branch.
 - **Every command started in the background has its own time limit,**
   longer than that command's slowest normal run, so a stuck command cannot
   hold the session unseen. On a machine without a `timeout` command, set

@@ -2,10 +2,10 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { ElementQuery, Engine, FoundElement } from 'claude-code/testing'
 
-import { FACTS_LEAD, GITHUB_NAMES_LINE, SETTINGS_HINT } from '../hooks/context'
-import { RUNS_JQ, snapshotOf, type GhPullRequest } from '../hooks/github'
+import { FACTS_LEAD, SETTINGS_HINT } from '../hooks/context'
+import { JOBS_JQ, RUNS_JQ, snapshotOf, type GhPullRequest } from '../hooks/github'
 import { NOTHING_WATCHED, STALE_WARNING } from '../hooks/pane'
-import { RELOAD_LINE, REREAD_CLOSING } from '../hooks/prompts'
+import { GITHUB_NAMES_LINE, RELOAD_LINE, REREAD_CLOSING } from '../hooks/prompts'
 import { INSTRUCTION_PATHSPECS } from '../hooks/review'
 import { FOREMAN_NUDGE_TEXTS, STATUS_CHANGED_TEXT } from '../hooks/status'
 import type { BuildStatus, Compactions } from '../types'
@@ -56,11 +56,19 @@ function fakeGitHub(on: On) {
   // engine does when gh cannot start or runs past its timeout.
   // `onPost`, when set, runs as a review is posted on #7, so a test can
   // change what GitHub shows from then on.
-  // `runs` are the head's unfinished workflow runs, printed one JSON line
-  // each as `gh api --jq` prints them, and `runsReadsToFail` makes that many
-  // reads of them fail. `runsReadsCut` makes every read of them answer the
-  // runs with exit code 0 but say its output was cut off, and
-  // `runsReadsThrow` makes every read of them throw instead of answering.
+  // `runs` are the head's workflow runs, printed one JSON line each as
+  // `gh api --jq` prints them; a run without a status is unfinished. `jobs`
+  // gives what the read of a run's jobs prints, keyed by the run's id and
+  // attempt with a dot between, and a read of one not listed exits with an
+  // error, and `jobsHold`, when set, keeps every jobs read waiting until it
+  // resolves. `workflows` is what `git ls-tree` lists for the base's workflow
+  // folder, and that listing exits with an error when it is null. It lists
+  // the folder only when the path it is given names `.github/workflows` from
+  // the top of the checkout, which `toplevels` gives for a folder below it.
+  // `runsReadsToFail` makes that many reads of the workflow runs fail.
+  // `runsReadsCut` makes every read of the workflow runs answer them with
+  // exit code 0 but say its output was cut off, and `runsReadsThrow` makes
+  // every read of the workflow runs throw instead of answering.
   // `loginThrows` makes the read of the gh login throw, and `fetchesThrow`
   // makes `git fetch` throw, in the same way.
   // `ran` records each command with the folder it ran in, beside `calls`.
@@ -119,7 +127,9 @@ function fakeGitHub(on: On) {
     pr: openPullRequest(), calls: [] as string[], removalsToFail: 0, labelMissing: false, head: C,
     hold: null as Promise<void> | null, cutDiff: false, otherNumber: 0, readsToFail: 0,
     gitDirFails: false, postsToFail: 0, onPost: null as (() => void) | null,
-    runs: [] as { id: number; run_attempt: number; name: string }[], runsReadsToFail: 0,
+    runs: [] as { id: number; run_attempt: number; name: string; workflow_id?: number; event?: string; run_number?: number; status?: string; conclusion?: string | null }[], runsReadsToFail: 0,
+    jobs: {} as Record<string, string>, jobsHold: null as Promise<void> | null, workflows: null as string | null,
+    toplevels: {} as Record<string, string>,
     runsReadsCut: false, runsReadsThrow: false, readsThrow: false, loginThrows: false, fetchesThrow: false,
     ran: [] as { argv: string; cwd: string | undefined }[],
     heads: {} as Record<string, string>, gitDirs: {} as Record<string, string>,
@@ -190,6 +200,19 @@ function fakeGitHub(on: On) {
     if (argv.startsWith('git rev-list --merges ')) return out(world.merges)
     if (argv.startsWith('git show ') && argv.endsWith('marketplace.json')) return world.marketplace === null ? exit(128) : out(world.marketplace)
     if (argv.startsWith('git show origin/')) return world.baseClaude === null ? exit(128) : out(world.baseClaude)
+    if (argv.startsWith('git ls-tree ')) {
+      // Real git reads the path relative to the folder it runs in, unless
+      // --full-tree makes it relative to the top of the checkout, and a path
+      // that names nothing in the tree lists nothing and still exits 0.
+      const args = e.argv.slice(2)
+      const isFullTree = args[0] === '--full-tree'
+      const path = (isFullTree ? args.slice(1) : args)[1] ?? ''
+      const folder = cwd ?? '/repo'
+      const top = world.toplevels[folder] ?? folder
+      const prefix = isFullTree || folder === top ? '' : `${folder.slice(top.length + 1)}/`
+      if (world.workflows === null) return exit(128)
+      return out(`${prefix}${path}` === '.github/workflows' ? world.workflows : '')
+    }
     if (argv.startsWith('git grep ')) return world.grepFail ? exit(128) : world.grep === '' ? exit(1) : out(world.grep)
     if (argv === 'git rev-parse --show-object-format') return out(`${world.objectFormat}\n`)
     if (argv.startsWith('git diff-tree ')) return world.linksFail ? exit(128) : out(world.links)
@@ -225,6 +248,12 @@ function fakeGitHub(on: On) {
       return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: true, isStderrTruncated: false } }
     }
     if (argv.startsWith('gh api --paginate repos/o/r/actions/runs?')) return out(world.runs.map(r => `${JSON.stringify(r)}\n`).join(''))
+    const jobsRead = /^gh api --paginate repos\/o\/r\/actions\/runs\/(\d+)\/attempts\/(\d+)\/jobs\?per_page=100 /.exec(argv)
+    if (jobsRead !== null) {
+      if (world.jobsHold !== null) await world.jobsHold
+      const jobs = world.jobs[`${jobsRead[1]}.${jobsRead[2]}`]
+      return jobs === undefined ? { value: { exitCode: 1, stdout: '', stderr: 'HTTP 502', isStdoutTruncated: false, isStderrTruncated: false } } : out(jobs)
+    }
     const stateRead = /^gh pr view (\d+) --repo o\/r --json state$/.exec(argv)
     if (stateRead !== null) {
       const answer = JSON.stringify({ state: world.states[Number(stateRead[1])] ?? world.pr.state })
@@ -8118,6 +8147,9 @@ const HOUR = 60 * MINUTE
 const DAY = 24 * HOUR
 const stuckOf = (prompts: string[]) => prompts.filter(text => text.includes('nothing has happened on pull request #7'))
 const resumesOf = (prompts: string[]) => prompts.filter(text => text.includes('the usage limit has reset'))
+// The first line of each resume prompt, which is all of it when no pull
+// request is watched, and is followed by the state and the step when one is.
+const resumeLeadsOf = (prompts: string[]) => resumesOf(prompts).map(text => text.split('\n')[0])
 
 // A turn of the session's own that starts and ends at once, with the reason
 // given: `answer` for a turn that ended as usual, `refusal` for one the model
@@ -8185,6 +8217,32 @@ test('no stuck prompt comes while a question to the person is open', async ($, o
   expect(stuckOf(prompts)).toEqual([])
   tools.get('q1')!.finish({ result: { answers: {} } })
   await asked
+})
+
+test('a stuck prompt that comes while a new watch has saved its record but not yet its snapshot never carries the other pull request', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const prompts = recordPrompts(on)
+  // The new watch's snapshot of #8 waits to be saved, after its record is.
+  let release = () => {}
+  const held = new Promise<void>(resolve => { release = resolve })
+  on('state.set', async ($, e, next) => {
+    if (e.plugin === 'builder' && e.key === 'pr' && (e.value as { number?: number } | null)?.number === 8) await held
+    return next(e)
+  })
+  await watch($)
+  await clock.advance(40 * MINUTE)
+
+  world.pr = openPullRequest({ number: 8 })
+  world.otherNumber = 8
+  const ran = loose($)({ tool: 'mcp__builder__watch', number: 8 })
+  await clock.advance(10 * MINUTE)
+
+  expect(stuckOf(prompts)).toEqual([])
+  release()
+  await ran
 })
 
 test('no stuck prompt comes while a subagent runs, and once it ends one comes 45 minutes later', async ($, on) => {
@@ -8855,7 +8913,11 @@ test('a turn that dies with a window at 100 percent holds: the line says until w
   expect(prompts).toEqual([])
 
   await clock.advance(1000)
-  expect(resumesOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in.'])
+  expect(resumeLeadsOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in.'])
+  // A pull request is watched, so the resume prompt also carries its state
+  // and the step that applies.
+  expect(resumesOf(prompts)[0]).toContain('\n\nPull request: o/r#7, open')
+  expect(resumesOf(prompts)[0]).toContain('\n\nThe step that applies: ')
   expect(prompts.length).toBe(1)
   expect(await line()).not.toContain('waiting on the usage limit')
   await clock.advance(10 * MINUTE)
@@ -9042,7 +9104,7 @@ test('a write that fails as the resume time clears the hold sends no prompt, and
   await clock.advance(15 * MINUTE - 1000)
   expect(prompts).toEqual([])
   await clock.advance(1000)
-  expect(resumesOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in.'])
+  expect(resumeLeadsOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in.'])
   expect(prompts.length).toBe(1)
   expect(await line()).not.toContain('waiting on the usage limit')
 })
@@ -9059,7 +9121,7 @@ test('a read of the hold refused at the resume time sends nothing, and the resum
   await clock.advance(15 * MINUTE - 1000)
   expect(prompts).toEqual([])
   await clock.advance(1000)
-  expect(resumesOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in.'])
+  expect(resumeLeadsOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in.'])
   expect(prompts.length).toBe(1)
   expect(await line()).not.toContain('waiting on the usage limit')
 })
@@ -9076,7 +9138,7 @@ test('a read of the hold refused at the end of a turn that ended with an answer 
   await clock.advance(2 * HOUR + MINUTE - 1000)
   expect(prompts).toEqual([])
   await clock.advance(1000)
-  expect(resumesOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in.'])
+  expect(resumeLeadsOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in.'])
   expect(prompts.length).toBe(1)
   expect(await line()).not.toContain('waiting on the usage limit')
 })
@@ -9090,7 +9152,7 @@ test('a write of the quiet time refused just after the resume time clears the ho
   await clock.advance(2 * HOUR + MINUTE)
   fault.isArmed = false
   expect(fault.refusals).toBe(1)
-  expect(resumesOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in.'])
+  expect(resumeLeadsOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in.'])
   expect(await line()).not.toContain('waiting on the usage limit')
 
   // No turn follows the resume prompt here, so the stuck prompt comes 45
@@ -9391,7 +9453,7 @@ test('a refused resume prompt whose new hold cannot be saved is tried again 15 m
   await clock.advance(15 * MINUTE - 1000)
   expect(resumesOf(record.prompts)).toEqual([])
   await clock.advance(1000)
-  expect(resumesOf(record.prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in.'])
+  expect(resumeLeadsOf(record.prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in.'])
 
   // No turn follows the resume prompt here, so the stuck prompt still comes
   // 45 minutes after the clear.
@@ -9738,7 +9800,7 @@ test('a person\'s prompt that comes while the hold is being saved, when taking t
   expect(stuckOf(prompts)).toEqual([])
 
   await clock.advance(1000)
-  expect(resumesOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in.'])
+  expect(resumeLeadsOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in.'])
   expect(await line()).not.toContain('waiting on the usage limit')
   await clock.advance(10 * MINUTE)
   expect(world.calls.some(call => call.startsWith('gh pr view 7'))).toBe(true)
@@ -9852,7 +9914,7 @@ test('a turn of the session\'s own that ends with an answer while a later turn s
   await clock.advance(2 * HOUR + MINUTE - 1000)
   expect(resumesOf(prompts)).toEqual([])
   await clock.advance(1000)
-  expect(resumesOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in.'])
+  expect(resumeLeadsOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in.'])
   await clock.advance(3 * HOUR)
   expect(resumesOf(prompts).length).toBe(1)
 })
@@ -10229,6 +10291,316 @@ for (const [how, fail] of [
     expect(prompts).toEqual([])
   })
 }
+
+// A completed run at the head as the runs read prints it, of workflow 5 from
+// a pull request event unless told otherwise. The jobs reads are kept in
+// memory for the life of the module, which the tests share, so each test
+// uses run ids of its own.
+const completedRun = (id: number, number: number, conclusion: string, over: Record<string, unknown> = {}) => ({
+  id, run_attempt: 1, name: 'build', workflow_id: 5, event: 'pull_request', run_number: number, status: 'completed', conclusion, ...over,
+})
+const jobsReadsOf = (world: ReturnType<typeof fakeGitHub>, id: number) => world.calls.filter(call => call.startsWith(`gh api --paginate repos/o/r/actions/runs/${id}/`))
+
+test('a head with one run per workflow and event reads no jobs', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  world.runs = [completedRun(301, 1, 'success'), completedRun(302, 1, 'success', { workflow_id: 6 }), completedRun(303, 2, 'success', { event: 'push' })]
+  await watch($)
+  await clock.advance(3 * 90_000)
+  expect(world.calls.some(call => call.includes('/jobs'))).toBe(false)
+})
+
+test('a run that may replace an older one has its jobs read once for each attempt across looks', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  world.runs = [completedRun(311, 1, 'failure'), completedRun(312, 2, 'success')]
+  world.jobs['312.1'] = '{"conclusion":"success"}\n'
+  await watch($)
+  // Nothing is pending, so the mod looks every ten minutes.
+  await clock.advance(3 * 10 * 60_000)
+  expect(jobsReadsOf(world, 312)).toEqual([`gh api --paginate repos/o/r/actions/runs/312/attempts/1/jobs?per_page=100 --jq ${JOBS_JQ}`])
+  // The older run is never asked about, since nothing older can replace it.
+  expect(jobsReadsOf(world, 311)).toEqual([])
+
+  // A new attempt of the run is read again, once.
+  world.runs = [completedRun(311, 1, 'failure'), completedRun(312, 2, 'success', { run_attempt: 2 })]
+  world.jobs['312.2'] = '{"conclusion":"skipped"}\n'
+  await clock.advance(3 * 10 * 60_000)
+  expect(jobsReadsOf(world, 312).filter(call => call.includes('/attempts/2/')).length).toBe(1)
+  expect(jobsReadsOf(world, 312).length).toBe(2)
+})
+
+test('a failed jobs read counts as no real work and is tried again at the next look, until one answers', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  world.runs = [completedRun(321, 1, 'failure'), completedRun(322, 2, 'success')]
+  const call = loose($)
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  const first = await call({ tool: 'mcp__builder__watch', number: 7 })
+  // The newer run did no real work as far as the mod can tell, so the older
+  // failure still counts.
+  expect(String(first.result)).toContain('The step that applies: A check or a workflow run failed at the head.')
+  expect(String(first.result)).toContain('321')
+  // A failed run without a check polls as slowly as nothing pending.
+  await clock.advance(2 * 10 * 60_000)
+  expect(jobsReadsOf(world, 322).length).toBeGreaterThanOrEqual(3)
+
+  world.jobs['322.1'] = '{"conclusion":"success"}\n'
+  await clock.advance(10 * 60_000)
+  const answered = jobsReadsOf(world, 322).length
+  await clock.advance(3 * 10 * 60_000)
+  expect(jobsReadsOf(world, 322).length).toBe(answered)
+  const again = await call({ tool: 'mcp__builder__watch', number: 7 })
+  expect(String(again.result)).toContain('The step that applies: Review this head.')
+})
+
+test('the jobs reads of one look run at the same time rather than one after another', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  // Runs 332 and 333 may each replace an older run of their kind, so both
+  // need their jobs read; 331 is the oldest and needs none.
+  world.runs = [completedRun(331, 1, 'failure'), completedRun(332, 2, 'failure'), completedRun(333, 3, 'success')]
+  world.jobs['332.1'] = '{"conclusion":"success"}\n'
+  world.jobs['333.1'] = '{"conclusion":"success"}\n'
+  let release = () => {}
+  world.jobsHold = new Promise<void>(resolve => { release = resolve })
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  const watching = loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await clock.settle()
+  // Read one after another, the second read would not start until the first
+  // answered, which the hold prevents.
+  expect(jobsReadsOf(world, 331)).toEqual([])
+  expect(jobsReadsOf(world, 332).length).toBe(1)
+  expect(jobsReadsOf(world, 333).length).toBe(1)
+  release()
+  const ran = await watching
+  // Both did real work, so 333 replaces the older runs and nothing failed.
+  expect(String(ran.result)).toContain('The step that applies: Review this head.')
+})
+
+// Both verdicts approve at the head, and no check exists, so the base's
+// `Checks:` line decides between merging and asking.
+const approvedWithoutChecks = () => openPullRequest({ statusCheckRollup: [], reviews: [verdictReview(C, 'APPROVE', 'APPROVE')] })
+
+test('the base facts come from the session folder\'s base branch when the watch took its repository from that folder', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr = approvedWithoutChecks()
+  world.baseClaude = 'Checks: none\n'
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  const ran = await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  expect(world.ran).toContainEqual({ argv: 'git show origin/main:CLAUDE.md', cwd: '/repo' })
+  expect(String(ran.result)).toContain('The step that applies: Both verdicts approve at this head, merge.')
+  expect(String(ran.result)).toContain(`gh pr merge 7 --merge --match-head-commit ${C}`)
+})
+
+test('a base CLAUDE.md without a Checks: line asks whether the base has workflow files', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr = approvedWithoutChecks()
+  world.baseClaude = 'Base branch: main\n'
+  world.workflows = ''
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  const none = await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  expect(String(none.result)).toContain('The step that applies: Both verdicts approve at this head, merge.')
+  world.workflows = '100644 blob 0123 .github/workflows/test.yml\n'
+  const listed = await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  expect(String(listed.result)).toContain('The step that applies: Both verdicts approve at this head, with no checks.')
+})
+
+test('a session that started in a subfolder of the checkout still finds the base\'s workflow files', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr = approvedWithoutChecks()
+  world.baseClaude = 'Base branch: main\n'
+  world.workflows = '100644 blob 0123 .github/workflows/test.yml\n'
+  world.toplevels['/repo/sub'] = '/repo'
+  await $.session.start({ cwd: '/repo/sub', surface: null, isInteractive: true })
+  const ran = await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  // Read relative to /repo/sub, the listing would name nothing, and the mod
+  // would take the base for one without checks and merge.
+  expect(world.ran.some(r => r.argv.startsWith('git ls-tree ') && r.cwd === '/repo/sub')).toBe(true)
+  expect(String(ran.result)).toContain('The step that applies: Both verdicts approve at this head, with no checks.')
+})
+
+// Base branch names that are not safe to put in a git argument: one that
+// would read as an option, one that would read as a range, one with a
+// character outside the plain pattern, and one that is too long.
+for (const [what, name] of [
+  ['starts with a dash', '-x'],
+  ['holds two dots in a row', 'a..b'],
+  ['holds a character outside the plain pattern', 'feat;ure'],
+  ['is longer than 200 characters', 'a'.repeat(201)],
+] as const) {
+  test(`a base branch name that ${what} runs no git show and asks before merging without checks`, async ($, on) => {
+    mock.clock(on)
+    mock.store(on)
+    engine(on)
+    const world = fakeGitHub(on)
+    world.pr = { ...approvedWithoutChecks(), baseRefName: name }
+    // The base would allow a merge without checks, if it were read.
+    world.baseClaude = 'Checks: none\n'
+    await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+    const ran = await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+    expect(world.ran.some(r => r.argv.startsWith('git show'))).toBe(false)
+    expect(String(ran.result)).toContain('The step that applies: Both verdicts approve at this head, with no checks.')
+  })
+}
+
+test('a watch given a checkout reads the base CLAUDE.md in that checkout, not in the session folder', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  sessionInAnotherRepository(world, files)
+  world.pr = approvedWithoutChecks()
+  world.baseClaude = 'Checks: none\n'
+  const ran = await watchFromApi($, { repo: 'o/r', checkout: '/web' })
+  const shows = world.ran.filter(r => r.argv === 'git show origin/main:CLAUDE.md')
+  expect(shows.length).toBeGreaterThan(0)
+  expect(shows.every(r => r.cwd === '/web')).toBe(true)
+  expect(String(ran.result)).toContain('The step that applies: Both verdicts approve at this head, merge.')
+})
+
+test('a base CLAUDE.md that cannot be read gives the unread facts, which ask before merging without checks and read the merge command from the base', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr = approvedWithoutChecks()
+  world.baseClaude = null
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  const ran = await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  expect(String(ran.result)).toContain('The step that applies: Both verdicts approve at this head, with no checks.')
+  expect(String(ran.result)).toContain('`Merge command:`')
+  expect(String(ran.result)).not.toContain(`gh pr merge 7 --merge --match-head-commit ${C}`)
+})
+
+test('a watch named a repository with no checkout reads no base facts from the session folder, which may be another repository\'s', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr = approvedWithoutChecks()
+  world.baseClaude = 'Checks: none\n'
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  world.ran = []
+  const ran = await loose($)({ tool: 'mcp__builder__watch', number: 7, repo: 'o/r' })
+  expect(world.ran.some(r => r.argv.startsWith('git show origin/main:CLAUDE.md') && r.cwd === '/repo')).toBe(false)
+  expect(String(ran.result)).toContain('The step that applies: Both verdicts approve at this head, with no checks.')
+})
+
+test('while both verdicts approve, a failed runs read holds the merge in a turn, and the next good read wakes the session to merge', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const prompts = recordPrompts(on)
+  world.pr = openPullRequest({ reviews: [verdictReview(C, 'APPROVE', 'APPROVE')] })
+  world.baseClaude = 'Checks: expected\n'
+  await watch($)
+  await clock.settle()
+  world.runsReadsToFail = 1
+  await clock.advance(10 * 60_000)
+  expect(prompts.length).toBe(1)
+  expect(prompts[0]).toContain('The workflow runs at the head could not be read.')
+  expect(prompts[0]).toContain('The step that applies: Both verdicts approve at this head, but the workflow runs could not be read.')
+
+  await clock.advance(10 * 60_000)
+  expect(prompts.length).toBe(2)
+  expect(prompts[1]).toContain('The workflow runs at the head could be read again.')
+  expect(prompts[1]).toContain('The step that applies: Both verdicts approve at this head, merge.')
+})
+
+test('the change prompt, the CI event context, the stuck prompt and the watch answer each carry the step that applies with its text', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const seen: { text: string; context: readonly string[] }[] = []
+  on('prompt.submit', ($, e) => {
+    seen.push({ text: e.text, context: e.context ?? [] })
+    return { text: e.text }
+  })
+  const review = `No verdict review is at this head, ${C}.`
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  const ran = await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  expect(String(ran.result)).toContain('The step that applies: Review this head.')
+  expect(String(ran.result)).toContain(review)
+  expect(String(ran.result)).toEndWith(`\n\n${GITHUB_NAMES_LINE}`)
+
+  // The stuck prompt, after the session has been quiet.
+  await clock.advance(46 * 60_000)
+  const stuck = seen.filter(p => p.text.includes('nothing has happened on pull request #7'))
+  expect(stuck.length).toBe(1)
+  expect(stuck[0]?.text).toContain(`\n\nThe step that applies: Review this head.\n${review}`)
+
+  // The change prompt, when a check fails.
+  world.pr = openPullRequest({ statusCheckRollup: [{ __typename: 'CheckRun', name: 'tests', status: 'COMPLETED', conclusion: 'FAILURE' }] })
+  await clock.advance(10 * 60_000)
+  const changed = seen.filter(p => p.text.includes('pull request #7 changed'))
+  expect(changed.length).toBe(1)
+  expect(changed[0]?.text).toContain('\n\nThe step that applies: A check or a workflow run failed at the head.\n')
+
+  // The CI event context, as of the event.
+  world.pr = openPullRequest({ reviews: [verdictReview(C, 'REQUEST_CHANGES', 'APPROVE')] })
+  await $.prompt.submit({ text: CI_EVENT, origin: { kind: 'sdk' } } as never)
+  const event = seen.find(p => p.text === CI_EVENT)
+  expect(event?.context.join('\n') ?? '').toContain('\n\nThe step that applies: The newest verdict at this head requests changes.\n')
+})
+
+test('while a question to the person is open, the watch answer, the change prompt and the CI event context name the open question step', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const tools = heldTools(on)
+  const seen: { text: string; context: readonly string[] }[] = []
+  on('prompt.submit', ($, e) => {
+    seen.push({ text: e.text, context: e.context ?? [] })
+    return { text: e.text }
+  })
+  const open = '\n\nThe step that applies: An open question.\nA question to the person is open.'
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  const asked = loose($)({ tool: 'AskUserQuestion', tool_use_id: 'q1', questions: [{ question: 'Which name?' }] })
+
+  // The watch tool's answer.
+  const ran = await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  expect(String(ran.result)).toContain(open)
+
+  // The change prompt, when a check fails. Had the two flags been passed in
+  // each other's place, the prompt would name the review step instead.
+  world.pr = openPullRequest({ statusCheckRollup: [{ __typename: 'CheckRun', name: 'tests', status: 'COMPLETED', conclusion: 'FAILURE' }] })
+  await clock.advance(10 * 60_000)
+  const changed = seen.filter(p => p.text.includes('pull request #7 changed'))
+  expect(changed.length).toBe(1)
+  expect(changed[0]?.text).toContain(open)
+  expect(changed[0]?.text).not.toContain('builder: the conversation was compacted')
+
+  // The CI event context, as of the event.
+  world.pr = openPullRequest({ reviews: [verdictReview(C, 'REQUEST_CHANGES', 'APPROVE')] })
+  await $.prompt.submit({ text: CI_EVENT, origin: { kind: 'sdk' } } as never)
+  const event = seen.find(p => p.text === CI_EVENT)
+  expect(event?.context.join('\n') ?? '').toContain(open)
+
+  tools.get('q1')!.finish({ result: { answers: {} } })
+  await asked
+})
 
 test('the workflow runs are read at the head gh pr view gave, not at the local checkout', async ($, on) => {
   const clock = mock.clock(on)
