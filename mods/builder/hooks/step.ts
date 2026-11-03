@@ -201,19 +201,23 @@ export function labelFor(step: Step): StateLabel | null {
 
 // What the mod does with the label it derived: nothing, record it without
 // writing, or write it and remove the other state labels the live read saw.
-// `record` is the label the mod last set on the pull request, and
-// `liveLabels` the labels it carries now. With no record while `stuck` is on,
-// as after a restart, the derived label is only recorded, so a reload never
-// removes a `stuck` the session set by its own judgement; any other state
+// `record` is the label the mod last set on the pull request, `lastDerived`
+// the label it derived at the job before this one, and `liveLabels` the
+// labels the pull request carries now. While `stuck` is on, the derived label
+// is only recorded when there is no record, as after a restart, or when the
+// derived label is the one derived last time, as after an edit that failed,
+// because the label that follows from the step has not changed since the
+// session could have set that `stuck` by its own judgement. Any other state
 // label beside that `stuck`, such as one an edit put on just before the
-// session set it, still comes off. Only labels the
-// live read saw are removed, because a label on the pull request exists in
-// the repository, so removing it cannot fail for lack of the label.
+// session set it, still comes off. Only labels the live read saw are
+// removed, because a label on the pull request exists in the repository, so
+// removing it cannot fail for lack of the label.
 export type LabelAction = { kind: 'none' } | { kind: 'record'; remove: StateLabel[] } | { kind: 'write'; remove: StateLabel[] }
 
-export function labelActionOf(derived: StateLabel | null, record: StateLabel | null, liveLabels: readonly string[]): LabelAction {
+export function labelActionOf(derived: StateLabel | null, record: StateLabel | null, liveLabels: readonly string[], lastDerived: StateLabel | null = null): LabelAction {
   if (derived === null || derived === record) return { kind: 'none' }
-  if (record === null && liveLabels.includes('stuck')) return { kind: 'record', remove: otherStateLabelsOf('stuck', liveLabels) }
+  const isStepUnchanged = record === null || lastDerived === derived
+  if (isStepUnchanged && liveLabels.includes('stuck')) return { kind: 'record', remove: otherStateLabelsOf('stuck', liveLabels) }
   return { kind: 'write', remove: otherStateLabelsOf(derived, liveLabels) }
 }
 
@@ -233,15 +237,19 @@ export function labelsToRemoveAfterEdit(added: StateLabel, before: readonly stri
 }
 
 // The record of the label the mod last set on a pull request, as it is
-// stored: the label and when it was set. Any other shape counts as no record.
-export type LabelRecord = { label: StateLabel; at: number }
+// stored: the label, when it was set, and the label the mod derived at its
+// last job, which differs from the label only after an edit that failed. Any
+// other shape counts as no record, and a derived label of any other shape is
+// left out.
+export type LabelRecord = { label: StateLabel; at: number; derived?: StateLabel }
 
 export function labelRecordIn(raw: unknown): LabelRecord | null {
   if (typeof raw !== 'object' || raw === null) return null
   const r = raw as Record<string, unknown>
   const label = STATE_LABELS.find(name => name === r.label)
   if (label === undefined || typeof r.at !== 'number' || !Number.isFinite(r.at)) return null
-  return { label, at: r.at }
+  const derived = STATE_LABELS.find(name => name === r.derived)
+  return derived === undefined ? { label, at: r.at } : { label, at: r.at, derived }
 }
 
 // The sections and named paragraphs of skills/implement/SKILL.md that the

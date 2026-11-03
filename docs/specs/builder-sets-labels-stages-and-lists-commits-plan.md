@@ -60,9 +60,11 @@ adds an await between choosing a read and handing it over.
 - A pure `labelActionOf(derived, record, liveLabels)` in `hooks/step.ts`
   returns none, record only, or write with the state labels to remove:
   - no derived label, or a derived label equal to the record, gives none;
-  - no record while the live labels hold `stuck` gives record, with no
-    write of the derived label, removing only any other state label beside
-    that `stuck`;
+  - while the live labels hold `stuck`, no record, or a derived label equal
+    to the one derived at the job before (as after a failed edit), gives
+    record, with no write of the derived label, removing only any other state
+    label beside that `stuck`; the record notes the derived label before the
+    job reads the labels, so the next job can tell;
   - otherwise it gives write, removing only the other state labels the live
     read saw, because a label on the pull request must exist in the
     repository, so removing it cannot fail for lack of the label.

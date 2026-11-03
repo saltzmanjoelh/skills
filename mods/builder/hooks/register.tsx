@@ -3059,6 +3059,11 @@ async function takeOffAnsweredLabels($: $) {
   }
 }
 
+// Removes the labels in `names` in one edit. True when gh confirmed it.
+async function removeLabels($: $, r: BuilderRun, names: readonly string[]): Promise<boolean> {
+  return (await gh($, r.cwd, ['pr', 'edit', String(r.number), '--repo', r.repo, '--remove-label', names.join(',')])) !== null
+}
+
 // Adds the label `name`, and removes the labels in `remove` in the same edit.
 async function addLabel($: $, r: BuilderRun, name: string, remove: readonly string[] = []): Promise<boolean> {
   const removing = remove.length > 0 ? ['--remove-label', remove.join(',')] : []
@@ -3071,7 +3076,7 @@ async function addLabel($: $, r: BuilderRun, name: string, remove: readonly stri
 }
 
 // The state label the mod last set on each pull request, kept in the store
-// under `state-label:<repo>#<number>` as `{ label, at }`, so that it
+// under `state-label:<repo>#<number>` as `{ label, at, derived }`, so that it
 // survives a restart. It has no session id, because the label is on the pull
 // request, whichever session set it.
 const STATE_LABEL_PREFIX = 'state-label:'
@@ -3100,9 +3105,13 @@ function requestStateLabel($: $) {
 // an older label: the watch, the stored snapshot, whether a question is open,
 // the record, and the labels the pull request carries now, read fresh as for
 // a question's label because the snapshot can be minutes old. It stops when
-// the snapshot is of another pull request or the watch moved on. The record
-// is saved only after the edit succeeded and a read after it shows no other
-// state label on, so a failed edit is tried again at the next look.
+// the snapshot is of another pull request or the watch moved on. Before it
+// reads the labels, it notes the derived label in the record, so that after
+// an edit that failed the next job knows the step's label has not changed. A
+// new label record is saved only once every edit the job needed succeeded:
+// on a write, the edit and the removal that the read after it may call for;
+// when the label is only recorded, the removal of any state label beside
+// `stuck`. So a failed edit, read or removal is tried again at the next look.
 async function settleStateLabel($: $) {
   const r = await read($, run)
   const s = snapshotIn(await read($, pr))
@@ -3111,20 +3120,19 @@ async function settleStateLabel($: $) {
   const derived = labelFor(chooseStep(s, await isAsking($)))
   if (derived === null) return
   const key = stateLabelKey(r)
-  const record = labelRecordIn(await $.store.get(key))?.label ?? null
-  if (derived === record) return
+  const record = labelRecordIn(await $.store.get(key))
+  if (derived === (record?.label ?? null)) return
+  if (record !== null && record.derived !== derived) await $.store.set(key, { ...record, derived })
   const live = await liveLabelNames($, r)
   if (live === null || !(await stillWatching($, r))) return
-  const action = labelActionOf(derived, record, live)
+  const action = labelActionOf(derived, record?.label ?? null, live, record?.derived ?? null)
   if (action.kind === 'none') return
   if (action.kind === 'write') {
     if (!(await addLabel($, r, derived, action.remove))) return
     if (!(await removeOtherStateLabels($, r, derived, live))) return
   }
-  if (action.kind === 'record' && action.remove.length > 0) {
-    if ((await gh($, r.cwd, ['pr', 'edit', String(r.number), '--repo', r.repo, '--remove-label', action.remove.join(',')])) === null) return
-  }
-  await $.store.set(key, { label: derived, at: await $.clock.now() })
+  if (action.kind === 'record' && action.remove.length > 0 && !(await removeLabels($, r, action.remove))) return
+  await $.store.set(key, { label: derived, at: await $.clock.now(), derived })
 }
 
 // Reads the labels again after the edit that added `added`, and removes in one
@@ -3141,7 +3149,7 @@ async function removeOtherStateLabels($: $, r: BuilderRun, added: StateLabel, be
   if (live === null) return false
   const others = labelsToRemoveAfterEdit(added, before, live)
   if (others.length === 0) return true
-  return (await gh($, r.cwd, ['pr', 'edit', String(r.number), '--repo', r.repo, '--remove-label', others.join(',')])) !== null
+  return removeLabels($, r, others)
 }
 
 // The labels the pull request carries now, read fresh, or null when the read

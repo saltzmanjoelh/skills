@@ -579,6 +579,15 @@ test('with no record while stuck is on, the derived label is recorded without a 
   expect(labelActionOf('in-review', null, ['in-review', 'stuck', 'ready-to-merge'])).toEqual({ kind: 'record', remove: ['in-review', 'ready-to-merge'] })
 })
 
+test('with stuck on and the derived label unchanged since the last job, as after a failed edit, the label is only recorded', () => {
+  expect(labelActionOf('ready-to-merge', 'in-review', ['in-review', 'stuck'], 'ready-to-merge')).toEqual({ kind: 'record', remove: ['in-review'] })
+  // A derived label that changed since the last job removes that stuck.
+  expect(labelActionOf('ready-to-merge', 'in-review', ['stuck'], 'in-review')).toEqual({ kind: 'write', remove: ['stuck'] })
+  expect(labelActionOf('ready-to-merge', 'in-review', ['stuck'])).toEqual({ kind: 'write', remove: ['stuck'] })
+  // Without stuck on, an unchanged derived label is written again.
+  expect(labelActionOf('ready-to-merge', 'in-review', ['in-review'], 'ready-to-merge')).toEqual({ kind: 'write', remove: ['in-review'] })
+})
+
 test('otherwise the derived label is written, removing only the other state labels the live read saw', () => {
   expect(labelActionOf('in-review', null, [])).toEqual({ kind: 'write', remove: [] })
   expect(labelActionOf('ready-to-merge', 'in-review', ['bug', 'in-review', 'needs-decision'])).toEqual({ kind: 'write', remove: ['in-review'] })
@@ -599,6 +608,8 @@ test('after the edit, every other state label comes off, unless a stuck appeared
 
 test('a stored label record reads back only in the shape the mod writes', () => {
   expect(labelRecordIn({ label: 'stuck', at: 5 })).toEqual({ label: 'stuck', at: 5 })
+  expect(labelRecordIn({ label: 'stuck', at: 5, derived: 'in-review' })).toEqual({ label: 'stuck', at: 5, derived: 'in-review' })
+  expect(labelRecordIn({ label: 'stuck', at: 5, derived: 'bug' })).toEqual({ label: 'stuck', at: 5 })
   for (const raw of [null, undefined, 'stuck', { label: 'bug', at: 5 }, { label: 'stuck' }, { label: 'stuck', at: Number.NaN }, { label: 'needs-decision', at: 1 }]) {
     expect(labelRecordIn(raw)).toBeNull()
   }
