@@ -110,7 +110,7 @@ export function ciEventContext(s: Snapshot, isCompacted = false, isAsking = fals
 // names from GitHub, so it ends with the line saying they are names. With
 // `isCompacted` set it begins with the reload line, because the engine
 // attaches the implement skill only in part after a compaction.
-export function stuckPrompt(s: Snapshot, quietMs: number, isCompacted = false, isAsking = false): string {
+export function stuckPrompt(s: Snapshot, quietMs: number, isCompacted = false): string {
   const minutes = Math.floor(quietMs / 60_000)
   return [
     ...reloadLead(isCompacted),
@@ -120,7 +120,7 @@ export function stuckPrompt(s: Snapshot, quietMs: number, isCompacted = false, i
     '',
     ...stateLines(s),
     '',
-    ...stepFor(s, isAsking),
+    ...stepFor(s, false),
     '',
     GITHUB_NAMES_LINE,
   ].join('\n')

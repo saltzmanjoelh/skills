@@ -400,7 +400,6 @@ test('the stuck prompt names the pull request and the whole minutes, asks the se
   expect(stuckPrompt(s, 360 * 60_000).split('\n')[0]).toBe('builder: nothing has happened on pull request #7 for 360 minutes.')
   // A snapshot without verdicts names the review step.
   expect(stuckPrompt(s, 45 * 60_000)).toContain('The step that applies: Review this head.')
-  expect(stuckPrompt(s, 45 * 60_000, false, true)).toContain('The step that applies: An open question.')
 })
 
 test('the resume prompt says the usage limit has reset and names the stage, or no stage when none was reported', () => {
