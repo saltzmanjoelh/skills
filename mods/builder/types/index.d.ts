@@ -567,12 +567,14 @@ export type Loaded = { head: string | null; session: LoadedCommit; hooks: Loaded
 // group of agents launched in the same step. `tasks` holds the ids of the
 // background tasks its own tool calls started, and `live` whether its last
 // turn end listed any of them still in flight; a member whose turn end was
-// never seen has no `live`. `ended` is set at a turn end that listed none of
-// its own tasks, at its report or a notification that it finished when its
-// last turn end listed none, or at a notification that it failed or was
-// killed. A released batch keeps neither `tasks` nor `live`, and a state
-// without them reads as before, so the state stays at version 1.
-export type BatchMember = { id: string; type: string; ended: boolean; tasks?: string[]; live?: boolean }
+// never seen has no `live`. `woken` is set when the engine woke the agent
+// after it parked. `ended` is set at its report when its last turn end
+// listed none of its own tasks, at a notification that it failed or was
+// killed, and, only for a woken member, at a turn end that listed none of its
+// own tasks or a notification that it finished when its last turn end listed
+// none. A released batch keeps none of `tasks`, `live` and `woken`, and a
+// state without them reads as before, so the state stays at version 1.
+export type BatchMember = { id: string; type: string; ended: boolean; tasks?: string[]; live?: boolean; woken?: true }
 
 // The agents the session's own loop launched in one step, keyed by that
 // step's turn id and index. Two or more members make a batch. `heldReports`
@@ -596,8 +598,11 @@ export type BatchMember = { id: string; type: string; ended: boolean; tasks?: st
 // give it back, and dropped at the release. `wokenAfterClaim` is set when an
 // engine wake of a member cleared a claim of the completion line, so that the
 // batch is still released if the engine takes that line, and it is dropped at
-// the next claim and at the release.
-export type Batch = { step: string; members: BatchMember[]; heldReports: number; deadline: number | null; releasedAt: number | null; fired?: true; retryMs?: number; deadlineBeforeSettle?: number | null; wokenAfterClaim?: true }
+// the next claim and at the release. `completionClaimed` is set when the
+// deadline claims the batch with every member ended, so that the line it
+// claimed is the completion line, and it is dropped at the next claim of the
+// deadline line, by an engine wake that clears the claim, and at the release.
+export type Batch = { step: string; members: BatchMember[]; heldReports: number; deadline: number | null; releasedAt: number | null; fired?: true; retryMs?: number; deadlineBeforeSettle?: number | null; wokenAfterClaim?: true; completionClaimed?: true }
 
 // The batches, oldest first, and the counter marker: how many held deliveries
 // have arrived while the session was idle and still owe a turn answered

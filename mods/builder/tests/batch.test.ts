@@ -294,7 +294,7 @@ test('an engine wake keeps a member of a batch whose deadline claimed it, and ma
   let state = afterDelivery(launched(), report(ALPHA), true, 0).state
   state = afterDeadline(state, BATCH_LIMIT_MS).state
   state = afterWake(state, ALPHA)
-  expect(state.batches[0]?.members).toEqual([{ id: ALPHA, type: 'Explore', ended: false }, { id: BRAVO, type: 'Plan', ended: false }])
+  expect(state.batches[0]?.members).toEqual([{ id: ALPHA, type: 'Explore', ended: false, woken: true }, { id: BRAVO, type: 'Plan', ended: false }])
   expect(state.batches[0]?.fired).toBe(true)
   expect(dueLines(state, BATCH_LIMIT_MS + BATCH_RETRY_MS)).toEqual([deadlineLine(['Explore aaaaaaaa', 'Plan bbbbbbbb'])])
 })
@@ -429,11 +429,11 @@ test('a summary with other text around the finished wording is not read as finis
   expect(deliveryOf(NOTICE, finishedText(ALPHA, 'Agent x finished'))?.finished).toBe(false)
 })
 
-test('a finished notification ends its member, and as the last one releases the batch with the completion line', () => {
+test('a finished notification ends a woken member, and as the last one releases the batch with the completion line', () => {
   const finishedDelivery = deliveryOf(NOTICE, finishedText(BRAVO)) as Delivery
-  const state = afterDelivery(launched(), report(ALPHA), true, 0).state
+  const state = afterWake(afterDelivery(launched(), report(ALPHA), true, 0).state, BRAVO)
   expect(afterDelivery(state, finishedDelivery, true, 1).act).toEqual({ kind: 'release', line: completeLine(2) })
-  const first = afterDelivery(launched(), finishedDelivery, true, 0)
+  const first = afterDelivery(afterWake(launched(), BRAVO), finishedDelivery, true, 0)
   expect(first.act).toEqual({ kind: 'hold' })
   expect(runningLines(first.state)).toEqual([incompleteLine(['Explore aaaaaaaa'])])
   expect(afterDelivery(first.state, report(ALPHA), true, 1).act).toEqual({ kind: 'release', line: completeLine(2) })
@@ -508,6 +508,10 @@ const MONITOR = 'task-monitor-1'
 const SLEEP = 'task-sleep-1'
 const listing = (...ids: string[]) => ids.map(id => ({ id, type: 'shell', status: 'running', description: id }))
 const members = (state: BatchState) => state.batches.find(b => b.step === 't1:0')?.members ?? []
+// The launched state after the engine woke ALPHA, or both members of the
+// batch, once each, so that a later clean turn end of theirs ends them.
+const alphaWoken = () => afterWake(launched(), ALPHA)
+const bothWoken = () => afterWake(alphaWoken(), BRAVO)
 
 test('a background task id is read from a Bash result\'s backgroundTaskId or a Monitor result\'s taskId, and from nothing else', () => {
   expect(taskIdOf({ backgroundTaskId: SLEEP, stdout: '' })).toBe(SLEEP)
@@ -577,7 +581,7 @@ test('a turn end with work listed, or for an agent in no batch, ends nothing and
   expect(nextDeadline(live)).toBeNull()
   expect(afterMemberStop(state, CHARLIE, [], 0)).toBe(state)
   expect(afterMemberStop(state, 'unknown-agent', [], 0)).toBe(state)
-  const held = afterDelivery(afterMemberStop(state, BRAVO, [], 0), report(BRAVO), true, 0).state
+  const held = afterWake(afterDelivery(afterMemberStop(state, BRAVO, [], 0), report(BRAVO), true, 0).state, ALPHA)
   expect(nextDeadline(afterMemberStop(held, ALPHA, [], 5))).toBe(5 + BATCH_SETTLE_MS)
   expect(nextDeadline(afterMemberStop(held, ALPHA, [], BATCH_LIMIT_MS - 1000))).toBe(BATCH_LIMIT_MS)
 })
@@ -590,7 +594,7 @@ test('a member with no turn end seen ends at its report, as before', () => {
 })
 
 test('a listed task that the member did not start does not hold it', () => {
-  let state = afterTask(launched(), ALPHA, MONITOR)
+  let state = afterTask(alphaWoken(), ALPHA, MONITOR)
   state = afterTask(state, BRAVO, SLEEP)
   state = afterMemberStop(state, ALPHA, [SLEEP, 'task-of-the-session'], 0)
   expect(members(state).map(m => m.ended)).toEqual([true, false])
@@ -598,13 +602,13 @@ test('a listed task that the member did not start does not hold it', () => {
 })
 
 test('the task ids and turn-end readings are dropped when the batch is released, by a delivery, a resume or a taken completion line', () => {
-  let state = afterMemberStop(afterTask(launched(), ALPHA, MONITOR), ALPHA, [MONITOR], 0)
+  let state = afterMemberStop(afterTask(bothWoken(), ALPHA, MONITOR), ALPHA, [MONITOR], 0)
   state = afterMemberStop(afterTask(state, BRAVO, SLEEP), BRAVO, [], 0)
   const strip = (s: BatchState) => members(s).map(m => Object.keys(m).sort())
   const byDelivery = afterDelivery(afterMemberStop(state, ALPHA, [], 1), report(ALPHA), true, 2).state
   expect(byDelivery.batches[0]?.releasedAt).toBe(2)
   expect(strip(byDelivery)).toEqual([['ended', 'id', 'type'], ['ended', 'id', 'type']])
-  const third = afterMemberStop(afterTask(afterLaunch(state, 't1:0', { id: CHARLIE, type: 'Plan' }), CHARLIE, 'task-3'), CHARLIE, [], 0)
+  const third = afterMemberStop(afterTask(afterWake(afterLaunch(state, 't1:0', { id: CHARLIE, type: 'Plan' }), CHARLIE), CHARLIE, 'task-3'), CHARLIE, [], 0)
   const byResume = afterResume(afterDelivery(third, report(BRAVO), true, 1).state, ALPHA, 2)
   expect(byResume.batches.find(b => b.step === 't1:0')?.releasedAt).toBe(2)
   expect(strip(byResume)).toEqual([['ended', 'id', 'type'], ['ended', 'id', 'type']])
@@ -630,7 +634,7 @@ test('the deadline claims a batch whose last member ended at a turn end with the
 })
 
 test('a delivery that arrives while the completion line is claimed and not yet taken is held and carries no second line', () => {
-  let state = afterMemberStop(launched(), BRAVO, [], 0)
+  let state = afterMemberStop(bothWoken(), BRAVO, [], 0)
   state = afterDelivery(state, report(BRAVO), true, 1).state
   state = afterMemberStop(state, ALPHA, [], 10)
   const claimed = afterDeadline(state, 10 + BATCH_SETTLE_MS).state
@@ -650,7 +654,7 @@ test('stored members with task ids and a turn-end reading read back, and the sam
 })
 
 test('an engine wake after a turn end that ended the last member, listing work builder did not record, gives the batch back its time limit, and no line goes out at the minute', () => {
-  let state = afterDelivery(launched(), report(BRAVO), true, 1000).state
+  let state = afterDelivery(alphaWoken(), report(BRAVO), true, 1000).state
   state = afterMemberStop(state, ALPHA, ['task-not-recorded'], 2000)
   expect(nextDeadline(state)).toBe(2000 + BATCH_SETTLE_MS)
   state = afterWake(state, ALPHA)
@@ -661,7 +665,7 @@ test('an engine wake after a turn end that ended the last member, listing work b
 })
 
 test('an engine wake after the settle minute claimed the completion line clears that claim, and a wake in a batch that held nothing leaves it with no deadline', () => {
-  let state = afterDelivery(launched(), report(BRAVO), true, 1000).state
+  let state = afterDelivery(alphaWoken(), report(BRAVO), true, 1000).state
   state = afterMemberStop(state, ALPHA, [], 2000)
   state = afterDeadline(state, 2000 + BATCH_SETTLE_MS).state
   state = afterWake(state, ALPHA)
@@ -670,14 +674,14 @@ test('an engine wake after the settle minute claimed the completion line clears 
   expect(nextDeadline(state)).toBe(1000 + BATCH_LIMIT_MS)
   expect(dueLines(state, 2000 + BATCH_SETTLE_MS + BATCH_RETRY_MS)).toEqual([])
   expect(afterDelivery(state, report(ALPHA), true, 3000 + BATCH_SETTLE_MS).act).toEqual({ kind: 'release', line: completeLine(2) })
-  let quiet = afterMemberStop(launched(), BRAVO, [], 0)
+  let quiet = afterMemberStop(bothWoken(), BRAVO, [], 0)
   quiet = afterMemberStop(quiet, ALPHA, [], 10)
   expect(nextDeadline(quiet)).toBe(10 + BATCH_SETTLE_MS)
   expect(nextDeadline(afterWake(quiet, ALPHA))).toBeNull()
 })
 
 test('a repeat turn end of a batch whose members had all ended, after the deadline claimed it, leaves its deadline as it was', () => {
-  let state = afterMemberStop(launched(), BRAVO, [], 0)
+  let state = afterMemberStop(bothWoken(), BRAVO, [], 0)
   state = afterDelivery(state, report(BRAVO), true, 1).state
   state = afterMemberStop(state, ALPHA, [], 10)
   state = afterDeadline(state, 10 + BATCH_SETTLE_MS).state
@@ -688,7 +692,7 @@ test('a repeat turn end of a batch whose members had all ended, after the deadli
 })
 
 test('a stored deadline from before the settle reads back as a time or null, and in any other shape reads as the empty state', () => {
-  const state = afterMemberStop(afterDelivery(launched(), report(BRAVO), true, 1000).state, ALPHA, [], 2000)
+  const state = afterMemberStop(afterDelivery(alphaWoken(), report(BRAVO), true, 1000).state, ALPHA, [], 2000)
   expect(state.batches[0]?.deadlineBeforeSettle).toBe(1000 + BATCH_LIMIT_MS)
   expect(batchStateIn(state, SESSION)).toEqual(state)
   const withField = (v: unknown) => ({ ...state, batches: [{ ...state.batches[0], deadlineBeforeSettle: v }, ...state.batches.slice(1)] })
@@ -699,7 +703,7 @@ test('a stored deadline from before the settle reads back as a time or null, and
 })
 
 test('an engine wake between the claim of the completion line and the engine taking it still settles the batch as released with one line, and forgets the woken member so that its later report passes', () => {
-  let state = afterDelivery(launched(), report(BRAVO), true, 1000).state
+  let state = afterDelivery(alphaWoken(), report(BRAVO), true, 1000).state
   state = afterMemberStop(state, ALPHA, [], 2000)
   const claimed = afterDeadline(state, 2000 + BATCH_SETTLE_MS)
   expect(claimed.due).toEqual([{ step: 't1:0', line: completeLine(2) }])
@@ -717,7 +721,7 @@ test('an engine wake between the claim of the completion line and the engine tak
 })
 
 test('an engine wake after a claim of the completion line that the engine refused sends no line at the retry, gives back the time limit, and a deadline line taken later drops the batch', () => {
-  let state = afterDelivery(launched(), report(BRAVO), true, 1000).state
+  let state = afterDelivery(alphaWoken(), report(BRAVO), true, 1000).state
   state = afterMemberStop(state, ALPHA, [], 2000)
   state = afterWake(afterDeadline(state, 2000 + BATCH_SETTLE_MS).state, ALPHA)
   expect(nextDeadline(state)).toBe(1000 + BATCH_LIMIT_MS)
@@ -730,7 +734,7 @@ test('an engine wake after a claim of the completion line that the engine refuse
 })
 
 test('the mark of a wake after a claim reads back, in any other shape reads as the empty state, and is dropped at the release', () => {
-  let state = afterDelivery(launched(), report(BRAVO), true, 1000).state
+  let state = afterDelivery(alphaWoken(), report(BRAVO), true, 1000).state
   state = afterMemberStop(state, ALPHA, [], 2000)
   state = afterWake(afterDeadline(state, 2000 + BATCH_SETTLE_MS).state, ALPHA)
   expect(state.batches[0]?.wokenAfterClaim).toBe(true)
@@ -741,4 +745,77 @@ test('the mark of a wake after a claim reads back, in any other shape reads as t
   const out = afterDelivery(state, report(ALPHA), true, 3000 + BATCH_SETTLE_MS)
   expect(out.act).toEqual({ kind: 'release', line: completeLine(2) })
   expect(out.state.batches[0]?.wokenAfterClaim).toBeUndefined()
+})
+
+test('a member the engine never woke does not end at a clean turn end, and a woken member does', () => {
+  const quiet = afterMemberStop(launched(), ALPHA, [], 0)
+  expect(members(quiet)).toEqual([{ id: ALPHA, type: 'Explore', ended: false, live: false }, { id: BRAVO, type: 'Plan', ended: false }])
+  expect(nextDeadline(quiet)).toBeNull()
+  const woken = afterMemberStop(afterWake(launched(), ALPHA), ALPHA, [], 0)
+  expect(members(woken).map(m => m.ended)).toEqual([true, false])
+})
+
+test('in a batch whose agents never park, a notification after every turn end releases nothing, and the last report carries the completion line', () => {
+  let state = afterMemberStop(launched(), ALPHA, [], 0)
+  state = afterDelivery(state, report(ALPHA), true, 1).state
+  state = afterMemberStop(state, BRAVO, [], 2)
+  expect(members(state).map(m => m.ended)).toEqual([true, false])
+  const notified = afterDelivery(state, finished(ALPHA), true, 3)
+  expect(notified.act).toEqual({ kind: 'hold' })
+  expect(afterDelivery(state, finished(BRAVO), true, 3).act).toEqual({ kind: 'hold' })
+  expect(afterDelivery(notified.state, report(BRAVO), true, 4).act).toEqual({ kind: 'release', line: completeLine(2) })
+})
+
+test('after a deadline line names a woken member, its clean turn end and report release the batch with the completion line, and the engine taking the line later changes nothing', () => {
+  let state = afterDelivery(launched(), report(BRAVO), true, 1000).state
+  state = afterWake(state, ALPHA)
+  const claimed = afterDeadline(state, 1000 + BATCH_LIMIT_MS)
+  expect(claimed.due).toEqual([{ step: 't1:0', line: deadlineLine(['Explore aaaaaaaa']) }])
+  const stopped = afterMemberStop(claimed.state, ALPHA, [], 1001 + BATCH_LIMIT_MS)
+  expect(members(stopped).map(m => m.ended)).toEqual([true, true])
+  const last = afterDelivery(stopped, report(ALPHA), true, 1002 + BATCH_LIMIT_MS)
+  expect(last.act).toEqual({ kind: 'release', line: completeLine(2) })
+  expect(afterDeadlineSent(last.state, ['t1:0'], 1003 + BATCH_LIMIT_MS)).toEqual(last.state)
+  const takenFirst = afterDeadlineSent(stopped, ['t1:0'], 1002 + BATCH_LIMIT_MS)
+  expect(takenFirst.batches.some(b => b.step === 't1:0')).toBe(false)
+  expect(afterDelivery(takenFirst, report(ALPHA), true, 1003 + BATCH_LIMIT_MS).act).toEqual({ kind: 'pass' })
+})
+
+test('the marks of a woken member and of a claimed completion line read back, in any other shape read as the empty state, and are dropped at the release', () => {
+  let state = afterWake(afterDelivery(launched(), report(BRAVO), true, 1000).state, ALPHA)
+  expect(members(state)[0]?.woken).toBe(true)
+  expect(batchStateIn(state, SESSION)).toEqual(state)
+  const withMember = (v: unknown) => ({ ...state, batches: [{ ...state.batches[0], members: [{ id: ALPHA, type: 'Explore', ended: false, woken: v }] }] })
+  expect(batchStateIn(withMember(false), SESSION)).toEqual(emptyBatchState(SESSION))
+  expect(batchStateIn(withMember('yes'), SESSION)).toEqual(emptyBatchState(SESSION))
+  state = afterMemberStop(state, ALPHA, [], 2000)
+  const claimed = afterDeadline(state, 2000 + BATCH_SETTLE_MS).state
+  expect(claimed.batches[0]?.completionClaimed).toBe(true)
+  expect(batchStateIn(claimed, SESSION)).toEqual(claimed)
+  const withField = (v: unknown) => ({ ...claimed, batches: [{ ...claimed.batches[0], completionClaimed: v }, ...claimed.batches.slice(1)] })
+  expect(batchStateIn(withField(false), SESSION)).toEqual(emptyBatchState(SESSION))
+  expect(batchStateIn(withField('yes'), SESSION)).toEqual(emptyBatchState(SESSION))
+  const sent = afterDeadlineSent(claimed, ['t1:0'], 2001 + BATCH_SETTLE_MS)
+  expect(sent.batches[0]?.releasedAt).toBe(2001 + BATCH_SETTLE_MS)
+  expect(sent.batches[0]?.completionClaimed).toBeUndefined()
+  expect(members(sent).map(m => m.woken)).toEqual([undefined, undefined])
+  expect(afterDeadline(afterDelivery(launched(), report(BRAVO), true, 0).state, BATCH_LIMIT_MS).state.batches[0]?.completionClaimed).toBeUndefined()
+})
+
+test('a wake that clears a claim of the completion line drops its mark, and a later claim of the deadline line drops a mark left from an earlier claim', () => {
+  let settled = afterDelivery(alphaWoken(), report(BRAVO), true, 1000).state
+  settled = afterMemberStop(settled, ALPHA, [], 2000)
+  const reopened = afterWake(afterDeadline(settled, 2000 + BATCH_SETTLE_MS).state, ALPHA)
+  expect(reopened.batches[0]?.wokenAfterClaim).toBe(true)
+  expect(reopened.batches[0]?.completionClaimed).toBeUndefined()
+  let state = afterDeadline(afterDelivery(alphaWoken(), report(BRAVO), true, 0).state, BATCH_LIMIT_MS).state
+  state = afterMemberStop(state, ALPHA, [], BATCH_LIMIT_MS + 1)
+  const completion = afterDeadline(state, BATCH_LIMIT_MS + BATCH_RETRY_MS)
+  expect(completion.due).toEqual([{ step: 't1:0', line: completeLine(2) }])
+  state = afterWake(completion.state, ALPHA)
+  expect(state.batches[0]?.completionClaimed).toBe(true)
+  const again = afterDeadline(state, nextDeadline(state) as number)
+  expect(again.due).toEqual([{ step: 't1:0', line: deadlineLine(['Explore aaaaaaaa']) }])
+  expect(again.state.batches[0]?.completionClaimed).toBeUndefined()
+  expect(afterDelivery(again.state, notice(BRAVO, 'completed'), true, (nextDeadline(state) as number) + 1).act).toEqual({ kind: 'pass' })
 })
