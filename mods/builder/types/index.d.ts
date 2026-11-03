@@ -564,27 +564,57 @@ export type StatusMemo = {
 export type Loaded = { head: string | null; session: LoadedCommit; hooks: LoadedCommit }
 
 // One background agent the session's own loop launched, as a member of the
-// group of agents launched in the same step. `ended` is set at its report, or
-// at a notification that it failed or was killed.
-export type BatchMember = { id: string; type: string; ended: boolean }
+// group of agents launched in the same step. `tasks` holds the ids of the
+// background tasks its own tool calls started, and `live` whether its last
+// turn end listed any of them still in flight; a member whose turn end was
+// never seen has no `live`. `woken` is set when the engine woke the agent
+// after it parked. `ended` is set at its report when its last turn end
+// listed none of its own tasks, at a notification that it failed or was
+// killed, and, only for a woken member, at a turn end that listed none of its
+// own tasks or a notification that it finished when its last turn end listed
+// none. A released batch keeps none of `tasks`, `live` and `woken`, and a
+// state without them reads as before, so the state stays at version 1.
+export type BatchMember = { id: string; type: string; ended: boolean; tasks?: string[]; live?: boolean; woken?: true }
 
 // The agents the session's own loop launched in one step, keyed by that
 // step's turn id and index. Two or more members make a batch. `heldReports`
 // counts the reports held back from the model while the batch is open.
 // `deadline` is when the time limit passes, ten minutes after the first
-// delivery held for the batch, or null before one. `releasedAt` is when the
-// last member ended, after which the batch is remembered for ten minutes, so
-// that a notification coming after the release is held too. `fired` is set
-// when the deadline claims the batch, before its line is submitted, and stays
-// set through a refused or failed submit until the batch is dropped once the
-// engine has taken the line.
-export type Batch = { step: string; members: BatchMember[]; heldReports: number; deadline: number | null; releasedAt: number | null; fired?: true }
+// delivery held for the batch, or null before one, or one minute after the
+// turn end that ended the last member, if that is sooner. `releasedAt` is
+// when the batch was released, after which it is remembered for ten
+// minutes, so that a notification coming after the release is held too.
+// `fired` is set when the deadline claims the batch, before its line is
+// submitted, and stays set through a refused or failed submit until the
+// engine has taken the line, unless an engine wake of a member clears a claim
+// of the completion line first. When the engine has taken the line, a batch
+// that got the completion line is released and any other is dropped.
+// `retryMs` is how long the next claim of the batch waits before it is
+// claimed again. It doubles at each claim from one
+// minute up to one hour, and a batch stored without it waits one minute.
+// `deadlineBeforeSettle` is the deadline that the one-minute deadline after
+// the turn end that ended the last member replaced, set only when the
+// deadline had not claimed the batch, so that an engine wake of a member can
+// give it back, and dropped at the release. `wokenAfterClaim` is set when an
+// engine wake of a member cleared a claim of the completion line, so that the
+// batch is still released if the engine takes that line, and it is dropped at
+// the next claim and at the release. `completionClaimed` is set when the
+// deadline claims the batch with every member ended, so that the line it
+// claimed is the completion line, and it is dropped at the next claim of the
+// deadline line, by an engine wake that clears the claim, and at the release.
+export type Batch = { step: string; members: BatchMember[]; heldReports: number; deadline: number | null; releasedAt: number | null; fired?: true; retryMs?: number; deadlineBeforeSettle?: number | null; wokenAfterClaim?: true; completionClaimed?: true }
 
 // The batches, oldest first, and the counter marker: how many held deliveries
 // have arrived while the session was idle and still owe a turn answered
 // without the model, stamped with the session id of the conversation they
-// belong to. Read through batchStateIn in hooks/batch.ts.
-export type BatchState = { version: 1; sessionId: string; batches: Batch[]; marker: number }
+// belong to. `releasing` is set when a delivery that arrives while the
+// session is idle releases a batch, and cleared by the next first step of a
+// turn of the session's loop, so that a held delivery in between does not
+// raise the marker and answer the release turn with "Noted.". The state stays
+// at version 1 with this field, because an older build ignores it and a
+// state without it reads as not releasing. Read through batchStateIn in
+// hooks/batch.ts.
+export type BatchState = { version: 1; sessionId: string; batches: Batch[]; marker: number; releasing?: true }
 
 declare module 'claude-code' {
   interface PluginState {

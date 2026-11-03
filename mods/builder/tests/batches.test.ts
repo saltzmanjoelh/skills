@@ -2,9 +2,10 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On, SessionMessage, TurnStepChunk, TurnStepInput } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
-import { BATCH_LIMIT_MS, BATCH_RETRY_MS, completeLine, deadlineLine, incompleteLine } from '../hooks/batch'
+import { BATCH_LIMIT_MS, BATCH_RETRY_MS, BATCH_SETTLE_MS, completeLine, deadlineLine, incompleteLine } from '../hooks/batch'
 import { heldLine } from '../hooks/pane'
 import type { BatchState } from '../types'
+import { finishedText, parkText } from './notification-fixture'
 
 // The hooks that make builder wait for a whole batch of background agents
 // before the model reads their reports (see
@@ -65,10 +66,12 @@ function promptsBelow(on: On, refusing: { on: boolean; then?: () => unknown }) {
 }
 
 // Answers each spawn with the next id, which is long enough to be named by
-// its first eight characters.
+// its first eight characters. A resume is answered with the resumed agent's
+// own id and leaves the count alone, as the engine does.
 function spawns(on: On) {
   let n = 0
-  on('agent.spawn', () => {
+  on('agent.spawn', ($, e) => {
+    if (e.resume !== undefined) return { model: 'test', agentId: e.resume.agentId }
     n += 1
     return { model: 'test', agentId: `agent-${n}-xxxxxxxxxx` }
   })
@@ -130,6 +133,18 @@ type Submitted = { text?: string; drop?: string; context?: readonly string[] }
 const deliver = ($: Engine, text: string, kind: 'peer' | 'task-notification' | 'composer' | 'sdk' = 'peer', over: Record<string, unknown> = {}) =>
   $.prompt.submit({ text, wait: false, origin: { kind }, ...(kind === 'peer' ? { isMeta: true } : {}), ...over } as never) as Promise<Submitted>
 
+// Delivers as deliver does and records the context each delivery passed on
+// with, so that a test can check how often the completion line was added.
+const recorder = ($: Engine) => {
+  const contexts: (readonly string[] | undefined)[] = []
+  const sent = async (text: string, kind: 'peer' | 'task-notification' = 'peer') => {
+    const out = await deliver($, text, kind)
+    contexts.push(out.context)
+    return out
+  }
+  return { sent, contexts }
+}
+
 const ALPHA = 'agent-1-xxxxxxxxxx'
 const BRAVO = 'agent-2-xxxxxxxxxx'
 const CHARLIE = 'agent-3-xxxxxxxxxx'
@@ -159,7 +174,15 @@ function world(on: On, seeded: Record<string, unknown> = {}) {
   const talk = conversation(on)
   const refusing: { on: boolean; then?: () => unknown } = { on: false }
   const passed = promptsBelow(on, refusing)
+  tools(on)
   return { clock, state, asked, talk, passed, refusing }
+}
+
+// The engine beneath the mod's tool.call and SubagentStop hooks: a call is
+// answered with the result its test names, and a subagent's turn end goes on.
+function tools(on: On) {
+  on('tool.call', ($, e) => ({ result: (e as unknown as { answer: unknown }).answer }) as never)
+  on('classic.SubagentStop', () => ({}))
 }
 
 test('agents launched in one step make one batch: an idle held report passes on unchanged, and its turn is answered without the model', async ($, on) => {
@@ -218,9 +241,12 @@ test('a completed notification before or after the report is held and ends nothi
   await deliver($, notice(ALPHA, 'completed'), 'task-notification')
   expect(w.state.value?.marker).toBe(3)
   expect(await deliver($, notice(BRAVO, 'failed'), 'task-notification')).toEqual({ text: notice(BRAVO, 'failed'), context: [completeLine(2)] })
-  // A notification after the release is held too.
+  // The release cleared the marker, and a notification after the release
+  // turn's first step is held too, which raises the marker again.
+  expect(w.state.value?.marker).toBe(0)
+  await step($, { turnId: 't2', index: 0 })
   await deliver($, notice(BRAVO, 'completed'), 'task-notification')
-  expect(w.state.value?.marker).toBe(4)
+  expect(w.state.value?.marker).toBe(1)
 })
 
 test('a delivery into a running turn leaves the marker alone', async ($, on) => {
@@ -410,7 +436,7 @@ test('a first step whose last message is a user message goes to the model and cl
 
 // The engine adds each agent's task notification to the conversation as a
 // user message, so the next member's report finds it last.
-test('a report whose turn finds the last member\'s notification last is answered without the model, and a person\'s prompt after one is not', async ($, on) => {
+test('a report whose turn finds the last member\'s notification last is answered without the model', async ($, on) => {
   const w = world(on)
   await launched($, ['Explore', 'Plan', 'Explore'])
   await deliver($, report(ALPHA))
@@ -421,10 +447,6 @@ test('a report whose turn finds the last member\'s notification last is answered
   const { chunks } = await step($, { turnId: 't3', index: 0 })
   expect(texts(chunks)).toEqual(['Noted.', 'stop'])
   expect(w.asked.calls).toBe(before)
-  w.talk.messages = [...w.talk.messages, assistant('Noted.'), user(notice(BRAVO, 'completed')), user('what now?')]
-  await deliver($, 'what now?', 'composer')
-  await step($, { turnId: 't4', index: 0 })
-  expect(w.asked.calls).toBe(before + 1)
 })
 
 test('a later step, a subagent\'s step and a step with no marker go to the model and leave the marker as it is', async ($, on) => {
@@ -590,4 +612,324 @@ test('the band above the prompt never reads the batches, so a batch write does n
   expect(w.state.reads).not.toContain('batches')
   await pane.redraw()
   expect(w.state.reads).toContain('batches')
+})
+
+// The engine waking the parked agent `id` once the work it moved into the
+// background has finished: a resume whose prompt begins with the
+// notification about the agent's own shell task. Builder recognises the wake
+// by that shape alone and does not match its task id against the tasks it
+// recorded for the member, as non-goal (b) of
+// docs/specs/builder-keeps-woken-batch-members.md decides.
+async function wake($: Engine, w: { clock: { settle: () => Promise<void> } }, id: string) {
+  await $.agent.spawn(launch('Explore', { resume: { agentId: id }, prompt: notice('shell-task-1', 'completed') }))
+  await w.clock.settle()
+}
+
+test('a member that reports, parks and is woken twice is held, and the batch is released once, with the completion line, at its final report', async ($, on) => {
+  const w = world(on)
+  await launched($)
+  const { sent, contexts } = recorder($)
+  await sent(report(ALPHA))
+  await sent(notice(ALPHA, 'completed'), 'task-notification')
+  await wake($, w, ALPHA)
+  expect(await sent(report(ALPHA))).toEqual({ text: report(ALPHA) })
+  expect(w.state.value?.marker).toBe(3)
+  await sent(notice(ALPHA, 'completed'), 'task-notification')
+  await wake($, w, ALPHA)
+  expect(await sent(report(BRAVO))).toEqual({ text: report(BRAVO) })
+  expect(w.state.value?.marker).toBe(5)
+  expect(await sent(report(ALPHA))).toEqual({ text: report(ALPHA), context: [completeLine(2)] })
+  expect(contexts.filter(c => c !== undefined)).toEqual([[completeLine(2)]])
+})
+
+test('a report that a member for which no turn end was seen sent before it parked, and that arrives after its wake, ends it, and as the last member\'s releases the batch once, with the completion line', async ($, on) => {
+  const w = world(on)
+  await launched($, ['Explore', 'Plan', 'Explore'])
+  const { sent, contexts } = recorder($)
+  expect(await sent(parkText(ALPHA), 'task-notification')).toEqual({ text: parkText(ALPHA) })
+  await wake($, w, ALPHA)
+  expect(await sent(report(BRAVO))).toEqual({ text: report(BRAVO) })
+  expect(await sent(report(CHARLIE))).toEqual({ text: report(CHARLIE) })
+  expect(w.state.value?.batches.every(b => b.releasedAt === null)).toBe(true)
+  expect(await sent(report(ALPHA))).toEqual({ text: report(ALPHA), context: [completeLine(3)] })
+  expect(w.state.value?.batches.every(b => b.releasedAt !== null)).toBe(true)
+  expect(await sent(finishedText(ALPHA), 'task-notification')).toEqual({ text: finishedText(ALPHA) })
+  expect(contexts.filter(c => c !== undefined)).toEqual([[completeLine(3)]])
+})
+
+test('a member that the session resumes with its own text is forgotten, and the rest are released as one batch', async ($, on) => {
+  const w = world(on)
+  await launched($, ['Explore', 'Plan', 'Explore'])
+  await deliver($, report(ALPHA))
+  await $.agent.spawn(launch('Explore', { resume: { agentId: ALPHA }, prompt: 'Also check the tests.' }))
+  await w.clock.settle()
+  expect(w.state.value?.batches.flatMap(b => b.members.map(m => m.id))).not.toContain(ALPHA)
+  expect(await deliver($, report(BRAVO))).toEqual({ text: report(BRAVO) })
+  expect(await deliver($, report(CHARLIE))).toEqual({ text: report(CHARLIE), context: [completeLine(2)] })
+  const marker = w.state.value?.marker
+  expect(await deliver($, report(ALPHA))).toEqual({ text: report(ALPHA) })
+  expect(w.state.value?.marker).toBe(marker)
+})
+
+test('a member that the engine wakes after its batch was released has its final report reach the model', async ($, on) => {
+  const w = world(on)
+  await launched($)
+  await deliver($, report(ALPHA))
+  await step($, { turnId: 't2', index: 0 })
+  expect(await deliver($, report(BRAVO))).toEqual({ text: report(BRAVO), context: [completeLine(2)] })
+  await step($, { turnId: 't3', index: 0 })
+  await wake($, w, ALPHA)
+  expect(await deliver($, report(ALPHA))).toEqual({ text: report(ALPHA) })
+  expect(w.state.value?.marker).toBe(0)
+  const before = w.asked.calls
+  await step($, { turnId: 't4', index: 0 })
+  expect(w.asked.calls).toBe(before + 1)
+})
+
+// The times, in minutes, at which the engine refused builder's deadline
+// line, from a world whose engine refuses every prompt.
+function refusalsOf(w: ReturnType<typeof world>) {
+  const minutes: number[] = []
+  w.refusing.on = true
+  w.refusing.then = () => { minutes.push(w.clock.now() / 60_000) }
+  return minutes
+}
+
+const gapsOf = (times: number[]) => times.slice(1).map((t, i) => t - (times[i] as number))
+
+test('a refused deadline line is tried again after 1, 2, 4, 8, 16, 32, 60 and 60 minutes, and a person\'s prompt during a long wait names the members still running', async ($, on) => {
+  const w = world(on)
+  await launched($)
+  await deliver($, report(ALPHA))
+  const refused = refusalsOf(w)
+  await w.clock.advance(BATCH_LIMIT_MS + 150 * 60_000)
+  await w.clock.settle()
+  expect(refused).toEqual([10, 11, 13, 17, 25, 41, 73, 133])
+  w.refusing.on = false
+  expect(await deliver($, 'how is it going?', 'composer')).toEqual({ text: 'how is it going?', context: [incompleteLine(['Plan agent-2-'])] })
+  w.refusing.on = true
+  await w.clock.advance(60 * 60_000)
+  await w.clock.settle()
+  expect(gapsOf(refused)).toEqual([1, 2, 4, 8, 16, 32, 60, 60])
+  expect(w.passed.map(p => p.text)).not.toContain(deadlineLine(['Plan agent-2-']))
+})
+
+test('a claimed batch stored without a wait, as the previous build stored it, is tried one minute and then two minutes on', async ($, on) => {
+  const w = world(on, { batches: { ...heldBatchOf('session-1'), batches: heldBatchOf('session-1').batches.map(b => ({ ...b, fired: true })) } })
+  const refused = refusalsOf(w)
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await w.clock.settle()
+  await w.clock.advance(9 * 60_000)
+  await w.clock.settle()
+  expect(refused).toEqual([5, 6, 8])
+})
+
+test('a deadline line the engine takes after refusals is not sent before its doubled wait, ends the batch, and nothing more is sent two hours later', async ($, on) => {
+  const w = world(on)
+  await launched($)
+  await deliver($, report(ALPHA))
+  const refused = refusalsOf(w)
+  await w.clock.advance(BATCH_LIMIT_MS + 60_000)
+  await w.clock.settle()
+  expect(refused).toEqual([10, 11])
+  w.refusing.on = false
+  await w.clock.advance(2 * 60_000 - 1000)
+  await w.clock.settle()
+  const lines = () => w.passed.filter(p => p.text === deadlineLine(['Plan agent-2-'])).length
+  expect(lines()).toBe(0)
+  await w.clock.advance(1000)
+  await w.clock.settle()
+  expect(lines()).toBe(1)
+  expect(w.state.value?.batches.some(b => b.deadline !== null)).toBe(false)
+  await w.clock.advance(2 * 60 * 60_000)
+  await w.clock.settle()
+  expect(lines()).toBe(1)
+  expect(await deliver($, report(BRAVO))).toEqual({ text: report(BRAVO) })
+})
+
+test('a woken member that ends with only a finished notification and no second report releases the batch once, with the completion line, without waiting for the deadline', async ($, on) => {
+  const w = world(on)
+  await launched($)
+  const { sent, contexts } = recorder($)
+  await sent(report(ALPHA))
+  expect(await sent(parkText(ALPHA), 'task-notification')).toEqual({ text: parkText(ALPHA) })
+  await wake($, w, ALPHA)
+  expect(await sent(report(BRAVO))).toEqual({ text: report(BRAVO) })
+  expect(await sent(finishedText(ALPHA), 'task-notification')).toEqual({ text: finishedText(ALPHA), context: [completeLine(2)] })
+  expect(contexts.filter(c => c !== undefined)).toEqual([[completeLine(2)]])
+  await w.clock.advance(2 * BATCH_LIMIT_MS)
+  await w.clock.settle()
+  expect(w.passed.map(p => p.text).filter(t => t.startsWith('builder: the time limit'))).toEqual([])
+})
+
+// The engine delivers several members' notifications within a fraction of a
+// second and starts one turn for all of them, so fewer first steps run than
+// held deliveries raised the marker. Answers the world after the last
+// member's report released the batch and the release turn's first step ran,
+// with how many times the model was asked and the conversation was read in
+// that step. `after`, when given,
+// is a notification from the last member that arrives while the session is
+// still idle, after its report and before the release turn's first step, and
+// is then the conversation's last message.
+async function releasedAfterBurst($: Engine, on: On, after?: string) {
+  const w = world(on)
+  await launched($, ['Explore', 'Plan', 'Explore'])
+  await deliver($, report(ALPHA))
+  await deliver($, notice(ALPHA, 'completed'), 'task-notification')
+  await deliver($, report(BRAVO))
+  await deliver($, notice(BRAVO, 'completed'), 'task-notification')
+  w.talk.messages = [assistant('Launched them.'), user(notice(BRAVO, 'completed'))]
+  const { chunks } = await step($, { turnId: 't2', index: 0 })
+  expect(texts(chunks)).toEqual(['Noted.', 'stop'])
+  expect(w.state.value?.marker).toBeGreaterThan(0)
+  expect(await deliver($, report(CHARLIE))).toEqual({ text: report(CHARLIE), context: [completeLine(3)] })
+  expect(w.passed.at(-1)).toEqual({ text: report(CHARLIE), context: [completeLine(3)] })
+  w.talk.messages = [...w.talk.messages, assistant('Noted.'), user(report(CHARLIE))]
+  if (after !== undefined) {
+    expect(await deliver($, after, 'task-notification')).toEqual({ text: after })
+    w.talk.messages = [...w.talk.messages, user(after)]
+  }
+  const before = w.asked.calls
+  const readsBefore = w.talk.reads
+  const release = await step($, { turnId: 't3', index: 0 })
+  return { w, asked: w.asked.calls - before, reads: w.talk.reads - readsBefore, chunks: release.chunks }
+}
+
+test('the turn that releases a batch after a burst of held notifications goes to the model with the completion line', async ($, on) => {
+  const { w, asked, chunks } = await releasedAfterBurst($, on)
+  expect(asked).toBe(1)
+  expect(texts(chunks)).toEqual(['From the model.', 'stop'])
+  expect(w.state.value?.marker).toBe(0)
+})
+
+test('the release turn\'s first step clears the releasing mark without reading the conversation', async ($, on) => {
+  const { w, reads } = await releasedAfterBurst($, on)
+  expect(reads).toBe(0)
+  expect(w.state.value?.releasing).toBeUndefined()
+})
+
+test('the releasing member\'s completed notification before the release turn\'s first step leaves that turn to the model', async ($, on) => {
+  const { w, asked, chunks } = await releasedAfterBurst($, on, notice(CHARLIE, 'completed'))
+  expect(asked).toBe(1)
+  expect(texts(chunks)).toEqual(['From the model.', 'stop'])
+  expect(w.state.value?.marker).toBe(0)
+})
+
+test('the releasing member\'s finished notification before the release turn\'s first step leaves that turn to the model', async ($, on) => {
+  const { w, asked, chunks } = await releasedAfterBurst($, on, finishedText(CHARLIE))
+  expect(asked).toBe(1)
+  expect(texts(chunks)).toEqual(['From the model.', 'stop'])
+  expect(w.state.value?.marker).toBe(0)
+})
+
+test('after the release turn\'s first step, a held notification from the releasing member is answered without the model again', async ($, on) => {
+  const { w } = await releasedAfterBurst($, on, notice(CHARLIE, 'completed'))
+  await turnEnds($, 't3')
+  expect(await deliver($, finishedText(CHARLIE), 'task-notification')).toEqual({ text: finishedText(CHARLIE) })
+  expect(w.state.value?.marker).toBe(1)
+  w.talk.messages = [...w.talk.messages, assistant('From the model.'), user(finishedText(CHARLIE))]
+  const before = w.asked.calls
+  const { chunks } = await step($, { turnId: 't4', index: 0 })
+  expect(texts(chunks)).toEqual(['Noted.', 'stop'])
+  expect(w.asked.calls).toBe(before)
+})
+
+test('a held notification from a member of a released batch is still answered without the model', async ($, on) => {
+  const { w } = await releasedAfterBurst($, on)
+  await turnEnds($, 't3')
+  expect(await deliver($, notice(CHARLIE, 'completed'), 'task-notification')).toEqual({ text: notice(CHARLIE, 'completed') })
+  expect(w.state.value?.marker).toBe(1)
+  w.talk.messages = [...w.talk.messages, assistant('From the model.'), user(notice(CHARLIE, 'completed'))]
+  const before = w.asked.calls
+  const { chunks } = await step($, { turnId: 't4', index: 0 })
+  expect(texts(chunks)).toEqual(['Noted.', 'stop'])
+  expect(w.asked.calls).toBe(before)
+})
+
+// A member's tool call that the engine moved to the background, in the
+// engine's order: the call returns with the task id in its result.
+const backgrounds = ($: Engine, agentId: string, tool: 'Bash' | 'Monitor', taskId: string) =>
+  $.tool.call({ tool, agentId, command: 'sleep 30', run_in_background: true, answer: tool === 'Bash' ? { backgroundTaskId: taskId } : { taskId } } as never)
+
+// A member's turn end, with the session-wide list of work still in flight.
+const memberStops = ($: Engine, agentId: string, inFlight: string[]) =>
+  $.classic.SubagentStop({ stop_hook_active: false, agent_id: agentId, agent_transcript_path: '/t', agent_type: 'Explore', background_tasks: inFlight.map(id => ({ id, type: 'shell', status: 'running', description: id })) } as never)
+
+test('in the engine\'s order, a member that reports while its own Monitor runs is held, and the batch is released once, with the completion line, at its clean final report', async ($, on) => {
+  const w = world(on)
+  await launched($)
+  const { sent, contexts } = recorder($)
+  await backgrounds($, ALPHA, 'Bash', 'sleep-a')
+  await backgrounds($, ALPHA, 'Monitor', 'monitor-a')
+  await backgrounds($, BRAVO, 'Bash', 'sleep-b')
+  await memberStops($, ALPHA, ['sleep-a', 'monitor-a', 'sleep-b'])
+  await memberStops($, BRAVO, ['sleep-a', 'monitor-a', 'sleep-b'])
+  await wake($, w, ALPHA)
+  await memberStops($, ALPHA, ['monitor-a', 'sleep-b'])
+  expect(await sent(report(ALPHA))).toEqual({ text: report(ALPHA) })
+  await wake($, w, BRAVO)
+  await memberStops($, BRAVO, ['monitor-a'])
+  expect(await sent(report(BRAVO))).toEqual({ text: report(BRAVO) })
+  expect(w.state.value?.batches.every(b => b.releasedAt === null)).toBe(true)
+  await wake($, w, ALPHA)
+  await memberStops($, ALPHA, [])
+  expect(await sent(report(ALPHA))).toEqual({ text: report(ALPHA), context: [completeLine(2)] })
+  expect(contexts.filter(c => c !== undefined)).toEqual([[completeLine(2)]])
+  expect(w.state.value?.batches.flatMap(b => b.members.map(m => m.tasks))).toEqual([undefined, undefined])
+})
+
+test('a woken member that ends with plain text, whose finished notification never passes the hook, has the completion line submitted once a minute later', async ($, on) => {
+  const w = world(on)
+  await launched($)
+  const { sent, contexts } = recorder($)
+  await backgrounds($, ALPHA, 'Bash', 'sleep-a')
+  await memberStops($, ALPHA, ['sleep-a'])
+  expect(await sent(report(ALPHA))).toEqual({ text: report(ALPHA) })
+  await memberStops($, BRAVO, ['sleep-a'])
+  expect(await sent(report(BRAVO))).toEqual({ text: report(BRAVO) })
+  await wake($, w, ALPHA)
+  await memberStops($, ALPHA, [])
+  await w.clock.settle()
+  const lines = () => w.passed.filter(p => p.text === completeLine(2)).length
+  await w.clock.advance(BATCH_SETTLE_MS - 1000)
+  await w.clock.settle()
+  expect(lines()).toBe(0)
+  await w.clock.advance(1000)
+  await w.clock.settle()
+  expect(lines()).toBe(1)
+  expect(w.state.value?.batches.every(b => b.releasedAt !== null)).toBe(true)
+  expect(await sent(finishedText(ALPHA), 'task-notification')).toEqual({ text: finishedText(ALPHA) })
+  await w.clock.advance(2 * BATCH_LIMIT_MS)
+  await w.clock.settle()
+  expect(lines()).toBe(1)
+  expect(w.passed.map(p => p.text).filter(t => t.startsWith('builder: the time limit'))).toEqual([])
+  expect(contexts.filter(c => c !== undefined)).toEqual([])
+})
+
+test('in a batch whose agents never park, a finished notification after every turn end is held without the completion line, and the last report carries it', async ($, on) => {
+  world(on)
+  await launched($)
+  const { sent, contexts } = recorder($)
+  await memberStops($, ALPHA, [])
+  expect(await sent(report(ALPHA))).toEqual({ text: report(ALPHA) })
+  await memberStops($, BRAVO, [])
+  expect(await sent(finishedText(ALPHA), 'task-notification')).toEqual({ text: finishedText(ALPHA) })
+  expect(await sent(report(BRAVO))).toEqual({ text: report(BRAVO), context: [completeLine(2)] })
+  expect(contexts.filter(c => c !== undefined)).toEqual([[completeLine(2)]])
+})
+
+test('the last report of a batch whose deadline line was refused carries the completion line after its woken member\'s clean turn end, and no deadline line follows', async ($, on) => {
+  const w = world(on)
+  await launched($)
+  await deliver($, report(ALPHA))
+  w.refusing.on = true
+  await w.clock.advance(BATCH_LIMIT_MS)
+  await w.clock.settle()
+  w.refusing.on = false
+  await wake($, w, BRAVO)
+  await memberStops($, BRAVO, [])
+  expect(await deliver($, report(BRAVO))).toEqual({ text: report(BRAVO), context: [completeLine(2)] })
+  await w.clock.advance(5 * BATCH_RETRY_MS)
+  await w.clock.settle()
+  expect(w.passed.map(p => p.text).filter(t => t.startsWith('builder: the time limit'))).toEqual([])
 })

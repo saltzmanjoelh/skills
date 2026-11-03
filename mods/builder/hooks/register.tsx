@@ -3,7 +3,7 @@ import type { EngineInterface, Next, PromptOrigin, PromptSubmitInput, Register, 
 
 import type { AgentCard, BackgroundTask, BatchState, BuilderRun, Compactions, ContextMeasure, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, StatusMemo, UsageLedger, Wake } from '../types'
 import { isSvgSurface } from './art'
-import { afterDeadline, afterDeadlineSent, afterDelivery, BATCH_RETRY_MS, afterLaunch, afterResume, afterFirstStep, answersStep, batchStateIn, deliveryOf, heldReports, isBatchLaunch, nextDeadline, NOTED_REPLY, runningLines, type DeliveryAct } from './batch'
+import { afterDeadline, afterDeadlineSent, afterDelivery, BATCH_RETRY_MS, afterLaunch, afterResume, afterTask, afterMemberStop, afterWake, afterFirstStep, answersStep, batchStateIn, deliveryOf, heldReports, isBatchLaunch, isEngineWake, listedIdsOf, nextDeadline, NOTED_REPLY, runningLines, taskIdOf, type DeliveryAct } from './batch'
 import { checkoutSentence, otherRepositorySentence, worktreeWithBranch, type Checkout } from './checkout'
 // The context module's `told` is the compaction record after a reload was
 // announced; it is renamed here because `told` below is the snapshot last
@@ -17,7 +17,7 @@ import { AGENT_PANE, agentPaneTree, bandTree, isDrawable, messagesReadOf, NAMED_
 import { ADVERSARIAL_REVIEWER, afterReport, afterSeen, endedOf, FOCUSED_REVIEWERS, focusedReviewersFor, plannedOf, progressIn, reportAnswer, reportOf, stageLabel, STAGES, type ReportInput, type StageId } from './progress'
 import { changePrompt, ciEventContext, GITHUB_NAMES_LINE, resumePrompt, stateLines, stuckPrompt } from './prompts'
 import { changedKinds, commitRecordsOf, decidedItems, factIn, INSTRUCTION_PATHSPECS, instructionFileIsLink, isFullSha, isUpForCheck, LATER_CONTEXT_LINES, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pluginRootsOf, reviewedHeadOf, secretIn, specDirOf, trendOf, trendStopLine, underRoot, verdictHeadOf, verdictsLine, type CommitRecord, type EarlierRound, type FileKind, type PackageInput } from './review'
-import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isMerge, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
+import { AGENTS_KEPT, backgroundOf, backgroundTaskIdOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isMerge, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
 import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isForemanNudge, newMemo, parentIn, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, STATUS_CHANGED_TEXT, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
 import { afterSend, emptySends, sendOutcomeOf, sendsIn, sendsKey, sendsNewest, SENDS_KEPT_MS, SENDS_PREFIX, type SendOutcome, type SendSettled, type SendsRecord } from './sends'
 import { baseFactsOf, chooseStep, labelActionOf, labelFor, labelRecordIn, labelsToRemoveAfterEdit, needsListing, SHORT_HASH, stepFor, UNPUSHED_KEPT, UNREAD_FACTS } from './step'
@@ -1204,16 +1204,21 @@ function rearmBatch($: $, gen: number) {
 }
 
 // Claims each batch whose deadline has passed, in one write, so that only one
-// timer submits its prompt, and submits builder's line for each. It calls
+// timer submits its prompt, and submits builder's line for each: the
+// completion line for a batch whose members have all ended, and the deadline
+// line otherwise. It calls
 // $.prompt.submit directly rather than submitClaimed, because submitClaimed
 // gives back the isDelivering flag when it ends, which would clear it in the
 // middle of a handover that holds it. A claimed batch stays in the state until
 // the engine has taken its line, because the held reports were each answered
 // with "Noted.", so nothing else may wake the model for them: a line the
 // engine refuses, a submit that throws, a removal that fails and a hot reload
-// in the middle all leave the batch to be claimed again a minute later, with
-// the members still running then. The cost is that a removal that fails after
-// the engine took the line sends the line a second time.
+// in the middle all leave the batch to be claimed again after its wait, with
+// the members still running then. The wait starts at one minute and doubles
+// at each claim up to one hour (see afterDeadline), so a line the engine
+// keeps refusing is tried once an hour rather than once a minute. The cost is
+// that a removal that fails after the engine took the line sends the line a
+// second time.
 // The deadline is first worked out from a plain read, so that a timer step
 // that finds nothing due writes nothing, and then again inside the write,
 // because the batches may have changed in between.
@@ -1231,13 +1236,15 @@ async function fireBatch($: $) {
     const submitted = await $.prompt.submit({ text: line }).catch(() => ({ drop: 'the submit failed' }))
     if (submitted.drop === undefined) sent.push(step)
   }
-  if (sent.length > 0) await changeBatches($, state => afterDeadlineSent(state, sent))
+  if (sent.length > 0) await changeBatches($, state => afterDeadlineSent(state, sent, now))
 }
 
 // What builder does to a prompt for the batches. A finishing agent's
 // delivery passes on with its text unchanged: a held one raises the marker
 // when the session is idle and starts the deadline, and the one that ends a
-// batch carries the completion line. A person's prompt, other than a slash
+// batch carries the completion line and clears the marker, so that its turn
+// reaches the model even when held deliveries raised the marker more often
+// than turns ran (see afterDelivery). A person's prompt, other than a slash
 // command, carries a line for each batch with held deliveries naming its
 // members still running. Every other prompt, and every prompt when a read or
 // write fails, passes as it came. A delivery is first decided on a plain
@@ -1267,18 +1274,58 @@ async function withBatch($: $, e: PromptSubmitInput): Promise<PromptSubmitInput>
   }
 }
 
+// Records, for a batch member, the background task that its own tool call
+// started (see afterTask). A call that started none, and every call when the
+// read fails, writes nothing. It never throws, because the tool.call hook
+// would take a failure for the tool's own.
+async function noteTask($: $, agentId: string, ran: ToolCallResult) {
+  try {
+    const taskId = taskIdOf(ran.result)
+    if (taskId === undefined) return
+    const stored = await storedBatches($)
+    if (afterTask(stored, agentId, taskId) === stored) return
+    await changeBatches($, state => afterTask(state, agentId, taskId))
+  } catch {
+    // The member then ends at its turn end or report, as before.
+  }
+}
+
+// Records a member's turn end against the work still in flight (see
+// afterMemberStop), and arms the deadline's timer, which the turn end that ends
+// a batch's last member moves to one minute on. A turn end of an agent in no
+// open batch writes nothing. It never throws, so the background list is
+// still replaced.
+async function noteTurnEnd($: $, agentId: string, raw: unknown) {
+  try {
+    const listed = listedIdsOf(raw)
+    const now = await $.clock.now()
+    const stored = await storedBatches($)
+    if (afterMemberStop(stored, agentId, listed, now) === stored) return
+    await changeBatches($, state => afterMemberStop(state, agentId, listed, now))
+    void armBatch($).catch(() => undefined)
+  } catch {
+    // The member then ends at its report, as before.
+  }
+}
+
 // Whether builder answers the first step of a turn of the session's own loop
 // itself: only when a held delivery raised the marker and the conversation's
 // last message is not a user message, or is only a held member's frame (see
 // answersStep), so that no person's or plugin's prompt started the turn. The
-// marker is read first, so a turn with no marker set reads nothing more and
-// writes nothing. The step's decision and the marker's change are one write:
-// one less when the step is answered, and zero when it goes to the model,
-// which a failure also tries to write. Any failure means the model answers.
+// marker is read first, so a turn with no marker set and no release waiting
+// for its first step reads nothing more and writes nothing. The step's
+// decision and the marker's change are one write: one less when the step is
+// answered, and zero when it goes to the model, which a failure also tries to
+// write. The write also clears the releasing mark. A turn whose marker is
+// zero goes to the model without reading the conversation, because no last
+// message can change that; should a held delivery raise the marker before the
+// write, the turn still goes to the model, which costs one model turn. Any
+// failure means the model answers.
 async function answersHeld($: $): Promise<boolean> {
   try {
-    if ((await storedBatches($)).marker === 0) return false
-    const messages = await $.session.messages()
+    const stored = await storedBatches($)
+    if (stored.marker === 0 && stored.releasing !== true) return false
+    const messages = stored.marker === 0 ? [] : await $.session.messages()
     const last = Array.isArray(messages) ? messages.at(-1) : undefined
     let answered = false
     await changeBatches($, state => {
@@ -3620,7 +3667,7 @@ async function foreground($: $, e: { tool: string; tool_use_id?: string }, call:
   ensureLive($)
   try {
     const ran = await call()
-    const taskId = backgroundTaskIdOf(ran)
+    const taskId = backgroundTaskIdOf(ran.result)
     if (typeof taskId === 'string' && taskId !== '') {
       await changeStarts($, starts => startsBackgrounded(starts, taskKeyOfId(taskId), record.startedAt)).catch(() => undefined)
     }
@@ -3839,20 +3886,11 @@ async function route($: $, e: ToolCallInput, next: Next<'tool.call'>): Promise<T
   return next(e)
 }
 
-// The background task id a call's result carries, which it does when the call
-// was moved to the background, or undefined when it carries none. It is read
-// here alone, so whether a call went to the background and which task it
-// became are read the same way.
-function backgroundTaskIdOf(ran: ToolCallResult): unknown {
-  const result = ran.result as { backgroundTaskId?: unknown } | null | undefined
-  return typeof result === 'object' && result !== null ? result.backgroundTaskId : undefined
-}
-
 // Whether a call succeeded: it was not refused, did not end in an error, and
 // was not moved to the background, where a command has not finished yet.
 function succeeded(ran: ToolCallResult): boolean {
   if (ran.deny !== undefined || ran.isError === true) return false
-  return backgroundTaskIdOf(ran) === undefined
+  return backgroundTaskIdOf(ran.result) === undefined
 }
 
 // The status file for the foreman. A session whose first prompt holds a
@@ -4635,12 +4673,18 @@ export const register: Register = on => {
   // because the line names the question and the agent already. After a push
   // or merge of the session's own that succeeded, the mod looks at the pull
   // request soon, even while the turn goes on. Before a merge command of the
-  // session's own runs, the mod reports the merge stage.
+  // session's own runs, the mod reports the merge stage. A subagent's call that
+  // started a background task records that task for the agent's batch.
   // However the call ends, its return closes one permission prompt of its
   // loop and tool for the status file.
   on('tool.call', async ($, e, next) => {
     try {
-      if (e.agentId !== undefined || UNNAMED_TOOLS.has(String(e.tool))) return await route($, e, next)
+      if (e.agentId !== undefined) {
+        const ran = await route($, e, next)
+        await noteTask($, e.agentId, ran)
+        return ran
+      }
+      if (UNNAMED_TOOLS.has(String(e.tool))) return await route($, e, next)
       if (e.tool === 'Bash' && isMerge(String(e.command), mergePattern)) await reportSeen($, 'merge')
       const ran = await foreground($, e, () => route($, e, next))
       if (e.tool === 'Bash' && succeeded(ran) && isPushOrMerge(String(e.command), mergePattern)) armCommandLooks($)
@@ -4721,9 +4765,13 @@ export const register: Register = on => {
   // taken: an older engine sends no field, and its absence says nothing about
   // the session's work, where the Stop's absence means nothing is in flight.
   // It keeps the start times of tasks its list leaves out (see
-  // replaceBackground).
+  // replaceBackground). First it tells the agent's batch whether any of the
+  // agent's own tasks is still in flight (see noteTurnEnd).
   on('classic.SubagentStop', async ($, e, next) => {
-    if (Array.isArray(e.background_tasks)) await replaceBackground($, e.background_tasks, false)
+    if (Array.isArray(e.background_tasks)) {
+      await noteTurnEnd($, e.agent_id, e.background_tasks)
+      await replaceBackground($, e.background_tasks, false)
+    }
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -4804,8 +4852,12 @@ export const register: Register = on => {
     const spawned = await next(e)
     const id = spawned.agentId
     const resumed = e.resume?.agentId
+    // A resume whose prompt begins with a task notification is the engine
+    // waking a parked agent, which stays a member of its open batch. Any
+    // other resume is one the session asked for, which forgets the member.
     if (resumed !== undefined) {
-      void $.clock.now().then(now => changeBatches($, state => afterResume(state, resumed, now))).catch(() => undefined)
+      const isWake = isEngineWake(e.prompt)
+      void $.clock.now().then(now => changeBatches($, state => (isWake ? afterWake(state, resumed) : afterResume(state, resumed, now)))).catch(() => undefined)
     }
     if (id !== undefined && step !== undefined && isBatchLaunch(e)) {
       void changeBatches($, state => afterLaunch(state, step, { id, type: e.subagentType })).catch(() => undefined)
