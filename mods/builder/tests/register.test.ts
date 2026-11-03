@@ -123,6 +123,12 @@ function fakeGitHub(on: On) {
   // than one of o/r's, and `worktreesIn` what `git worktree list` lists in a
   // folder of another repository, so a session can start in one repository
   // and watch a pull request in another.
+  // `missing` names the commits `git cat-file -e <sha>^{commit}` does not
+  // find, and `pullFetchFails` makes the fetch of `pull/<n>/head` exit with an
+  // error. `unpushed` is what `git rev-list <head>..HEAD` prints, the commits
+  // the worktree holds that the head lacks, and `unpushedFail` makes that
+  // listing exit with an error or throw. `editsToFail` makes that many label
+  // edits, `gh pr edit` with `--add-label`, fail as gh offline does.
   const world = {
     pr: openPullRequest(), calls: [] as string[], removalsToFail: 0, labelMissing: false, head: C,
     hold: null as Promise<void> | null, cutDiff: false, otherNumber: 0, readsToFail: 0,
@@ -141,6 +147,7 @@ function fakeGitHub(on: On) {
     states: {} as Record<number, string>, stateRead: null as null | 'exit' | 'throw' | 'cut' | 'text',
     messages: [{ sha: A, message: 'Build it' }] as { sha: string; message: string }[], messagesFail: false,
     ancestorExit: 0, ancestorFail: null as null | 'throw' | 'cut', merges: '', mergesFail: null as null | 'exit' | 'throw' | 'cut', baseClaude: null as string | null, grep: '', grepFail: false, objectFormat: 'sha1', links: '', linksFail: false, marketplace: null as string | null, nameStatus: '', nameStatusFail: false, sinceDiffFail: false,
+    missing: [] as string[], pullFetchFails: false, unpushed: '', unpushedFail: null as null | 'exit' | 'throw', editsToFail: 0,
   }
   on('process.run', async ($, e) => {
     const argv = e.argv.join(' ')
@@ -175,6 +182,9 @@ function fakeGitHub(on: On) {
       return { value: { exitCode: 128, stdout: '', stderr: 'not a git repository', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     if (argv === 'git rev-parse --absolute-git-dir') return out(`${(cwd === undefined ? undefined : world.gitDirs[cwd]) ?? '/repo/.git'}\n`)
+    const object = /^git cat-file -e ([0-9a-f]+)\^\{commit\}$/.exec(argv)
+    if (object !== null) return exit(world.missing.includes(object[1]!) ? 1 : 0)
+    if (argv.startsWith('git fetch -q origin pull/') && world.pullFetchFails) return exit(1)
     if (argv.startsWith('git fetch') && world.fetchesThrow) throw new Error('the process could not be started')
     if (argv.startsWith('git fetch')) return out('')
     if (argv.startsWith('git diff --quiet ')) {
@@ -198,6 +208,10 @@ function fakeGitHub(on: On) {
       return { value: { exitCode: 0, stdout: world.merges, stderr: '', isStdoutTruncated: true, isStderrTruncated: false } }
     }
     if (argv.startsWith('git rev-list --merges ')) return out(world.merges)
+    if (/^git rev-list [0-9a-f]+\.\.HEAD$/.test(argv)) {
+      if (world.unpushedFail === 'throw') throw new Error('the process could not be started')
+      return world.unpushedFail === 'exit' ? exit(128) : out(world.unpushed)
+    }
     if (argv.startsWith('git show ') && argv.endsWith('marketplace.json')) return world.marketplace === null ? exit(128) : out(world.marketplace)
     if (argv.startsWith('git show origin/')) return world.baseClaude === null ? exit(128) : out(world.baseClaude)
     if (argv.startsWith('git ls-tree ')) {
@@ -269,7 +283,7 @@ function fakeGitHub(on: On) {
     if (argv.startsWith('gh repo view')) return out(`${(cwd === undefined ? undefined : world.reposIn[cwd]) ?? 'o/r'}\n`)
     if (argv.startsWith('gh api user') && world.loginThrows) throw new Error('the process could not be started')
     if (argv.startsWith('gh api user')) return out('owner\n')
-    if (argv.startsWith('gh pr view 7') && argv.includes('--json labels ')) {
+    if (/^gh pr view \d+ /.test(argv) && argv.includes('--json labels ')) {
       return out(JSON.stringify((world.pr.labels ?? []).map(label => label.name)))
     }
     if (world.otherNumber !== 0 && argv.startsWith(`gh pr view ${world.otherNumber} `)) return out(JSON.stringify(world.pr))
@@ -292,6 +306,10 @@ function fakeGitHub(on: On) {
     if (argv.startsWith('gh label create')) {
       world.labelMissing = false
       return out('')
+    }
+    if (argv.startsWith('gh pr edit') && argv.includes('--add-label') && world.editsToFail > 0) {
+      world.editsToFail -= 1
+      return { value: { exitCode: 1, stdout: '', stderr: 'network', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     if (argv.includes('--add-label') && world.labelMissing) {
       return { value: { exitCode: 1, stdout: '', stderr: 'label not found', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -778,10 +796,13 @@ test('a label the repository lacks is created, without --force, and then added',
   mock.store(on)
   engine(on)
   const world = fakeGitHub(on)
-  world.labelMissing = true
   on('tool.call', () => ({ result: { answers: {} } }))
 
   await watch($)
+  // The state label the watch sets is settled first, so the missing label is
+  // the question's.
+  await clock.settle()
+  world.labelMissing = true
   await loose($)({ tool: 'AskUserQuestion', questions: [{ question: 'Which name?' }] })
   await clock.settle()
 
@@ -13393,4 +13414,320 @@ test('a delivery held for a batch of agents launched together never asks for the
   await $.prompt.submit({ text: '<agent-message from="agent-1-xxxxxxxxxx">\nThe report.', wait: false, origin: { kind: 'peer' }, isMeta: true } as never)
   await s.clock.settle()
   expect(progressReads).toBe(before)
+})
+
+// The commits the worktree holds that the pull request lacks, listed by the
+// mod at a look that chose a merge step or the Merged step.
+const approvedAndPassed = () => openPullRequest({ reviews: [verdictReview(C, 'APPROVE', 'APPROVE')] })
+const unpushedListings = (world: { calls: string[] }) => world.calls.filter(call => call.startsWith('git rev-list ') && !call.includes('--merges'))
+
+test('the merge step states that the worktree holds no commits the pull request lacks, listed in the head branch\'s worktree', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr = approvedAndPassed()
+  world.worktrees = [{ path: '/repo', branch: 'main' }, { path: '/repo/.claude/worktrees/x', branch: 'feature' }]
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  const ran = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  expect(ran).toContain('The step that applies: Both verdicts approve at this head, merge.')
+  expect(ran).toContain('The mod listed the commits the head branch\'s worktree holds that the pull request\'s head lacks, and found none.')
+  expect(world.ran).toContainEqual({ argv: `git rev-list ${C}..HEAD`, cwd: '/repo/.claude/worktrees/x' })
+  // The head is already there, so nothing is fetched, and with no commits no
+  // ancestor check is made.
+  expect(world.calls.some(call => call.includes('pull/7/head'))).toBe(false)
+  expect(world.calls.some(call => call.startsWith('git merge-base --is-ancestor'))).toBe(false)
+})
+
+test('commits the pull request lacks are named by short hash with the ancestor answer, on the merge, ask-merge and Merged steps', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  world.unpushed = `${D}\n${E}\n`
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  world.pr = approvedAndPassed()
+  const merge = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  expect(merge).toContain(`The worktree of the head branch holds 2 commits that the pull request's head lacks: ${D.slice(0, 12)}, ${E.slice(0, 12)}. The head is an ancestor of the worktree's HEAD.`)
+  expect(world.calls).toContain(`git merge-base --is-ancestor ${C} HEAD`)
+  world.ancestorExit = 1
+  world.pr = approvedWithoutChecks()
+  const ask = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  expect(ask).toContain('The step that applies: Both verdicts approve at this head, with no checks.')
+  expect(ask).toContain('The head is not an ancestor of the worktree\'s HEAD.')
+  world.pr = openPullRequest({ state: 'MERGED' })
+  const merged = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  expect(merged).toContain('The step that applies: Merged.')
+  expect(merged).toContain(`${D.slice(0, 12)}, ${E.slice(0, 12)}`)
+})
+
+test('a head the worktree lacks is fetched before the listing, and a failed fetch, listing or ancestor check, or no worktree, gives could not be listed', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr = approvedAndPassed()
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  const watched = async () => String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  const unlisted = 'The mod could not list the commits the head branch\'s worktree holds that the pull request\'s head lacks, which counts as holding some.'
+
+  world.missing = [C]
+  expect(await watched()).toContain('found none')
+  expect(world.ran).toContainEqual({ argv: 'git fetch -q origin pull/7/head', cwd: '/repo' })
+  world.pullFetchFails = true
+  expect(await watched()).toContain(unlisted)
+  world.missing = []
+  world.pullFetchFails = false
+
+  world.unpushedFail = 'exit'
+  expect(await watched()).toContain(unlisted)
+  world.unpushedFail = 'throw'
+  expect(await watched()).toContain(unlisted)
+  world.unpushedFail = null
+  // A line that is not a full commit sha is not trusted.
+  world.unpushed = 'not a sha\n'
+  expect(await watched()).toContain(unlisted)
+  world.unpushed = `${D}\n`
+  world.ancestorExit = 128
+  expect(await watched()).toContain(unlisted)
+  world.ancestorExit = 0
+  world.ancestorFail = 'throw'
+  expect(await watched()).toContain(unlisted)
+  world.ancestorFail = null
+
+  world.worktrees = [{ path: '/repo', branch: 'main' }]
+  expect(await watched()).toContain(unlisted)
+  world.worktrees = [{ path: '/repo', branch: 'feature' }]
+  world.worktreesFail = 'exit'
+  expect(await watched()).toContain(unlisted)
+})
+
+test('a review step and a closed pull request run no listing, and a change in the listing alone never wakes the session', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const prompts = recordPrompts(on)
+  await watch($)
+  await clock.settle()
+  expect(unpushedListings(world)).toEqual([])
+  world.pr = openPullRequest({ state: 'CLOSED' })
+  const closed = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  expect(closed).not.toContain('could not list')
+  expect(unpushedListings(world)).toEqual([])
+
+  world.pr = approvedAndPassed()
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await clock.settle()
+  const told = prompts.length
+  world.unpushed = `${D}\n`
+  await clock.advance(30 * 60_000)
+  expect(unpushedListings(world).length).toBeGreaterThan(1)
+  expect(prompts.length).toBe(told)
+})
+
+// The state label the mod sets from the step it chose.
+const STATE_LABEL_KEY = 'state-label:o/r#7'
+const labelEdits = (world: { calls: string[] }) => world.calls.filter(call => call.startsWith('gh pr edit 7 ') && !call.includes('needs-decision'))
+
+test('a first watch sets in-review and records it, and a later look that derives the same label writes nothing', async ($, on) => {
+  const clock = mock.clock(on)
+  const stored = memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  await watch($)
+  await clock.settle()
+  expect(labelEdits(world)).toEqual(['gh pr edit 7 --repo o/r --add-label in-review'])
+  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'in-review', at: clock.now() })
+
+  await clock.advance(30 * 60_000)
+  expect(labelEdits(world)).toEqual(['gh pr edit 7 --repo o/r --add-label in-review'])
+})
+
+test('a changed step moves the label, removing only the state labels the pull request carries', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  await watch($)
+  await clock.settle()
+  world.pr = openPullRequest({ reviews: [verdictReview(C, 'REQUEST_CHANGES', 'APPROVE')], labels: [{ name: 'in-review' }, { name: 'bug' }] })
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await clock.settle()
+  expect(labelEdits(world).at(-1)).toBe('gh pr edit 7 --repo o/r --add-label waiting-on-author --remove-label in-review')
+  world.pr = openPullRequest({ state: 'CLOSED', labels: [{ name: 'waiting-on-author' }] })
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await clock.settle()
+  expect(labelEdits(world).at(-1)).toBe('gh pr edit 7 --repo o/r --add-label stuck --remove-label waiting-on-author')
+})
+
+test('a failed label edit saves no record, and the next look tries again', async ($, on) => {
+  const clock = mock.clock(on)
+  const stored = memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  await startOnly($)
+  await clock.settle()
+  // The watch asks for the label, and so does the look it runs, so both of
+  // the two tries made at once fail here.
+  world.editsToFail = 2
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await clock.settle()
+  expect(labelEdits(world)).toEqual([
+    'gh pr edit 7 --repo o/r --add-label in-review',
+    'gh pr edit 7 --repo o/r --add-label in-review',
+  ])
+  expect(stored.get(STATE_LABEL_KEY)).toBeUndefined()
+
+  await clock.advance(30 * 60_000)
+  expect(labelEdits(world).length).toBe(3)
+  expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ label: 'in-review' })
+})
+
+test('a state label the repository lacks is created, and the edit is tried again', async ($, on) => {
+  const clock = mock.clock(on)
+  const stored = memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  world.labelMissing = true
+  await watch($)
+  await clock.settle()
+  const created = world.calls.indexOf('gh label create in-review --repo o/r')
+  expect(created).toBeGreaterThan(-1)
+  expect(world.calls.lastIndexOf('gh pr edit 7 --repo o/r --add-label in-review')).toBeGreaterThan(created)
+  expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ label: 'in-review' })
+})
+
+test('after a reload with stuck on and no record, the derived label is recorded without a write, and a later change removes stuck', async ($, on) => {
+  const clock = mock.clock(on)
+  const stored = memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr = openPullRequest({ labels: [{ name: 'stuck' }] })
+  await watch($)
+  await clock.settle()
+  expect(labelEdits(world)).toEqual([])
+  expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ label: 'in-review' })
+
+  world.pr = openPullRequest({ reviews: [verdictReview(C, 'REQUEST_CHANGES', 'APPROVE')], labels: [{ name: 'stuck' }] })
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await clock.settle()
+  expect(labelEdits(world)).toEqual(['gh pr edit 7 --repo o/r --add-label waiting-on-author --remove-label stuck'])
+})
+
+test('a merged pull request and an open question change no state label', async ($, on) => {
+  const clock = mock.clock(on)
+  const stored = memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  let answer = () => {}
+  on('tool.call', () => new Promise(resolve => { answer = () => resolve({ result: { answers: {} } } as never) }))
+  world.pr = openPullRequest({ state: 'MERGED' })
+  await watch($)
+  await clock.settle()
+  expect(labelEdits(world)).toEqual([])
+  expect(stored.get(STATE_LABEL_KEY)).toBeUndefined()
+
+  world.pr = openPullRequest()
+  const asked = loose($)({ tool: 'AskUserQuestion', questions: [{ question: 'Which way?' }] })
+  await clock.settle()
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await clock.settle()
+  expect(labelEdits(world)).toEqual([])
+  answer()
+  await asked
+  await clock.advance(30 * 60_000)
+  expect(labelEdits(world)).toEqual(['gh pr edit 7 --repo o/r --add-label in-review'])
+})
+
+test('a session start prunes label records older than they are kept, and records of another shape', async ($, on) => {
+  const clock = mock.clock(on, { now: 200 * 24 * 60 * 60_000 })
+  const stored = memoryStore(on, [
+    ['state-label:o/r#1', { label: 'stuck', at: 0 }],
+    ['state-label:o/r#2', { label: 'in-review', at: clock.now() - 60_000 }],
+    ['state-label:o/r#3', 'stuck'],
+  ])
+  engine(on)
+  fakeGitHub(on)
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await clock.settle()
+  expect([...stored.keys()].filter(key => key.startsWith('state-label:'))).toEqual(['state-label:o/r#2'])
+})
+
+// The stages the mod reports by itself once the pull request is open.
+const shownStage = (state: ReturnType<typeof writtenState>) => state.of<{ title: string; stage: string; note: string } | null>('progress', null)
+
+test('the watch tool reports pr, and the package tool review with the round from the live read, under the session\'s title', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  fakePanes(on)
+  fakeFiles(on)
+  const state = writtenState(on)
+  await startOnly($)
+  await report($, 'verify')
+  await clock.advance(1000)
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  expect(shownStage(state)).toMatchObject({ title: TITLE, stage: 'pr', note: '' })
+
+  await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
+  expect(shownStage(state)).toMatchObject({ title: TITLE, stage: 'review', note: 'round 1' })
+
+  world.pr = openPullRequest({ headRefOid: D, commits: [{ oid: C }, { oid: D }], reviews: [verdictReview(C, 'APPROVE', 'REQUEST_CHANGES')] })
+  world.head = D
+  await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
+  expect(shownStage(state)).toMatchObject({ title: TITLE, stage: 'review', note: 'round 2' })
+
+  // A later watch never moves the bar back to pr.
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  expect(shownStage(state)).toMatchObject({ stage: 'review', note: 'round 2' })
+})
+
+test('a session Bash merge reports merge before the command runs, and a push or a subagent\'s merge reports nothing', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  fakePanes(on)
+  on('agent.list', () => ({ value: [] }))
+  const state = writtenState(on)
+  const stagesWhenRun: string[] = []
+  on('tool.call', () => {
+    stagesWhenRun.push(shownStage(state)?.stage ?? 'none')
+    return { result: { stdout: '', stderr: '', interrupted: false } } as never
+  })
+  await startOnly($)
+  await report($, 'review')
+  await clock.advance(1000)
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+
+  await loose($)({ tool: 'Bash', command: 'git push origin HEAD' })
+  await loose($)({ tool: 'Bash', command: 'gh pr merge 7 --merge', agentId: 'agent-1' })
+  expect(shownStage(state)).toMatchObject({ stage: 'review' })
+  await loose($)({ tool: 'Bash', command: 'gh pr merge 7 --merge --match-head-commit cccccccc' })
+  expect(stagesWhenRun).toEqual(['review', 'review', 'merge'])
+  expect(shownStage(state)).toMatchObject({ title: TITLE, stage: 'merge' })
+})
+
+test('with no progress record, or one newer than the watch, the mod reports no stage', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  fakePanes(on)
+  fakeFiles(on)
+  bashAnswers(on)
+  const state = writtenState(on)
+  await startOnly($)
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
+  await loose($)({ tool: 'Bash', command: 'gh pr merge 7 --merge' })
+  expect(shownStage(state)).toBeNull()
+
+  await clock.advance(1000)
+  await report($, 'verify')
+  await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
+  await loose($)({ tool: 'Bash', command: 'gh pr merge 7 --merge' })
+  expect(shownStage(state)).toMatchObject({ stage: 'verify' })
 })
