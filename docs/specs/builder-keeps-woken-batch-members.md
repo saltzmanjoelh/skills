@@ -54,6 +54,13 @@ fields. It found:
   batch could be released early with no completion line. In the parent's
   desktop run, seven of ten turns after the launch were answered by builder
   without the model, and three reached it.
+- **A woken agent often cannot report twice.** A second run with the first
+  version of this fix showed that the engine refuses a second handback
+  report from the same agent. One woken member ended with plain text, so
+  builder kept counting it as running and its batch stayed open until the
+  deadline. The engine's notification for that end has a summary saying
+  the agent finished, while the notification for a park has a summary
+  saying the agent is waiting on its own background work.
 - **The completion line reaches the model on an idle release.** A second run
   released a batch while the session was idle, and the model quoted the
   completion line back.
@@ -68,11 +75,24 @@ fields. It found:
    notifications are then held or end the batch as any member's are. In a
    batch already released, the agent is forgotten, as a resume forgets it
    today, so that its final report reaches the model.
-2. **Every other resume forgets the member,** as the existing spec says: the
+2. **A notification that says the agent finished ends its member.** The
+   engine accepts one handback report from each agent, so an agent that
+   reported before it parked often ends its woken run with plain text and
+   sends no second report. Its only sign of ending is a notification with
+   status `completed` whose summary says the agent finished, worded as
+   `<summary>Agent "…" finished</summary>`. Builder ends a member at such a
+   notification, reading only the engine-written `<summary>` element and
+   never the result or note, which can carry the agent's own text. Every
+   other `completed` notification, including the one whose summary says the
+   agent is waiting on its own background work, stays held and ends nothing,
+   as the existing spec says. The rule applies to every member, because the
+   finished notification comes after any report the agent made, so for a
+   member that already reported it ends nothing new.
+3. **Every other resume forgets the member,** as the existing spec says: the
    resume is one the session asked for, so the session already has the
    batch's reports in front of it. When every other member has ended, the
    batch is released with no line, as today.
-3. **A refused deadline line backs off.** When the engine refuses the line
+4. **A refused deadline line backs off.** When the engine refuses the line
    that builder submits at a batch's deadline, or the submit throws, the
    batch stays claimed and is tried again after a wait that starts at one
    minute and doubles after each refusal, up to a ceiling of one hour: 1, 2,
@@ -82,7 +102,7 @@ fields. It found:
    one minute. While the batch waits, a person's prompt still carries the
    line naming the members still running, and a member's later report or
    notification still ends the batch in the usual way.
-4. **The test rename.** The hook test that claimed a person's prompt after a
+5. **The test rename.** The hook test that claimed a person's prompt after a
    held member's notification goes to the model is renamed to claim only
    that a report whose turn finds the last member's notification last is
    answered without the model, and its second half, which could not fail,
@@ -136,6 +156,10 @@ fields. It found:
 - **State that the reloaded code cannot read,** or a write that fails, keeps
   the existing spec's handling: the delivery goes on unchanged and reaches
   the model.
+- **A finished summary that the engine words differently in a later
+  version** no longer matches, so a woken member that ends with plain text
+  holds its batch until the deadline, which is how such a batch behaved
+  before this change. Nothing is lost.
 
 ## Verification
 
@@ -149,8 +173,13 @@ fields. It found:
   today; a refused deadline line is tried again after 1, 2, 4, 8, 16, 32
   and then 60 minutes, and again at 60 minutes after that; a stored batch
   without a wait starts at one minute; a deadline line the engine takes
-  after refusals ends the batch. Each new test fails when its change is
-  removed.
+  after refusals ends the batch; a `completed` notification whose summary
+  says the agent finished ends its member, so a woken member that ends with
+  no second report still lets its batch be released once, with the
+  completion line; a `completed` notification whose summary says the agent
+  is waiting on its own background work ends nothing; and the word
+  finished in the result or note, outside the summary, ends nothing. Each
+  new test fails when its change is removed.
 - The four gates pass for both mods.
 - Before the pull request merges, the headless probe on the desktop app's
   engine runs twice with the fixed builder, and the pull request records
@@ -167,3 +196,4 @@ fields. It found:
 - How should the hook test whose second half cannot fail be fixed? The counsel chose: Rename the test so its name claims only what its first half proves, and leave the person's-prompt case to the tests that already cover it. 5 of 7 members voted for it.
 - What evidence from the real engine must the pull request carry before it merges, beyond the hook tests? The counsel chose: Same headless run, plus a second scenario in which the session resumes one member with SendMessage mid-batch, recording that this member is forgotten and the rest still release as one batch. 6 of 7 members voted for it.
 - Which of these does the change deliberately leave out, as non-goals? The counsel chose: All four: (a), (b), (c) and (d) are non-goals. 7 of 7 members voted for it.
+- A batch member that the engine woke may end without a second report. Which delivery should end such a member? The counsel chose: End a member only at a `completed` notification whose summary says the agent finished; every other `completed` notification stays held and ends nothing. 5 of 7 members voted for it.
