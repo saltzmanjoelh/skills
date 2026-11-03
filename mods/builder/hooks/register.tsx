@@ -367,7 +367,7 @@ async function listUnpushed($: $, r: SnapshotTarget, live: GhPullRequest): Promi
   const unlisted: Unpushed = { kind: 'unlisted' }
   const head = live.headRefOid
   if (!Number.isInteger(live.number) || live.number <= 0 || !isFullSha(head) || typeof live.headRefName !== 'string') return unlisted
-  const checkout = await checkoutOf($, r.checkout ?? r.cwd, live.headRefName, r.checkout !== undefined)
+  const checkout = await checkoutOf($, listingFolder(r), live.headRefName, r.checkout !== undefined)
   if (checkout.how !== 'worktree') return unlisted
   const dir = checkout.dir
   const present = await gitRun($, dir, ['cat-file', '-e', `${head}^{commit}`])
@@ -2456,11 +2456,11 @@ async function checkoutOf($: $, from: string, branch: string, isGiven = false): 
   return dir === null ? { dir: from, branch, how: 'no-worktree', ...given } : { dir, branch, how: 'worktree', ...given }
 }
 
-// The folder the package and review tools ask git for the worktrees from: the
-// checkout given to the watch tool, for a session whose folder belongs to
-// another repository and so lists only that repository's worktrees, else the
-// session's folder.
-const listingFolder = (r: BuilderRun) => r.checkout ?? r.cwd
+// The folder the package and review tools and the commit listing ask git for
+// the worktrees from: the checkout given to the watch tool, for a session
+// whose folder belongs to another repository and so lists only that
+// repository's worktrees, else the session's folder.
+const listingFolder = (r: Pick<BuilderRun, 'checkout' | 'cwd'>) => r.checkout ?? r.cwd
 
 // Derived files for one head, kept inside the checkout's git folder so they
 // are never committed and go away with the worktree. Writing a file creates
@@ -3007,9 +3007,9 @@ const inLabelQueue = oneAtATime({ passesErrors: false })
 // was killed while its question was open, which a restarted mod has no
 // record of.
 async function labelForQuestion($: $, r: BuilderRun, at: number) {
-  const names = await gh($, r.cwd, ['pr', 'view', String(r.number), '--repo', r.repo, '--json', 'labels', '--jq', '[.labels[].name]'])
+  const names = await liveLabelNames($, r)
   if (names === null) return
-  const isOn = (JSON.parse(names) as string[]).includes(DECISION_LABEL)
+  const isOn = names.includes(DECISION_LABEL)
   if (!isOn && !(await addLabel($, r, DECISION_LABEL))) return
   await update($, questions, list => list.map(q => q.at === at ? { ...q, labelled: true } : q))
 }
@@ -3083,13 +3083,18 @@ async function settleStateLabel($: $) {
   const key = stateLabelKey(r)
   const record = labelRecordIn(await $.store.get(key))?.label ?? null
   if (derived === record) return
-  const names = await gh($, r.cwd, ['pr', 'view', String(r.number), '--repo', r.repo, '--json', 'labels', '--jq', '[.labels[].name]'])
-  const live = labelNamesIn(names)
+  const live = await liveLabelNames($, r)
   if (live === null || !(await stillWatching($, r))) return
   const action = labelActionOf(derived, record, live)
   if (action.kind === 'none') return
   if (action.kind === 'write' && !(await addLabel($, r, derived, action.remove))) return
   await $.store.set(key, { label: derived, at: await $.clock.now() })
+}
+
+// The labels the pull request carries now, read fresh, or null when the read
+// failed or answered something other than a list of names.
+async function liveLabelNames($: $, r: BuilderRun): Promise<string[] | null> {
+  return labelNamesIn(await gh($, r.cwd, ['pr', 'view', String(r.number), '--repo', r.repo, '--json', 'labels', '--jq', '[.labels[].name]']))
 }
 
 // The label names gh printed as a JSON list, or null when it printed nothing

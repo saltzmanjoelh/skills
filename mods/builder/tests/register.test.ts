@@ -129,6 +129,9 @@ function fakeGitHub(on: On) {
   // the worktree holds that the head lacks, and `unpushedFail` makes that
   // listing exit with an error or throw. `editsToFail` makes that many label
   // edits, `gh pr edit` with `--add-label`, fail as gh offline does.
+  // `labelsHold`, when set, keeps the next read of the labels of #7 waiting
+  // until it resolves, and `labelsAnswer`, when set, is what every read of
+  // the labels prints instead of the list of names.
   const world = {
     pr: openPullRequest(), calls: [] as string[], removalsToFail: 0, labelMissing: false, head: C,
     hold: null as Promise<void> | null, cutDiff: false, otherNumber: 0, readsToFail: 0,
@@ -148,6 +151,7 @@ function fakeGitHub(on: On) {
     messages: [{ sha: A, message: 'Build it' }] as { sha: string; message: string }[], messagesFail: false,
     ancestorExit: 0, ancestorFail: null as null | 'throw' | 'cut', merges: '', mergesFail: null as null | 'exit' | 'throw' | 'cut', baseClaude: null as string | null, grep: '', grepFail: false, objectFormat: 'sha1', links: '', linksFail: false, marketplace: null as string | null, nameStatus: '', nameStatusFail: false, sinceDiffFail: false,
     missing: [] as string[], pullFetchFails: false, unpushed: '', unpushedFail: null as null | 'exit' | 'throw', editsToFail: 0,
+    labelsHold: null as Promise<void> | null, labelsAnswer: null as string | null,
   }
   on('process.run', async ($, e) => {
     const argv = e.argv.join(' ')
@@ -284,7 +288,11 @@ function fakeGitHub(on: On) {
     if (argv.startsWith('gh api user') && world.loginThrows) throw new Error('the process could not be started')
     if (argv.startsWith('gh api user')) return out('owner\n')
     if (/^gh pr view \d+ /.test(argv) && argv.includes('--json labels ')) {
-      return out(JSON.stringify((world.pr.labels ?? []).map(label => label.name)))
+      const seen = world.labelsAnswer ?? JSON.stringify((world.pr.labels ?? []).map(label => label.name))
+      const hold = world.labelsHold
+      world.labelsHold = null
+      if (hold !== null) await hold
+      return out(seen)
     }
     if (world.otherNumber !== 0 && argv.startsWith(`gh pr view ${world.otherNumber} `)) return out(JSON.stringify(world.pr))
     if (argv.startsWith('gh pr view 7') && world.readsThrow) throw new Error('the process could not be started')
@@ -789,6 +797,24 @@ test('the owner\'s answer reaches the session before the label work behind it fi
 
   expect(world.calls).toContain('gh pr edit 7 --repo o/r --add-label needs-decision')
   expect(world.calls).toContain('gh pr edit 7 --repo o/r --remove-label needs-decision')
+})
+
+test('a labels answer that is not a list of names counts as a failed read, so the question is never recorded as labelled', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  // A JSON string holding the label's name, which a check for the name in an
+  // unchecked parse would find.
+  world.labelsAnswer = '"needs-decision"\n'
+  on('tool.call', () => ({ result: { answers: {} } }))
+
+  await watch($)
+  await clock.settle()
+  await loose($)({ tool: 'AskUserQuestion', questions: [{ question: 'Which name?' }] })
+  await clock.settle()
+
+  expect(world.calls.filter(call => call.includes('needs-decision'))).toEqual([])
 })
 
 test('a label the repository lacks is created, without --force, and then added', async ($, on) => {
@@ -13638,6 +13664,33 @@ test('a merged pull request and an open question change no state label', async (
   await asked
   await clock.advance(30 * 60_000)
   expect(labelEdits(world)).toEqual(['gh pr edit 7 --repo o/r --add-label in-review'])
+})
+
+test('looks that land while a state label job runs queue one more job between them, not one each', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  // Every edit fails, so no record is saved and each job that runs reads the
+  // labels again.
+  world.editsToFail = 100
+  const labelReads = () => world.calls.filter(call => call.startsWith('gh pr view 7 ') && call.includes('--json labels ')).length
+  let release = () => {}
+  world.labelsHold = new Promise(resolve => { release = resolve })
+  await watch($)
+  await clock.settle()
+  // The first job has started and waits on its read of the labels.
+  expect(labelReads()).toBe(1)
+
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await clock.settle()
+  expect(labelReads()).toBe(1)
+
+  release()
+  await clock.settle()
+  expect(labelReads()).toBe(2)
 })
 
 test('a session start prunes label records older than they are kept, and records of another shape', async ($, on) => {
