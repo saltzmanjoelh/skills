@@ -12303,7 +12303,7 @@ test('a write that gives up after 30 seconds sends nothing, and the next write t
 // Mounts the builder pane and answers its line for the messages to the
 // parent, drawn again first: the text and the colour, or null when the pane
 // draws no such line.
-async function sendsLine($: Engine) {
+async function messagesLineReader($: Engine) {
   const pane = await $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'Pane', requestId: 'builder', props: {} as never })
   return async () => {
     await pane.redraw()
@@ -12321,7 +12321,7 @@ const sendsCopy = (over: object = {}) => ({
 test('a delivered, a refused, an undelivered, a throwing and a timed-out send each change the right count, newest time and reason, in the pane and in the copy', async ($, on) => {
   const s = foremanSession(on)
   const sends = parentSends(on, s)
-  const line = await sendsLine($)
+  const line = await messagesLineReader($)
   sends.answers = ['delivered', 'refused', 'undelivered', 'throws', 'hangs']
   await firstPrompt($, s.clock, PARENTED)
   expect(await line()).toEqual({ text: 'Messages to foreman: 1 delivered, 0 failed, last at 00:00:00 UTC', color: undefined })
@@ -12365,7 +12365,7 @@ test('a delivered, a refused, an undelivered, a throwing and a timed-out send ea
 test('the line shows nothing sent before the first send ends, turns yellow with the reason while the newest send failed, and is plain again after a delivered one', async ($, on) => {
   const s = foremanSession(on)
   const sends = parentSends(on, s)
-  const line = await sendsLine($)
+  const line = await messagesLineReader($)
   let release = () => {}
   sends.hold = new Promise(resolve => {
     release = resolve
@@ -12391,7 +12391,7 @@ test('the line shows nothing sent before the first send ends, turns yellow with 
 test('a burst of changed writes folded into one further send counts as one send', async ($, on) => {
   const s = foremanSession(on)
   const sends = parentSends(on, s)
-  const line = await sendsLine($)
+  const line = await messagesLineReader($)
   let release = () => {}
   sends.hold = new Promise(resolve => {
     release = resolve
@@ -12415,7 +12415,7 @@ test('a burst of changed writes folded into one further send counts as one send'
 test('a session without a parent line, or without a ticket, draws no line for the messages and stores no copy', async ($, on) => {
   const s = foremanSession(on)
   const sends = parentSends(on, s)
-  const line = await sendsLine($)
+  const line = await messagesLineReader($)
   await firstPrompt($, s.clock)
   await $.turn.start({ text: 'go', turnId: 't1' } as never)
   await s.clock.settle()
@@ -12490,7 +12490,7 @@ test('the count never reaches the status file or the memo, and causes no status 
 test('after a hot reload the count starts again from zero, and the copy carries the new load time', async ($, on) => {
   const s = foremanSession(on)
   parentSends(on, s)
-  const line = await sendsLine($)
+  const line = await messagesLineReader($)
   await firstPrompt($, s.clock, PARENTED)
   expect((await line())?.text).toBe('Messages to foreman: 1 delivered, 0 failed, last at 00:00:00 UTC')
 
@@ -12508,7 +12508,7 @@ test('a stored copy with a later load time belongs to a newer load and is never 
   const newer = sendsCopy({ since: S0 + 60 * MINUTE, delivered: 7 })
   const s = foremanSession(on, { stored: [['sends:session-1', newer]] })
   parentSends(on, s)
-  const line = await sendsLine($)
+  const line = await messagesLineReader($)
   await firstPrompt($, s.clock, PARENTED)
   await $.turn.start({ text: 'go', turnId: 't1' } as never)
   await s.clock.settle()
@@ -12520,7 +12520,7 @@ test('a stored copy with a later load time belongs to a newer load and is never 
 test('with every write of the copy refused, the sends and the status writes go on and the pane still counts', async ($, on) => {
   const s = foremanSession(on)
   const sends = parentSends(on, s)
-  const line = await sendsLine($)
+  const line = await messagesLineReader($)
   s.stored.hold.setsRefused = 'sends:'
   await firstPrompt($, s.clock, PARENTED)
   await $.turn.start({ text: 'go', turnId: 't1' } as never)
@@ -12538,7 +12538,7 @@ test('with every write of the copy refused, the sends and the status writes go o
 test('a held send of an earlier conversation that ends after a /clear and after the new conversation took its record up is not counted for the new one', async ($, on) => {
   const s = foremanSession(on)
   const sends = parentSends(on, s)
-  const line = await sendsLine($)
+  const line = await messagesLineReader($)
   let release = () => {}
   sends.hold = new Promise(resolve => {
     release = resolve
