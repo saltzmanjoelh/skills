@@ -101,13 +101,12 @@ export type BandPresses = { open: (file: string) => void; pane: () => void }
 // never give up width to it, and the report is dropped when fewer than
 // REPORT_MIN_COLUMNS columns are left for it.
 // The head is a button that opens foreman's pane. Each chip is a button that
-// opens its sub session; it is colored by its
-// state's tone, or dimmed and uncolored when its file is stale. A chip whose
-// issue has a link draws its key as that link, then a space as its own text,
-// then the button holding the rest of the chip. The chips are fitted by their
-// whole text either way. A released sub session has no chip. Null in a
-// session that is not a parent, so the host draws what it would without
-// foreman.
+// opens its sub session; it is colored by its state's tone, or dimmed and
+// uncolored when its file is stale. A chip whose issue has a link draws its
+// key as that link, then a space as its own text, then the button holding the
+// rest of the chip. The chips are fitted by their whole text either way. A
+// released sub session has no chip. Null in a session that is not a parent,
+// so the host draws what it would without foreman.
 export function bandTree(ui: Elements, view: View, width: number | undefined, presses: BandPresses) {
   if (!view.isOn) return null
   const v = { ...view, rows: view.rows.filter(row => row.isReleased !== true) }
