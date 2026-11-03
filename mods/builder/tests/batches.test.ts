@@ -614,7 +614,7 @@ async function wake($: Engine, w: { clock: { settle: () => Promise<void> } }, id
   await w.clock.settle()
 }
 
-test('a member that reports, parks and is woken twice is held, and the batch is released once, with the completion line, at its finished notification', async ($, on) => {
+test('a member that reports, parks and is woken twice is held, and the batch is released once, with the completion line, at its final report', async ($, on) => {
   const w = world(on)
   await launched($)
   const { sent, contexts } = recorder($)
@@ -627,12 +627,11 @@ test('a member that reports, parks and is woken twice is held, and the batch is 
   await wake($, w, ALPHA)
   expect(await sent(report(BRAVO))).toEqual({ text: report(BRAVO) })
   expect(w.state.value?.marker).toBe(5)
-  expect(await sent(report(ALPHA))).toEqual({ text: report(ALPHA) })
-  expect(await sent(finishedText(ALPHA), 'task-notification')).toEqual({ text: finishedText(ALPHA), context: [completeLine(2)] })
+  expect(await sent(report(ALPHA))).toEqual({ text: report(ALPHA), context: [completeLine(2)] })
   expect(contexts.filter(c => c !== undefined)).toEqual([[completeLine(2)]])
 })
 
-test('a report that a member sent before it parked and that arrives after its wake is held without releasing the batch, and its finished notification releases it once, with the completion line', async ($, on) => {
+test('a report that a member sent before it parked and that arrives after its wake ends it, and as the last member\'s releases the batch once, with the completion line', async ($, on) => {
   const w = world(on)
   await launched($, ['Explore', 'Plan', 'Explore'])
   const { sent, contexts } = recorder($)
@@ -640,9 +639,10 @@ test('a report that a member sent before it parked and that arrives after its wa
   await wake($, w, ALPHA)
   expect(await sent(report(BRAVO))).toEqual({ text: report(BRAVO) })
   expect(await sent(report(CHARLIE))).toEqual({ text: report(CHARLIE) })
-  expect(await sent(report(ALPHA))).toEqual({ text: report(ALPHA) })
   expect(w.state.value?.batches.every(b => b.releasedAt === null)).toBe(true)
-  expect(await sent(finishedText(ALPHA), 'task-notification')).toEqual({ text: finishedText(ALPHA), context: [completeLine(3)] })
+  expect(await sent(report(ALPHA))).toEqual({ text: report(ALPHA), context: [completeLine(3)] })
+  expect(w.state.value?.batches.every(b => b.releasedAt !== null)).toBe(true)
+  expect(await sent(finishedText(ALPHA), 'task-notification')).toEqual({ text: finishedText(ALPHA) })
   expect(contexts.filter(c => c !== undefined)).toEqual([[completeLine(3)]])
 })
 
