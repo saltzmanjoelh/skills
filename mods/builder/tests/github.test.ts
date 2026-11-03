@@ -606,6 +606,11 @@ test('the fingerprint changes when a run newly counts as failed, even one that s
   const failed = snapshotOf('o/r', pullRequest(), ME, [], { headRuns: [headRun({ conclusion: 'startup_failure' })] })
   expect(failed.fingerprint).not.toBe(none.fingerprint)
   expect(changesBetween(none, failed)).toEqual(['Workflow run "build" failed.'])
+  // More newly failed runs than the limit are counted in one sentence.
+  const many = snapshotOf('o/r', pullRequest(), ME, [], { headRuns: [1, 2, 3, 4, 5, 6, 7].map(id => headRun({ id, workflow: id, conclusion: 'failure' })) })
+  expect(changesBetween(none, many)).toEqual(['7 workflow runs failed.'])
+  const six = snapshotOf('o/r', pullRequest(), ME, [], { headRuns: [1, 2, 3, 4, 5, 6].map(id => headRun({ id, workflow: id, conclusion: 'failure' })) })
+  expect(changesBetween(none, six)).toHaveLength(6)
   // A passed run that appears and finishes between two looks is not news.
   const passed = snapshotOf('o/r', pullRequest(), ME, [], { headRuns: [headRun()] })
   expect(passed.fingerprint).toBe(none.fingerprint)

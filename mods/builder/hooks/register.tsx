@@ -316,17 +316,18 @@ async function gh($: $, dir: string | null, args: string[]): Promise<string | nu
 // When the runs read fails, for any reason, the look carries on with the pull
 // request's other facts and keeps the runs the stored snapshot had (see
 // carriedRuns and carriedHeadRuns), and marks the snapshot as carried over.
-// The mark is part of the fingerprint, so the first look that reads the runs
-// again is news.
+// While both verdicts approve at the head, the mark is part of the
+// fingerprint (see fingerprintOf), so the first look that reads the runs
+// again is news. The two reads after the pull request's own do not depend
+// on each other, so they run together.
 type SnapshotTarget = Pick<BuilderRun, 'repo' | 'number' | 'cwd' | 'login' | 'checkout' | 'repoFromCwd'>
 
 async function fetchSnapshot($: $, r: SnapshotTarget): Promise<Snapshot | null> {
   const out = await gh($, r.cwd, ['pr', 'view', String(r.number), '--repo', r.repo, '--json', PR_FIELDS])
   if (out === null) return null
   const live = JSON.parse(out) as GhPullRequest
-  const headRuns = await readHeadRuns($, r, live.headRefOid)
   const base = plainBranchOf(live.baseRefName)
-  const facts = await readBaseFacts($, baseFolderOf(r), base)
+  const [headRuns, facts] = await Promise.all([readHeadRuns($, r, live.headRefOid), readBaseFacts($, baseFolderOf(r), base)])
   const extras: SnapshotExtras = { ...(base === null ? {} : { base }), facts }
   if (headRuns !== null) return snapshotOf(r.repo, live, r.login, unfinishedOf(headRuns), { ...extras, headRuns })
   const stored = await read($, pr)

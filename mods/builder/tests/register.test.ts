@@ -65,10 +65,10 @@ function fakeGitHub(on: On) {
   // folder, and that listing exits with an error when it is null. It lists
   // the folder only when the path it is given names `.github/workflows` from
   // the top of the checkout, which `toplevels` gives for a folder below it.
-  // `runsReadsToFail` makes that many
-  // reads of them fail. `runsReadsCut` makes every read of them answer the
-  // runs with exit code 0 but say its output was cut off, and
-  // `runsReadsThrow` makes every read of them throw instead of answering.
+  // `runsReadsToFail` makes that many reads of the workflow runs fail.
+  // `runsReadsCut` makes every read of the workflow runs answer them with
+  // exit code 0 but say its output was cut off, and `runsReadsThrow` makes
+  // every read of the workflow runs throw instead of answering.
   // `loginThrows` makes the read of the gh login throw, and `fetchesThrow`
   // makes `git fetch` throw, in the same way.
   // `ran` records each command with the folder it ran in, beside `calls`.
