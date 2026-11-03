@@ -11666,19 +11666,23 @@ test('a subagent that starts during an answer to a nudge leaves the answer recor
   }
 })
 
-test('a subagent that starts after the session\'s own turn ended leaves the session idle and busy false, and its start still reaches the engine', async ($, on) => {
+test('a subagent that starts after the session\'s own turn ended leaves the session idle and busy false, and its start still refreshes the pane and reaches the engine', async ($, on) => {
   const s = foremanSession(on)
   const state = writtenState(on)
+  const engineList = countedAgents(on)
   await firstPrompt($, s.clock)
   await ownTurn($, 't1')
   await s.clock.settle()
   expect(s.statusAt()?.state).toBe('idle')
+  engineList.reads = 0
 
   // A background agent the turn launched starts its run after the turn ended.
-  // The bottom hook answers the start with its turn id, so the answer shows
-  // the event reached the engine.
+  // The pane's refresh reads the engine's list of agents, and the bottom hook
+  // answers the start with its turn id, so the answer shows the event reached
+  // the engine.
   const started = await $.turn.start({ text: 'look at the log', turnId: 'a1', agentId: 'agent-1' } as never)
   await s.clock.settle()
+  expect(engineList.reads).toBeGreaterThan(0)
   expect(started).toMatchObject({ turnId: 'a1' })
   expect(state.of('busy', false)).toBe(false)
   expect(s.statusAt()?.state).toBe('idle')
