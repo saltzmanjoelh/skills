@@ -548,8 +548,13 @@ export type Loaded = { head: string | null; session: LoadedCommit; hooks: Loaded
 
 // One background agent the session's own loop launched, as a member of the
 // group of agents launched in the same step. `ended` is set at its report, or
-// at a notification that it failed or was killed.
-export type BatchMember = { id: string; type: string; ended: boolean }
+// at a notification that it finished, failed or was killed. `woken` is set at
+// the member's first wake by the engine, and from then on a report does not
+// end the member, only a notification that says the agent finished, failed or
+// was killed, because the report the agent sent before it parked can arrive
+// after the wake. The state stays at version 1 with this field, because an
+// older build ignores it and a member without it reads as never woken.
+export type BatchMember = { id: string; type: string; ended: boolean; woken?: true }
 
 // The agents the session's own loop launched in one step, keyed by that
 // step's turn id and index. Two or more members make a batch. `heldReports`

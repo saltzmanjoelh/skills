@@ -593,6 +593,11 @@ test('the band above the prompt never reads the batches, so a batch write does n
   expect(w.state.reads).toContain('batches')
 })
 
+// The engine's completed notification about the agent `id` when it parks to
+// wait on its own background work, and when it finished, in its own shape.
+const parkNotice = (id: string) => `<task-notification>\n<task-id>${id}</task-id>\n<tool-use-id>toolu_example</tool-use-id>\n<status>completed</status>\n<summary>Agent "Example agent" is waiting on its own background work</summary>\n<result>This agent has not reported yet.\n</result>\n</task-notification>`
+const finishedNotice = (id: string) => `<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>\n<summary>Agent "Example agent" finished</summary>\n<result>done</result>\n</task-notification>`
+
 // The engine waking the parked agent `id` once the work it moved into the
 // background has finished: a resume whose prompt begins with the
 // notification about the agent's own shell task, which builder never sees.
@@ -601,7 +606,7 @@ async function wake($: Engine, w: { clock: { settle: () => Promise<void> } }, id
   await w.clock.settle()
 }
 
-test('a member that reports, parks and is woken twice is held, and the batch is released once, with the completion line, at its final report', async ($, on) => {
+test('a member that reports, parks and is woken twice is held, and the batch is released once, with the completion line, at its finished notification', async ($, on) => {
   const w = world(on)
   await launched($)
   const contexts: (readonly string[] | undefined)[] = []
@@ -619,8 +624,28 @@ test('a member that reports, parks and is woken twice is held, and the batch is 
   await wake($, w, ALPHA)
   expect(await sent(report(BRAVO))).toEqual({ text: report(BRAVO) })
   expect(w.state.value?.marker).toBe(5)
-  expect(await sent(report(ALPHA))).toEqual({ text: report(ALPHA), context: [completeLine(2)] })
+  expect(await sent(report(ALPHA))).toEqual({ text: report(ALPHA) })
+  expect(await sent(finishedNotice(ALPHA), 'task-notification')).toEqual({ text: finishedNotice(ALPHA), context: [completeLine(2)] })
   expect(contexts.filter(c => c !== undefined)).toEqual([[completeLine(2)]])
+})
+
+test('a report that a member sent before it parked and that arrives after its wake is held without releasing the batch, and its finished notification releases it once, with the completion line', async ($, on) => {
+  const w = world(on)
+  await launched($, ['Explore', 'Plan', 'Explore'])
+  const contexts: (readonly string[] | undefined)[] = []
+  const sent = async (text: string, kind: 'peer' | 'task-notification' = 'peer') => {
+    const out = await deliver($, text, kind)
+    contexts.push(out.context)
+    return out
+  }
+  expect(await sent(parkNotice(ALPHA), 'task-notification')).toEqual({ text: parkNotice(ALPHA) })
+  await wake($, w, ALPHA)
+  expect(await sent(report(BRAVO))).toEqual({ text: report(BRAVO) })
+  expect(await sent(report(CHARLIE))).toEqual({ text: report(CHARLIE) })
+  expect(await sent(report(ALPHA))).toEqual({ text: report(ALPHA) })
+  expect(w.state.value?.batches.every(b => b.releasedAt === null)).toBe(true)
+  expect(await sent(finishedNotice(ALPHA), 'task-notification')).toEqual({ text: finishedNotice(ALPHA), context: [completeLine(3)] })
+  expect(contexts.filter(c => c !== undefined)).toEqual([[completeLine(3)]])
 })
 
 test('a member that the session resumes with its own text is forgotten, and the rest are released as one batch', async ($, on) => {
@@ -712,11 +737,6 @@ test('a deadline line the engine takes after refusals is not sent before its dou
   expect(lines()).toBe(1)
   expect(await deliver($, report(BRAVO))).toEqual({ text: report(BRAVO) })
 })
-
-// The engine's completed notification about the agent `id` when it parks to
-// wait on its own background work, and when it finished, in its own shape.
-const parkNotice = (id: string) => `<task-notification>\n<task-id>${id}</task-id>\n<tool-use-id>toolu_example</tool-use-id>\n<status>completed</status>\n<summary>Agent "Example agent" is waiting on its own background work</summary>\n<result>This agent has not reported yet.\n</result>\n</task-notification>`
-const finishedNotice = (id: string) => `<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>\n<summary>Agent "Example agent" finished</summary>\n<result>done</result>\n</task-notification>`
 
 test('a woken member that ends with only a finished notification and no second report releases the batch once, with the completion line, without waiting for the deadline', async ($, on) => {
   const w = world(on)

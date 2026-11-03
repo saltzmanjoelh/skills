@@ -16,6 +16,7 @@ const SESSION = 'session-1'
 
 const report = (id: string): Delivery => ({ id, isReport: true, status: null, finished: false })
 const notice = (id: string, status: string): Delivery => ({ id, isReport: false, status, finished: false })
+const finished = (id: string): Delivery => ({ id, isReport: false, status: 'completed', finished: true })
 // The deadline lines due at `now`.
 const dueLines = (state: BatchState, now: number) => afterDeadline(state, now).due.map(d => d.line)
 
@@ -277,14 +278,14 @@ test('only a prompt that begins with a whole task-notification element is the en
   expect(isEngineWake('Also check the tests.')).toBe(false)
 })
 
-test('an engine wake opens again a member that reported before it parked, so the other member\'s report is held and the woken member\'s final report releases the batch', () => {
+test('an engine wake opens again a member that reported before it parked, so the other member\'s report is held and the woken member\'s finished notification releases the batch', () => {
   let state = afterDelivery(launched(), report(ALPHA), true, 0).state
   state = afterDelivery(state, notice(ALPHA, 'completed'), true, 1).state
   state = afterWake(state, ALPHA)
   expect(runningLines(state)).toEqual([incompleteLine(['Explore aaaaaaaa', 'Plan bbbbbbbb'])])
   const other = afterDelivery(state, report(BRAVO), true, 2)
   expect(other.act).toEqual({ kind: 'hold' })
-  const last = afterDelivery(other.state, report(ALPHA), true, 3)
+  const last = afterDelivery(other.state, finished(ALPHA), true, 3)
   expect(last.act).toEqual({ kind: 'release', line: completeLine(2) })
 })
 
@@ -292,7 +293,7 @@ test('an engine wake keeps a member of a batch whose deadline claimed it, and ma
   let state = afterDelivery(launched(), report(ALPHA), true, 0).state
   state = afterDeadline(state, BATCH_LIMIT_MS).state
   state = afterWake(state, ALPHA)
-  expect(state.batches[0]?.members).toEqual([{ id: ALPHA, type: 'Explore', ended: false }, { id: BRAVO, type: 'Plan', ended: false }])
+  expect(state.batches[0]?.members).toEqual([{ id: ALPHA, type: 'Explore', ended: false, woken: true }, { id: BRAVO, type: 'Plan', ended: false }])
   expect(state.batches[0]?.fired).toBe(true)
   expect(dueLines(state, BATCH_LIMIT_MS + BATCH_RETRY_MS)).toEqual([deadlineLine(['Explore aaaaaaaa', 'Plan bbbbbbbb'])])
 })
@@ -312,7 +313,66 @@ test('an engine wake never releases a batch, even when every other member has en
   expect(woken.batches[0]?.releasedAt).toBeNull()
   expect(nextDeadline(woken)).toBe(BATCH_LIMIT_MS)
   expect(heldReports(woken)).toBe(1)
-  expect(afterDelivery(woken, report(BRAVO), true, 1).act).toEqual({ kind: 'release', line: completeLine(2) })
+  expect(afterDelivery(woken, finished(BRAVO), true, 1).act).toEqual({ kind: 'release', line: completeLine(2) })
+})
+
+test('an engine wake marks the member woken in a batch that is not released, and leaves the other members unmarked', () => {
+  const state = afterWake(afterDelivery(launched(), report(ALPHA), true, 0).state, ALPHA)
+  expect(state.batches[0]?.members).toEqual([{ id: ALPHA, type: 'Explore', ended: false, woken: true }, { id: BRAVO, type: 'Plan', ended: false }])
+  expect(afterWake(state, ALPHA).batches[0]?.members[0]).toEqual({ id: ALPHA, type: 'Explore', ended: false, woken: true })
+})
+
+test('a report from a woken member that arrives after its wake is held and does not end it, and its finished notification then releases the batch', () => {
+  let state = afterDelivery(launched(), notice(ALPHA, 'completed'), true, 0).state
+  state = afterWake(state, ALPHA)
+  state = afterDelivery(state, report(BRAVO), true, 1).state
+  const late = afterDelivery(state, report(ALPHA), true, 2)
+  expect(late.act).toEqual({ kind: 'hold' })
+  expect(late.state.batches[0]?.members.map(m => m.ended)).toEqual([false, true])
+  expect(runningLines(late.state)).toEqual([incompleteLine(['Explore aaaaaaaa'])])
+  expect(afterDelivery(late.state, finished(ALPHA), true, 3).act).toEqual({ kind: 'release', line: completeLine(2) })
+})
+
+test('a report from a woken member of a batch its deadline claimed passes and does not end it, and its finished notification ends it', () => {
+  let state = afterDelivery(launched(), report(BRAVO), true, 0).state
+  state = afterDeadline(state, BATCH_LIMIT_MS).state
+  state = afterWake(state, ALPHA)
+  const late = afterDelivery(state, report(ALPHA), true, 1)
+  expect(late.act).toEqual({ kind: 'pass' })
+  expect(late.state.batches[0]?.members.map(m => m.ended)).toEqual([false, true])
+  const last = afterDelivery(late.state, finished(ALPHA), true, 2)
+  expect(last.act).toEqual({ kind: 'release', line: completeLine(2) })
+})
+
+test('a notification that a woken member finished, failed or was killed ends it, in an open batch and in one its deadline claimed', () => {
+  const open = afterWake(afterDelivery(launched(), notice(ALPHA, 'completed'), true, 0).state, ALPHA)
+  const fired = afterDeadline(open, BATCH_LIMIT_MS).state
+  for (const d of [finished(ALPHA), notice(ALPHA, 'failed'), notice(ALPHA, 'killed')]) {
+    expect(afterDelivery(open, d, true, 1).state.batches[0]?.members.map(m => m.ended)).toEqual([true, false])
+    const out = afterDelivery(fired, d, true, BATCH_LIMIT_MS + 1)
+    expect(out.act).toEqual({ kind: 'end' })
+    expect(out.state.batches[0]?.members.map(m => m.ended)).toEqual([true, false])
+  }
+})
+
+test('a report from a member never woken still ends it while another member of its batch is woken, in an open batch and in one its deadline claimed', () => {
+  const open = afterWake(afterDelivery(launched(), notice(ALPHA, 'completed'), true, 0).state, ALPHA)
+  const held = afterDelivery(open, report(BRAVO), true, 1)
+  expect(held.act).toEqual({ kind: 'hold' })
+  expect(held.state.batches[0]?.members.map(m => m.ended)).toEqual([false, true])
+  const fired = afterDeadline(open, BATCH_LIMIT_MS).state
+  const ended = afterDelivery(fired, report(BRAVO), true, BATCH_LIMIT_MS + 1)
+  expect(ended.act).toEqual({ kind: 'end' })
+  expect(ended.state.batches[0]?.members.map(m => m.ended)).toEqual([false, true])
+})
+
+test('a stored woken mark reads back when it is true, and any other value reads as the empty state', () => {
+  const state = afterWake(afterDelivery(launched(), report(ALPHA), true, 0).state, ALPHA)
+  expect(batchStateIn(state, SESSION)).toEqual(state)
+  const withWoken = (woken: unknown) => ({ ...state, batches: state.batches.map((b, i) => (i === 0 ? { ...b, members: b.members.map(m => ({ ...m, woken })) } : b)) })
+  for (const bad of [false, 1, 'yes', null]) {
+    expect(batchStateIn(withWoken(bad), SESSION)).toEqual(emptyBatchState(SESSION))
+  }
 })
 
 // The times at which the deadline claims a batch whose line is refused every

@@ -41,17 +41,19 @@ export type Delivery = { id: string; isReport: boolean; status: string | null; f
 // it as held, or pass it on with the completion line added.
 export type DeliveryAct = { kind: 'pass' } | { kind: 'end' } | { kind: 'hold' } | { kind: 'release'; line: string }
 
-// The state stays at version 1 although a batch may now carry `retryMs`.
-// The previous build reads a batch with that field as it reads any other,
-// and this build reads a batch without it as one whose wait starts at one
-// minute. A new version would make the old and the new build read each
-// other's state as empty across a hot reload, so a batch whose reports were
-// answered "Noted." would never get its line.
+// The state stays at version 1 although it may now carry three optional
+// fields: `retryMs` on a batch, `woken` on a member and `releasing` on the
+// state (see types/index.d.ts). The previous build reads a value with any of
+// them as it reads any other, and this build reads a value without them as
+// it did before each was added. A new version would make the old and the new
+// build read each other's state as empty across a hot reload, so a batch
+// whose reports were answered "Noted." would never get its line.
 export const emptyBatchState = (sessionId: string): BatchState => ({ version: 1, sessionId, batches: [], marker: 0 })
 
 const isMember = (raw: unknown): raw is BatchMember => {
   const m = raw as BatchMember | null
-  return typeof m === 'object' && m !== null && typeof m.id === 'string' && typeof m.type === 'string' && typeof m.ended === 'boolean'
+  return typeof m === 'object' && m !== null && typeof m.id === 'string' && typeof m.type === 'string' && typeof m.ended === 'boolean' &&
+    (m.woken === undefined || m.woken === true)
 }
 
 const isTime = (raw: unknown): raw is number | null => raw === null || (typeof raw === 'number' && Number.isFinite(raw))
@@ -147,8 +149,9 @@ export function isEngineWake(prompt: string): boolean {
 }
 
 // Keeps an agent that the engine woke as a member of a batch that is not
-// released, fired or not, and counts it as running again, because the
-// report it sent before it parked ended it. Its later report and
+// released, fired or not, and counts it as running again, because the report
+// it sent before it parked ended it. It also marks the member as woken, so
+// that a report no longer ends it (see endsMember). Its later report and
 // notifications are then held, or end the batch, as any member's are. In a
 // released batch, which is only remembered, the agent is forgotten as
 // afterResume forgets it, so that its final report reaches the model, and a
@@ -156,7 +159,7 @@ export function isEngineWake(prompt: string): boolean {
 // the woken agent is still running.
 export function afterWake(state: BatchState, id: string): BatchState {
   const batches = state.batches.map(b => (b.releasedAt === null
-    ? { ...b, members: b.members.map(m => (m.id === id ? { ...m, ended: false } : m)) }
+    ? { ...b, members: b.members.map(m => (m.id === id ? { ...m, ended: false, woken: true as const } : m)) }
     : { ...b, members: b.members.filter(m => m.id !== id) }))
   return { ...state, batches: batches.filter(b => b.members.length > 0) }
 }
@@ -199,18 +202,27 @@ const pruned = (state: BatchState, now: number): BatchState => ({
 // delivery, so that the members left still release it.
 const countsAsBatch = (b: Batch) => b.members.length >= 2 || b.deadline !== null || b.releasedAt !== null
 
-// Whether a delivery ends its member: a report, a notification that the agent
-// failed or was killed, or one whose summary says the agent finished. The
-// engine accepts one report from each agent, so an agent that reported before
-// it parked often ends its woken run with no second report, and the finished
-// notification is its only sign of ending. Every other completed
-// notification, such as the one sent when an agent parks to wait on its own
-// background work, ends nothing.
+// Whether a delivery ends a member that was never woken: a report, a
+// notification that the agent failed or was killed, or one whose summary says
+// the agent finished. The engine accepts one report from each agent, so an
+// agent that reported before it parked often ends its woken run with no second
+// report, and the finished notification is its only sign of ending. Every
+// other completed notification, such as the one sent when an agent parks to
+// wait on its own background work, ends nothing.
 const ends = (d: Delivery) => d.isReport || d.status === 'failed' || d.status === 'killed' || d.finished
+
+// Whether a delivery ends the member `m` it comes from: as ends says, except
+// that a report does not end a member the engine has woken. The engine can
+// deliver the report an agent sent before it parked after the engine woke
+// it, and that report would end a member that is still running, so a woken
+// member ends only at a notification that says it finished, failed or was
+// killed.
+const endsMember = (m: BatchMember, d: Delivery) => ends(d) && !(m.woken === true && d.isReport)
 
 // What a delivery does to the batches. A delivery from an agent in no batch of
 // two or more passes. A report, a notification that its agent failed or was
-// killed, or one whose summary says the agent finished, ends its member; the
+// killed, or one whose summary says the agent finished, ends its member,
+// except a report from a member the engine has woken (see endsMember); the
 // one that ends the last member releases the batch. Every other delivery from
 // a member of an open or remembered batch is held: it starts the batch's
 // deadline if none is set, and raises the marker when it arrives while the
@@ -242,7 +254,8 @@ export function afterDelivery(state: BatchState, d: Delivery, isIdle: boolean, n
     act: { kind: 'hold' },
   })
   if (batch.releasedAt !== null) return held(batch)
-  const members = batch.members.map(m => (m.id === d.id && ends(d) ? { ...m, ended: true } : m))
+  const endsIt = batch.members.some(m => m.id === d.id && endsMember(m, d))
+  const members = batch.members.map(m => (m.id === d.id && endsIt ? { ...m, ended: true } : m))
   if (members.every(m => m.ended)) {
     const released = { ...batch, members, heldReports: 0, deadline: null, releasedAt: now }
     return {
@@ -251,7 +264,7 @@ export function afterDelivery(state: BatchState, d: Delivery, isIdle: boolean, n
     }
   }
   if (batch.fired === true) {
-    if (!ends(d)) return { state: kept, act: { kind: 'pass' } }
+    if (!endsIt) return { state: kept, act: { kind: 'pass' } }
     return { state: { ...kept, batches: kept.batches.map(b => (b === batch ? { ...batch, members } : b)) }, act: { kind: 'end' } }
   }
   // A report into a running turn is read by that turn's model, so only one
