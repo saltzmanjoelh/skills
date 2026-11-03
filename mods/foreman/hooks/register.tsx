@@ -8,6 +8,7 @@ import { becameParentAnswer, COMMAND, commandOf, PASSED_ON, PASTED_LINE, pastedC
 import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, failureLine, linkedFamily, listSessions, NUDGE_TEXT, openSession, readHeader, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
 import { acceptedLog, beginFailedNotice, heldLine, heldLog, heldNotice, heldSentence, isHeldRefusal, isPersonPrompt, keyOfTitle } from './held'
 import { ignoredLine, readIssueLink } from './links'
+import { afterConsumed, emptyMarkers, FIRST_MARKER_LOG, MARKERS_KEPT_MS, MARKERS_PREFIX, markersIn, markersKey, markersNewest, type MarkersRecord } from './markers'
 import { checkedLine, isAppParts, isStatusChanged, keptLine, keptNames, NOTED, NOTED_REPLY, notesIn } from './notes'
 import { bandTree, PANE, paneTree, shownReport, type Elements, type View } from './pane'
 import type { ForemanCheck, ForemanEffect, ForemanParent, ForemanTickets } from '../types'
@@ -98,6 +99,18 @@ let workingFolder: string | null = null
 // parent found it, or null when the project names none or names one that
 // cannot be used.
 let issueAddress: string | null = null
+// The count of builder's status messages that the session.receive hook
+// consumed since the hooks loaded (see hooks/markers.ts), null until a session
+// start begins it. It is a module variable rather than a $.state atom, so
+// counting never reaches the ledger, the reads or the status folder.
+// `markerLogged` says whether this load already wrote the log line for its
+// first message, so a change of the session id within one load never logs a
+// second first line.
+let markers: MarkersRecord | null = null
+let markerLogged = false
+// The store writes of the count under way, so the copies and the prune go
+// in order.
+let markerWrites: Promise<void> = Promise.resolve()
 
 // The status folder: under CLAUDE_CONFIG_DIR when it is set, else under the
 // home folder's `.claude`.
@@ -708,7 +721,8 @@ async function ownSpend($: $) {
 // because the band never shows them and is drawn every second and again
 // after each change to builder's usage value, which reading that value while
 // drawing subscribes the drawing to. They are also worked out only in a
-// parent, because only the parent's pane shows them.
+// parent, because only the parent's pane shows them. The count of status
+// messages is given only in a parent too, and reads no state.
 async function view($: $, withSpending: boolean): Promise<View> {
   const settings = parentIn(await read($, parent))
   const due = await read($, nextReadAt)
@@ -727,6 +741,7 @@ async function view($: $, withSpending: boolean): Promise<View> {
     subsSpent: isSpendingShown ? spentSum(ledger) : null,
     ownSpent: isSpendingShown ? await ownSpend($) : null,
     report: settings.isOn ? shownReport(await read($, report), now) : null,
+    markers: settings.isOn ? markers : null,
   }
 }
 
@@ -1167,12 +1182,15 @@ async function applyCommand($: $, command: Exclude<Command, { kind: 'refused' }>
   return becameParentAnswer(null, await becomeParent($))
 }
 
-// Turns the role on, reads the Issue link fact when the session was not
-// already the parent, reads the status folder, hands the checks to the read
-// loop and opens the pane. It answers what openPane answers.
+// Turns the role on, starts a copy of the count of status messages to the
+// store without waiting for it, as the session start does, reads the Issue
+// link fact when the session was not already the parent, reads the
+// status folder, hands the checks to the read loop and opens the pane. It
+// answers what openPane answers.
 async function becomeParent($: $): Promise<string | null> {
   const wasOn = await isOn($)
   await writeParent($, p => ({ ...p, isOn: true }))
+  void copyMarkers($).catch(() => undefined)
   if (!wasOn) await readLinkFact($, workingFolder)
   // Arming makes the first read of the status folder, so it has to come
   // before the pane opens. Opened first, the pane would draw from no read at
@@ -1197,6 +1215,91 @@ async function openPane($: $): Promise<string | null> {
   }
   await toastAndLog($, line)
   return line
+}
+
+// Begins this load's count of status messages at zero, stamped with the time
+// the hooks loaded and the session's id.
+async function startMarkers($: $, sessionId: string) {
+  markers = emptyMarkers(sessionId, await $.clock.now())
+  markerLogged = false
+  $.ui.invalidate('ui.render')
+}
+
+// Counts one status message that the session.receive hook consumed. The
+// count and the choice of the first log line are made in one synchronous
+// step, so two messages at once count twice and log once. A record of
+// another session id is replaced by a fresh one, stamped now. Then the pane
+// is drawn again, the first message of the load adds its line to the log,
+// and the count is copied to the store, each in its own try, so none of them
+// stops the others. The hook has already decided to consume the message, so
+// nothing here can change that.
+async function noteConsumed($: $) {
+  const at = await $.clock.now()
+  const id = await $.session.id()
+  const held = markers !== null && markers.sessionId === id ? markers : emptyMarkers(id, at)
+  markers = afterConsumed(held, at)
+  const isFirst = !markerLogged
+  markerLogged = true
+  try {
+    $.ui.invalidate('ui.render')
+  } catch {
+    // The next draw shows the count.
+  }
+  if (isFirst) {
+    try {
+      await addLog($, FIRST_MARKER_LOG)
+    } catch {
+      // The count in the pane and in the store still says it.
+    }
+  }
+  await copyMarkers($)
+}
+
+// Writes the count to the store under the session id the record carries,
+// after any write already under way, so the last write to land carries the
+// newest count. Each write reads the newest record when its turn comes. A
+// record the same as the stored copy is not written again, and neither is one
+// whose stored copy a later load of the hooks wrote, which owns the key now.
+// The skip compares with the stored copy rather than with what this load
+// last wrote, because the hooks from before a hot reload can finish a write
+// they had under way after this load's write and leave their older copy in
+// the store; the next copy this load makes then writes its own again. A
+// write that fails rejects, every caller ignores it, and the next change
+// writes the copy again.
+async function copyMarkers($: $) {
+  const next = markerWrites.then(async () => {
+    const record = markers
+    if (record === null) return
+    const key = markersKey(record.sessionId)
+    const stored = markersIn(await $.store.get(key), record.sessionId)
+    // A newer load of the hooks owns the key.
+    if (stored !== null && stored.since > record.since) return
+    // The stored copy is already this record. The texts compare equal only
+    // because markersIn builds its fields in the order emptyMarkers and afterConsumed write
+    // them; were the orders to drift, each copy would be written again.
+    if (stored !== null && JSON.stringify(stored) === JSON.stringify(record)) return
+    await $.store.set(key, record)
+  })
+  markerWrites = next.catch(() => undefined)
+  await next
+}
+
+// Deletes every stored count whose newest time is more than two weeks old,
+// whichever session wrote it, and at once one that reads as damaged or as
+// another session's, as builder prunes its copies of what a session spent.
+// It runs in the chain of the count's writes, so it never deletes a copy
+// that this load wrote while the prune ran.
+async function pruneMarkers($: $) {
+  const next = markerWrites.then(async () => {
+    const now = await $.clock.now()
+    for (const key of await $.store.keys()) {
+      if (!key.startsWith(MARKERS_PREFIX)) continue
+      const record = markersIn(await $.store.get(key), key.slice(MARKERS_PREFIX.length))
+      if (record === null || now - markersNewest(record) > MARKERS_KEPT_MS) await $.store.delete(key)
+    }
+  })
+  markerWrites = next.catch(() => undefined)
+  await next
 }
 
 // What the start_session hook answers when it failed, as fallbackOf decides.
@@ -1227,6 +1330,11 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     workingFolder = e.cwd
     const id = await $.session.id()
+    // The count of status messages starts again at zero on every load. The
+    // stored copies too old to keep are deleted in the chain of the count's
+    // writes, ahead of this load's copy, and the start waits for neither.
+    await startMarkers($, id).catch(() => undefined)
+    void pruneMarkers($).catch(() => undefined)
     const rawParent = await $.store.get(storeKey(id))
     const rawTickets = await $.store.get(ticketsKey(id))
     // The stored ledger is taken only while $.state holds none of its own,
@@ -1250,6 +1358,7 @@ export const register: Register = (on, options) => {
         await ensureArmed($)
       }
     }
+    if (await isOn($).catch(() => false)) void copyMarkers($).catch(() => undefined)
     void ensureOffRoleWork($).catch(() => undefined)
     return next(e)
   })
@@ -1312,10 +1421,13 @@ export const register: Register = (on, options) => {
   // the folder, so a message that arrives while foreman is off is taken and
   // nothing is read. The origin's plugin is only the sender's claim, so it is
   // never looked at. Every other delivery, and one met by a hook that throws,
-  // passes on as it came.
+  // passes on as it came. A consumed message is counted after the decision
+  // and the read have started, without waiting, so counting can never pass a
+  // message on to the model or hold up the read.
   on('session.receive', async ($, e, next) => {
     if (e.origin.kind !== 'peer' || !isStatusChanged(e.text)) return next(e)
     void readNow($).catch(() => undefined)
+    void noteConsumed($).catch(() => undefined)
     return { consumed: 'a builder status file changed, so foreman reads its folder' }
   }).catch(($, e, next) => next(e))
   // Whether a turn of the session's own loop runs decides how a wake goes in,

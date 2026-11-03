@@ -19,6 +19,7 @@ import { changePrompt, ciEventContext, GITHUB_NAMES_LINE, resumePrompt, stateLin
 import { changedKinds, commitRecordsOf, decidedItems, factIn, INSTRUCTION_PATHSPECS, instructionFileIsLink, isFullSha, isUpForCheck, LATER_CONTEXT_LINES, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pluginRootsOf, reviewedHeadOf, secretIn, specDirOf, trendOf, trendStopLine, underRoot, verdictHeadOf, verdictsLine, type CommitRecord, type EarlierRound, type FileKind, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isMerge, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
 import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isForemanNudge, newMemo, parentIn, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, STATUS_CHANGED_TEXT, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
+import { afterSend, emptySends, sendOutcomeOf, sendsIn, sendsKey, sendsNewest, SENDS_KEPT_MS, SENDS_PREFIX, type SendOutcome, type SendSettled, type SendsRecord } from './sends'
 import { baseFactsOf, chooseStep, labelActionOf, labelFor, labelRecordIn, labelsToRemoveAfterEdit, needsListing, SHORT_HASH, stepFor, UNPUSHED_KEPT, UNREAD_FACTS } from './step'
 import { timeOfDay } from './text'
 import { afterCost, afterStep, emptyUsage, usageIn } from './usage'
@@ -1686,6 +1687,19 @@ async function startUsage($: $) {
   }
   // Handed over straight after the read, as recordCost needs.
   await recordCost($, cost)
+}
+
+// The record of the sends to the parent as the pane draws it, or null when
+// there is none or it belongs to a conversation that a /clear or a resume
+// ended.
+async function currentSends($: $): Promise<SendsRecord | null> {
+  const record = sends
+  if (record === null) return null
+  try {
+    return record.sessionId === (await $.session.id()) ? record : null
+  } catch {
+    return null
+  }
 }
 
 // This session's ledger as the pane draws it, or null when there is none, the
@@ -3673,11 +3687,12 @@ async function agentType($: $, id: string): Promise<string | undefined> {
 
 // What the band and the panes draw from. A value an older build stored in
 // another shape is read as its default: no progress, not started, folded.
-// The spending and the count of held reports are read only when `isPane` is
-// set, which only the pane sets, because the band never shows them, and
-// reading them while drawing would subscribe the band to values that change
-// after every counted model step and every batch delivery. Without the flag
-// the usage is null and the count is zero.
+// The spending, the count of held reports and the record of the sends to the
+// parent are read only when `isPane` is set, which only the pane sets,
+// because the band never shows them, and reading the first two while drawing
+// would subscribe the band to values that change after every counted model
+// step and every batch delivery. Without the flag the usage and the record
+// are null and the count is zero.
 async function view($: $, isPane: boolean): Promise<View> {
   const s = await read($, pr)
   const shown = isDrawable(s) ? s : null
@@ -3707,6 +3722,7 @@ async function view($: $, isPane: boolean): Promise<View> {
     compactions: await storedCompactions($),
     usage: isPane ? await storedUsage($) : null,
     heldReports: isPane ? heldReports(await storedBatches($)) : 0,
+    sends: isPane ? await currentSends($) : null,
   }
 }
 
@@ -3896,6 +3912,15 @@ let lastWrittenText: string | null = null
 // than to the one the running send was for.
 let parentSendInFlight = false
 let parentSendOwedTo: string | null = null
+// The sends to the parent since the hooks loaded (see hooks/sends.ts), or
+// null in a session without a parent and before its memo is taken up. It is
+// a module variable rather than a value in $.state, so that a count never
+// reaches the state.set hook, the status file or the memo, and so can never
+// cause a status write or another send. The session's start sets it to null,
+// so the count starts at zero on every load of the hooks.
+let sends: SendsRecord | null = null
+// The chain the record's store writes go through, one after another.
+let sendsWrites: Promise<void> = Promise.resolve()
 // The minute's tick, and whether the session has ended, after which nothing
 // more is written.
 let statusTick: { cancel: () => void } | undefined
@@ -4018,17 +4043,32 @@ async function writeStatus($: $, gen: number): Promise<void> {
 // refused, is not delivered, throws or runs past PARENT_SEND_TIMEOUT_MS is
 // dropped with no retry, because the file and foreman's timer cover the gap,
 // and nothing here can stop a hook.
+// How each send ended is counted (see noteSend) once it settles and before
+// any owed send is fired, for the record of the conversation the send began
+// in, at the time it began.
 function tellParent($: $, parent: string) {
   if (parentSendInFlight) {
     parentSendOwedTo = parent
     return
   }
   parentSendInFlight = true
+  const countedFor = sends?.sessionId ?? null
+  // The time is read beside the send rather than before it, so that counting
+  // never holds the send up.
+  const began = Promise.resolve().then(() => $.clock.now()).catch(() => null)
   void (async () => {
     try {
-      await withinTimeout($, $.session.send({ to: { sessionId: parent }, text: STATUS_CHANGED_TEXT }), PARENT_SEND_TIMEOUT_MS)
+      let settled: SendSettled
+      try {
+        settled = { kind: 'answered', answer: await withinTimeout($, $.session.send({ to: { sessionId: parent }, text: STATUS_CHANGED_TEXT }), PARENT_SEND_TIMEOUT_MS) }
+      } catch (error) {
+        settled = error instanceof TimedOut ? { kind: 'timed-out' } : { kind: 'threw', error }
+      }
+      noteSend($, countedFor, await began, sendOutcomeOf(settled, PARENT_SEND_TIMEOUT_MS))
     } catch {
-      // Dropped, as said above.
+      // The send's own errors are settled above, so only an error in
+      // counting lands here, and it is dropped so that the owed send below
+      // still fires.
     } finally {
       parentSendInFlight = false
       const owedTo = parentSendOwedTo
@@ -4036,6 +4076,85 @@ function tellParent($: $, parent: string) {
       if (owedTo !== null) tellParent($, owedTo)
     }
   })()
+}
+
+// Counts how one send to the parent ended, in the record it began under. A
+// send that began before a /clear or a resume ends with `countedFor` naming
+// the earlier conversation, so it is dropped rather than counted for the new
+// one. A send whose start time could not be read is counted at the load
+// time. Then the pane is drawn again and the record copied. Nothing here can
+// throw into the send, and the copy is not waited for.
+function noteSend($: $, countedFor: string | null, at: number | null, outcome: SendOutcome) {
+  if (sends === null || countedFor === null || sends.sessionId !== countedFor) return
+  sends = afterSend(sends, outcome, at ?? sends.since)
+  try {
+    $.ui.invalidate('ui.render')
+  } catch {
+    // The next redraw shows it.
+  }
+  void copySends($).catch(() => undefined)
+}
+
+// Starts the record of the sends for a memo whose session has a parent,
+// unless the record already belongs to that session, as it does when the
+// same load takes the memo up again. It counts nothing yet, carries this
+// copy's load stamp as its load time, and is copied to the store at once, so
+// the store shows the load before the first send ends.
+function startSends($: $, memo: StatusMemo) {
+  if (memo.parentSessionId === undefined || sends?.sessionId === memo.sessionId) return
+  sends = emptySends({ sessionId: memo.sessionId, parentSessionId: memo.parentSessionId, since: loadStamp })
+  try {
+    $.ui.invalidate('ui.render')
+  } catch {
+    // The next redraw shows it.
+  }
+  void copySends($).catch(() => undefined)
+}
+
+// Writes the newest record to the store under its own session id. The writes
+// go one after another, as the spending ledger's do (see persistUsage), and
+// each takes the newest record when its turn comes. A stored copy with a
+// later load time belongs to a newer load of the hooks, so it is left as it
+// is. A record equal to the stored copy is not written again. The skip
+// compares with the stored copy rather than with what this load last wrote,
+// because the hooks from before a hot reload can finish a send they had under
+// way after this load's write and leave their older copy in the store; the
+// next copy this load makes then writes its own again. A refused write is
+// ignored: the next send writes the record again.
+async function copySends($: $) {
+  const next = sendsWrites.then(async () => {
+    const record = sends
+    if (record === null) return
+    const key = sendsKey(record.sessionId)
+    const stored = sendsIn(await $.store.get(key), record.sessionId)
+    // A newer load of the hooks owns the key.
+    if (stored !== null && stored.since > record.since) return
+    // The stored copy is already this record. The texts compare equal only
+    // because sendsIn builds its fields in the order emptySends and afterSend write
+    // them; were the orders to drift, each copy would be written again.
+    if (stored !== null && JSON.stringify(stored) === JSON.stringify(record)) return
+    await $.store.set(key, record)
+  })
+  sendsWrites = next.catch(() => undefined)
+  await next
+}
+
+// Drops every stored record of the sends whose newest time is more than two
+// weeks old, whichever session wrote it, and at once one that reads as
+// damaged or as another session's, as pruneUsage does for the spending. It
+// runs in the chain of the record's writes, so it never deletes a copy that
+// this load wrote while the prune ran.
+async function pruneSends($: $) {
+  const next = sendsWrites.then(async () => {
+    const now = await $.clock.now()
+    for (const key of await $.store.keys()) {
+      if (!key.startsWith(SENDS_PREFIX)) continue
+      const record = sendsIn(await $.store.get(key), key.slice(SENDS_PREFIX.length))
+      if (record === null || now - sendsNewest(record) > SENDS_KEPT_MS) await $.store.delete(key)
+    }
+  })
+  sendsWrites = next.catch(() => undefined)
+  await next
 }
 
 // Writes the file, keeping the write among the unsettled ones until it
@@ -4050,10 +4169,14 @@ function trackedWrite($: $, path: string, text: string): Promise<void> {
   return write
 }
 
-// Settles as `work` does, or rejects once `ms` have passed.
+// The error withinTimeout rejects with, so that a caller can tell a timeout
+// apart from an error of the work itself.
+class TimedOut extends Error {}
+
+// Settles as `work` does, or rejects with TimedOut once `ms` have passed.
 function withinTimeout<T>($: $, work: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
-    const timer = $.clock.after(ms, () => reject(new Error('timed out')))
+    const timer = $.clock.after(ms, () => reject(new TimedOut('timed out')))
     work.then(
       value => {
         timer.cancel()
@@ -4120,11 +4243,13 @@ function armStatusTick($: $) {
 
 // Takes the answer a memo of this session already holds: the ticket, or that
 // there is none. A ticket with no path to write to counts as none, since
-// nothing can be written. A memo with a ticket starts the tick and a write.
+// nothing can be written. A memo with a ticket starts the record of the sends
+// when it names a parent, then the tick and a write.
 function adoptMemo($: $, memo: StatusMemo) {
   ticketKnown = memo.ticket === null || memo.path === null ? 'none' : 'some'
   ticketFor = memo.sessionId
   if (ticketKnown === 'some') {
+    startSends($, memo)
     armStatusTick($)
     statusChanged($, true)
   }
@@ -4276,6 +4401,7 @@ async function reopenForNextConversation($: $) {
   ticketFor = undefined
   lastWrittenText = null
   parentSendOwedTo = null
+  sends = null
   statusDirty = false
   statusForced = false
   // Writing opens again even when the reset fails. That is safe, because a
@@ -4309,6 +4435,10 @@ export const register: Register = on => {
   })
 
   on('session.start', async ($, e, next) => {
+    // The record of the sends to the parent starts again on every load, before
+    // anything else, and taking the memo up below starts it afresh when the
+    // session has a parent.
+    sends = null
     // The commit this load of the hooks reads its files at, recorded first,
     // and not awaited, so the session's start never waits on git.
     void loadHooks($).catch(() => undefined)
@@ -4481,6 +4611,7 @@ export const register: Register = on => {
     void pruneOwed($).catch(() => undefined)
     void pruneStateLabels($).catch(() => undefined)
     void startUsage($).catch(() => undefined)
+    void pruneSends($).catch(() => undefined)
     // Watching starts only when asked (the watch tool or /builder watch), so a
     // session that has not named a pull request is never handed one.
     void ensureArmed($)

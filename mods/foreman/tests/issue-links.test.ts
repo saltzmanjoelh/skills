@@ -58,7 +58,8 @@ async function expectLinkedRow(ui: Awaited<ReturnType<typeof mountBoth>>, file: 
 // says. The band is the same on both surfaces. The lines that say what each
 // sub session, the sub sessions together and this session spent came later,
 // with the counting of what sessions spend, and were added here then. The
-// head became a button that opens foreman's pane later still.
+// head became a button that opens foreman's pane later still, and the line
+// that counts builder's status messages came after that.
 const BAND_BEFORE = {
   type: 'Box', props: { key: 'foreman-band', flexDirection: 'row' },
   children: [
@@ -89,6 +90,7 @@ const PANE_BEFORE = {
       { type: 'Text', children: [' '] },
       { type: 'Text', children: ['Sub sessions spent: unknown'] },
       { type: 'Text', children: ['This session spent: unknown'] },
+      { type: 'Text', children: ['Status messages consumed since 12:00:00 UTC: none yet'] },
       { type: 'Text', children: [' '] },
       { type: 'Text', props: { bold: true }, children: ['Log'] },
       { type: 'Text', props: { dimColor: true }, children: ['Nothing yet.'] },
@@ -112,6 +114,7 @@ const PANE_BEFORE = {
       { type: 'Text', children: [' '] },
       { type: 'Text', children: ['Sub sessions spent: unknown'] },
       { type: 'Text', children: ['This session spent: unknown'] },
+      { type: 'Text', children: ['Status messages consumed since 12:00:00 UTC: none yet'] },
       { type: 'Text', children: [' '] },
       { type: 'Text', props: { bold: true, weight: 'semibold' }, children: ['Log'] },
       { type: 'Text', props: { dimColor: true }, children: ['Nothing yet.'] },

@@ -959,14 +959,16 @@ test('an agent the engine does not list keeps its tools', async ($, on) => {
 // `hold.until`, when set, keeps a read of a key starting with `hold.prefix`
 // waiting until it resolves: the first such read after `hold.skip` others.
 // `hold.refused`, when set, refuses every read of a key with that prefix.
-// `hold.full` refuses every write, `hold.deletesRefused` every delete and
+// `hold.full` refuses every write, `hold.setsRefused`, when set, every write
+// of a key with that prefix, `hold.deletesRefused` every delete and
 // `hold.keysRefused` every listing of the keys. `hold.listings` counts the
-// listings of the keys, refused ones included.
+// listings of the keys, refused ones included, and `hold.sets` lists the key
+// of every write, refused ones included, in the order the writes began.
 function memoryStore(on: On, entries: [string, unknown][] = []) {
   const stored = new Map<string, unknown>(entries)
   const hold = {
     prefix: '', skip: 0, until: null as Promise<void> | null, refused: null as string | null, full: false,
-    deletesRefused: false, keysRefused: false, listings: 0,
+    setsRefused: null as string | null, deletesRefused: false, keysRefused: false, listings: 0, sets: [] as string[],
   }
   on('store.keys', () => {
     hold.listings += 1
@@ -985,8 +987,10 @@ function memoryStore(on: On, entries: [string, unknown][] = []) {
     return { value: stored.get(e.key) }
   })
   on('store.set', ($, e) => {
+    hold.sets.push(e.key)
     // A full store refuses every write, as the engine does past 4 MiB.
     if (hold.full) return { deny: 'the store is full' }
+    if (hold.setsRefused !== null && e.key.startsWith(hold.setsRefused)) return { deny: 'the store could not write the key' }
     stored.set(e.key, e.value)
     return { value: undefined }
   })
@@ -11230,10 +11234,11 @@ const S0 = Date.parse('2026-10-12T00:00:00Z')
 // events the tests raise, and the transcript, which is `messages` or refused.
 // `ids.hold`, when set, keeps the next read of the session's id waiting until
 // it resolves. `env` is the environment the mod reads. `transcriptReads`
-// counts the reads of the transcript.
-function foremanSession(on: On, over: { env?: Record<string, string>; messages?: object[] | 'refused' } = {}) {
+// counts the reads of the transcript. `stored` is the store, in memory,
+// holding `over.stored` at the start.
+function foremanSession(on: On, over: { env?: Record<string, string>; messages?: object[] | 'refused'; stored?: [string, unknown][] } = {}) {
   const clock = mock.clock(on, { now: S0 })
-  mock.store(on)
+  const stored = memoryStore(on, over.stored)
   mock.env(on, over.env ?? { HOME: '/home/me', CLAUDE_CODE_HOST_SESSION_ID: 'desk-1' })
   const ids = { current: 'session-1', hold: null as Promise<void> | null }
   engine(on, undefined, async () => {
@@ -11262,7 +11267,7 @@ function foremanSession(on: On, over: { env?: Record<string, string>; messages?:
   }
   const writesOf = (path = BUILD) => files.writes.log.filter(written => written === path).length
   const transcriptReads = () => transcript.reads
-  return { clock, ids, world, files, statusAt, writesOf, transcriptReads }
+  return { clock, ids, world, files, statusAt, writesOf, transcriptReads, stored }
 }
 
 // Starts the session and submits its first prompt, typed by the person.
@@ -12044,8 +12049,12 @@ test('a write that never settles is given up on after its timeout, and the next 
 const PARENTED = `${TICKETED}foreman-parent: parent-1\n`
 
 // What a send to the parent answers: delivered, not delivered, refused as a
-// permission check refuses it, a throw, or no answer ever.
-type SendAnswer = 'delivered' | 'undelivered' | 'refused' | 'throws' | 'hangs'
+// permission check refuses it, not delivered for a reason that holds markup,
+// an escape sequence and several lines, a throw, or no answer ever.
+type SendAnswer = 'delivered' | 'undelivered' | 'refused' | 'garbled' | 'throws' | 'hangs'
+
+// The reason a 'garbled' send gives.
+const GARBLED_REASON = '<Text color="red">no</Text>\u001b[31m refused\r\nby a hook'
 
 // Answers the mod's sends beneath it and records each one: whom it went to,
 // its text, and how many writes of the status file had begun by then.
@@ -12064,6 +12073,7 @@ function parentSends(on: On, s: ReturnType<typeof foremanSession>) {
     if (answer === 'throws') throw new Error('the socket closed')
     if (answer === 'undelivered') return { isDelivered: false as const, reason: 'the recipient is not running' }
     if (answer === 'refused') return { isDelivered: false as const, reason: 'SendMessage needs the person\'s approval' }
+    if (answer === 'garbled') return { isDelivered: false as const, reason: GARBLED_REASON }
     return { isDelivered: true as const }
   })
   return sends
@@ -12284,6 +12294,332 @@ test('a write that gives up after 30 seconds sends nothing, and the next write t
   await s.clock.advance(MINUTE)
   expect(s.statusAt()).toMatchObject({ state: 'working', writtenAt: S0 + MINUTE })
   expect(sends.log.length).toBe(2)
+})
+
+// The count of the messages to the parent. Builder keeps it in memory for
+// its pane and copies it to the store under `sends:<session id>`, and never
+// writes it into the status file or the memo.
+
+// Mounts the builder pane and answers its line for the messages to the
+// parent, drawn again first: the text and the colour, or null when the pane
+// draws no such line.
+async function messagesLineReader($: Engine) {
+  const pane = await $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'Pane', requestId: 'builder', props: {} as never })
+  return async () => {
+    await pane.redraw()
+    const row = await pane.find({ type: 'Text', text: /^Messages to foreman: / })
+    return row === undefined ? null : { text: row.text, color: row.props.color }
+  }
+}
+
+// The copy of the count that a session with a parent stores, with nothing
+// sent yet unless the case says otherwise.
+const sendsCopy = (over: object = {}) => ({
+  version: 1, sessionId: 'session-1', parentSessionId: 'parent-1', since: S0, delivered: 0, failed: 0, last: null, ...over,
+})
+
+test('a send whose start time cannot be read is still counted, at the load time', async ($, on) => {
+  // The test kit's clock refuses once: the first read after the second send
+  // began, which is the read of that send's start time. The clock's handler
+  // is wrapped as the kit registers it, since an event takes one handler.
+  let refused = false
+  let sendsSoFar = () => 0
+  const onRefusing = ((event: string, ...rest: unknown[]) => {
+    const register = on as unknown as (...args: unknown[]) => unknown
+    if (event !== 'clock.now') return register(event, ...rest)
+    const handler = rest[rest.length - 1] as (...args: unknown[]) => unknown
+    return register(event, ...rest.slice(0, -1), (...args: unknown[]) => {
+      if (sendsSoFar() !== 2 || refused) return handler(...args)
+      refused = true
+      throw new Error('the clock could not be read')
+    })
+  }) as typeof on
+  const s = foremanSession(onRefusing)
+  const sends = parentSends(on, s)
+  sendsSoFar = () => sends.log.length
+  const line = await messagesLineReader($)
+  await firstPrompt($, s.clock, PARENTED)
+  await s.clock.advance(1_000)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+
+  expect(refused).toBe(true)
+  expect(await line()).toEqual({ text: 'Messages to foreman: 2 delivered, 0 failed, last at 00:00:00 UTC', color: undefined })
+  expect(s.stored.get('sends:session-1')).toEqual(sendsCopy({ delivered: 2, last: { at: S0, outcome: 'delivered' } }))
+})
+
+test('a prompt that takes up the memo another prompt of this load took up keeps the count of the sends made in between', async ($, on) => {
+  const late = answerWaits(on, 'state.get', 'statusMemo')
+  const s = foremanSession(on)
+  const sends = parentSends(on, s)
+  const line = await messagesLineReader($)
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await s.clock.settle()
+
+  // The first prompt's read of the memo answers that there is none and is
+  // held, while a second prompt takes up the memo and sends to the parent.
+  late.arm()
+  const first = $.prompt.submit({ text: PARENTED, origin: { kind: 'composer' } } as never)
+  await s.clock.settle()
+  await $.prompt.submit({ text: PARENTED, origin: { kind: 'composer' } } as never)
+  await s.clock.settle()
+  expect(sends.log.length).toBe(1)
+
+  late.release()
+  await first
+  await s.clock.settle()
+  expect(sends.log.length).toBe(1)
+  expect(await line()).toEqual({ text: 'Messages to foreman: 1 delivered, 0 failed, last at 00:00:00 UTC', color: undefined })
+  expect(s.stored.get('sends:session-1')).toEqual(sendsCopy({ delivered: 1, last: { at: S0, outcome: 'delivered' } }))
+})
+
+test('a delivered, a refused, an undelivered, a throwing and a timed-out send each change the right count, newest time and reason, in the pane and in the copy', async ($, on) => {
+  const s = foremanSession(on)
+  const sends = parentSends(on, s)
+  const line = await messagesLineReader($)
+  sends.answers = ['delivered', 'refused', 'undelivered', 'throws', 'hangs']
+  await firstPrompt($, s.clock, PARENTED)
+  expect(await line()).toEqual({ text: 'Messages to foreman: 1 delivered, 0 failed, last at 00:00:00 UTC', color: undefined })
+  expect(s.stored.get('sends:session-1')).toEqual(sendsCopy({ delivered: 1, last: { at: S0, outcome: 'delivered' } }))
+
+  await s.clock.advance(1_000)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  const refused = 'SendMessage needs the person\'s approval'
+  expect(await line()).toEqual({ text: `Messages to foreman: 1 delivered, 1 failed, last at 00:00:01 UTC, which failed: ${refused}`, color: 'yellow' })
+  expect(s.stored.get('sends:session-1')).toEqual(sendsCopy({ delivered: 1, failed: 1, last: { at: S0 + 1_000, outcome: 'failed', reason: refused } }))
+
+  await s.clock.advance(1_000)
+  await turnEnds($, 't1')
+  await s.clock.settle()
+  expect(await line()).toEqual({ text: 'Messages to foreman: 1 delivered, 2 failed, last at 00:00:02 UTC, which failed: the recipient is not running', color: 'yellow' })
+  expect(s.stored.get('sends:session-1')).toEqual(sendsCopy({ delivered: 1, failed: 2, last: { at: S0 + 2_000, outcome: 'failed', reason: 'the recipient is not running' } }))
+
+  // A hook that throws reaches the mod as the error the test kit's engine
+  // throws in its place, which names the event, and its message is the reason.
+  await s.clock.advance(1_000)
+  await $.turn.start({ text: 'go', turnId: 't2' } as never)
+  await s.clock.settle()
+  const thrown = (s.stored.get('sends:session-1') as { last: { reason: string } }).last.reason
+  expect(thrown).toMatch(/session\.send/)
+  expect(await line()).toEqual({ text: `Messages to foreman: 1 delivered, 3 failed, last at 00:00:03 UTC, which failed: ${thrown}`, color: 'yellow' })
+  expect(s.stored.get('sends:session-1')).toEqual(sendsCopy({ delivered: 1, failed: 3, last: { at: S0 + 3_000, outcome: 'failed', reason: thrown } }))
+
+  // The hanging send counts only once its limit has passed, at the time it began.
+  await s.clock.advance(1_000)
+  await turnEnds($, 't2')
+  await s.clock.settle()
+  expect(sends.log.length).toBe(5)
+  expect((await line())?.text).toContain('1 delivered, 3 failed')
+  await s.clock.advance(10_000)
+  const timedOut = 'no answer came within 10 seconds'
+  expect(await line()).toEqual({ text: `Messages to foreman: 1 delivered, 4 failed, last at 00:00:04 UTC, which failed: ${timedOut}`, color: 'yellow' })
+  expect(s.stored.get('sends:session-1')).toEqual(sendsCopy({ delivered: 1, failed: 4, last: { at: S0 + 4_000, outcome: 'failed', reason: timedOut } }))
+})
+
+test('the line shows nothing sent before the first send ends, turns yellow with the reason while the newest send failed, and is plain again after a delivered one', async ($, on) => {
+  const s = foremanSession(on)
+  const sends = parentSends(on, s)
+  const line = await messagesLineReader($)
+  let release = () => {}
+  sends.hold = new Promise(resolve => {
+    release = resolve
+  })
+  sends.answers = ['garbled']
+  await firstPrompt($, s.clock, PARENTED)
+  expect(sends.log.length).toBe(1)
+  expect(await line()).toEqual({ text: 'Messages to foreman: 0 delivered, 0 failed', color: undefined })
+
+  release()
+  await s.clock.settle()
+  // The reason's markup is drawn as text, and its escape sequence and line break are gone.
+  expect(await line()).toEqual({
+    text: 'Messages to foreman: 0 delivered, 1 failed, last at 00:00:00 UTC, which failed: <Text color="red">no</Text> refused by a hook',
+    color: 'yellow',
+  })
+
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  expect(await line()).toEqual({ text: 'Messages to foreman: 1 delivered, 1 failed, last at 00:00:00 UTC', color: undefined })
+})
+
+test('a burst of changed writes folded into one further send counts as one send', async ($, on) => {
+  const s = foremanSession(on)
+  const sends = parentSends(on, s)
+  const line = await messagesLineReader($)
+  let release = () => {}
+  sends.hold = new Promise(resolve => {
+    release = resolve
+  })
+  await firstPrompt($, s.clock, PARENTED)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  await turnEnds($, 't1')
+  await s.clock.settle()
+  await $.skill.prompt({ skill: 'cleanup', text: 'clean' } as never)
+  await s.clock.settle()
+  expect(s.writesOf()).toBe(4)
+
+  release()
+  await s.clock.settle()
+  expect(sends.log.length).toBe(2)
+  expect((await line())?.text).toBe('Messages to foreman: 2 delivered, 0 failed, last at 00:00:00 UTC')
+  expect(s.stored.get('sends:session-1')).toMatchObject({ delivered: 2, failed: 0 })
+})
+
+test('a session without a parent line, or without a ticket, draws no line for the messages and stores no copy', async ($, on) => {
+  const s = foremanSession(on)
+  const sends = parentSends(on, s)
+  const line = await messagesLineReader($)
+  await firstPrompt($, s.clock)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('working')
+  expect(sends.log).toEqual([])
+  expect(await line()).toBeNull()
+
+  // After a /clear, the new conversation has no ticket at all.
+  await endSession($, 'clear')
+  s.ids.current = 'session-2'
+  await $.prompt.submit({ text: 'Just a question.', origin: { kind: 'composer' } } as never)
+  await s.clock.settle()
+  expect(await line()).toBeNull()
+  expect(s.stored.hold.sets.filter(key => key.startsWith('sends:'))).toEqual([])
+})
+
+test('the copy is stored when the hooks take up a memo with a parent, before any send has ended, and after each send', async ($, on) => {
+  const s = foremanSession(on)
+  const sends = parentSends(on, s)
+  let release = () => {}
+  sends.hold = new Promise(resolve => {
+    release = resolve
+  })
+  await firstPrompt($, s.clock, PARENTED)
+  expect(s.stored.get('sends:session-1')).toEqual(sendsCopy())
+
+  release()
+  await s.clock.settle()
+  expect(s.stored.get('sends:session-1')).toEqual(sendsCopy({ delivered: 1, last: { at: S0, outcome: 'delivered' } }))
+  expect(s.stored.hold.sets.filter(key => key.startsWith('sends:'))).toEqual(['sends:session-1', 'sends:session-1'])
+})
+
+test('when the hooks load, a copy whose newest time is 15 days old and a damaged one are deleted, and a copy whose newest time is 13 days old is kept', async ($, on) => {
+  const old = { ...sendsCopy({ sessionId: 'old', since: S0 - 15 * DAY }) }
+  const recent = { ...sendsCopy({ sessionId: 'recent', since: S0 - 13 * DAY }) }
+  // Loaded long ago, but its newest send is recent, so it is kept.
+  const sentLately = { ...sendsCopy({ sessionId: 'sent-lately', since: S0 - 20 * DAY, delivered: 1, last: { at: S0 - DAY, outcome: 'delivered' } }) }
+  const s = foremanSession(on, { stored: [
+    ['sends:old', old], ['sends:recent', recent], ['sends:sent-lately', sentLately], ['sends:damaged', { version: 1, sessionId: 'damaged' }],
+    ['sends:not-its-own', { ...recent, sessionId: 'someone-else' }], ['usage:old', { sessionId: 'old' }],
+  ] })
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await s.clock.settle()
+
+  expect([...s.stored.keys()].filter(key => key.startsWith('sends:')).sort()).toEqual(['sends:recent', 'sends:sent-lately'])
+  expect(s.stored.get('sends:recent')).toEqual(recent)
+})
+
+test('the count never reaches the status file or the memo, and causes no status write and no send of its own', async ($, on) => {
+  const memos: string[] = []
+  on('state.set', ($, e, next) => {
+    if (e.plugin === 'builder' && e.key === 'statusMemo') memos.push(JSON.stringify(e.value))
+    return next(e)
+  })
+  const s = foremanSession(on)
+  const sends = parentSends(on, s)
+  sends.answers = ['delivered', 'undelivered']
+  await firstPrompt($, s.clock, PARENTED)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  await s.clock.advance(1_000)
+
+  expect(s.writesOf()).toBe(2)
+  expect(sends.log.map(send => send.writes)).toEqual([1, 2])
+  expect(Object.keys(s.statusAt() ?? {}).sort()).toEqual([
+    'cwd', 'desktopSessionId', 'issueKey', 'issueTitle', 'pr', 'reason', 'sessionId', 'stage', 'stageDone', 'state', 'stateSince', 'ticket', 'usage', 'version', 'writtenAt',
+  ])
+  expect(memos.length).toBeGreaterThan(0)
+  for (const memo of memos) expect(memo).not.toMatch(/delivered|failed|sends/)
+})
+
+test('after a hot reload the count starts again from zero, and the copy carries the new load time', async ($, on) => {
+  const s = foremanSession(on)
+  parentSends(on, s)
+  const line = await messagesLineReader($)
+  await firstPrompt($, s.clock, PARENTED)
+  expect((await line())?.text).toBe('Messages to foreman: 1 delivered, 0 failed, last at 00:00:00 UTC')
+
+  await s.clock.advance(5_000)
+  await reloads($, s.clock)
+  expect(await line()).toEqual({ text: 'Messages to foreman: 0 delivered, 0 failed', color: undefined })
+  expect(s.stored.get('sends:session-1')).toEqual(sendsCopy({ since: S0 + 5_000 }))
+
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  expect(s.stored.get('sends:session-1')).toEqual(sendsCopy({ since: S0 + 5_000, delivered: 1, last: { at: S0 + 5_000, outcome: 'delivered' } }))
+})
+
+test('a stored copy with a later load time belongs to a newer load and is never written over, while the pane still counts', async ($, on) => {
+  const newer = sendsCopy({ since: S0 + 60 * MINUTE, delivered: 7 })
+  const s = foremanSession(on, { stored: [['sends:session-1', newer]] })
+  parentSends(on, s)
+  const line = await messagesLineReader($)
+  await firstPrompt($, s.clock, PARENTED)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+
+  expect((await line())?.text).toBe('Messages to foreman: 2 delivered, 0 failed, last at 00:00:00 UTC')
+  expect(s.stored.get('sends:session-1')).toEqual(newer)
+})
+
+test('with every write of the copy refused, the sends and the status writes go on and the pane still counts', async ($, on) => {
+  const s = foremanSession(on)
+  const sends = parentSends(on, s)
+  const line = await messagesLineReader($)
+  s.stored.hold.setsRefused = 'sends:'
+  await firstPrompt($, s.clock, PARENTED)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  await turnEnds($, 't1')
+  await s.clock.settle()
+
+  expect(s.writesOf()).toBe(3)
+  expect(sends.log.map(send => send.writes)).toEqual([1, 2, 3])
+  expect((await line())?.text).toBe('Messages to foreman: 3 delivered, 0 failed, last at 00:00:00 UTC')
+  expect(s.stored.hold.sets.filter(key => key.startsWith('sends:')).length).toBeGreaterThan(0)
+  expect(s.stored.has('sends:session-1')).toBe(false)
+})
+
+test('a held send of an earlier conversation that ends after a /clear and after the new conversation took its record up is not counted for the new one', async ($, on) => {
+  const s = foremanSession(on)
+  const sends = parentSends(on, s)
+  const line = await messagesLineReader($)
+  let release = () => {}
+  sends.hold = new Promise(resolve => {
+    release = resolve
+  })
+  sends.answers = ['throws']
+  await firstPrompt($, s.clock, PARENTED)
+  expect(sends.log.length).toBe(1)
+
+  await endSession($, 'clear')
+  s.ids.current = 'session-2'
+  await $.prompt.submit({ text: 'foreman-ticket: slot-2\nforeman-parent: parent-2\n', origin: { kind: 'composer' } } as never)
+  await s.clock.settle()
+  expect(s.stored.get('sends:session-2')).toEqual(sendsCopy({ sessionId: 'session-2', parentSessionId: 'parent-2' }))
+  expect(await line()).toEqual({ text: 'Messages to foreman: 0 delivered, 0 failed', color: undefined })
+
+  // The earlier conversation's send throws once released, and the send the
+  // new conversation owed then goes to its parent and is delivered.
+  release()
+  await s.clock.settle()
+  expect(sends.log.length).toBe(2)
+  expect(sends.log[1]?.to).toEqual(expect.stringContaining('parent-2'))
+  expect(s.stored.get('sends:session-2')).toEqual(sendsCopy({
+    sessionId: 'session-2', parentSessionId: 'parent-2', delivered: 1, last: { at: S0, outcome: 'delivered' },
+  }))
+  expect(s.stored.get('sends:session-1')).toEqual(sendsCopy())
+  expect((await line())?.text).toBe('Messages to foreman: 1 delivered, 0 failed, last at 00:00:00 UTC')
 })
 
 test('after a merge, a write whose read is held across the end of a session ended by /clear never writes once the read answers', async ($, on) => {

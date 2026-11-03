@@ -7,6 +7,7 @@ import type { Elements as EngineElements } from 'claude-code'
 import type { ForemanLogLine, ForemanSpend } from '../types'
 import { BAR_SVG_HEIGHT, barSvg, fitBar, hasSvg, svgWidth, type Bar } from './art'
 import { linkOf } from './links'
+import { markersLine, type MarkersRecord } from './markers'
 import { spendOf, spendWords } from './spend'
 import { STAGES, stageLabel } from './stages'
 import {
@@ -40,6 +41,9 @@ export type View = {
   // The newest report sentence foreman showed, while it is less than
   // REPORT_SHOWN_MS old, else null. The band shows it after the chips.
   report: string | null
+  // The count of builder's status messages consumed since foreman's hooks
+  // loaded, while the session is a parent, else null.
+  markers: MarkersRecord | null
 }
 
 // How long the band shows a report sentence after foreman showed it.
@@ -284,8 +288,9 @@ export const NOT_A_PARENT = 'This session is not a parent. Run /start-foreman to
 export const NO_SUBS = 'No sub sessions are in the status folder.'
 
 // The pane: one row for each sub session, then what the sub sessions spent
-// together and what this session spent itself, then the log, newest last,
-// each line with its time.
+// together and what this session spent itself, then how many of builder's
+// status messages foreman consumed since its hooks loaded, then the log,
+// newest last, each line with its time.
 export function paneTree(ui: Elements, v: View, presses: PanePresses, columns?: number) {
   const { Box, Text } = ui
   if (!v.isOn) return <Box key="foreman-pane" flexDirection="column"><Text dimColor>{NOT_A_PARENT}</Text></Box>
@@ -295,6 +300,7 @@ export function paneTree(ui: Elements, v: View, presses: PanePresses, columns?: 
       {v.rows.flatMap(row => subTree(ui, row, v.now, v.issueLink, columns, presses))}
       <Text key="spent-subs">{`Sub sessions spent: ${spendWords(v.subsSpent)}`}</Text>
       <Text key="spent-own">{`This session spent: ${spendWords(v.ownSpent)}`}</Text>
+      {v.markers === null ? null : <Text key="markers">{markersLine(v.markers, v.now)}</Text>}
       <Text key="spent-gap"> </Text>
       <Text key="log-head" bold>Log</Text>
       {v.log.length === 0
