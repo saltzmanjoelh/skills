@@ -80,22 +80,20 @@ function limitIn(claude: string, label: string, fallback: number): number {
   return value !== null && /^\d+$/.test(value) ? Number(value) : fallback
 }
 
-// The facts a snapshot holds, or the unread ones when it holds none or says
-// the file was not read. Facts an older build stored have no `isClaudeRead`,
-// and count as read unless their merge command is unread.
+// The facts a snapshot holds, or the unread ones when it holds none or does
+// not say the file was read, as for any other damaged field.
 function factsOf(s: Snapshot): BaseFacts {
   const f = s.facts as Partial<BaseFacts> | undefined
   if (typeof f !== 'object' || f === null) return UNREAD_FACTS
   const merge = f.merge === 'default' || f.merge === 'custom' ? f.merge : 'unread'
-  const isClaudeRead = typeof f.isClaudeRead === 'boolean' ? f.isClaudeRead : merge !== 'unread'
-  if (!isClaudeRead) return UNREAD_FACTS
+  if (f.isClaudeRead !== true) return UNREAD_FACTS
   const isCount = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0
   return {
     maxPushes: isCount(f.maxPushes) ? f.maxPushes : UNREAD_FACTS.maxPushes,
     maxRounds: isCount(f.maxRounds) ? f.maxRounds : UNREAD_FACTS.maxRounds,
     checks: f.checks === 'none' ? 'none' : 'expected',
     merge,
-    isClaudeRead,
+    isClaudeRead: true,
   }
 }
 
@@ -300,6 +298,17 @@ function runsReadOf(repo: string | null, head: string): string {
   return `\`gh api --paginate "repos/${repo ?? '<repo>'}/actions/runs?head_sha=${head}" --jq '.workflow_runs[] | {id, run_attempt, status, conclusion}'\`${repo === null ? ', with <repo> as the pull request\'s repository, owner/name as GitHub gives it' : ''}`
 }
 
+// What the fetched base CLAUDE.md must still say for the merge this step
+// chose: `Checks: none` when it merges with no checks, and no merge command
+// of the project's own when it runs the default one.
+function baseChecks(step: Extract<Step, { kind: 'merge' | 'ask-merge' }>): string {
+  const changes = [
+    ...(step.kind === 'merge' && step.checks === 'none' ? [' If the fetched file no longer says `Checks: none`, do not merge: call `mcp__builder__watch` and follow the step it names.'] : []),
+    ...(step.command === 'default' ? [' If the fetched file now names a `Merge command:`, do not merge: call `mcp__builder__watch` and follow the step it names.'] : []),
+  ]
+  return changes.join('')
+}
+
 // The guards before any merge and the merge itself, which the merge step and
 // a yes to merging without checks share.
 function mergeLines(step: Extract<Step, { kind: 'merge' | 'ask-merge' }>): string[] {
@@ -310,6 +319,7 @@ function mergeLines(step: Extract<Step, { kind: 'merge' | 'ask-merge' }>): strin
   return [
     'Before merging:',
     '- If the branch changes any of the `Merge command:`, `Checks:`, `Max pushes per round:`, `Max rounds:` or `Base branch:` lines of CLAUDE.md, ask the person before merging, because those lines govern the merge and are read from the base branch.',
+    `- Fetch the base with \`git fetch origin <base>\`, where <base> is the pull request's \`baseRefName\`, and read \`git show origin/<base>:CLAUDE.md\` again, because the mod read that file from the local copy of the base branch, which can be out of date. If the fetch fails, do not merge: say why and end the turn.${baseChecks(step)}`,
     `- When the worktree holds commits the pull request lacks, do not merge: do what ${see('Commits the pull request lacks')} says, and after a push ${AFTER_PUSH}.`,
     `- Read the pull request again with \`gh pr view ${number} --json headRefOid,statusCheckRollup\`, and every workflow run at the head with ${runsReadOf(step.repo, head)}. If the head moved from ${head}, set \`in-review\`, call \`mcp__builder__watch\` and follow the step it names. If a check is no longer passed, call \`mcp__builder__watch\` and follow the step it names.`,
     `- The mod saw ${runsText(step.runs)} at this head, and has already applied the rules for which runs count to them, so an unfinished or failed run among them is one that a later run replaced. If the read finds any other run, or another attempt of one of them, whether it is unfinished, has failed or passed, call \`mcp__builder__watch\` and follow the step it names instead of merging.`,

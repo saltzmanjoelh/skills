@@ -260,18 +260,18 @@ test('a snapshot without base facts takes the defaults, which never merge withou
   expect(chooseStep(older as Snapshot, false)).toEqual({ kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'unread', runs: [], isClaudeRead: false })
 })
 
-test('stored base facts say whether the base CLAUDE.md was read, and facts that say it was not are the unread ones', () => {
+test('stored base facts say whether the base CLAUDE.md was read, and facts that do not say it was are the unread ones', () => {
   const none = { reviews: approved, statusCheckRollup: [] }
-  // Facts an older build stored, with no such field, were read unless their
-  // merge command is unread.
-  const older = { maxPushes: 8, maxRounds: 5, checks: 'expected', merge: 'custom' } as unknown as BaseFacts
-  expect(chooseStep(snapshot(none, [], older), false)).toMatchObject({ kind: 'ask-merge', command: 'custom', isClaudeRead: true })
-  const olderUnread = { maxPushes: 8, maxRounds: 5, checks: 'expected', merge: 'unread' } as unknown as BaseFacts
-  expect(chooseStep(snapshot(none, [], olderUnread), false)).toMatchObject({ kind: 'ask-merge', command: 'unread', isClaudeRead: false })
+  // Facts without the field are damaged, and count as unread whatever else
+  // they hold, so they never allow a merge without checks.
+  const missing = { maxPushes: 8, maxRounds: 5, checks: 'none', merge: 'default' } as unknown as BaseFacts
+  expect(chooseStep(snapshot(none, [], missing), false)).toMatchObject({ kind: 'ask-merge', command: 'unread', isClaudeRead: false })
   // Facts that say the file was not read never allow a merge without checks
   // or the default command, whatever else they hold.
   const damaged: BaseFacts = { maxPushes: 8, maxRounds: 5, checks: 'none', merge: 'default', isClaudeRead: false }
   expect(chooseStep(snapshot(none, [], damaged), false)).toMatchObject({ kind: 'ask-merge', command: 'unread', isClaudeRead: false })
+  const read: BaseFacts = { maxPushes: 8, maxRounds: 5, checks: 'expected', merge: 'custom', isClaudeRead: true }
+  expect(chooseStep(snapshot(none, [], read), false)).toMatchObject({ kind: 'ask-merge', command: 'custom', isClaudeRead: true })
 })
 
 test('a repository that is not a plain owner and name is left out of the step', () => {
@@ -358,6 +358,21 @@ test('the merge text under Checks: none says there are no checks and does not cl
   const text = textOf({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'none', runs: [] })
   expect(text).toContain('Checks: none')
   expect(text).not.toContain('every check passed')
+})
+
+test('every merge text fetches the base and reads its CLAUDE.md again before merging, because the mod read a local copy', () => {
+  const merges = EVERY_STEP.filter(step => step.kind === 'merge' || step.kind === 'ask-merge')
+  for (const step of merges) {
+    const text = textOf(step)
+    expect(text).toContain('git fetch origin <base>')
+    expect(text).toContain('If the fetch fails, do not merge')
+  }
+  const none = textOf({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'none', runs: [] })
+  expect(none).toContain('If the fetched file no longer says `Checks: none`')
+  expect(none).toContain('If the fetched file now names a `Merge command:`')
+  const passed = textOf({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'custom', checks: 'passed', runs: [] })
+  expect(passed).not.toContain('no longer says `Checks: none`')
+  expect(passed).not.toContain('now names a `Merge command:`')
 })
 
 test('every merge text reads the head\'s runs again and calls the watch tool for a run the mod did not see', () => {
