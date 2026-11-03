@@ -12,14 +12,16 @@
 // judgement is the session's: a text says what to do, and the mod never does
 // it.
 
-import type { BaseFacts, Snapshot } from '../types'
-import { ciOf, countingRuns, failedCheckNames, failedRunsOf, headRunsIn, isChangesRequested, isUnfinished, roundInProgress } from './github'
+import type { BaseFacts, Snapshot, Unpushed } from '../types'
+import { ciOf, countingRuns, failedCheckNames, failedRunsOf, headRunsIn, isChangesRequested, isUnfinished, roundInProgress, STATE_LABELS, type StateLabel } from './github'
 import { factIn, isFullSha } from './review'
 
 export type Limit = { which: 'pushes' | 'rounds'; count: number; max: number }
 
+// The merge steps and the Merged step carry `unpushed`, the commits the head
+// branch's worktree holds that the head lacks, as the look listed them.
 export type Step =
-  | { kind: 'merged' }
+  | { kind: 'merged'; unpushed: Unpushed }
   | { kind: 'closed' }
   | { kind: 'question' }
   | { kind: 'over-limit'; limits: Limit[] }
@@ -40,11 +42,11 @@ export type Step =
   // the session reads the runs again and calls the watch tool for any run
   // outside it. `repo` is null when the repository is not a plain owner and
   // name, and the text then names it by a placeholder.
-  | { kind: 'merge'; number: number; head: string; repo: string | null; command: BaseFacts['merge']; checks: 'passed' | 'none'; runs: RunRef[] }
+  | { kind: 'merge'; number: number; head: string; repo: string | null; command: BaseFacts['merge']; checks: 'passed' | 'none'; runs: RunRef[]; unpushed: Unpushed }
   // For a merge without checks, `runs` is also the set that the person's
   // answer covers. `isClaudeRead` says whether the base branch's CLAUDE.md
   // was read, which decides how the text explains `Checks: expected`.
-  | { kind: 'ask-merge'; number: number; head: string; repo: string | null; command: BaseFacts['merge']; runs: RunRef[]; isClaudeRead: boolean }
+  | { kind: 'ask-merge'; number: number; head: string; repo: string | null; command: BaseFacts['merge']; runs: RunRef[]; isClaudeRead: boolean; unpushed: Unpushed }
 
 // A workflow run at the head as a step names it: its id and its attempt.
 export type RunRef = { id: number; attempt: number }
@@ -113,7 +115,7 @@ function plainRepoOf(repo: unknown): string | null {
 // because that step comes first. A mergeability of unknown holds nothing,
 // because the merge command refuses a conflicting pull request anyway.
 export function chooseStep(s: Snapshot, isAsking: boolean): Step {
-  if (s.state === 'MERGED') return { kind: 'merged' }
+  if (s.state === 'MERGED') return { kind: 'merged', unpushed: unpushedIn(s.unpushed) }
   if (s.state === 'CLOSED') return { kind: 'closed' }
   if (isAsking) return { kind: 'question' }
   const facts = factsOf(s)
@@ -136,11 +138,91 @@ export function chooseStep(s: Snapshot, isAsking: boolean): Step {
   const ci = ciOf(s.checks)
   if (ci === 'pending' || countingRuns(headRuns).some(isUnfinished)) return { kind: 'waiting' }
   if (head === null) return { kind: 'head-unchecked' }
-  const merging = { number: s.number, head, repo: plainRepoOf(s.repo), command: facts.merge }
+  const merging = { number: s.number, head, repo: plainRepoOf(s.repo), command: facts.merge, unpushed: unpushedIn(s.unpushed) }
   const runs = headRuns.map(run => ({ id: run.id, attempt: run.attempt }))
   if (ci === 'passed') return { kind: 'merge', ...merging, checks: 'passed', runs }
   if (facts.checks === 'none') return { kind: 'merge', ...merging, checks: 'none', runs }
   return { kind: 'ask-merge', ...merging, runs, isClaudeRead: facts.isClaudeRead }
+}
+
+// Whether a step needs the listing of the commits the head branch's worktree
+// holds that the head lacks: the merge steps, which must not merge past such
+// commits, and the Merged step, which must not run /cleanup over them. The
+// Closed step never pushes or cleans up, so it lists nothing.
+export function needsListing(step: Step): step is Extract<Step, { kind: 'merge' | 'ask-merge' | 'merged' }> {
+  return step.kind === 'merge' || step.kind === 'ask-merge' || step.kind === 'merged'
+}
+
+// How many short hashes a listing keeps, and how long each one is.
+export const UNPUSHED_KEPT = 20
+export const SHORT_HASH = 12
+
+// A listing a snapshot holds, or could not be listed when it holds none or
+// one of another shape, which stops the merge and the cleanup, the safe
+// direction. Only short hex hashes are kept, because they go into a text.
+export function unpushedIn(raw: unknown): Unpushed {
+  if (typeof raw !== 'object' || raw === null) return { kind: 'unlisted' }
+  const u = raw as Record<string, unknown>
+  if (u.kind === 'none') return { kind: 'none' }
+  if (u.kind !== 'some' || !Array.isArray(u.commits) || typeof u.isAncestor !== 'boolean') return { kind: 'unlisted' }
+  const commits = u.commits
+  const isHash = (c: unknown): c is string => typeof c === 'string' && new RegExp(`^[0-9a-f]{${SHORT_HASH}}$`).test(c)
+  if (commits.length === 0 || commits.length > UNPUSHED_KEPT || !commits.every(isHash)) return { kind: 'unlisted' }
+  if (typeof u.total !== 'number' || !Number.isInteger(u.total) || u.total < commits.length) return { kind: 'unlisted' }
+  return { kind: 'some', commits: [...commits], total: u.total, isAncestor: u.isAncestor }
+}
+
+// The state label that follows from a step, or null when the step changes
+// nothing. The four outcomes where both verdicts approve give ready-to-merge,
+// but the step for runs that could not be read is not one of them: it exists
+// only because the runs read failed, so a ready-to-merge there would rest on
+// a failed read, and it would also move the poll to the merge interval that
+// waitingOn derives from the label. Merged and An open question change
+// nothing either.
+export function labelFor(step: Step): StateLabel | null {
+  switch (step.kind) {
+    case 'review': return 'in-review'
+    case 'failed':
+    case 'conflicting':
+    case 'changes-requested': return 'waiting-on-author'
+    case 'waiting':
+    case 'head-unchecked':
+    case 'merge':
+    case 'ask-merge': return 'ready-to-merge'
+    case 'over-limit':
+    case 'closed': return 'stuck'
+    case 'merged':
+    case 'question':
+    case 'runs-unread': return null
+  }
+}
+
+// What the mod does with the label it derived: nothing, record it without
+// writing, or write it and remove the other state labels the live read saw.
+// `record` is the label the mod last set on the pull request, and
+// `liveLabels` the labels it carries now. With no record while `stuck` is on,
+// as after a restart, the derived label is only recorded, so a reload never
+// removes a `stuck` the session set by its own judgement. Only labels the
+// live read saw are removed, because a label on the pull request exists in
+// the repository, so removing it cannot fail for lack of the label.
+export type LabelAction = { kind: 'none' } | { kind: 'record' } | { kind: 'write'; remove: StateLabel[] }
+
+export function labelActionOf(derived: StateLabel | null, record: StateLabel | null, liveLabels: readonly string[]): LabelAction {
+  if (derived === null || derived === record) return { kind: 'none' }
+  if (record === null && liveLabels.includes('stuck')) return { kind: 'record' }
+  return { kind: 'write', remove: STATE_LABELS.filter(label => label !== derived && liveLabels.includes(label)) }
+}
+
+// The record of the label the mod last set on a pull request, as it is
+// stored: the label and when it was set. Any other shape counts as no record.
+export type LabelRecord = { label: StateLabel; at: number }
+
+export function labelRecordIn(raw: unknown): LabelRecord | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const r = raw as Record<string, unknown>
+  const label = STATE_LABELS.find(name => name === r.label)
+  if (label === undefined || typeof r.at !== 'number' || !Number.isFinite(r.at)) return null
+  return { label, at: r.at }
 }
 
 // The sections and named paragraphs of skills/implement/SKILL.md that the
@@ -219,8 +301,8 @@ const AFTER_PUSH = `go on as ${see('When a turn ends')} says`
 
 function textOf(step: Step): string[] {
   switch (step.kind) {
-    case 'merged': return MERGED
-    case 'closed': return [`Set \`stuck\` (see ${see('State labels')}), say that the pull request was closed without merging, and stop.`]
+    case 'merged': return mergedText(step)
+    case 'closed': return ['Say that the pull request was closed without merging, and stop.']
     case 'question': return ['A question to the person is open. Wait for their answer, and end the turn. Act on the pull request only once they have answered.']
     case 'over-limit': return overLimitText(step.limits)
     case 'conflicting': return [`The pull request conflicts with its base. Merge the base in (never rebase), rerun the gates the merge could move, push, and ${AFTER_PUSH}.`]
@@ -233,7 +315,7 @@ function textOf(step: Step): string[] {
     ]
     case 'waiting': return [
       'Both verdicts approve at this head, and a check is pending or a workflow run that counts is unfinished. Waiting on checks happens here, and only here, so reviews and fixes never wait on them.',
-      `Set \`ready-to-merge\` (see ${see('State labels')}), say "waiting on checks" and end the turn. The mod starts a turn when they finish.`,
+      'Say "waiting on checks" and end the turn. The mod starts a turn when they finish.',
     ]
     case 'head-unchecked': return [
       'Both verdicts approve at this head, but the head in the mod\'s snapshot is not a full commit sha, so the mod puts no head into a merge command.',
@@ -244,17 +326,31 @@ function textOf(step: Step): string[] {
   }
 }
 
-const MERGED = [
-  `First update the linked checkout, as ${see('Updating the linked checkout')} says. Then move the issue to done. Then list the commits the worktree holds and the pull request lacks, as ${see('Commits the pull request lacks')} says, before anything is filed.`,
-  `Then file at most one issue for the follow-ups. The list to file is the \`To file:\` list of the last verdict review, together with the \`To file:\` items of any cheap-fix commit that no verdict review lists, whether it is on the pull request or only in the worktree. That list holds what the counsel decided to file, together with the fix decisions and the visible problems that the limit rule of ${seePoint('point 4 of the second half of "A review round" in /implement')} moved there, what the person decided when the counsel could not sit, and items carried over from reviews posted before the counsel decided follow-ups. So nothing new reaches the issue tracker on the session's judgement alone, except a visible problem it meant to fix in this pull request and could not. Take the first of these that applies:`,
-  '- The last verdict review has no **Follow-ups** section, because a session that predates it posted the review: file nothing, and say in the report which review holds the follow-ups.',
-  '- The list to file is empty: file nothing.',
-  '- The project names no issue tracker and the session has none connected: file nothing, and say in the report that the list is in the last review.',
-  '- A search of the issue tracker for the exact title `Follow-ups from <owner>/<name>#<n>`, with the repository\'s owner and name as GitHub gives them, finds an issue, because an earlier session filed it: file nothing.',
-  '- The search fails: file nothing, and say so in the report, because filing twice is what this step exists to prevent.',
-  '- Otherwise file one issue with that title in the issue tracker, with a link to the pull request, holding every item of the list, each in one sentence saying what a person would see.',
-  `Then, when the worktree held commits the pull request lacks, do what ${see('Commits the pull request lacks')} says for a merged pull request, and stop. Otherwise run \`/cleanup\`, report, and stop. The person's request for \`/implement\` already counts as their agreement to the archive that ends \`/cleanup\`, whether they started this session directly or through a foreman parent session that they started, so never wait for, or ask for, a second agreement. When that archive, or the call that turns Remote Control off before it, is refused, do what ${seeCleanup('Archive the session')} says, and nothing more.`,
-]
+// The sentence that states the listing of the commits the head branch's
+// worktree holds that the head lacks. Only short hex hashes and counts are put
+// into it, which unpushedIn checked.
+function unpushedLine(u: Unpushed): string {
+  const subject = 'the commits the head branch\'s worktree holds that the pull request\'s head lacks'
+  if (u.kind === 'none') return `The mod listed ${subject}, and found none.`
+  if (u.kind === 'unlisted') return `The mod could not list ${subject}, which counts as holding some.`
+  const more = u.total > u.commits.length ? ` and ${u.total - u.commits.length} more` : ''
+  const count = u.total === 1 ? '1 commit that' : `${u.total} commits that`
+  return `The worktree of the head branch holds ${count} the pull request's head lacks: ${u.commits.join(', ')}${more}. The head is ${u.isAncestor ? '' : 'not '}an ancestor of the worktree's HEAD.`
+}
+
+function mergedText(step: Extract<Step, { kind: 'merged' }>): string[] {
+  return [
+    `First update the linked checkout, as ${see('Updating the linked checkout')} says. Then move the issue to done. ${unpushedLine(step.unpushed)}`,
+    `Then file at most one issue for the follow-ups. The list to file is the \`To file:\` list of the last verdict review, together with the \`To file:\` items of any cheap-fix commit that no verdict review lists, whether it is on the pull request or only in the worktree. That list holds what the counsel decided to file, together with the fix decisions and the visible problems that the limit rule of ${seePoint('point 4 of the second half of "A review round" in /implement')} moved there, what the person decided when the counsel could not sit, and items carried over from reviews posted before the counsel decided follow-ups. So nothing new reaches the issue tracker on the session's judgement alone, except a visible problem it meant to fix in this pull request and could not. Take the first of these that applies:`,
+    '- The last verdict review has no **Follow-ups** section, because a session that predates it posted the review: file nothing, and say in the report which review holds the follow-ups.',
+    '- The list to file is empty: file nothing.',
+    '- The project names no issue tracker and the session has none connected: file nothing, and say in the report that the list is in the last review.',
+    '- A search of the issue tracker for the exact title `Follow-ups from <owner>/<name>#<n>`, with the repository\'s owner and name as GitHub gives them, finds an issue, because an earlier session filed it: file nothing.',
+    '- The search fails: file nothing, and say so in the report, because filing twice is what this step exists to prevent.',
+    '- Otherwise file one issue with that title in the issue tracker, with a link to the pull request, holding every item of the list, each in one sentence saying what a person would see.',
+    `Then, when the worktree holds commits the pull request lacks, or they could not be listed, do what ${see('Commits the pull request lacks')} says for a merged pull request, and stop. Otherwise run \`/cleanup\`, report, and stop. The person's request for \`/implement\` already counts as their agreement to the archive that ends \`/cleanup\`, whether they started this session directly or through a foreman parent session that they started, so never wait for, or ask for, a second agreement. When that archive, or the call that turns Remote Control off before it, is refused, do what ${seeCleanup('Archive the session')} says, and nothing more.`,
+  ]
+}
 
 function overLimitText(limits: readonly Limit[]): string[] {
   const facts = limits.map(limit => limit.which === 'pushes'
@@ -263,7 +359,7 @@ function overLimitText(limits: readonly Limit[]): string[] {
   return [
     'The pull request is over a limit read from the base branch\'s CLAUDE.md, or over its default when that file could not be read:',
     ...facts,
-    `Set \`stuck\` (see ${see('State labels')}), ask the person once with a summary of what keeps failing, tell the session that started this one as ${see('The line to the starting session')} says, and wait. When the person has already answered about this limit at these counts, act on their answer rather than asking again.`,
+    `Ask the person once with a summary of what keeps failing, tell the session that started this one as ${see('The line to the starting session')} says, and wait. When the person has already answered about this limit at these counts, act on their answer rather than asking again.`,
   ]
 }
 
@@ -274,7 +370,7 @@ function failedText(runs: readonly number[]): string[] {
   return [
     `${named} The mod has already applied the rules for which runs count: a completed run failed when its conclusion is anything other than success, skipped or neutral, and a later run of the same workflow and event that has not completed or did real work replaces it.`,
     'Read each failure with `gh run view <id> --log-failed`, or `gh run view <id>` for a run that failed before its first job, and establish why it is red before changing anything. Then take the first of these that applies:',
-    `- The code is wrong, including a workflow file that is broken and so failed at startup: fix it, set \`waiting-on-author\` (see ${see('State labels')}), push, and ${AFTER_PUSH}. A run that failed at startup is never rerun; rerunning cannot fix its file.`,
+    `- The code is wrong, including a workflow file that is broken and so failed at startup: fix it, push, and ${AFTER_PUSH}. A run that failed at startup is never rerun; rerunning cannot fix its file.`,
     '- The check never really ran (it was not scheduled, or it timed out waiting for a machine): if `gh run view <id> --json attempt` says this is its first attempt, rerun it with `gh run rerun <id> --failed` and end the turn; otherwise set `stuck` and ask the person.',
     '- Something outside the code stopped it (Actions is disabled, a billing or spending limit refused it, or it ended `action_required`, waiting for someone to approve it): neither a fix nor a rerun helps. Set `stuck` and ask the person.',
   ]
@@ -291,7 +387,7 @@ function reviewText(head: string | null): string[] {
 }
 
 const CHANGES_REQUESTED = [
-  `Fix the newest verdict's blocking findings, except those outside the spec and those the owner's answer dropped, in a commit that carries the fix lines (see ${see('A review round')}), set \`waiting-on-author\` (see ${see('State labels')}), push, and ${AFTER_PUSH}. The push also carries the cheap fixes that the second half committed, and the next round reviews them.`,
+  `Fix the newest verdict's blocking findings, except those outside the spec and those the owner's answer dropped, in a commit that carries the fix lines (see ${see('A review round')}), push, and ${AFTER_PUSH}. The push also carries the cheap fixes that the second half committed, and the next round reviews them.`,
   `If it has no blocking finding left to fix, which should not happen (see ${seePoint('point 3 of the second half of "A review round" in /implement')}), set \`stuck\` and ask the person rather than wait for a change that will not come.`,
 ]
 
@@ -334,10 +430,10 @@ function mergeLines(step: Extract<Step, { kind: 'merge' | 'ask-merge' }>): strin
     'Before merging:',
     '- If the branch changes any of the `Merge command:`, `Checks:`, `Max pushes per round:`, `Max rounds:` or `Base branch:` lines of CLAUDE.md, ask the person before merging, because those lines govern the merge and are read from the base branch.',
     `- Fetch the base with \`git fetch origin <base>\`, where <base> is the pull request's \`baseRefName\`, and read \`git show origin/<base>:CLAUDE.md\` again, because the mod read that file from the local copy of the base branch, which can be out of date. If the fetch fails, do not merge: say why and end the turn.${baseChecks(step)}`,
-    `- When the worktree holds commits the pull request lacks, do not merge: do what ${see('Commits the pull request lacks')} says, and after a push ${AFTER_PUSH}.`,
-    `- Read the pull request again with \`gh pr view ${number} --json headRefOid,statusCheckRollup\`, and every workflow run at the head with ${runsReadOf(step.repo, head)}. If the head moved from ${head}, set \`in-review\`, call \`mcp__builder__watch\` and follow the step it names. If a check is no longer passed, call \`mcp__builder__watch\` and follow the step it names.`,
+    `- ${unpushedLine(step.unpushed)} When the worktree holds commits the pull request lacks, or they could not be listed, do not merge: do what ${see('Commits the pull request lacks')} says, and after a push ${AFTER_PUSH}.`,
+    `- Read the pull request again with \`gh pr view ${number} --json headRefOid,statusCheckRollup\`, and every workflow run at the head with ${runsReadOf(step.repo, head)}. If the head moved from ${head}, call \`mcp__builder__watch\` and follow the step it names. If a check is no longer passed, call \`mcp__builder__watch\` and follow the step it names.`,
     `- The mod saw ${runsText(step.runs)} at this head, and has already applied the rules for which runs count to them, so an unfinished or failed run among them is one that a later run replaced. If the read finds any other run, or another attempt of one of them, whether it is unfinished, has failed or passed, call \`mcp__builder__watch\` and follow the step it names instead of merging.`,
-    `To merge, set \`ready-to-merge\` (see ${see('State labels')}), report the \`merge\` stage with \`mcp__builder__progress\`, and ${run}. Never merge any other way: a project that names a gate means no session merges around it. If the command refuses, say why and wait.`,
+    `To merge, ${run}. Never merge any other way: a project that names a gate means no session merges around it. If the command refuses, say why and wait.`,
   ]
 }
 

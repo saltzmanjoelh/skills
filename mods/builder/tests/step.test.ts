@@ -1,8 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 
 import { countingRuns, failedRunsOf, hasFailed, isReplaced, isUnfinished, needsJobs, snapshotOf, type GhPullRequest } from '../hooks/github'
-import { baseFactsOf, chooseStep, CLEANUP_SECTIONS, DEFAULT_MERGE_COMMAND, SKILL_POINTS, SKILL_SECTIONS, stepFor, stepLines, type Step } from '../hooks/step'
-import type { BaseFacts, HeadRun, Snapshot } from '../types'
+import { baseFactsOf, chooseStep, CLEANUP_SECTIONS, DEFAULT_MERGE_COMMAND, labelActionOf, labelFor, labelRecordIn, needsListing, SKILL_POINTS, SKILL_SECTIONS, stepFor, stepLines, unpushedIn, type Step } from '../hooks/step'
+import type { BaseFacts, HeadRun, Snapshot, Unpushed } from '../types'
 
 const ME = 'owner'
 const C = 'c'.repeat(40)
@@ -40,6 +40,11 @@ function review(sha: string, spec: string, adversarial: string) {
     commit: { oid: sha },
   }
 }
+
+// The commits a worktree holds that the head lacks, as a step carries them:
+// a snapshot that holds no listing reads as could not be listed.
+const UNLISTED: Unpushed = { kind: 'unlisted' }
+const NONE: Unpushed = { kind: 'none' }
 
 const FACTS: BaseFacts = { maxPushes: 8, maxRounds: 5, checks: 'expected', merge: 'default', isClaudeRead: true }
 const approved = [review(C, 'APPROVE', 'APPROVE')]
@@ -243,21 +248,21 @@ test('both verdicts approving with a pending check or an unfinished run waits on
 })
 
 test('both verdicts approving with every check passed merges, with the number, the head and the merge command kind', () => {
-  expect(chooseStep(snapshot({ reviews: approved }, [headRun()]), false)).toEqual({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'passed', runs: [{ id: 1, attempt: 1 }] })
-  expect(chooseStep(snapshot({ reviews: approved }, [], { ...FACTS, merge: 'custom' }), false)).toEqual({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'custom', checks: 'passed', runs: [] })
+  expect(chooseStep(snapshot({ reviews: approved }, [headRun()]), false)).toEqual({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'passed', runs: [{ id: 1, attempt: 1 }], unpushed: UNLISTED })
+  expect(chooseStep(snapshot({ reviews: approved }, [], { ...FACTS, merge: 'custom' }), false)).toEqual({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'custom', checks: 'passed', runs: [], unpushed: UNLISTED })
 })
 
 test('both verdicts approving with no checks merges under Checks: none and asks under Checks: expected or an unread base', () => {
   const none = { reviews: approved, statusCheckRollup: [] }
-  expect(chooseStep(snapshot(none, [], { ...FACTS, checks: 'none' }), false)).toEqual({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'none', runs: [] })
-  expect(chooseStep(snapshot(none, [headRun({ id: 5 })], FACTS), false)).toEqual({ kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'default', runs: [{ id: 5, attempt: 1 }], isClaudeRead: true })
+  expect(chooseStep(snapshot(none, [], { ...FACTS, checks: 'none' }), false)).toEqual({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'none', runs: [], unpushed: UNLISTED })
+  expect(chooseStep(snapshot(none, [headRun({ id: 5 })], FACTS), false)).toEqual({ kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'default', runs: [{ id: 5, attempt: 1 }], isClaudeRead: true, unpushed: UNLISTED })
   const unread: BaseFacts = { maxPushes: 8, maxRounds: 5, checks: 'expected', merge: 'unread', isClaudeRead: false }
-  expect(chooseStep(snapshot(none, [], unread), false)).toEqual({ kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'unread', runs: [], isClaudeRead: false })
+  expect(chooseStep(snapshot(none, [], unread), false)).toEqual({ kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'unread', runs: [], isClaudeRead: false, unpushed: UNLISTED })
 })
 
 test('a snapshot without base facts takes the defaults, which never merge without checks', () => {
   const { facts: _dropped, ...older } = snapshot({ reviews: approved, statusCheckRollup: [] })
-  expect(chooseStep(older as Snapshot, false)).toEqual({ kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'unread', runs: [], isClaudeRead: false })
+  expect(chooseStep(older as Snapshot, false)).toEqual({ kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'unread', runs: [], isClaudeRead: false, unpushed: UNLISTED })
 })
 
 test('stored base facts say whether the base CLAUDE.md was read, and facts that do not say it was are the unread ones', () => {
@@ -303,7 +308,7 @@ test('the base facts are read from the base branch CLAUDE.md, with defaults for 
 
 // Every step, as the chooser can return it, for the text tests.
 const EVERY_STEP: Step[] = [
-  { kind: 'merged' },
+  { kind: 'merged', unpushed: NONE },
   { kind: 'closed' },
   { kind: 'question' },
   { kind: 'over-limit', limits: [{ which: 'pushes', count: 9, max: 8 }, { which: 'rounds', count: 6, max: 5 }] },
@@ -315,11 +320,13 @@ const EVERY_STEP: Step[] = [
   { kind: 'waiting' },
   { kind: 'head-unchecked' },
   { kind: 'review', head: null },
-  { kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'passed', runs: [{ id: 5, attempt: 1 }] },
-  { kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'custom', checks: 'passed', runs: [] },
-  { kind: 'merge', number: 7, head: C, repo: null, command: 'unread', checks: 'none', runs: [] },
-  { kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'default', runs: [{ id: 5, attempt: 1 }, { id: 6, attempt: 2 }], isClaudeRead: true },
-  { kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'unread', runs: [], isClaudeRead: false },
+  { kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'passed', runs: [{ id: 5, attempt: 1 }], unpushed: NONE },
+  { kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'custom', checks: 'passed', runs: [], unpushed: UNLISTED },
+  { kind: 'merge', number: 7, head: C, repo: null, command: 'unread', checks: 'none', runs: [], unpushed: { kind: 'some', commits: ['abcdef012345'], total: 1, isAncestor: true } },
+  { kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'default', runs: [{ id: 5, attempt: 1 }, { id: 6, attempt: 2 }], isClaudeRead: true, unpushed: NONE },
+  { kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'unread', runs: [], isClaudeRead: false, unpushed: UNLISTED },
+  { kind: 'merged', unpushed: UNLISTED },
+  { kind: 'merged', unpushed: { kind: 'some', commits: ['abcdef012345', '0123456789ab'], total: 2, isAncestor: false } },
 ]
 
 const textOf = (step: Step) => stepLines(step).join('\n')
@@ -344,11 +351,12 @@ test('a head that is not a full commit sha never reaches a step text, and never 
 })
 
 test('the default merge text holds the merge command with the number and the full head, and the guards', () => {
-  const text = textOf({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'passed', runs: [] })
+  const text = textOf({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'passed', runs: [], unpushed: NONE })
   expect(text).toContain(`gh pr merge 7 --merge --match-head-commit ${C}`)
   expect(text).toContain('Commits the pull request lacks')
-  expect(text).toContain('mcp__builder__progress')
-  expect(text).toContain('ready-to-merge')
+  // The mod sets the label and reports the merge stage itself.
+  expect(text).not.toContain('mcp__builder__progress')
+  expect(text).not.toContain('ready-to-merge')
   expect(text).toContain(`gh pr view 7 --json headRefOid,statusCheckRollup`)
   expect(text).toContain('Never merge any other way')
   expect(text).toContain('If the command refuses, say why and wait.')
@@ -359,7 +367,7 @@ test('the default merge text holds the merge command with the number and the ful
 
 test('the custom and unread merge texts say to read Merge command: from the base and never to merge around a gate with the default', () => {
   for (const command of ['custom', 'unread'] as const) {
-    const text = textOf({ kind: 'merge', number: 7, head: C, repo: 'o/r', command, checks: 'passed', runs: [] })
+    const text = textOf({ kind: 'merge', number: 7, head: C, repo: 'o/r', command, checks: 'passed', runs: [], unpushed: NONE })
     expect(text).toContain('git show origin/<base>:CLAUDE.md')
     expect(text).toContain('`Merge command:`')
     expect(text).toContain('with <n> as 7 and <sha> as ' + C)
@@ -369,7 +377,7 @@ test('the custom and unread merge texts say to read Merge command: from the base
 })
 
 test('the merge text under Checks: none says there are no checks and does not claim they passed', () => {
-  const text = textOf({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'none', runs: [] })
+  const text = textOf({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'none', runs: [], unpushed: NONE })
   expect(text).toContain('Checks: none')
   expect(text).not.toContain('every check passed')  // The file can count as none by the default, with no `Checks:` line of
   // its own, so the text never claims the file says so.
@@ -384,10 +392,10 @@ test('every merge text fetches the base and reads its CLAUDE.md again before mer
     expect(text).toContain('git fetch origin <base>')
     expect(text).toContain('If the fetch fails, do not merge')
   }
-  const none = textOf({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'none', runs: [] })
+  const none = textOf({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'none', runs: [], unpushed: NONE })
   expect(none).toContain('If the fetched file no longer counts as `Checks: none`, because it names `Checks:` with another value, or has no `Checks:` line while `git ls-tree --full-tree origin/<base> .github/workflows` lists anything, do not merge')
   expect(none).toContain('If the fetched file now names a `Merge command:`')
-  const passed = textOf({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'custom', checks: 'passed', runs: [] })
+  const passed = textOf({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'custom', checks: 'passed', runs: [], unpushed: NONE })
   expect(passed).not.toContain('no longer counts as `Checks: none`')
   expect(passed).not.toContain('now names a `Merge command:`')
 })
@@ -402,15 +410,15 @@ test('every merge text reads the head\'s runs again and calls the watch tool for
     expect(text).toContain('unfinished, has failed or passed')
     expect(text).toContain('call `mcp__builder__watch` and follow the step it names')
   }
-  const seen = textOf({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'passed', runs: [{ id: 5, attempt: 1 }, { id: 6, attempt: 2 }] })
+  const seen = textOf({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'passed', runs: [{ id: 5, attempt: 1 }, { id: 6, attempt: 2 }], unpushed: NONE })
   expect(seen).toContain('The mod saw run 5 (attempt 1), run 6 (attempt 2) at this head')
-  expect(textOf({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'none', runs: [] })).toContain('The mod saw no workflow runs at this head')
+  expect(textOf({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'none', runs: [], unpushed: NONE })).toContain('The mod saw no workflow runs at this head')
   // A repository left out is named by a placeholder the text explains.
-  expect(textOf({ kind: 'merge', number: 7, head: C, repo: null, command: 'unread', checks: 'none', runs: [] })).toContain('<repo> as the pull request\'s repository')
+  expect(textOf({ kind: 'merge', number: 7, head: C, repo: null, command: 'unread', checks: 'none', runs: [], unpushed: NONE })).toContain('<repo> as the pull request\'s repository')
 })
 
 test('the question for a merge without checks covers this head and these runs, and keeps the read again before merging on a yes', () => {
-  const text = textOf({ kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'default', runs: [{ id: 5, attempt: 1 }, { id: 6, attempt: 2 }], isClaudeRead: true })
+  const text = textOf({ kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'default', runs: [{ id: 5, attempt: 1 }, { id: 6, attempt: 2 }], isClaudeRead: true, unpushed: NONE })
   expect(text).toContain(C)
   expect(text).toContain('run 5 (attempt 1), run 6 (attempt 2)')
   expect(text).toContain('They already said no to this head and these runs')
@@ -419,11 +427,11 @@ test('the question for a merge without checks covers this head and these runs, a
   expect(text).toContain('no checks, no unfinished run and no new run')
   expect(text).toContain(`gh pr merge 7 --merge --match-head-commit ${C}`)
   expect(text).toContain('Commits the pull request lacks')
-  expect(textOf({ kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'unread', runs: [], isClaudeRead: false })).toContain('no workflow runs')
+  expect(textOf({ kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'unread', runs: [], isClaudeRead: false, unpushed: NONE })).toContain('no workflow runs')
 })
 
 test('the question for a merge without checks says the base CLAUDE.md could not be read only when it was not read', () => {
-  const step = { kind: 'ask-merge' as const, number: 7, head: C, repo: 'o/r', runs: [] }
+  const step = { kind: 'ask-merge' as const, number: 7, head: C, repo: 'o/r', runs: [], unpushed: NONE }
   expect(textOf({ ...step, command: 'unread', isClaudeRead: false })).toContain('could not be read, which counts as `Checks: expected`')
   // A file that was read and names a merge command of its own says what it says.
   const read = textOf({ ...step, command: 'custom', isClaudeRead: true })
@@ -436,7 +444,9 @@ test('the failed text holds the run ids and how to read them', () => {
   expect(text).toContain('123456, 789')
   expect(text).toContain('gh run view <id> --log-failed')
   expect(text).toContain('gh run rerun <id> --failed')
-  expect(text).toContain('waiting-on-author')
+  // The mod sets waiting-on-author itself; only the judgement stuck stays.
+  expect(text).not.toContain('waiting-on-author')
+  expect(text).toContain('set `stuck` and ask the person')
   expect(textOf({ kind: 'failed', runs: [] })).toContain('No workflow run counts as failed')
 })
 
@@ -446,7 +456,8 @@ test('the over-limit text holds each limit and its counts', () => {
   expect(text).toContain('`Max pushes per round` is 8')
   expect(text).toContain('Round 6')
   expect(text).toContain('`Max rounds` is 5')
-  expect(text).toContain('stuck')
+  // The mod sets stuck for this step itself.
+  expect(text).not.toContain('stuck')
   expect(text).toContain('The line to the starting session')
 })
 
@@ -461,7 +472,7 @@ test('the review text holds the head and says how to tell which half is due', ()
 
 test('the waiting and unread texts end the turn and never merge', () => {
   expect(textOf({ kind: 'waiting' })).toContain('waiting on checks')
-  expect(textOf({ kind: 'waiting' })).toContain('ready-to-merge')
+  expect(textOf({ kind: 'waiting' })).not.toContain('ready-to-merge')
   const unread = textOf({ kind: 'runs-unread' })
   expect(unread).toContain('could not be read')
   expect(unread).toContain('Merge nothing')
@@ -469,7 +480,7 @@ test('the waiting and unread texts end the turn and never merge', () => {
 })
 
 test('the merged text keeps updating the linked checkout, the follow-ups and the cleanup', () => {
-  const text = textOf({ kind: 'merged' })
+  const text = textOf({ kind: 'merged', unpushed: NONE })
   expect(text).toContain('Updating the linked checkout')
   expect(text).toContain('Follow-ups from <owner>/<name>#<n>')
   expect(text).toContain('/cleanup')
@@ -535,4 +546,102 @@ test('every numbered point of a skill that a step text names is one of the pinne
     expect(text).not.toMatch(/\b(point|step) \d+\b/i)
   }
   expect([...pinned].sort()).toEqual([...SKILL_POINTS].sort())
+})
+
+test('each step gives the state label that follows from it, and Merged, An open question and unread runs give none', () => {
+  const labels = Object.fromEntries(EVERY_STEP.map(step => [step.kind, labelFor(step)]))
+  expect(labels).toEqual({
+    merged: null,
+    closed: 'stuck',
+    question: null,
+    'over-limit': 'stuck',
+    conflicting: 'waiting-on-author',
+    failed: 'waiting-on-author',
+    review: 'in-review',
+    'changes-requested': 'waiting-on-author',
+    'runs-unread': null,
+    waiting: 'ready-to-merge',
+    'head-unchecked': 'ready-to-merge',
+    merge: 'ready-to-merge',
+    'ask-merge': 'ready-to-merge',
+  })
+})
+
+test('a derived label equal to the record, or no derived label, changes nothing', () => {
+  expect(labelActionOf('in-review', 'in-review', ['stuck'])).toEqual({ kind: 'none' })
+  expect(labelActionOf(null, 'in-review', [])).toEqual({ kind: 'none' })
+  expect(labelActionOf(null, null, ['stuck'])).toEqual({ kind: 'none' })
+})
+
+test('with no record while stuck is on, the derived label is recorded without a write, so a reload never removes it', () => {
+  expect(labelActionOf('in-review', null, ['bug', 'stuck'])).toEqual({ kind: 'record' })
+})
+
+test('otherwise the derived label is written, removing only the other state labels the live read saw', () => {
+  expect(labelActionOf('in-review', null, [])).toEqual({ kind: 'write', remove: [] })
+  expect(labelActionOf('ready-to-merge', 'in-review', ['bug', 'in-review', 'needs-decision'])).toEqual({ kind: 'write', remove: ['in-review'] })
+  // With a record, a stuck the session set comes off once the derived label changes.
+  expect(labelActionOf('waiting-on-author', 'ready-to-merge', ['stuck', 'ready-to-merge', 'waiting-on-author'])).toEqual({ kind: 'write', remove: ['ready-to-merge', 'stuck'] })
+})
+
+test('a stored label record reads back only in the shape the mod writes', () => {
+  expect(labelRecordIn({ label: 'stuck', at: 5 })).toEqual({ label: 'stuck', at: 5 })
+  for (const raw of [null, undefined, 'stuck', { label: 'bug', at: 5 }, { label: 'stuck' }, { label: 'stuck', at: Number.NaN }, { label: 'needs-decision', at: 1 }]) {
+    expect(labelRecordIn(raw)).toBeNull()
+  }
+})
+
+test('only the merge steps and the Merged step need the listing of commits the pull request lacks', () => {
+  const listed = EVERY_STEP.filter(needsListing).map(step => step.kind)
+  expect([...new Set(listed)].sort()).toEqual(['ask-merge', 'merge', 'merged'])
+})
+
+test('a listing a snapshot holds reaches its step, and a missing or malformed one reads as could not be listed', () => {
+  const some: Unpushed = { kind: 'some', commits: ['abcdef012345'], total: 1, isAncestor: false }
+  expect(unpushedIn(some)).toEqual(some)
+  expect(unpushedIn(NONE)).toEqual(NONE)
+  for (const raw of [undefined, null, 'none', { kind: 'some' }, { kind: 'some', commits: [], total: 0, isAncestor: true },
+    { kind: 'some', commits: ['$(rm -rf /)'], total: 1, isAncestor: true }, { kind: 'some', commits: ['abcdef012345'], total: 0, isAncestor: true },
+    { kind: 'some', commits: ['abcdef012345'], total: 1, isAncestor: 'yes' }, { kind: 'other' }]) {
+    expect(unpushedIn(raw)).toEqual(UNLISTED)
+  }
+  expect(chooseStep({ ...snapshot({ reviews: approved }, [headRun()]), unpushed: some }, false)).toMatchObject({ kind: 'merge', unpushed: some })
+  expect(chooseStep({ ...snapshot({ state: 'MERGED' }), unpushed: NONE }, false)).toEqual({ kind: 'merged', unpushed: NONE })
+  expect(chooseStep(snapshot({ state: 'MERGED' }), false)).toEqual({ kind: 'merged', unpushed: UNLISTED })
+  expect(chooseStep({ ...snapshot({ state: 'CLOSED' }), unpushed: some }, false)).toEqual({ kind: 'closed' })
+})
+
+test('the merge, ask-merge and Merged texts carry none, the short hashes with the ancestor answer, or could not be listed', () => {
+  const merge = { kind: 'merge' as const, number: 7, head: C, repo: 'o/r', command: 'default' as const, checks: 'passed' as const, runs: [] }
+  const ask = { kind: 'ask-merge' as const, number: 7, head: C, repo: 'o/r', command: 'default' as const, runs: [], isClaudeRead: true }
+  for (const base of [merge, ask, { kind: 'merged' as const }]) {
+    expect(textOf({ ...base, unpushed: NONE } as Step)).toContain('found none')
+    const unlisted = textOf({ ...base, unpushed: UNLISTED } as Step)
+    expect(unlisted).toContain('could not list the commits')
+    expect(unlisted).toContain('counts as holding some')
+    const ancestor = textOf({ ...base, unpushed: { kind: 'some', commits: ['abcdef012345', '0123456789ab'], total: 2, isAncestor: true } } as Step)
+    expect(ancestor).toContain('2 commits')
+    expect(ancestor).toContain('abcdef012345, 0123456789ab')
+    expect(ancestor).toContain('The head is an ancestor of the worktree\'s HEAD')
+    const notAncestor = textOf({ ...base, unpushed: { kind: 'some', commits: ['abcdef012345'], total: 25, isAncestor: false } } as Step)
+    expect(notAncestor).toContain('25 commits')
+    expect(notAncestor).toContain('abcdef012345 and 24 more')
+    expect(notAncestor).toContain('The head is not an ancestor of the worktree\'s HEAD')
+  }
+  const one = textOf({ ...merge, unpushed: { kind: 'some', commits: ['abcdef012345'], total: 1, isAncestor: true } })
+  expect(one).toContain('1 commit that')
+  // The Closed step lists nothing.
+  expect(textOf({ kind: 'closed' })).not.toContain('commits')
+})
+
+test('no step text tells the session to set a label the mod sets, to report a stage, or to list commits itself', () => {
+  for (const step of EVERY_STEP) {
+    const text = textOf(step)
+    for (const label of ['in-review', 'waiting-on-author', 'ready-to-merge']) expect(text).not.toContain(label)
+    expect(text).not.toContain('mcp__builder__progress')
+    expect(text).not.toContain('git fetch origin pull/')
+    expect(text).not.toMatch(/git log [^`]*\.\.HEAD/)
+    expect(text).not.toContain('list the commits the worktree holds')
+    if (step.kind === 'closed' || step.kind === 'over-limit') expect(text).not.toContain('stuck')
+  }
 })

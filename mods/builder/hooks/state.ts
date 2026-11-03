@@ -171,6 +171,16 @@ export function isPushOrMerge(command: string, mergePattern: RegExp | null): boo
   return PUSH_OR_MERGE.test(command) || (mergePattern?.test(command) ?? false)
 }
 
+const MERGE = new RegExp(String.raw`${COMMAND_START}gh\s+pr\s+merge${COMMAND_END}`)
+
+// Whether a command the session is about to run merges: `gh pr merge`, or the
+// project's merge command, given as the pattern mergePatternOf built from it.
+// A push is not a merge. It is matched the same way as isPushOrMerge, and is
+// passed nowhere.
+export function isMerge(command: string, mergePattern: RegExp | null): boolean {
+  return MERGE.test(command) || (mergePattern?.test(command) ?? false)
+}
+
 export function waitingOn(s: Snapshot | null, cards: readonly AgentCard[], asked: readonly Question[]): WaitingOn {
   if (asked.some(question => !question.answered)) return 'owner'
   if (cards.some(isRunning)) return 'agents'
