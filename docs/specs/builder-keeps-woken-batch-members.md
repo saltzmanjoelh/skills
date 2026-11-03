@@ -111,13 +111,20 @@ fields. It found:
    one minute. While the batch waits, a person's prompt still carries the
    line naming the members still running, and a member's later report or
    notification still ends the batch in the usual way.
-5. **The release turn reaches the model.** When a delivery releases a
-   batch with the completion line, builder clears its count of turns to
-   answer without the model, so the turn that carries the line goes to the
-   model. A held delivery that arrives after the release raises the count
-   again as usual. If another batch is open at the same moment, its next
-   held delivery may then reach the model once, which costs one model turn
-   and loses nothing.
+5. **The release turn reaches the model.** When a delivery that arrives
+   while the session is idle releases a batch with the completion line,
+   builder clears its count of turns to answer without the model, so the
+   turn that carries the line goes to the model. Until that turn's first
+   step has run, a held delivery from a member of a released batch does not
+   raise the count again. The engine sends each agent's notification after
+   its report, and nothing in the engine stops the releasing member's
+   notification from arriving before the release turn's first step, which
+   would otherwise raise the count and answer that turn with "Noted.". A
+   held delivery that arrives after that first step raises the count again
+   as usual. If another batch is open at the same moment, or a delivery from
+   the same batch was held earlier and the engine gives it a turn of its own
+   before the release turn, that delivery's turn may reach the model once,
+   which costs one model turn and loses nothing.
 6. **The test rename.** The hook test that claimed a person's prompt after a
    held member's notification goes to the model is renamed to claim only
    that a report whose turn finds the last member's notification last is
@@ -196,7 +203,9 @@ fields. It found:
   is waiting on its own background work ends nothing; and the word
   finished in the result or note, outside the summary, ends nothing; and a
   release that comes after more idle deliveries than turns clears the count,
-  so the release turn reaches the model. Each
+  so the release turn reaches the model; and the releasing member's own
+  notification, arriving after the release and before the release turn's
+  first step, does not stop that turn from reaching the model. Each
   new test fails when its change is removed.
 - The four gates pass for both mods.
 - Before the pull request merges, the headless probe on the desktop app's
