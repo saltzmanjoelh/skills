@@ -48,8 +48,9 @@ export type Delivery = { id: string; isReport: boolean; status: string | null; f
 export type DeliveryAct = { kind: 'pass' } | { kind: 'end' } | { kind: 'hold' } | { kind: 'release'; line: string }
 
 // The state stays at version 1 although it may now carry optional fields:
-// `retryMs` and `deadlineBeforeSettle` on a batch, `releasing` on the state,
-// and `tasks` and `live` on a member (see types/index.d.ts). The previous build reads a value with any of
+// `retryMs`, `deadlineBeforeSettle` and `wokenAfterClaim` on a batch,
+// `releasing` on the state, and `tasks` and `live` on a member (see
+// types/index.d.ts). The previous build reads a value with any of
 // them as it reads any other, and this build reads a value without them as
 // it did before each was added. A new version would make the old and the new build
 // read each other's state as empty across a hot reload, so a batch whose
@@ -71,7 +72,8 @@ const isBatch = (raw: unknown): raw is Batch => {
     Number.isInteger(b.heldReports) && b.heldReports >= 0 && isTime(b.deadline) && isTime(b.releasedAt) &&
     (b.fired === undefined || b.fired === true) &&
     (b.retryMs === undefined || (typeof b.retryMs === 'number' && Number.isFinite(b.retryMs) && b.retryMs > 0)) &&
-    (b.deadlineBeforeSettle === undefined || isTime(b.deadlineBeforeSettle))
+    (b.deadlineBeforeSettle === undefined || isTime(b.deadlineBeforeSettle)) &&
+    (b.wokenAfterClaim === undefined || b.wokenAfterClaim === true)
 }
 
 // The stored state of the conversation `sessionId` names, or the empty state
@@ -121,10 +123,11 @@ function trimmed(batches: Batch[]): Batch[] {
 // A member as a released batch keeps it: without its task ids and its last
 // turn-end reading, so that nothing carries over to a later batch. The batch
 // drops the deadline it had before a turn end ended its last member, which
-// only an engine wake of an open batch reads.
+// only an engine wake of an open batch reads, and the mark of a wake after a
+// claim, which only the settling of a line the engine took reads.
 const settled = ({ id, type, ended }: BatchMember): BatchMember => ({ id, type, ended })
 function released(b: Batch, now: number): Batch {
-  const { deadlineBeforeSettle: _, ...rest } = b
+  const { deadlineBeforeSettle: _, wokenAfterClaim: __, ...rest } = b
   return { ...rest, members: b.members.map(settled), heldReports: 0, deadline: null, releasedAt: now }
 }
 
@@ -177,7 +180,11 @@ export function isEngineWake(prompt: string): boolean {
 // incomplete again, so it gets back the deadline it had before: the time
 // limit, or none when it holds no delivery. A claim the deadline made in that
 // minute was a claim to send the completion line, so it is cleared with its
-// wait, and the batch's own deadline line goes out at its own time. In a
+// wait, and the batch's own deadline line goes out at its own time. The batch
+// is marked as woken after a claim, because the timer that claimed it may be
+// waiting on the engine to take that line: when the engine takes it, the batch
+// is settled as released all the same (see afterDeadlineSent), and when the
+// engine refuses it, no retry is left to send it. In a
 // released batch, which is only remembered, the agent is forgotten as
 // afterResume forgets it, so that its final report reaches the model, and a
 // batch left with no members is dropped. It never releases a batch, because
@@ -186,8 +193,8 @@ export function afterWake(state: BatchState, id: string): BatchState {
   const reopened = (b: Batch): Batch => {
     const members = b.members.map(m => (m.id === id ? { ...m, ended: false } : m))
     if (b.deadlineBeforeSettle === undefined || !b.members.some(m => m.id === id)) return { ...b, members }
-    const { deadlineBeforeSettle, fired: _, retryMs: __, ...rest } = b
-    return { ...rest, members, deadline: deadlineBeforeSettle }
+    const { deadlineBeforeSettle, fired, retryMs: _, ...rest } = b
+    return { ...rest, members, deadline: deadlineBeforeSettle, ...(fired === true ? { wokenAfterClaim: true as const } : {}) }
   }
   const batches = state.batches.map(b => (b.releasedAt === null ? reopened(b) : { ...b, members: b.members.filter(m => m.id !== id) }))
   return { ...state, batches: batches.filter(b => b.members.length > 0) }
@@ -246,8 +253,8 @@ export function afterMemberStop(state: BatchState, id: string, listed: string[],
     const live = (m.tasks ?? []).some(t => listed.includes(t))
     return { ...m, live, ended: m.ended || !live }
   })
-  const isComplete = members.every(m => m.ended) && !batch.members.every(m => m.ended)
-  if (!isComplete) return { ...state, batches: state.batches.map(b => (b === batch ? { ...batch, members } : b)) }
+  const endsLastMember = members.every(m => m.ended) && !batch.members.every(m => m.ended)
+  if (!endsLastMember) return { ...state, batches: state.batches.map(b => (b === batch ? { ...batch, members } : b)) }
   const settledBatch: Batch = {
     ...batch,
     members,
@@ -405,28 +412,36 @@ const retryOf = (b: Batch) => Math.min(Math.max(b.retryMs ?? BATCH_RETRY_MS, BAT
 // the engine refuses, or a removal that fails, leaves it to be claimed again
 // with the members still running at that time. The wait starts at one minute
 // and doubles at each claim, up to one hour, so the claims of a line the
-// engine keeps refusing fall 1, 2, 4, 8, 16, 32 and then 60 minutes apart.
+// engine keeps refusing fall 1, 2, 4, 8, 16, 32 and then 60 minutes apart. A
+// claim drops the mark of a wake after an earlier claim, because the line it
+// sends replaces the one that claim sent.
 export function afterDeadline(state: BatchState, now: number): { state: BatchState; due: { step: string; line: string }[] } {
   const isDue = (b: Batch) => isOpenWithHeld(b) && (b.deadline as number) <= now
-  const claimed = (b: Batch): Batch => ({ ...b, fired: true, deadline: now + retryOf(b), retryMs: nextBatchRetry(retryOf(b)) })
+  const claimed = ({ wokenAfterClaim: _, ...b }: Batch): Batch => ({ ...b, fired: true, deadline: now + retryOf(b), retryMs: nextBatchRetry(retryOf(b)) })
   return {
     state: { ...state, batches: state.batches.map(b => (isDue(b) ? claimed(b) : b)) },
     due: state.batches.filter(isDue).map(b => ({ step: b.step, line: b.members.every(m => m.ended) ? completeLine(b.members.length) : deadlineLine(runningOf(b)) })),
   }
 }
 
-// Settles the fired batches of the steps whose line the engine took. A batch
-// whose members have all ended got the completion line, so it is released at
-// `now` and remembered, and its members' later deliveries are held as any
-// released batch's are. Any other got the deadline line, so it is dropped,
-// and its members' later deliveries pass.
+// Settles the claimed batches of the steps whose line the engine took. A
+// batch whose members have all ended got the completion line, so it is
+// released at `now` and remembered, and its members' later deliveries are
+// held as any released batch's are. So did a batch that an engine wake
+// reopened after its claim (see afterWake): it is released too, and the
+// members the wake made running again are forgotten, as a wake forgets an
+// agent in a released batch, so that their later reports reach the model on
+// their own. Any other got the deadline line, so it is dropped, and its
+// members' later deliveries pass.
 export function afterDeadlineSent(state: BatchState, steps: string[], now: number): BatchState {
-  const isSent = (b: Batch) => b.fired === true && b.releasedAt === null && steps.includes(b.step)
+  const isSent = (b: Batch) => (b.fired === true || b.wokenAfterClaim === true) && b.releasedAt === null && steps.includes(b.step)
+  const gotComplete = (b: Batch) => b.wokenAfterClaim === true || b.members.every(m => m.ended)
   return {
     ...state,
     batches: state.batches
-      .filter(b => !isSent(b) || b.members.every(m => m.ended))
-      .map(b => (isSent(b) ? released(b, now) : b)),
+      .filter(b => !isSent(b) || gotComplete(b))
+      .map(b => (isSent(b) ? released({ ...b, members: b.members.filter(m => m.ended) }, now) : b))
+      .filter(b => b.members.length > 0),
   }
 }
 

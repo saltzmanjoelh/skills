@@ -696,3 +696,48 @@ test('a stored deadline from before the settle reads back as a time or null, and
   expect(batchStateIn(withField(Infinity), SESSION)).toEqual(emptyBatchState(SESSION))
   expect(afterDelivery(state, report(ALPHA), true, 2001).state.batches[0]?.deadlineBeforeSettle).toBeUndefined()
 })
+
+test('an engine wake between the claim of the completion line and the engine taking it still settles the batch as released with one line, and forgets the woken member so that its later report passes', () => {
+  let state = afterDelivery(launched(), report(BRAVO), true, 1000).state
+  state = afterMemberStop(state, ALPHA, [], 2000)
+  const claimed = afterDeadline(state, 2000 + BATCH_SETTLE_MS)
+  expect(claimed.due).toEqual([{ step: 't1:0', line: completeLine(2) }])
+  state = afterWake(claimed.state, ALPHA)
+  state = afterDeadlineSent(state, ['t1:0'], 2001 + BATCH_SETTLE_MS)
+  expect(state.batches[0]?.releasedAt).toBe(2001 + BATCH_SETTLE_MS)
+  expect(members(state).map(m => m.id)).toEqual([BRAVO])
+  expect(nextDeadline(state)).toBeNull()
+  expect(dueLines(state, 2000 + BATCH_LIMIT_MS + BATCH_RETRY_CEILING_MS)).toEqual([])
+  expect(afterMemberStop(state, ALPHA, [], 2002 + BATCH_SETTLE_MS)).toBe(state)
+  expect(afterDelivery(state, report(ALPHA), true, 2003 + BATCH_SETTLE_MS).act).toEqual({ kind: 'pass' })
+  expect(afterDelivery(state, finished(BRAVO), true, 2003 + BATCH_SETTLE_MS).act).toEqual({ kind: 'hold' })
+  const both = afterWake(afterWake(claimed.state, ALPHA), BRAVO)
+  expect(afterDeadlineSent(both, ['t1:0'], 2001 + BATCH_SETTLE_MS).batches.some(b => b.step === 't1:0')).toBe(false)
+})
+
+test('an engine wake after a claim of the completion line that the engine refused sends no line at the retry, gives back the time limit, and a deadline line taken later drops the batch', () => {
+  let state = afterDelivery(launched(), report(BRAVO), true, 1000).state
+  state = afterMemberStop(state, ALPHA, [], 2000)
+  state = afterWake(afterDeadline(state, 2000 + BATCH_SETTLE_MS).state, ALPHA)
+  expect(nextDeadline(state)).toBe(1000 + BATCH_LIMIT_MS)
+  expect(dueLines(state, 2000 + BATCH_SETTLE_MS + BATCH_RETRY_MS)).toEqual([])
+  const claimed = afterDeadline(state, 1000 + BATCH_LIMIT_MS)
+  expect(claimed.due).toEqual([{ step: 't1:0', line: deadlineLine(['Explore aaaaaaaa']) }])
+  const sent = afterDeadlineSent(claimed.state, ['t1:0'], 1001 + BATCH_LIMIT_MS)
+  expect(sent.batches.some(b => b.step === 't1:0')).toBe(false)
+  expect(afterDelivery(sent, report(ALPHA), true, 1002 + BATCH_LIMIT_MS).act).toEqual({ kind: 'pass' })
+})
+
+test('the mark of a wake after a claim reads back, in any other shape reads as the empty state, and is dropped at the release', () => {
+  let state = afterDelivery(launched(), report(BRAVO), true, 1000).state
+  state = afterMemberStop(state, ALPHA, [], 2000)
+  state = afterWake(afterDeadline(state, 2000 + BATCH_SETTLE_MS).state, ALPHA)
+  expect(state.batches[0]?.wokenAfterClaim).toBe(true)
+  expect(batchStateIn(state, SESSION)).toEqual(state)
+  const withField = (v: unknown) => ({ ...state, batches: [{ ...state.batches[0], wokenAfterClaim: v }, ...state.batches.slice(1)] })
+  expect(batchStateIn(withField(false), SESSION)).toEqual(emptyBatchState(SESSION))
+  expect(batchStateIn(withField('yes'), SESSION)).toEqual(emptyBatchState(SESSION))
+  const out = afterDelivery(state, report(ALPHA), true, 3000 + BATCH_SETTLE_MS)
+  expect(out.act).toEqual({ kind: 'release', line: completeLine(2) })
+  expect(out.state.batches[0]?.wokenAfterClaim).toBeUndefined()
+})

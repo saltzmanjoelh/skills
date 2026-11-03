@@ -584,15 +584,20 @@ export type BatchMember = { id: string; type: string; ended: boolean; tasks?: st
 // minutes, so that a notification coming after the release is held too.
 // `fired` is set when the deadline claims the batch, before its line is
 // submitted, and stays set through a refused or failed submit until the
-// engine has taken the line, when a batch whose members have all ended is
-// released and any other is dropped. `retryMs` is how long the next claim of the
-// batch waits before it is claimed again. It doubles at each claim from one
+// engine has taken the line, unless an engine wake of a member clears a claim
+// of the completion line first. When the engine has taken the line, a batch
+// that got the completion line is released and any other is dropped.
+// `retryMs` is how long the next claim of the batch waits before it is
+// claimed again. It doubles at each claim from one
 // minute up to one hour, and a batch stored without it waits one minute.
 // `deadlineBeforeSettle` is the deadline that the one-minute deadline after
 // the turn end that ended the last member replaced, set only when the
 // deadline had not claimed the batch, so that an engine wake of a member can
-// give it back, and dropped at the release.
-export type Batch = { step: string; members: BatchMember[]; heldReports: number; deadline: number | null; releasedAt: number | null; fired?: true; retryMs?: number; deadlineBeforeSettle?: number | null }
+// give it back, and dropped at the release. `wokenAfterClaim` is set when an
+// engine wake of a member cleared a claim of the completion line, so that the
+// batch is still released if the engine takes that line, and it is dropped at
+// the next claim and at the release.
+export type Batch = { step: string; members: BatchMember[]; heldReports: number; deadline: number | null; releasedAt: number | null; fired?: true; retryMs?: number; deadlineBeforeSettle?: number | null; wokenAfterClaim?: true }
 
 // The batches, oldest first, and the counter marker: how many held deliveries
 // have arrived while the session was idle and still owe a turn answered
