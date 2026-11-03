@@ -7697,11 +7697,13 @@ test('values an older build stored draw without throwing: a card without a model
 })
 
 // Answers the mod's reads of an agent's messages with `answer`, which the test
-// sets, and records whose messages were read.
+// sets, and records whose messages were read. A read of the session's own
+// transcript, which the session's start makes when it looks for a ticket, is
+// answered the same way but not recorded, since it reads no agent's messages.
 function agentMessages(on: On) {
   const messages = { answer: (() => ({ value: [] })) as () => unknown, readFor: [] as (string | undefined)[] }
   on('session.messages', ($, e) => {
-    messages.readFor.push(e.agentId)
+    if (e.agentId !== undefined) messages.readFor.push(e.agentId)
     return messages.answer() as never
   })
   return messages
@@ -11240,8 +11242,11 @@ const S0 = Date.parse('2026-10-12T00:00:00Z')
 // events the tests raise, and the transcript, which is `messages` or refused.
 // `ids.hold`, when set, keeps the next read of the session's id waiting until
 // it resolves. `env` is the environment the mod reads. `transcriptReads`
-// counts the reads of the transcript. `stored` is the store, in memory,
-// holding `over.stored` at the start.
+// counts the reads of the transcript. `transcript.messages` is what the next
+// read answers, which a test may change, and `transcript.hold`, when set,
+// keeps the next read waiting until it resolves, with the answer it had when
+// it was read. `stored` is the store, in memory, holding `over.stored` at the
+// start.
 function foremanSession(on: On, over: { env?: Record<string, string>; messages?: object[] | 'refused'; stored?: [string, unknown][] } = {}) {
   const clock = mock.clock(on, { now: S0 })
   const stored = memoryStore(on, over.stored)
@@ -11254,10 +11259,14 @@ function foremanSession(on: On, over: { env?: Record<string, string>; messages?:
     return { value: ids.current }
   })
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
-  const transcript = { reads: 0 }
-  on('session.messages', () => {
+  const transcript = { reads: 0, messages: over.messages ?? [] as object[] | 'refused', hold: null as Promise<void> | null }
+  on('session.messages', async () => {
     transcript.reads += 1
-    return over.messages === 'refused' ? { deny: 'the transcript could not be read' } : { value: (over.messages ?? []) as never }
+    const messages = transcript.messages
+    const hold = transcript.hold
+    transcript.hold = null
+    if (hold !== null) await hold
+    return messages === 'refused' ? { deny: 'the transcript could not be read' } : { value: messages as never }
   })
   on('prompt.submit', ($, e) => ({ text: e.text }))
   on('skill.prompt', ($, e) => ({ text: e.text }))
@@ -11273,7 +11282,7 @@ function foremanSession(on: On, over: { env?: Record<string, string>; messages?:
   }
   const writesOf = (path = BUILD) => files.writes.log.filter(written => written === path).length
   const transcriptReads = () => transcript.reads
-  return { clock, ids, world, files, statusAt, writesOf, transcriptReads, stored }
+  return { clock, ids, world, files, statusAt, writesOf, transcriptReads, transcript, stored }
 }
 
 // Starts the session and submits its first prompt, typed by the person.
@@ -12128,7 +12137,9 @@ test('a hot reload keeps the parent from the memo, and the next changed write se
 
   await $.turn.start({ text: 'go', turnId: 't1' } as never)
   await s.clock.settle()
-  expect(s.transcriptReads()).toBe(1)
+  // The session's start and the first prompt each read the transcript, and
+  // neither the reload nor the turn reads it again.
+  expect(s.transcriptReads()).toBe(2)
   expect(sends.log.length).toBe(before + 1)
   expect(sends.log.at(-1)?.to).toEqual(expect.stringContaining('parent-1'))
 })
@@ -12681,13 +12692,15 @@ test('after a merge, a write whose read is held across a /clear whose reset of t
 test('a hot reload takes the ticket from the memo without reading the transcript again, keeps the state\'s start time, and starts the minute\'s write again', async ($, on) => {
   const s = foremanSession(on)
   await firstPrompt($, s.clock)
-  expect(s.transcriptReads()).toBe(1)
+  // The session's start finds no ticket in the empty transcript, and the
+  // first prompt reads it again.
+  expect(s.transcriptReads()).toBe(2)
 
   await s.clock.advance(MINUTE / 2)
   await reloads($, s.clock)
   await $.prompt.submit({ text: 'Carry on.', origin: { kind: 'composer' } } as never)
   await s.clock.settle()
-  expect(s.transcriptReads()).toBe(1)
+  expect(s.transcriptReads()).toBe(2)
   expect(s.statusAt()).toMatchObject({ ticket: 'slot-1', state: 'idle', stateSince: S0, writtenAt: S0 + MINUTE / 2 })
 
   // The tick runs a minute after the reload, not a minute after the start.
@@ -12737,12 +12750,27 @@ test('after a restart whose kept ticket could not be read at the hooks\' start, 
   s.stored.hold.refused = 'ticket:'
   await startsAgain($, s)
   expect(s.statusAt()).toBeUndefined()
+  // With no record read, the session's start looks in the transcript once,
+  // and finds only the summary, whose bullet is no ticket line.
+  expect(s.transcriptReads()).toBe(1)
 
   s.stored.hold.refused = null
   await $.prompt.submit({ text: 'Carry on.', origin: { kind: 'composer' } } as never)
   await s.clock.settle()
   expect(s.statusAt()?.ticket).toBe('slot-1')
-  expect(s.transcriptReads()).toBe(0)
+  expect(s.transcriptReads()).toBe(1)
+})
+
+test('after a restart whose kept ticket could not be read at the hooks\' start, a turn that no prompt started takes it up and writes working', async ($, on) => {
+  const s = foremanSession(on, { stored: [['ticket:session-1', UNPARENTED]], messages: COMPACTED })
+  s.stored.hold.refused = 'ticket:'
+  await startsAgain($, s)
+  expect(s.statusAt()).toBeUndefined()
+
+  s.stored.hold.refused = null
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  expect(s.statusAt()).toMatchObject({ ticket: 'slot-1', state: 'working' })
 })
 
 test('after a restart and a merge, the session\'s end deletes the file and then the kept record', async ($, on) => {
@@ -13148,12 +13176,13 @@ test('a session that takes its memo up at a prompt, with its own generation not 
   // forgets the ticket and leaves this copy's generation not the memo's,
   // while the memo stays this session's. The hot reload after it gets a load
   // stamp above the memo's generation, and then has its take-up of the memo
-  // refused, as a failed start of the hooks would.
+  // refused, as a failed start of the hooks would, both at the start of the
+  // hooks and at the look in the transcript that follows it.
   refusal.writes = 1
   await endSession($, 'resume')
-  refusal.writes = 1
+  refusal.writes = 2
   await reloads($, s.clock)
-  expect(refusal.refusals).toBe(2)
+  expect(refusal.refusals).toBe(3)
 
   await s.clock.advance(MINUTE / 2)
   await $.prompt.submit({ text: 'Carry on.', origin: { kind: 'composer' } } as never)
@@ -13243,9 +13272,11 @@ test('a copy whose load stamp is lower than the memo\'s generation does not take
   await s.clock.advance(5 * MINUTE)
   expect(s.files.writes.log.filter(path => path.includes('/foreman/'))).toEqual([])
   // The one write of the memo is this copy's take-up, which finds the memo
-  // owned by the newer copy and writes it back exactly as it was.
+  // owned by the newer copy and writes it back exactly as it was. The one
+  // read of the transcript is the session start's, made before the newer
+  // copy's memo appeared, and the prompt reads it no more.
   expect(owner.writes).toEqual([owner.newer])
-  expect(s.transcriptReads()).toBe(0)
+  expect(s.transcriptReads()).toBe(1)
 })
 
 test('a prompt that found no memo does not write its own over the memo of this session that a newer copy wrote while it looked', async ($, on) => {
@@ -13264,7 +13295,8 @@ test('a prompt that found no memo does not write its own over the memo of this s
   await first
   await s.clock.advance(5 * MINUTE)
 
-  expect(s.transcriptReads()).toBe(1)
+  // The session's start and the prompt each read the transcript once.
+  expect(s.transcriptReads()).toBe(2)
   expect(s.files.writes.log.filter(path => path.includes('/foreman/'))).toEqual([])
   // The one write of the memo is this copy's take-up, which finds the memo
   // owned by the newer copy and writes it back exactly as it was.
@@ -13286,6 +13318,267 @@ test('a hot reload whose clock has not moved past the memo\'s generation still t
   expect(generations.at(-1)).toBe(S0 + 1)
   await reloads($, s.clock)
   expect(generations.at(-1)).toBe(S0 + 2)
+})
+
+// A session whose process restarted, as when the desktop app is quit and
+// relaunched, has no memo in the engine's state, so it looks for the ticket
+// in its transcript at the session's start and at each own turn's start (see
+// docs/specs/stalled-working-sub-session.md).
+
+test('a session that starts with no memo and a ticket in its transcript writes its file at once, idle, and the minute\'s rewrite runs', async ($, on) => {
+  const s = foremanSession(on, { messages: [{ role: 'user', text: TICKETED, toolUses: [] }] })
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await s.clock.settle()
+  expect(s.statusAt()).toMatchObject({ ticket: 'slot-1', desktopSessionId: 'desk-1', cwd: '/repo', state: 'idle', writtenAt: S0 })
+
+  await s.clock.advance(MINUTE)
+  expect(s.statusAt()?.writtenAt).toBe(S0 + MINUTE)
+})
+
+test('a session that starts with an empty transcript writes nothing and stores no memo, so its first prompt with a ticket still writes the file', async ($, on) => {
+  const s = foremanSession(on)
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await s.clock.advance(5 * MINUTE)
+  expect(s.files.writes.log.filter(path => path.includes('/foreman/'))).toEqual([])
+  expect(s.transcriptReads()).toBe(1)
+
+  await $.prompt.submit({ text: TICKETED, origin: { kind: 'composer' } } as never)
+  await s.clock.settle()
+  // The prompt reads the transcript again, which it would not do had the
+  // session's start stored the answer that there is no ticket.
+  expect(s.transcriptReads()).toBe(2)
+  expect(s.statusAt()).toMatchObject({ ticket: 'slot-1', state: 'idle' })
+})
+
+test('a turn that no prompt started, in a session whose transcript was refused at its start and holds a ticket at the turn, writes working and then idle at its end', async ($, on) => {
+  const s = foremanSession(on, { messages: 'refused' })
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await s.clock.settle()
+  expect(s.statusAt()).toBeUndefined()
+
+  s.transcript.messages = [{ role: 'user', text: TICKETED, toolUses: [] }]
+  await s.clock.advance(MINUTE)
+  await $.turn.start({ text: 'A background agent did not finish.', turnId: 't1' } as never)
+  await s.clock.settle()
+  expect(s.statusAt()).toMatchObject({ ticket: 'slot-1', state: 'working', reason: 'The session\'s own turn is running.' })
+
+  await s.clock.advance(MINUTE / 2)
+  await turnEnds($, 't1')
+  await s.clock.settle()
+  expect(s.statusAt()).toMatchObject({ state: 'idle', stateSince: S0 + (3 * MINUTE) / 2 })
+})
+
+test('a turn a foreman nudge started keeps that it was a nudge when its own look takes the memo up', async ($, on) => {
+  const s = foremanSession(on, { messages: 'refused' })
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await s.clock.settle()
+
+  s.transcript.messages = [{ role: 'user', text: TICKETED, toolUses: [] }]
+  await $.turn.start({ text: CROSS_SESSION_SHAPES[0]!(FOREMAN_NUDGE_TEXTS[0]!), turnId: 't1' } as never)
+  await s.clock.settle()
+  await s.clock.advance(MINUTE / 2)
+  await turnEnds($, 't1')
+  await s.clock.settle()
+  expect(s.statusAt()?.lastTurn).toEqual({ endedAt: S0 + MINUTE / 2, answeredNudge: true })
+})
+
+test('a refused transcript writes nothing and a ticket line in the turn\'s own text is not used, and a later prompt with a ticket writes the file', async ($, on) => {
+  const s = foremanSession(on, { messages: 'refused' })
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await s.clock.settle()
+  await $.turn.start({ text: TICKETED, turnId: 't1' } as never)
+  await s.clock.settle()
+  await turnEnds($, 't1')
+  await s.clock.advance(5 * MINUTE)
+  expect(s.files.writes.log.filter(path => path.includes('/foreman/'))).toEqual([])
+  expect(s.transcriptReads()).toBe(2)
+
+  await $.prompt.submit({ text: TICKETED, origin: { kind: 'composer' } } as never)
+  await s.clock.settle()
+  expect(s.statusAt()).toMatchObject({ ticket: 'slot-1', state: 'idle' })
+})
+
+test('a turn whose look at the transcript is held marks the session busy without waiting for it', async ($, on) => {
+  const busyWrites: unknown[] = []
+  on('state.set', ($, e, next) => {
+    if (e.plugin === 'builder' && e.key === 'busy') busyWrites.push(e.value)
+    return next(e)
+  })
+  const s = foremanSession(on)
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await s.clock.settle()
+
+  s.transcript.messages = [{ role: 'user', text: TICKETED, toolUses: [] }]
+  const held = gate()
+  s.transcript.hold = held.until
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  expect(busyWrites.at(-1)).toBe(true)
+  expect(s.statusAt()).toBeUndefined()
+
+  held.release()
+  await s.clock.settle()
+  expect(s.statusAt()).toMatchObject({ ticket: 'slot-1', state: 'working' })
+})
+
+test('a turn that ends while its look at the transcript is held is not recorded as started once the look is done, so the next turn\'s end keeps its own answer', async ($, on) => {
+  const s = foremanSession(on)
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await s.clock.settle()
+
+  // The first turn, which a foreman nudge started, ends while its look is
+  // held. The next turn's own look is not held, so it takes the memo up and
+  // writes working.
+  s.transcript.messages = [{ role: 'user', text: TICKETED, toolUses: [] }]
+  const held = gate()
+  s.transcript.hold = held.until
+  await $.turn.start({ text: CROSS_SESSION_SHAPES[0]!(FOREMAN_NUDGE_TEXTS[0]!), turnId: 't1' } as never)
+  await turnEnds($, 't1')
+  await s.clock.settle()
+  expect(s.statusAt()).toBeUndefined()
+  await $.turn.start({ text: 'go', turnId: 't2' } as never)
+  await s.clock.settle()
+  expect(s.statusAt()).toMatchObject({ ticket: 'slot-1', state: 'working' })
+
+  // The first turn's look is done only now, and the turn it began for has
+  // ended, so it records no start of its own.
+  held.release()
+  await s.clock.settle()
+  await s.clock.advance(MINUTE / 2)
+  await turnEnds($, 't2')
+  await s.clock.settle()
+  expect(s.statusAt()).toMatchObject({ state: 'idle', lastTurn: { endedAt: S0 + MINUTE / 2, answeredNudge: false } })
+  await s.clock.advance(3 * MINUTE)
+  expect(s.statusAt()).toMatchObject({ state: 'idle', lastTurn: { endedAt: S0 + MINUTE / 2, answeredNudge: false } })
+})
+
+test('a look at the transcript that outlives its session does not write the ended session\'s memo over the memo the new conversation took up', async ($, on) => {
+  const s = foremanSession(on, { messages: 'refused' })
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await s.clock.settle()
+
+  // The turn's look reads a transcript with a ticket and is held. The turn
+  // ends, and a /clear ends the session.
+  s.transcript.messages = [{ role: 'user', text: TICKETED, toolUses: [] }]
+  const held = gate()
+  s.transcript.hold = held.until
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  s.transcript.messages = []
+  await turnEnds($, 't1')
+  await s.clock.settle()
+  await endSession($, 'clear')
+  await s.clock.settle()
+
+  // The new conversation takes up a memo of its own.
+  s.ids.current = 'session-2'
+  await $.prompt.submit({ text: 'foreman-ticket: slot-2', origin: { kind: 'composer' } } as never)
+  await s.clock.settle()
+  const second = '/home/me/.claude/foreman/builds/session-2.json'
+  expect(s.statusAt(second)).toMatchObject({ sessionId: 'session-2', ticket: 'slot-2', state: 'idle' })
+
+  // The old look is done only now. The new conversation's file goes on being
+  // written, and says working while its turn runs.
+  held.release()
+  await s.clock.settle()
+  await $.turn.start({ text: 'go on', turnId: 't2' } as never)
+  await s.clock.advance(3 * MINUTE)
+  expect(s.statusAt(second)).toMatchObject({ sessionId: 'session-2', ticket: 'slot-2', state: 'working', writtenAt: S0 + 3 * MINUTE })
+  expect(s.statusAt()).toBeUndefined()
+})
+
+test('a turn after a session\'s end was cut off looks for the new session id\'s ticket in the transcript', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+
+  // The session id changes with no end, so this copy still knows the answer
+  // for the old id only.
+  s.ids.current = 'session-2'
+  s.transcript.messages = [{ role: 'user', text: 'foreman-ticket: slot-2', toolUses: [] }]
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  expect(s.statusAt('/home/me/.claude/foreman/builds/session-2.json')).toMatchObject({ sessionId: 'session-2', ticket: 'slot-2', state: 'working' })
+})
+
+test('a first message with no ticket that a look at the transcript found is used at the next turn and the next prompt without reading the transcript again', async ($, on) => {
+  const s = foremanSession(on, { messages: [{ role: 'user', text: 'Implement the next issue.', toolUses: [] }] })
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await s.clock.settle()
+  expect(s.transcriptReads()).toBe(1)
+
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  await turnEnds($, 't1')
+  expect(s.transcriptReads()).toBe(1)
+
+  // The prompt being submitted holds a ticket, but the first prompt of the
+  // session does not, so the session has none.
+  await $.prompt.submit({ text: TICKETED, origin: { kind: 'composer' } } as never)
+  await $.turn.start({ text: 'go on', turnId: 't2' } as never)
+  await s.clock.advance(5 * MINUTE)
+  expect(s.transcriptReads()).toBe(1)
+  expect(s.files.writes.log.filter(path => path.includes('/foreman/'))).toEqual([])
+})
+
+test('a first message with no ticket that the ended conversation\'s look found is not used for the next conversation', async ($, on) => {
+  const s = foremanSession(on, { messages: [{ role: 'user', text: 'Implement the next issue.', toolUses: [] }] })
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await s.clock.settle()
+  await endSession($, 'clear')
+  s.ids.current = 'session-1'
+  s.transcript.messages = [{ role: 'user', text: TICKETED, toolUses: [] }]
+  await $.prompt.submit({ text: 'Carry on.', origin: { kind: 'composer' } } as never)
+  await s.clock.settle()
+  expect(s.transcriptReads()).toBe(2)
+  expect(s.statusAt()).toMatchObject({ ticket: 'slot-1', state: 'idle' })
+})
+
+test('a look at the transcript that finds a ticket does not write its memo over the memo of this session that a newer copy wrote while it read', async ($, on) => {
+  const owner = newerOwnersMemo(on)
+  const s = foremanSession(on, { messages: [{ role: 'user', text: TICKETED, toolUses: [] }] })
+  const held = gate()
+  s.transcript.hold = held.until
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await s.clock.settle()
+  expect(s.transcriptReads()).toBe(1)
+
+  owner.appear()
+  held.release()
+  await s.clock.advance(5 * MINUTE)
+  expect(s.files.writes.log.filter(path => path.includes('/foreman/'))).toEqual([])
+  // The one write of the memo is the look's take-up, which finds the memo
+  // owned by the newer copy and writes it back exactly as it was.
+  expect(owner.writes).toEqual([owner.newer])
+})
+
+test('the session start\'s look and the first prompt\'s look, racing, take the memo up once: one forced write and one send to the parent', async ($, on) => {
+  const s = foremanSession(on, { messages: [{ role: 'user', text: PARENTED, toolUses: [] }] })
+  const sends = parentSends(on, s)
+  const held = gate()
+  s.transcript.hold = held.until
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await s.clock.settle()
+  await $.prompt.submit({ text: PARENTED, origin: { kind: 'composer' } } as never)
+  await s.clock.settle()
+  expect(s.writesOf()).toBe(1)
+  expect(sends.log.length).toBe(1)
+
+  held.release()
+  await s.clock.settle()
+  expect(s.writesOf()).toBe(1)
+  expect(sends.log.length).toBe(1)
+})
+
+test('a turn after the ticket is known reads no transcript', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  const reads = s.transcriptReads()
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  await turnEnds($, 't1')
+  await $.turn.start({ text: 'go on', turnId: 't2' } as never)
+  await s.clock.settle()
+  expect(s.transcriptReads()).toBe(reads)
+  expect(s.statusAt()?.state).toBe('working')
 })
 
 // The context cap (see docs/specs/implement-session-context-cap.md): the

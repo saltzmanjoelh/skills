@@ -350,7 +350,11 @@ test('Release frees the slot, leaves the row dimmed and labelled released, and w
 
 test('a sub session whose file stopped and whose session is not running wakes the parent once', async ($, on) => {
   const w = world(on)
-  w.folder.put('a.json', record('ABC-1', 'working', { desktopSessionId: 'local_a' }))
+  // A working record would be stalled here and nudged instead, so the gone
+  // wake is pinned with a record that waits on builder. Such a record is read
+  // every two minutes rather than every thirty seconds, so the wake comes on
+  // the read at six minutes.
+  w.folder.put('a.json', record('ABC-1', 'waiting-on-builder', { desktopSessionId: 'local_a' }))
   w.desktop.sessions = [{ sessionId: 'local_a', cwd: '/w', isArchived: false, isRunning: false }]
   await mountBoth($, on)
   await start($)
@@ -358,8 +362,29 @@ test('a sub session whose file stopped and whose session is not running wakes th
   await minutesPass(w, 5)
   expect(w.engine.prompts).toEqual([])
   await minutesPass(w, 2)
-  expect(w.engine.prompts).toEqual(['foreman: ABC-1 has not updated its status file for 5 minutes and its session is not running, so restart it or release the issue.'])
+  expect(w.engine.prompts).toEqual(['foreman: ABC-1 has not updated its status file for 6 minutes and its session is not running, so restart it or release the issue.'])
   await minutesPass(w, 10)
+  expect(w.engine.prompts).toHaveLength(1)
+})
+
+test('a sub session whose file stopped saying working while its session is not running is nudged as idle, and no gone wake comes', async ($, on) => {
+  const w = world(on)
+  w.folder.put('a.json', record('ABC-1', 'working', { desktopSessionId: 'local_a', stateSince: T0 - 60 * MINUTE }))
+  w.desktop.sessions = [{ sessionId: 'local_a', cwd: '/w', isArchived: false, isRunning: false }]
+  await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await minutesPass(w, 5)
+  expect(w.desktop.sent).toEqual([])
+  await minutesPass(w, 1)
+  expect(w.desktop.sent).toEqual([['local_a', NUDGE]])
+  expect(w.engine.prompts).toEqual([])
+  await minutesPass(w, 5)
+  expect(w.desktop.sent).toHaveLength(2)
+  await minutesPass(w, 5)
+  expect(w.engine.prompts).toEqual(['foreman: ABC-1 is still idle after two nudges.'])
+  await minutesPass(w, 10)
+  expect(w.desktop.sent).toHaveLength(2)
   expect(w.engine.prompts).toHaveLength(1)
 })
 

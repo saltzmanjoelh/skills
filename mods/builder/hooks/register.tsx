@@ -3908,6 +3908,23 @@ function succeeded(ran: ToolCallResult): boolean {
 // file with no await, and a hot reload sets them from the memo again.
 let ticketKnown: 'some' | 'none' | undefined
 let ticketFor: string | undefined
+// The first user message of a session's transcript, when a look in the
+// transcript found one that holds no ticket line, together with the session
+// id it belongs to. It lets the next prompt and the later turns' looks use
+// that text rather than read the transcript again. It is kept in this module
+// alone, never in the engine's state and never as a memo that says there is
+// no ticket, so a hot reload forgets it and reads the transcript once more.
+// An empty transcript keeps nothing, so a prompt still falls back to its own
+// text. The next conversation starts without it (see
+// reopenForNextConversation).
+let firstMessageKept: { sessionId: string; text: string } | null = null
+
+// Whether this copy of the module already knows the ticket answer, some or
+// none, for the session `sessionId`. A session whose end was cut off leaves
+// the answer naming its old id, so the answer counts only for that id.
+function knowsTicketFor(sessionId: string): boolean {
+  return ticketKnown !== undefined && ticketFor === sessionId
+}
 // A write of the file was asked for since the writer last read the state,
 // and whether one of those asks was the minute's tick, which writes even
 // when nothing changed.
@@ -4349,18 +4366,33 @@ async function stampLoad($: $) {
 // newer copy, so it is left as it is and nothing is taken: this copy does no
 // more for the status file. When the session has no memo by then, `found`,
 // which carries this copy's stamp, is written instead and taken, or, when
-// `found` is null, nothing is written or taken. Both ways of taking a memo
-// up, at the start of the hooks and at a prompt, come through here, so that
-// a copy whose start failed, or that found no memo at its start because the
-// copy before it wrote one later, still takes the memo up.
+// `found` is null, nothing is written or taken. Every way of taking a memo
+// up, at the start of the hooks, at a look in the transcript and at a prompt,
+// comes through here, so that a copy whose start failed, or that found no
+// memo at its start because the copy before it wrote one later, still takes
+// the memo up. Two of those ways can run at once in one copy, as the
+// session start's look and the first prompt's look do, so a copy that
+// already took the answer for this session under its own stamp takes nothing
+// more when the write settles. Nothing is awaited between that check and the
+// taking, so the memo is never taken up twice. A start of the hooks after a
+// hot reload has a new stamp, so it still takes the memo up again.
+// A caller can outlive its session, as a look in the transcript does when a
+// /clear or a resume ends the session while the look reads. So a stored memo
+// of the session that is current when the memo is written, called for some
+// other session, belongs to the new conversation and is left as it is. A
+// memo of any other session, such as one left under the ended session's id
+// when the reset at its end failed, is still written over with `found`.
 async function takeUpMemo($: $, sessionId: string, found: StatusMemo | null) {
+  const current = await $.session.id()
   const stored = await update($, statusMemo, raw => {
     const memo = statusMemoIn(raw, sessionId)
-    if (memo === null) return found ?? raw
-    return memo.generation > loadStamp ? raw : { ...memo, generation: loadStamp }
+    if (memo !== null) return memo.generation > loadStamp ? raw : { ...memo, generation: loadStamp }
+    const isCurrentSessions = current !== sessionId && statusMemoIn(raw, current) !== null
+    return isCurrentSessions ? raw : found ?? raw
   })
   const taken = statusMemoIn(stored, sessionId)
   if (taken === null || taken.generation !== loadStamp) return
+  if (knowsTicketFor(sessionId) && statusGen === loadStamp) return
   statusGen = loadStamp
   adoptMemo($, taken)
 }
@@ -4380,18 +4412,32 @@ async function takeUpMemo($: $, sessionId: string, found: StatusMemo | null) {
 // another prompt, the copy of the module from before a hot reload, or a
 // newer copy wrote while this one looked is never written over: it is taken
 // up when this copy owns it, and left as it is when a newer copy does.
+// When a look in the transcript already found this session's first user
+// message, which holds no ticket line, that text is used and the transcript
+// is not read again (see firstMessageKept).
 async function lookForTicket($: $, submitted: string) {
   const sessionId = await $.session.id()
-  if (ticketKnown !== undefined && ticketFor === sessionId) return
+  if (knowsTicketFor(sessionId)) return
   if (await startStatus($)) return
   let first = submitted
-  try {
-    first = firstPromptOf(await $.session.messages(), submitted)
-  } catch {
-    // The prompt being submitted is checked instead.
+  if (firstMessageKept?.sessionId === sessionId) first = firstMessageKept.text
+  else {
+    try {
+      first = firstPromptOf(await $.session.messages(), submitted)
+    } catch {
+      // The prompt being submitted is checked instead.
+    }
   }
+  await takeUpMemo($, sessionId, await memoFrom($, sessionId, first))
+}
+
+// The memo that the first prompt `first` of this session gives, carrying this
+// copy's load stamp: one that says the session has no ticket when the prompt
+// holds no ticket line, and otherwise one with the ticket, the file's path,
+// the desktop id, the parent's id and the session's folder.
+async function memoFrom($: $, sessionId: string, first: string): Promise<StatusMemo> {
   const ticket = ticketIn(first)
-  const found = ticket === null
+  return ticket === null
     ? newMemo({ sessionId, ticket: null, path: null, cwd: '', generation: loadStamp })
     : newMemo({
         sessionId,
@@ -4402,7 +4448,64 @@ async function lookForTicket($: $, submitted: string) {
         cwd: (await read($, cwd)) ?? (await $.session.cwd()),
         generation: loadStamp,
       })
+}
+
+// Looks for the ticket in the transcript alone, at the session's start and at
+// the start of each own turn while the answer is not known, so that a session
+// whose process restarted, and which therefore has no memo in the engine's
+// state, takes its memo up again even when no prompt is submitted, as on a
+// turn that the desktop app starts after a relaunch. It returns when this
+// copy already knows the answer for this session, or when a memo of this
+// session is taken up as it is (see startStatus). It stores a memo only when
+// the transcript's first user message holds a ticket line. It never reads the
+// turn's own text, which may be the desktop app's notice rather than the
+// first prompt, and it never stores the answer that there is no ticket, so a
+// transcript that is empty, cannot be read or holds no ticket leaves the look
+// to the next prompt, as before. A first user message with no ticket line is
+// kept in memory for that prompt, and a later look for the same session id
+// returns without reading (see firstMessageKept).
+// The look is not awaited, so the session can end while it reads, and a new
+// conversation can take up its own memo meanwhile. So once the memo is built
+// the session id is read again, and the look stops when it changed or when
+// writing is closed, before it takes anything up.
+// When the session's start has just found neither a memo nor a kept record
+// (see startStatus), `isStartDone` is set and the look goes straight to the
+// transcript rather than read the kept record from the store a second time.
+// A turn's look tries the take-up itself, so a record that the start could
+// not read is still taken up before the transcript is read.
+async function lookInTranscript($: $, isStartDone = false) {
+  const sessionId = await $.session.id()
+  if (knowsTicketFor(sessionId)) return
+  if (!isStartDone && await startStatus($)) return
+  if (firstMessageKept?.sessionId === sessionId) return
+  let first: string
+  try {
+    first = firstPromptOf(await $.session.messages(), '')
+  } catch {
+    return
+  }
+  if (ticketIn(first) === null) {
+    if (first !== '') firstMessageKept = { sessionId, text: first }
+    return
+  }
+  const found = await memoFrom($, sessionId, first)
+  if (statusClosed || await $.session.id() !== sessionId) return
   await takeUpMemo($, sessionId, found)
+}
+
+// Records in the memo that the session's own turn number `turn` started, and
+// whether a foreman nudge started it. The end's own change to the memo is
+// queued after this one. While this copy does not know the ticket answer for
+// the current session id, the turn first looks for it in the transcript (see
+// lookInTranscript), and the start is recorded once the look is done, only
+// when this same turn is still running, so the start of a turn that ended
+// meanwhile is never recorded after its end.
+async function recordTurnStart($: $, turn: number, nudged: boolean) {
+  if (!knowsTicketFor(await $.session.id())) {
+    await lookInTranscript($).catch(() => undefined)
+    if (ownTurnsStarted !== turn || !turnRunning) return
+  }
+  await changeMemo($, memo => afterTurnStart(afterLoopEnd(memo, ''), nudged))
 }
 
 // Takes a memo of this session up when there is one (see takeUpMemo), and
@@ -4552,6 +4655,7 @@ async function deleteAfterMerge($: $, sessionId: string, budget: { remainingMs: 
 async function reopenForNextConversation($: $) {
   ticketKnown = undefined
   ticketFor = undefined
+  firstMessageKept = null
   ticketDue = null
   lastWrittenText = null
   parentSendOwedTo = null
@@ -4739,13 +4843,21 @@ export const register: Register = on => {
     // across a hot reload, is then taken up again, so the writes below
     // already count for the status file. When taking it up fails, the next
     // prompt takes the memo up instead (see lookForTicket), and until then
-    // the file is not written.
+    // the file is not written. A session with no memo, as after its process
+    // restarted, then looks for its ticket in the transcript, once the
+    // session's folder is stored for the memo to name. The look is not
+    // awaited, so the session's start never waits on the transcript.
     await stampLoad($).catch(() => undefined)
     // The kept tickets' sweep starts before the take-up, so that the first
     // refresh of this copy waits for it (see refreshTicket).
     void pruneTickets($).catch(() => undefined)
-    await startStatus($).catch(() => undefined)
+    // When the take-up found neither a memo nor a kept record, the look skips
+    // its own, so the kept record is read once here, and a read that never
+    // answers is waited on only once. A take-up that failed is tried again
+    // by the look (see lookInTranscript).
+    const isTakenUp = await startStatus($).catch(() => undefined)
     await update($, cwd, () => e.cwd)
+    if (isTakenUp !== true) void lookInTranscript($, isTakenUp === false).catch(() => undefined)
     // The hooks start again after a hot reload too, which drops every call in
     // flight from this module, so the records of them go. A question still
     // marked unanswered is settled, and its label taken off, rather than leave
@@ -4861,9 +4973,8 @@ export const register: Register = on => {
     // A new turn means the last one ended, so the session's own permission
     // prompts are closed for the status file. The memo also keeps whether a
     // foreman nudge started this turn, which its end records. The change is
-    // not awaited, so busy is set as soon as before; the end's own change to
-    // the memo is queued after this one.
-    void changeMemo($, memo => afterTurnStart(afterLoopEnd(memo, ''), isForemanNudge(e.text))).catch(() => undefined)
+    // not awaited, so busy is set as soon as before (see recordTurnStart).
+    void recordTurnStart($, ownTurnsStarted, isForemanNudge(e.text)).catch(() => undefined)
     await update($, busy, () => true)
     refreshLater($)
     return next(e)
