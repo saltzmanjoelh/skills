@@ -12318,6 +12318,36 @@ const sendsCopy = (over: object = {}) => ({
   version: 1, sessionId: 'session-1', parentSessionId: 'parent-1', since: S0, delivered: 0, failed: 0, last: null, ...over,
 })
 
+test('a send whose start time cannot be read is still counted, at the load time', async ($, on) => {
+  // The test kit's clock refuses once: the first read after the second send
+  // began, which is the read of that send's start time. The clock's handler
+  // is wrapped as the kit registers it, since an event takes one handler.
+  let refused = false
+  let sendsSoFar = () => 0
+  const onRefusing = ((event: string, ...rest: unknown[]) => {
+    const register = on as unknown as (...args: unknown[]) => unknown
+    if (event !== 'clock.now') return register(event, ...rest)
+    const handler = rest[rest.length - 1] as (...args: unknown[]) => unknown
+    return register(event, ...rest.slice(0, -1), (...args: unknown[]) => {
+      if (sendsSoFar() !== 2 || refused) return handler(...args)
+      refused = true
+      throw new Error('the clock could not be read')
+    })
+  }) as typeof on
+  const s = foremanSession(onRefusing)
+  const sends = parentSends(on, s)
+  sendsSoFar = () => sends.log.length
+  const line = await messagesLineReader($)
+  await firstPrompt($, s.clock, PARENTED)
+  await s.clock.advance(1_000)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+
+  expect(refused).toBe(true)
+  expect(await line()).toEqual({ text: 'Messages to foreman: 2 delivered, 0 failed, last at 00:00:00 UTC', color: undefined })
+  expect(s.stored.get('sends:session-1')).toEqual(sendsCopy({ delivered: 2, last: { at: S0, outcome: 'delivered' } }))
+})
+
 test('a delivered, a refused, an undelivered, a throwing and a timed-out send each change the right count, newest time and reason, in the pane and in the copy', async ($, on) => {
   const s = foremanSession(on)
   const sends = parentSends(on, s)

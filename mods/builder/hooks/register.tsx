@@ -4127,7 +4127,12 @@ async function copySends($: $) {
     if (record === null) return
     const key = sendsKey(record.sessionId)
     const stored = sendsIn(await $.store.get(key), record.sessionId)
-    if (stored !== null && (stored.since > record.since || JSON.stringify(stored) === JSON.stringify(record))) return
+    // A newer load of the hooks owns the key.
+    if (stored !== null && stored.since > record.since) return
+    // The stored copy is already this record. The texts compare equal only
+    // because sendsIn builds its fields in the order emptySends and afterSend write
+    // them; were the orders to drift, each copy would be written again.
+    if (stored !== null && JSON.stringify(stored) === JSON.stringify(record)) return
     await $.store.set(key, record)
   })
   sendsWrites = next.catch(() => undefined)

@@ -1271,7 +1271,12 @@ async function copyMarkers($: $) {
     if (record === null) return
     const key = markersKey(record.sessionId)
     const stored = markersIn(await $.store.get(key), record.sessionId)
-    if (stored !== null && (stored.since > record.since || JSON.stringify(stored) === JSON.stringify(record))) return
+    // A newer load of the hooks owns the key.
+    if (stored !== null && stored.since > record.since) return
+    // The stored copy is already this record. The texts compare equal only
+    // because markersIn builds its fields in the order emptyMarkers and afterConsumed write
+    // them; were the orders to drift, each copy would be written again.
+    if (stored !== null && JSON.stringify(stored) === JSON.stringify(record)) return
     await $.store.set(key, record)
   })
   markerWrites = next.catch(() => undefined)
