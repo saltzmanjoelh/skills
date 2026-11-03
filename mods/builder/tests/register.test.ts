@@ -12348,6 +12348,31 @@ test('a send whose start time cannot be read is still counted, at the load time'
   expect(s.stored.get('sends:session-1')).toEqual(sendsCopy({ delivered: 2, last: { at: S0, outcome: 'delivered' } }))
 })
 
+test('a prompt that takes up the memo another prompt of this load took up keeps the count of the sends made in between', async ($, on) => {
+  const late = answerWaits(on, 'state.get', 'statusMemo')
+  const s = foremanSession(on)
+  const sends = parentSends(on, s)
+  const line = await messagesLineReader($)
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await s.clock.settle()
+
+  // The first prompt's read of the memo answers that there is none and is
+  // held, while a second prompt takes up the memo and sends to the parent.
+  late.arm()
+  const first = $.prompt.submit({ text: PARENTED, origin: { kind: 'composer' } } as never)
+  await s.clock.settle()
+  await $.prompt.submit({ text: PARENTED, origin: { kind: 'composer' } } as never)
+  await s.clock.settle()
+  expect(sends.log.length).toBe(1)
+
+  late.release()
+  await first
+  await s.clock.settle()
+  expect(sends.log.length).toBe(1)
+  expect(await line()).toEqual({ text: 'Messages to foreman: 1 delivered, 0 failed, last at 00:00:00 UTC', color: undefined })
+  expect(s.stored.get('sends:session-1')).toEqual(sendsCopy({ delivered: 1, last: { at: S0, outcome: 'delivered' } }))
+})
+
 test('a delivered, a refused, an undelivered, a throwing and a timed-out send each change the right count, newest time and reason, in the pane and in the copy', async ($, on) => {
   const s = foremanSession(on)
   const sends = parentSends(on, s)
