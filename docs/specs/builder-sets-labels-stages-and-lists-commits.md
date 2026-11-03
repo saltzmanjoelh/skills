@@ -75,16 +75,19 @@ that chooses a merge step or the Merged step.
 ### Stage reports
 
 - The mod reports `pr` when the watch tool starts watching a pull request.
-- The mod reports `review` when the package tool is first called for the
-  watched pull request, and reports `review` again with the round as its note
-  on later package calls.
+- The mod reports `review`, with the round as its note, on every package
+  tool call for the watched pull request. The first call carries `round 1`
+  too, because an empty note would wipe the `round 1` the session's resume
+  report shows.
 - The mod reports `merge` when a Bash call matching the merge command
   (`gh pr merge`, or the project's merge command) is about to run. It uses a
   matcher for merge commands only, not the push-or-merge matcher, and reports
   before the command runs.
 - Each report applies only when a progress record exists that the session
   started for this work, meaning the watch began at or after the record's
-  start. It keeps the session's title and never moves the shown stage back.
+  start. It keeps the session's title, and it never reports a stage before
+  the furthest stage reached, so a later watch does not show `pr` again while
+  the session reports `build` to fix review findings.
 - The session still reports grounding, issue, spec, plan, build and verify
   itself, because the mod cannot see them. The skill's "Reporting the stage"
   section and the merge step text drop the reports the mod now makes.
