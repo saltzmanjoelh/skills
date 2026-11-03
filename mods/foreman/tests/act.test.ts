@@ -985,6 +985,26 @@ test('a stall needs the list on every read until its idle wake, even after a gon
   expect(needsList(t, [stalledRow({}, T0 + 16 * MINUTE)], T0 + 17 * MINUTE)).toBe(false)
 })
 
+test('a stall that drops out of a list that is not complete after its first nudge gets the gone wake, counts as woken, and asks for the list only once every gone wait', () => {
+  const rows = [stalledRow()]
+  const first = T0 + GONE_MS + MINUTE
+  const nudged = read(paired(), rows, first, { sessions: stoppedListing })
+  expect(nudged.effects).toEqual([{ kind: 'nudge', to: 'local_a', name: 'ABC-1' }])
+  const gone = read(nudged.tickets, rows, first + MINUTE, { sessions: { kind: 'read', sessions: [] } })
+  expect(gone.reasons.map(r => r.kind)).toEqual(['gone'])
+  expect(gone.tickets.pairings[0]!.acts.stretch?.woke).toBe(true)
+  expect(needsList(gone.tickets, rows, first + 2 * MINUTE)).toBe(false)
+  expect(needsList(gone.tickets, rows, first + MINUTE + GONE_MS)).toBe(true)
+  // The parent was woken for this stall, so a later list that shows the
+  // session stopped again brings no second nudge and no second wake.
+  let t = gone.tickets
+  for (let now = first + 2 * MINUTE; now <= T0 + 40 * MINUTE; now += MINUTE) {
+    const d = read(t, rows, now, { sessions: stoppedListing })
+    expect([d.effects, d.reasons]).toEqual([[], []])
+    t = d.tickets
+  }
+})
+
 test('a stall-shaped record that never stalls asks for the list as often as on the base: after its gone wake, or after a merge, once every gone wait', () => {
   const first = T0 + GONE_MS + MINUTE
   // Missing from a list that is not complete: the gone wake goes, and no stall

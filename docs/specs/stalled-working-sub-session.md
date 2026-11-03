@@ -117,6 +117,12 @@ last written while a turn ran.
   woken on it, but the stall's count is kept until the file changes, so a
   nudged turn that changes nothing still leads to the second nudge and the
   wake on time.
+- A stalled record that has had its first nudge and then drops out of a list
+  that is not complete: on that read it is not stalled, so the gone rule wakes
+  the parent, and that wake counts as the stall's wake. No further nudge or
+  wake comes for it until its file changes, and its list reads fall back to
+  once every five minutes, because the idle wake needs a list that shows the
+  session and may never come.
 - A relaunched session whose transcript cannot be read at the session's start
   but can be read at its first turn's start: the turn's start takes the memo
   up.

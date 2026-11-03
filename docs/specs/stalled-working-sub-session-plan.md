@@ -42,7 +42,10 @@ so. Its weaknesses are fixed by the grafts below.
    whatever the list shows, so a failed or skipped list read, or one whose
    list shows the session running, in the middle of a stall neither nudges
    nor resets the count. Only a change to the file ends the stall's count.
-8. In `goneRule`, return when `isStalled(s)` holds.
+8. In `goneRule`, return when `isStalled(s)` holds. When the gone wake goes
+   for a record of the stall's shape whose stretch `stallsOwn` marks as the
+   stall's, also mark that stretch as woken, so that `stallHandled` holds and
+   the list reads fall back to once every five minutes.
 9. Extract the "active owned pairing for this row" lookup from
    `slotsNeedList` into `activeOwners(t, rows)`. Add `stallsNeedList`, which
    holds when some owned row has `stalledShape`, not `stallHandled`, and a
@@ -179,6 +182,10 @@ last change:
   idle wake. A record of the stall's shape that is missing from a list that
   is not complete, or whose pull request merged and whose session runs, keeps
   the five-minute limit after its first read.
+- A stall that has had its first nudge and then drops out of a list that is
+  not complete gets the gone wake, needs the list only once every five
+  minutes after it, and gets no further nudge or wake when the list shows it
+  stopped again.
 - End to end in `acts.test.ts`: the desktop nudge is sent and no gone prompt
   comes.
 

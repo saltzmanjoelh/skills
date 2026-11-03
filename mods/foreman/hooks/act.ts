@@ -421,13 +421,20 @@ function stallHandled(p: ForemanPairing, row: SubRow, now: number): boolean {
 // Gone, in any state but done: the file has not changed for GONE_MS, the list
 // does not show the session running, and the pull request has not merged.
 // One stretch is one unchanged modification time. A stalled record is left to
-// the idle rule, which wakes the parent itself at its third threshold.
+// the idle rule, which wakes the parent itself at its third threshold. A
+// stall that has nudged and then drops out of a list that is not complete
+// gets the gone wake instead, and its stretch is marked as woken, because the
+// parent now knows of it and the idle wake, which needs the list to show the
+// session, may never come. Without the mark stallsNeedList would ask for the
+// list on every read until the file changes.
 function goneRule(s: Step) {
   if (s.look === null || s.p.standing !== 'active' || !mayBeGone(s.p, s.row, s.now)) return
   if (isStalled(s)) return
   if (endedIn(s.look.byId, desktopOf(s.p, s.row)) === null) return
   s.reasons.push({ kind: 'gone', who: whoOf(s.row.record.issueKey, s.p.ticket), minutes: minutesOf(s.now - s.row.mtimeMs) })
-  setActs(s, { goneWokeFor: s.row.mtimeMs })
+  const { stretch } = s.p.acts
+  const stallNudged = stretch !== null && stretch.wait === null && stalledShape(s.p, s.row, s.now) && stallsOwn(stretch, s.row.mtimeMs)
+  setActs(s, stallNudged ? { goneWokeFor: s.row.mtimeMs, stretch: { ...stretch, woke: true } } : { goneWokeFor: s.row.mtimeMs })
 }
 
 // Over, in any state but done: the list shows the session archived, or
