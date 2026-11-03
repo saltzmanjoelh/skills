@@ -40,8 +40,8 @@ fields. It found:
   engine starts the agent again. That start fires `agent.spawn` with
   `resume.agentId` set to the agent's own id, `background` true and no
   `parentAgentId`. Its prompt begins with a `<task-notification>` element
-  whose `<task-id>` names the agent's own background shell task, an id that
-  builder never sees, because the agent's tool calls are not the session's.
+  whose `<task-id>` names the agent's own background shell task, an id
+  that only the agent's own tool call returned.
 - **A parking agent reports before it parks.** When the agent ends its
   turn to wait on its background work, the session receives its report and
   then a notification with status `completed`, and only later the engine's
@@ -84,46 +84,87 @@ fields. It found:
 - **The completion line reaches the model on an idle release.** A second run
   released a batch while the session was idle, and the model quoted the
   completion line back.
+- **An agent can report while its own work still runs.** Three runs on the
+  same engine made 2, 4 and 3 model turns after the launch instead of one.
+  Agents started a Monitor beside their background sleep, reported while the
+  Monitor still ran, and were counted as ended; after the release the engine
+  woke them again, and each second report made a model turn of its own.
+- **Builder can see whether a member's own work still runs.** A probe that
+  logged `tool.call` and `classic.SubagentStop` found that `tool.call` fires
+  for every subagent tool call with the agent's id, and its result carries
+  `backgroundTaskId` for a Bash call moved to the background and `taskId`
+  for a Monitor. SubagentStop fires at every turn end of a subagent, not only
+  at reports, with `agent_id`, 0.04 to 0.06 seconds after the agent's
+  handback and always before its report passes `prompt.submit`. Its
+  `background_tasks` list covers the whole session and has no owner field,
+  so ownership comes from the task ids that `tool.call` recorded. In all ten
+  reports of the probe, the member's own task was listed when it reported
+  with live work, and none of its tasks was listed when it reported with
+  nothing left running.
+- **A woken turn can end with plain text and no handback.** SubagentStop then
+  fires with none of the member's own tasks listed, and the finished
+  notification that follows usually does not pass `prompt.submit`.
 
 ## Behavior
 
 1. **An engine wake keeps the member.** When `agent.spawn` carries a resume
    whose prompt begins with a `<task-notification>` element, builder treats
    it as the engine waking a parked agent. In a batch that is not yet
-   released, the agent stays a member and counts as running again, because
-   the report it sent before it parked ended it; its later report and
-   notifications are then held or end the batch as any member's are. A
-   report that the agent sent before it parked but that the engine delivers
-   after the wake ends the member early, because builder cannot tell that
-   late report from the agent's final one. The batch can then be released,
-   with the completion line, before that agent finishes. Its final report
-   or notification still reaches the conversation, but builder answers its
-   turn with "Noted.", as it answers any delivery from a member of a
-   released batch, so the model reads it at its next turn. In a batch
-   already released, the agent is forgotten, as a resume forgets it today,
-   so that its final report reaches the model.
-2. **A notification that says the agent finished ends its member.** The
-   engine accepts one handback report from each agent, so an agent that
-   reported before it parked often ends its woken run with plain text and
-   sends no second report. Its only sign of ending is a notification with
-   status `completed` whose summary says the agent finished, worded as
-   `<summary>Agent "…" finished</summary>`. Builder ends a member at such a
-   notification, reading only the engine-written `<summary>` element and
-   never the result or note, which can carry the agent's own text. Every
-   other `completed` notification, including the one whose summary says the
-   agent is waiting on its own background work, stays held and ends nothing,
-   as the existing spec says. The rule applies to every member, because the
-   finished notification comes after any report the agent made, so for a
-   member that already reported it ends nothing new. Builder sees such a
-   notification only when the engine passes it through the prompt
-   submission hook, which it does not always do, so a woken member that ends
-   with plain text and whose finished notification skips the hook holds its
-   batch until the deadline.
-3. **Every other resume forgets the member,** as the existing spec says: the
+   released, the agent stays a member and counts as running again; its later
+   report and notifications are then held or end the batch as any member's
+   are. In a batch already released, the agent is forgotten, as a resume
+   forgets it today, so that its final report reaches the model. A report
+   that the agent sent before it parked but that the engine delivers after
+   the wake ends nothing when builder saw the agent's turn end with its own
+   work running, as the next item describes. For a member whose turn end
+   builder never saw, that late report ends the member early, because builder cannot tell it
+   from the agent's final one; the batch can then be released before that
+   agent finishes, and its final report is answered with "Noted.", as any
+   delivery from a member of a released batch is, so the model reads it at
+   its next turn.
+2. **A member ends only when none of its own background work is running.**
+   When a member's tool call returns a `backgroundTaskId` or a `taskId`,
+   builder stores that id with the member in the batch state. At each
+   SubagentStop for a member, builder records whether any of the member's
+   own task ids is listed in the event's `background_tasks`, which lists only
+   work still in flight. A report, or a `completed` notification whose
+   `<summary>` element says the agent finished (`Agent "…" finished`), ends
+   the member only when its last SubagentStop listed none of its own tasks.
+   A member whose turn ended with none of its own tasks listed ends at that
+   SubagentStop, even without a report, because a woken agent often ends
+   with plain text and the engine accepts only one handback report from each
+   agent. A notification that the agent failed or was killed ends it always.
+   A member for which builder saw no SubagentStop, for example after a hot
+   reload or a dropped event, ends at its report or finished notification,
+   so the batch is never stranded. A listed task that builder did not record
+   from the member's own tool calls does not count against it. Builder reads
+   only the engine-written `<summary>` element of a notification, never the
+   result or note, which can carry the agent's own text, and every other
+   `completed` notification, including the one whose summary says the agent
+   is waiting on its own background work, stays held and ends nothing. The
+   task ids and the last reading are dropped when the batch is released, so
+   nothing carries over to a later batch.
+3. **The release after a turn end reaches the model once.** When the last
+   member ends at a SubagentStop rather than at a delivery, the batch is not
+   released at that moment, because the member's report normally follows
+   within seconds and the model should read it in the release turn. Builder
+   sets the batch's deadline to one minute from then instead. The next
+   delivery from a member of the batch that passes the prompt submission
+   hook, normally that report, releases the batch with the completion line.
+   When no delivery passes the hook within the minute, as when the woken
+   turn ended with plain text and its finished notification skipped the
+   hook, the deadline's timer submits the completion line as its own prompt,
+   through the same path and with the same back-off as the deadline line,
+   and once the engine takes it the batch is released and remembered, so
+   that a later delivery from it is answered with "Noted.". While that line
+   is claimed and not yet taken, a delivery from the batch is held and adds
+   no second line. A person's prompt during the minute carries no line
+   naming members still running, because none is.
+4. **Every other resume forgets the member,** as the existing spec says: the
    resume is one the session asked for, so the session already has the
    batch's reports in front of it. When every other member has ended, the
    batch is released with no line, as today.
-4. **A refused deadline line backs off.** When the engine refuses the line
+5. **A refused deadline line backs off.** When the engine refuses the line
    that builder submits at a batch's deadline, or the submit throws, the
    batch stays claimed and is tried again after a wait that starts at one
    minute and doubles after each refusal, up to a ceiling of one hour: 1, 2,
@@ -133,7 +174,7 @@ fields. It found:
    one minute. While the batch waits, a person's prompt still carries the
    line naming the members still running, and a member's later report or
    notification still ends the batch in the usual way.
-5. **The release turn reaches the model.** When a delivery that arrives
+6. **The release turn reaches the model.** When a delivery that arrives
    while the session is idle releases a batch with the completion line,
    builder clears its count of turns to answer without the model, so the
    turn that carries the line goes to the model. Until that turn's first
@@ -147,7 +188,7 @@ fields. It found:
    the same batch was held earlier and the engine gives it a turn of its own
    before the release turn, that delivery's turn may reach the model once,
    which costs one model turn and loses nothing.
-6. **The test rename.** The hook test that claimed a person's prompt after a
+7. **The test rename.** The hook test that claimed a person's prompt after a
    held member's notification goes to the model is renamed to claim only
    that a report whose turn finds the last member's notification last is
    answered without the model, and its second half, which could not fail,
@@ -159,20 +200,23 @@ fields. It found:
 
 - **A session message that begins with a `<task-notification>` element**
   would be taken for the engine's wake and keep the member. The member then
-  ends at its report or at a notification that says the agent finished,
-  failed or was killed, as the batch's other members do, so the worst case
-  is a batch that waits until its deadline. Checking that the notification
-  names the agent's own task is not possible, because that id names the
-  agent's shell task, which builder never sees.
+  ends as the batch's other members do, so the worst case is a batch that
+  waits until its deadline.
 - **An agent woken by the engine after its batch was released** is
   forgotten in that remembered batch, as today, so its final report wakes
   the model on its own.
-- **Every member parks before any is woken.** Each report before a park
-  ends its member, so the batch is released on those reports with the
-  completion line, and each final report after a wake then reaches the
-  model on its own. Builder cannot know at a report that a wake will
-  follow, so this case keeps today's cost.
+- **Every member parks before any is woken.** A member whose turn end
+  listed its own work is not ended by its report, so the batch waits for
+  the wakes. For members whose turn ends builder never saw, each report
+  before a park ends its member, the batch is released on those reports,
+  and each final report after a wake reaches the model on its own.
 - **An agent woken several times** stays a member through every wake.
+- **A member whose own watcher never ends** holds its batch until the
+  deadline, which stays the backstop.
+- **A delivery from another member in the minute after the last turn end**
+  releases the batch, so the release turn can start before the last
+  member's report arrives. That report is then answered with "Noted." and
+  the model reads it at its next turn.
 - **A batch that keeps its line refused for hours** costs one hook-chain
   call and one state write an hour once the wait reaches its ceiling.
 
@@ -183,10 +227,11 @@ fields. It found:
   in for it, and the pull request says that the desktop run has not been
   made.
 - **(b) Telling a session message that begins with a `<task-notification>`
-  element apart from the engine's wake.** No check can be built, because the
-  notification's task id names a shell task builder never sees. Such a
-  message keeps the member until its report, a notification that says the
-  agent finished, failed or was killed, or the batch's deadline.
+  element apart from the engine's wake.** The wake is still recognised by
+  its shape alone, although builder now records a member's task ids and
+  could match the notification's task id against them. Such a message keeps
+  the member until it ends as any member ends or the batch's deadline
+  passes.
 - **(c) The mod's other retry policies,** such as the stuck-prompt
   reminder's fixed retry on refusal. They stay as they are.
 - **(d) A member that the session resumed and the engine later woke** stays
@@ -203,13 +248,16 @@ fields. It found:
   the existing spec's handling: the delivery goes on unchanged and reaches
   the model.
 - **A finished summary that the engine words differently in a later
-  version** no longer matches, so a woken member that ends with plain text
-  holds its batch until the deadline, which is how such a batch behaved
-  before this change. Nothing is lost.
-- **A finished notification that skips the prompt submission hook** never
-  reaches builder, so a woken member that ended with plain text stays
-  running and its batch waits for its deadline, which is how such a batch
-  behaved before this change. Nothing is lost.
+  version** no longer matches, so such a notification ends nothing, and the
+  member ends at its turn end or its report instead.
+- **A later engine that stops listing a subagent's own work in
+  `background_tasks`, or stops returning task ids at `tool.call`,** makes a
+  member end at its first turn end or report even while its work runs, as
+  before this change. That costs extra model turns and loses nothing.
+- **A SubagentStop that never reaches builder** leaves the member's last
+  reading as it was. With no reading at all, the member ends at its report,
+  as before this change; with a reading that listed its work, it ends at a
+  later turn end, or the batch waits for its deadline.
 
 ## Verification
 
@@ -219,26 +267,43 @@ fields. It found:
   still held and the batch is released once, with the completion line; such
   a resume after the batch was released forgets the member there, so its
   final report passes; a resume whose prompt is the session's own text
-  forgets the member, as today; a refused deadline line is tried again
-  after 1, 2, 4, 8, 16, 32 and then 60 minutes, and again at 60 minutes
-  after that; a stored batch without a wait starts at one minute; a deadline line the engine takes
-  after refusals ends the batch; a `completed` notification whose summary
-  says the agent finished ends its member, so a woken member that ends with
-  no second report still lets its batch be released once, with the
-  completion line; a `completed` notification whose summary says the agent
-  is waiting on its own background work ends nothing; and the word
-  finished in the result or note, outside the summary, ends nothing; and a
-  release that comes after more idle deliveries than turns clears the count,
-  so the release turn reaches the model; and the releasing member's own
-  notification, arriving after the release and before the release turn's
-  first step, does not stop that turn from reaching the model. Each
-  new test fails when its change is removed.
+  forgets the member, as today; a report sent before the park that arrives
+  after the wake ends a member for which no turn end was seen; a refused
+  deadline line is tried again after 1, 2, 4, 8, 16, 32 and then 60
+  minutes, and again at 60 minutes after that; a stored batch without a wait
+  starts at one minute; a deadline line the engine takes after refusals ends
+  the batch; a `completed` notification whose summary says the agent
+  finished ends its member; one whose summary says the agent is waiting on
+  its own background work ends nothing, nor does the word finished outside
+  the summary; a release that comes after more idle deliveries than turns
+  clears the count, so the release turn reaches the model; and the releasing
+  member's own notification before the release turn's first step does not
+  stop that turn from reaching the model.
+- For this change, `batch.test.ts` covers: a member that reports while its
+  own Monitor is still listed is not ended, the batch stays open, and its
+  later report after a clean turn end releases the batch once; a woken
+  member whose turn ends with plain text and nothing of its own listed ends
+  there, and the next delivery releases the batch with the completion line;
+  a member with no SubagentStop seen ends at its report, as before; a listed
+  task the member did not start does not hold it; a failed notification
+  ends a member whose work is listed; the task ids are dropped at release;
+  the deadline claims a batch whose last member ended at a turn end with the
+  completion line one minute later, releases it once the engine takes the
+  line, and holds a delivery that arrives while the line is claimed without
+  a second line; and stored members with and without the new fields read
+  back. `batches.test.ts` drives `tool.call`, `classic.SubagentStop` and
+  `prompt.submit` in the engine's order: a member that reports while its
+  Monitor runs is held, and the batch is released once, with the completion
+  line, at its clean final report; and a woken member that ends with plain
+  text, whose finished notification never passes the hook, has the
+  completion line submitted one minute later, once. Each new test fails when
+  its piece of the change is removed.
 - The four gates pass for both mods.
 - Before the pull request merges, the headless probe on the desktop app's
   engine runs twice with the fixed builder, and the pull request records
   both results. In the first run, seven agents launched in one message each
-  move a sleep into the background, and exactly one model turn follows the
-  launch, carrying the completion line. In the second, the session resumes
+  move a sleep into the background, some also start a Monitor, and exactly
+  one model turn follows the launch, carrying the completion line. In the second, the session resumes
   one member with SendMessage partway through the batch, and that member is
   forgotten while the rest are still released as one batch.
 
@@ -249,4 +314,6 @@ fields. It found:
 - How should the hook test whose second half cannot fail be fixed? The counsel chose: Rename the test so its name claims only what its first half proves, and leave the person's-prompt case to the tests that already cover it. 5 of 7 members voted for it.
 - What evidence from the real engine must the pull request carry before it merges, beyond the hook tests? The counsel chose: Same headless run, plus a second scenario in which the session resumes one member with SendMessage mid-batch, recording that this member is forgotten and the rest still release as one batch. 6 of 7 members voted for it.
 - Which of these does the change deliberately leave out, as non-goals? The counsel chose: All four: (a), (b), (c) and (d) are non-goals. 7 of 7 members voted for it.
-- A batch member that the engine woke may end without a second report. Which delivery should end such a member? The counsel chose: End a member only at a `completed` notification whose summary says the agent finished; every other `completed` notification stays held and ends nothing. 5 of 7 members voted for it.
+- A batch member that the engine woke may end without a second report. Which delivery should end such a member? The counsel chose: End a member only at a `completed` notification whose summary says the agent finished; every other `completed` notification stays held and ends nothing. 5 of 7 members voted for it. Replaced by the two decisions below.
+- The engine rerun at head 6cb9c038 failed: the batch was never released, because builder never sees many of the notifications that say an agent finished. How should the pull request fix this? The counsel chose: Go back to the rule under which both earlier runs passed, so that a report ends a woken member again, beside the finished notification. 7 of 7 members voted for it.
+- Members that report while their own background work still runs are counted as ended, and the engine wakes them again after the release. How should a member end? The counsel chose: At each SubagentStop for a member, record whether any background task that member started (task ids from tool.call) is still running in background_tasks; a report or finished notification ends the member only when its last SubagentStop showed none of its own tasks running, and a member whose turn ended with none running ends there even without a report. Store the member's task ids in the batch state. 7 of 7 members voted for it.
