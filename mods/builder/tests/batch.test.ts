@@ -76,11 +76,11 @@ test('an idle held delivery raises the marker, starts the deadline and counts as
   expect(heldReports(running)).toBe(0)
 })
 
-test('the delivery that ends the last member releases the batch with the completion line and leaves the marker alone', () => {
+test('the delivery that ends the last member releases the batch with the completion line and clears the marker', () => {
   const state = afterDelivery(launched(), report(ALPHA), true, 0).state
   const out = afterDelivery(state, report(BRAVO), true, 5)
   expect(out.act).toEqual({ kind: 'release', line: completeLine(2) })
-  expect(out.state.marker).toBe(1)
+  expect(out.state.marker).toBe(0)
   expect(heldReports(out.state)).toBe(0)
   expect(nextDeadline(out.state)).toBeNull()
   expect(completeLine(2)).toContain('2 agents')
@@ -437,4 +437,15 @@ test('a notification that the agent parked to wait on its own work ends nothing'
   const out = afterDelivery(state, parked, true, 1)
   expect(out.act).toEqual({ kind: 'hold' })
   expect(runningLines(out.state)).toEqual([incompleteLine(['Plan bbbbbbbb'])])
+})
+
+test('the delivery that releases a batch clears the marker that the held idle deliveries raised', () => {
+  let state = afterLaunch(launched(), 't1:0', { id: CHARLIE, type: 'Explore' })
+  state = afterDelivery(state, report(ALPHA), true, 0).state
+  state = afterDelivery(state, notice(ALPHA, 'completed'), true, 1).state
+  state = afterDelivery(state, report(BRAVO), true, 2).state
+  expect(state.marker).toBe(3)
+  const out = afterDelivery(state, report(CHARLIE), true, 3)
+  expect(out.act).toEqual({ kind: 'release', line: completeLine(3) })
+  expect(out.state.marker).toBe(0)
 })

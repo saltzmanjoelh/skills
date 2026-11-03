@@ -1163,7 +1163,9 @@ async function fireBatch($: $) {
 // What builder does to a prompt for the batches. A finishing agent's
 // delivery passes on with its text unchanged: a held one raises the marker
 // when the session is idle and starts the deadline, and the one that ends a
-// batch carries the completion line. A person's prompt, other than a slash
+// batch carries the completion line and clears the marker, so that its turn
+// reaches the model even when held deliveries raised the marker more often
+// than turns ran (see afterDelivery). A person's prompt, other than a slash
 // command, carries a line for each batch with held deliveries naming its
 // members still running. Every other prompt, and every prompt when a read or
 // write fails, passes as it came. A delivery is first decided on a plain

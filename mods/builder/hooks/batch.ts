@@ -219,6 +219,13 @@ const ends = (d: Delivery) => d.isReport || d.status === 'failed' || d.status ==
 // a line sent again names only those still running. The one that ends the last
 // member releases the batch as any batch is released, so that the model is
 // told the batch is complete even when its deadline line never got through.
+// A release clears the marker, so that the turn carrying the completion line
+// reaches the model. The engine can deliver several notifications within a
+// fraction of a second and start one turn for all of them, so the marker can
+// count more held deliveries than turns, and the spare counts would otherwise
+// answer the release turn with "Noted.", because its last message is a report
+// from a member of the batch just released, which is still remembered. A held
+// delivery after the release raises the marker again as usual.
 export function afterDelivery(state: BatchState, d: Delivery, isIdle: boolean, now: number): { state: BatchState; act: DeliveryAct } {
   const kept = pruned(state, now)
   const batch = kept.batches.find(b => countsAsBatch(b) && b.members.some(m => m.id === d.id))
@@ -232,7 +239,7 @@ export function afterDelivery(state: BatchState, d: Delivery, isIdle: boolean, n
   if (members.every(m => m.ended)) {
     const released = { ...batch, members, heldReports: 0, deadline: null, releasedAt: now }
     return {
-      state: { ...kept, batches: kept.batches.map(b => (b === batch ? released : b)) },
+      state: { ...kept, batches: kept.batches.map(b => (b === batch ? released : b)), marker: 0 },
       act: { kind: 'release', line: completeLine(members.length) },
     }
   }
@@ -320,7 +327,10 @@ export function heldReports(state: BatchState): number {
 // message is not a user message, or is a held delivery's own frame, so that
 // no person's or plugin's prompt started the turn. The engine adds each
 // agent's task notification to the conversation as a user message, often
-// without a turn of its own, so the next member's report finds it last.
+// without a turn of its own, so the next member's report finds it last. The
+// release turn's last message is a member's frame too, so it is the marker,
+// which a release clears (see afterDelivery), that sends that turn to the
+// model.
 export function answersStep(state: BatchState, last: { role: string; text?: string; toolResults?: unknown[] } | undefined): boolean {
   if (state.marker === 0 || last === undefined) return false
   return last.role !== 'user' || isHeldFrame(state, last)

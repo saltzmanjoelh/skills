@@ -220,9 +220,11 @@ test('a completed notification before or after the report is held and ends nothi
   await deliver($, notice(ALPHA, 'completed'), 'task-notification')
   expect(w.state.value?.marker).toBe(3)
   expect(await deliver($, notice(BRAVO, 'failed'), 'task-notification')).toEqual({ text: notice(BRAVO, 'failed'), context: [completeLine(2)] })
-  // A notification after the release is held too.
+  // The release cleared the marker, and a notification after it is held
+  // too, which raises the marker again.
+  expect(w.state.value?.marker).toBe(0)
   await deliver($, notice(BRAVO, 'completed'), 'task-notification')
-  expect(w.state.value?.marker).toBe(4)
+  expect(w.state.value?.marker).toBe(1)
 })
 
 test('a delivery into a running turn leaves the marker alone', async ($, on) => {
@@ -733,4 +735,47 @@ test('a woken member that ends with only a finished notification and no second r
   await w.clock.advance(2 * BATCH_LIMIT_MS)
   await w.clock.settle()
   expect(w.passed.map(p => p.text).filter(t => t.startsWith('builder: the time limit'))).toEqual([])
+})
+
+// The engine delivers several members' notifications within a fraction of a
+// second and starts one turn for all of them, so fewer first steps run than
+// held deliveries raised the marker. Answers the world after the last
+// member's report released the batch and the release turn's first step ran,
+// with how many times the model was asked in that step.
+async function releasedAfterBurst($: Engine, on: On) {
+  const w = world(on)
+  await launched($, ['Explore', 'Plan', 'Explore'])
+  await deliver($, report(ALPHA))
+  await deliver($, notice(ALPHA, 'completed'), 'task-notification')
+  await deliver($, report(BRAVO))
+  await deliver($, notice(BRAVO, 'completed'), 'task-notification')
+  w.talk.messages = [assistant('Launched them.'), user(notice(BRAVO, 'completed'))]
+  const { chunks } = await step($, { turnId: 't2', index: 0 })
+  expect(texts(chunks)).toEqual(['Noted.', 'stop'])
+  expect(w.state.value?.marker).toBeGreaterThan(0)
+  expect(await deliver($, report(CHARLIE))).toEqual({ text: report(CHARLIE), context: [completeLine(3)] })
+  expect(w.passed.at(-1)).toEqual({ text: report(CHARLIE), context: [completeLine(3)] })
+  w.talk.messages = [...w.talk.messages, assistant('Noted.'), user(report(CHARLIE))]
+  const before = w.asked.calls
+  const release = await step($, { turnId: 't3', index: 0 })
+  return { w, asked: w.asked.calls - before, chunks: release.chunks }
+}
+
+test('the turn that releases a batch after a burst of held notifications goes to the model with the completion line', async ($, on) => {
+  const { w, asked, chunks } = await releasedAfterBurst($, on)
+  expect(asked).toBe(1)
+  expect(texts(chunks)).toEqual(['From the model.', 'stop'])
+  expect(w.state.value?.marker).toBe(0)
+})
+
+test('a held notification from a member of a released batch is still answered without the model', async ($, on) => {
+  const { w } = await releasedAfterBurst($, on)
+  await turnEnds($, 't3')
+  expect(await deliver($, notice(CHARLIE, 'completed'), 'task-notification')).toEqual({ text: notice(CHARLIE, 'completed') })
+  expect(w.state.value?.marker).toBe(1)
+  w.talk.messages = [...w.talk.messages, assistant('From the model.'), user(notice(CHARLIE, 'completed'))]
+  const before = w.asked.calls
+  const { chunks } = await step($, { turnId: 't4', index: 0 })
+  expect(texts(chunks)).toEqual(['Noted.', 'stop'])
+  expect(w.asked.calls).toBe(before)
 })
