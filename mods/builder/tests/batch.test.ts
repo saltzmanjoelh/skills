@@ -819,3 +819,18 @@ test('a wake that clears a claim of the completion line drops its mark, and a la
   expect(again.state.batches[0]?.completionClaimed).toBeUndefined()
   expect(afterDelivery(again.state, notice(BRAVO, 'completed'), true, (nextDeadline(state) as number) + 1).act).toEqual({ kind: 'pass' })
 })
+
+test('a completion line claimed after an earlier claim and taken after an engine wake releases the batch and forgets the woken member so that its later report passes', () => {
+  let state = afterDeadline(afterDelivery(alphaWoken(), report(BRAVO), true, 0).state, BATCH_LIMIT_MS).state
+  state = afterMemberStop(state, ALPHA, [], BATCH_LIMIT_MS + 1)
+  const completion = afterDeadline(state, BATCH_LIMIT_MS + BATCH_RETRY_MS)
+  expect(completion.due).toEqual([{ step: 't1:0', line: completeLine(2) }])
+  state = afterWake(completion.state, ALPHA)
+  expect(state.batches[0]?.completionClaimed).toBe(true)
+  expect(state.batches[0]?.wokenAfterClaim).toBeUndefined()
+  const now = BATCH_LIMIT_MS + BATCH_RETRY_MS + 1
+  const sent = afterDeadlineSent(state, ['t1:0'], now)
+  expect(sent.batches[0]?.releasedAt).toBe(now)
+  expect(members(sent).map(m => m.id)).toEqual([BRAVO])
+  expect(afterDelivery(sent, report(ALPHA), true, now + 1).act).toEqual({ kind: 'pass' })
+})
