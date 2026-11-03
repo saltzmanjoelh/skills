@@ -194,7 +194,8 @@ until a read can decide it; follow it as above then.
 
 ## a slot is free, but foreman keeps it for <key>, whose waiting session it could not find in the desktop app's list; send that session foreman's begin message by hand or release the issue, and do not start a new issue.
 
-With several keys, the line names them all, joined with commas and "and",
+With several keys, the line names them in the order foreman put them in its
+queue, never more than there are free slots, joined with commas and "and",
 and reads "whose waiting sessions it could not find in the desktop app's
 list; send each of those sessions foreman's begin message by hand or release
 its issue". When foreman could not name the issues safely, the line reads
