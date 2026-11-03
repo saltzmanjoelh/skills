@@ -209,16 +209,16 @@ const ends = (d: Delivery) => d.isReport || d.status === 'failed' || d.status ==
 
 // What a delivery does to the batches. A delivery from an agent in no batch of
 // two or more passes. A report, a notification that its agent failed or was
-// killed, or one whose summary says the agent finished, ends its member; the one that ends the last member releases the
-// batch. Every other delivery from a member of an open or remembered batch is
-// held: it starts the batch's deadline if none is set, and raises the marker
-// when it arrives while the session is idle (`isIdle`), because only then does
-// it start a turn of its own. Once the deadline has claimed a batch, whether
-// or not the engine has taken its line yet, its deliveries pass but still end
-// their members, so that a line sent again names only those still running.
-// The one that ends the last member releases the batch as any batch is
-// released, so that the model is told the batch is complete even when its
-// deadline line never got through.
+// killed, or one whose summary says the agent finished, ends its member; the
+// one that ends the last member releases the batch. Every other delivery from
+// a member of an open or remembered batch is held: it starts the batch's
+// deadline if none is set, and raises the marker when it arrives while the
+// session is idle (`isIdle`), because only then does it start a turn of its
+// own. Once the deadline has claimed a batch, whether or not the engine has
+// taken its line yet, its deliveries pass but still end their members, so that
+// a line sent again names only those still running. The one that ends the last
+// member releases the batch as any batch is released, so that the model is
+// told the batch is complete even when its deadline line never got through.
 export function afterDelivery(state: BatchState, d: Delivery, isIdle: boolean, now: number): { state: BatchState; act: DeliveryAct } {
   const kept = pruned(state, now)
   const batch = kept.batches.find(b => countsAsBatch(b) && b.members.some(m => m.id === d.id))
