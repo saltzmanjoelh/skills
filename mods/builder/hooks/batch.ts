@@ -440,31 +440,38 @@ const retryOf = (b: Batch) => Math.min(Math.max(b.retryMs ?? BATCH_RETRY_MS, BAT
 // claim sent.
 export function afterDeadline(state: BatchState, now: number): { state: BatchState; due: { step: string; line: string }[] } {
   const isDue = (b: Batch) => isOpenWithHeld(b) && (b.deadline as number) <= now
-  const claimed = ({ wokenAfterClaim: _, completionClaimed: __, ...b }: Batch): Batch => ({
+  // Whether a due batch's claim is for the completion line. Both the claim's
+  // mark and the line it answers read this one value.
+  const claimsCompletion = (b: Batch) => b.members.every(m => m.ended)
+  const claimed = ({ wokenAfterClaim: _, completionClaimed: __, ...b }: Batch, completion: boolean): Batch => ({
     ...b,
     fired: true,
     deadline: now + retryOf(b),
     retryMs: nextBatchRetry(retryOf(b)),
-    ...(b.members.every(m => m.ended) ? { completionClaimed: true as const } : {}),
+    ...(completion ? { completionClaimed: true as const } : {}),
   })
-  return {
-    state: { ...state, batches: state.batches.map(b => (isDue(b) ? claimed(b) : b)) },
-    due: state.batches.filter(isDue).map(b => ({ step: b.step, line: b.members.every(m => m.ended) ? completeLine(b.members.length) : deadlineLine(runningOf(b)) })),
-  }
+  const due: { step: string; line: string }[] = []
+  const batches = state.batches.map(b => {
+    if (!isDue(b)) return b
+    const completion = claimsCompletion(b)
+    due.push({ step: b.step, line: completion ? completeLine(b.members.length) : deadlineLine(runningOf(b)) })
+    return claimed(b, completion)
+  })
+  return { state: { ...state, batches }, due }
 }
 
 // Settles the claimed batches of the steps whose line the engine took. A
 // batch whose claim was for the completion line got that line, so it is
 // released at `now` and remembered, and its members' later deliveries are
 // held as any released batch's are. Its members that a wake made running
-// again since the claim are forgotten, as below. So did a batch that an
-// engine wake reopened after its claim (see afterWake): it is released too,
-// and the members the wake made running again are forgotten, as a wake
-// forgets an agent in a released batch, so that their later reports reach the
-// model on their own. Any other got the deadline line, so it is dropped, and its
-// members' later deliveries pass, as that line told the model, even when
-// every member has ended since the claim. A batch that a delivery released
-// in the meantime is left as it is.
+// again since the claim are forgotten, as below. A batch that an engine wake
+// reopened after its claim also got the completion line (see afterWake): it
+// is released too, and the members the wake made running again are
+// forgotten, as a wake forgets an agent in a released batch, so that their
+// later reports reach the model on their own. Any other got the deadline
+// line, so it is dropped, and its members' later deliveries pass, as that
+// line told the model, even when every member has ended since the claim. A
+// batch that a delivery released in the meantime is left as it is.
 export function afterDeadlineSent(state: BatchState, steps: string[], now: number): BatchState {
   const isSent = (b: Batch) => (b.fired === true || b.wokenAfterClaim === true) && b.releasedAt === null && steps.includes(b.step)
   const gotComplete = (b: Batch) => b.wokenAfterClaim === true || b.completionClaimed === true

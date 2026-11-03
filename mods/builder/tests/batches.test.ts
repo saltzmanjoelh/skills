@@ -918,7 +918,7 @@ test('in a batch whose agents never park, a finished notification after every tu
   expect(contexts.filter(c => c !== undefined)).toEqual([[completeLine(2)]])
 })
 
-test('the last report of a batch whose deadline line was refused carries the completion line after its member\'s clean turn end, and no deadline line follows', async ($, on) => {
+test('the last report of a batch whose deadline line was refused carries the completion line after its woken member\'s clean turn end, and no deadline line follows', async ($, on) => {
   const w = world(on)
   await launched($)
   await deliver($, report(ALPHA))
@@ -926,6 +926,7 @@ test('the last report of a batch whose deadline line was refused carries the com
   await w.clock.advance(BATCH_LIMIT_MS)
   await w.clock.settle()
   w.refusing.on = false
+  await wake($, w, BRAVO)
   await memberStops($, BRAVO, [])
   expect(await deliver($, report(BRAVO))).toEqual({ text: report(BRAVO), context: [completeLine(2)] })
   await w.clock.advance(5 * BATCH_RETRY_MS)
