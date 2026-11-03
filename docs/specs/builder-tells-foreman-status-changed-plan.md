@@ -72,10 +72,13 @@ for. It adds no new file and no dependency.
   asks for both.
 - **Accept the trailer line only when the header came first** (from the
   extensible plan's parser), which matches the two shapes the spec names.
-- **A live check before merging** (adapted from the robust plan): after the
-  build, send the marker from a real sub session to a real parent and confirm
-  that the receive hook sees a `peer` origin and one of the two envelope
-  shapes. The result goes in the pull request.
+- **A live check** (adapted from the robust plan): send the marker from a
+  real sub session to a real parent and confirm that the receive hook sees a
+  `peer` origin and one of the two envelope shapes. This check could not be
+  finished before the merge, because in a desktop app parent a marker that
+  was delivered and consumed looked the same as one that never arrived. It
+  now runs after the merge, as point 12 of
+  `docs/specs/builder-and-foreman-show-status-messages.md` describes.
 
 ## Rejected alternatives
 
@@ -121,7 +124,10 @@ for. It adds no new file and no dependency.
 6. Update `mods/builder/README.md`, `mods/foreman/README.md` and the wake
    skill's description of the brief lines.
 7. Run every gate in the project's `CLAUDE.md`, in order.
-8. The live check, before the pull request merges.
+8. The live check. It could not be finished before the merge, because a
+   consumed marker and an undelivered one looked the same in a desktop app
+   parent, so it runs after the merge, as point 12 of
+   `docs/specs/builder-and-foreman-show-status-messages.md` describes.
 
 ## Test plan
 

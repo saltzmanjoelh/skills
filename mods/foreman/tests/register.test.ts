@@ -3,6 +3,7 @@ import type { On, SessionReceiveOrigin } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
 import { REASONS } from '../hooks/desktop'
+import { FIRST_MARKER_LOG, markersKey } from '../hooks/markers'
 import { STATUS_CHANGED_TEXT } from '../hooks/notes'
 import { ticketsIn, ticketsKey, TICKETS_EMPTY } from '../hooks/tickets'
 import { CHANGED, CHANGED_AS_RECEIVED, CHANGED_ELEMENT, foreman, HOME, MINUTE, SECOND, SECRET, SURFACES, T0, leftInState, mountBoth, record, SENT, start, statusFolder, world } from './world'
@@ -760,4 +761,156 @@ test('with no message at all, the timer reads the folder 30 seconds on while a s
   expect(w.folder.lists).toBe(3)
   await w.clock.advance(SECOND)
   expect(w.folder.lists).toBe(4)
+})
+
+// The pane's line that counts the status messages consumed since the hooks
+// loaded, and the copy of the count in the store.
+const MARKERS_HEAD = 'Status messages consumed since '
+const markersCopy = (w: ReturnType<typeof world>) => w.stored.get(markersKey('session-1'))
+const DAY = 24 * 60 * MINUTE
+
+test('before any message the pane\'s count says none yet, and each consumed message raises the count and shows the newest time after the load time', async ($, on) => {
+  const w = world(on)
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  expect(await linesOf(ui, MARKERS_HEAD)).toEqual(['Status messages consumed since 12:00:00 UTC: none yet'])
+  await w.clock.advance(5 * MINUTE)
+  expect((await receive($, CHANGED)).consumed).toBeDefined()
+  await w.clock.settle()
+  expect(await linesOf(ui, MARKERS_HEAD)).toEqual(['Status messages consumed since 12:00:00 UTC: 1, last at 12:05:00 UTC'])
+  await w.clock.advance(2 * MINUTE)
+  expect((await receive($, CHANGED_AS_RECEIVED)).consumed).toBeDefined()
+  await w.clock.settle()
+  expect(await linesOf(ui, MARKERS_HEAD)).toEqual(['Status messages consumed since 12:00:00 UTC: 2, last at 12:07:00 UTC'])
+})
+
+test('only the first message consumed since the hooks loaded adds a line to the log, and a reload lets a new first line be logged', async ($, on) => {
+  const w = world(on)
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  const firstLines = async () => (await linesOf(ui, '\\d\\d:\\d\\d:\\d\\d ')).filter(line => line.includes(FIRST_MARKER_LOG))
+  for (const _ of [1, 2, 3]) {
+    await w.clock.advance(MINUTE)
+    await receive($, CHANGED)
+    await w.clock.settle()
+  }
+  expect(await firstLines()).toEqual([`12:01:00 ${FIRST_MARKER_LOG}`])
+  await w.clock.advance(MINUTE)
+  await start($)
+  await w.clock.settle()
+  expect(await linesOf(ui, MARKERS_HEAD)).toEqual(['Status messages consumed since 12:04:00 UTC: none yet'])
+  await w.clock.advance(MINUTE)
+  await receive($, CHANGED)
+  await w.clock.settle()
+  expect(await linesOf(ui, MARKERS_HEAD)).toEqual(['Status messages consumed since 12:04:00 UTC: 1, last at 12:05:00 UTC'])
+  // The log counts a line the same as the newest one on that line, so the
+  // second load's first line shows as the first one logged twice.
+  expect(await firstLines()).toEqual([`12:05:00 ${FIRST_MARKER_LOG} (2 times)`])
+})
+
+test('the count is copied under the parent\'s session id when the role is turned on and after each message, and a session that is not a parent writes no copy when it starts', async ($, on) => {
+  const w = world(on)
+  await mountBoth($, on)
+  await start($)
+  await w.clock.settle()
+  expect(w.store.writes.get(markersKey('session-1'))).toBeUndefined()
+  await w.clock.advance(MINUTE)
+  await foreman($)
+  await w.clock.settle()
+  expect(markersCopy(w)).toEqual({ version: 1, sessionId: 'session-1', since: T0, consumed: 0, first: null, last: null })
+  await w.clock.advance(MINUTE)
+  await receive($, CHANGED)
+  await w.clock.settle()
+  expect(markersCopy(w)).toEqual({ version: 1, sessionId: 'session-1', since: T0, consumed: 1, first: T0 + 2 * MINUTE, last: T0 + 2 * MINUTE })
+})
+
+test('a parent that starts again writes a fresh copy of its count at once', async ($, on) => {
+  const old = { version: 1, sessionId: 'session-1', since: T0 - DAY, consumed: 4, first: T0 - DAY, last: T0 - MINUTE }
+  const w = world(on, { store: { 'parent:session-1': { isOn: true, slots: null }, [markersKey('session-1')]: old } })
+  await mountBoth($, on)
+  await start($)
+  await w.clock.settle()
+  expect(markersCopy(w)).toEqual({ version: 1, sessionId: 'session-1', since: T0, consumed: 0, first: null, last: null })
+})
+
+test('a stored copy that a newer load wrote is not overwritten', async ($, on) => {
+  const newer = { version: 1, sessionId: 'session-1', since: T0 + MINUTE, consumed: 0, first: null, last: null }
+  const w = world(on, { store: { 'parent:session-1': { isOn: true, slots: null }, [markersKey('session-1')]: newer } })
+  await mountBoth($, on)
+  await start($)
+  await w.clock.settle()
+  expect(w.store.writes.get(markersKey('session-1'))).toBeUndefined()
+  expect(markersCopy(w)).toEqual(newer)
+})
+
+test('when the hooks load, a copy whose newest time is 15 days old and a damaged one are deleted, and one 13 days old is kept', async ($, on) => {
+  const copy = (id: string, since: number, last: number | null) => ({ version: 1, sessionId: id, since, consumed: last === null ? 0 : 1, first: last, last })
+  const w = world(on, { store: {
+    [markersKey('old')]: copy('old', T0 - 20 * DAY, T0 - 15 * DAY),
+    [markersKey('quiet')]: copy('quiet', T0 - 15 * DAY, null),
+    [markersKey('recent')]: copy('recent', T0 - 20 * DAY, T0 - 13 * DAY),
+    [markersKey('damaged')]: { version: 1, sessionId: 'damaged', since: 'yesterday' },
+    [markersKey('other')]: copy('someone-else', T0, null),
+    'usage:old': { at: T0 - 20 * DAY },
+  } })
+  await mountBoth($, on)
+  await start($)
+  await w.clock.settle()
+  expect([...w.store.deleted].sort()).toEqual([markersKey('damaged'), markersKey('old'), markersKey('other'), markersKey('quiet')])
+  expect(w.stored.has(markersKey('recent'))).toBe(true)
+  expect(w.stored.has('usage:old')).toBe(true)
+})
+
+test('with the copy refused and the log write denied, a message is still consumed, the folder is still read once and the pane still counts', async ($, on) => {
+  const w = world(on)
+  w.folder.put('a.json', record('ABC-1', 'working'))
+  let deniesLog = false
+  on('state.set', ($, e, next) => (deniesLog && e.plugin === 'foreman' && e.key === 'log' ? { deny: 'refused' } as never : next(e)))
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await w.clock.settle()
+  expect(w.folder.lists).toBe(1)
+  w.store.refused.add(markersKey('session-1'))
+  deniesLog = true
+  const writes = w.store.writes.get(markersKey('session-1')) ?? 0
+  const out = await receive($, CHANGED)
+  expect(out.consumed).toBeDefined()
+  expect(out.text).toBeUndefined()
+  await w.clock.settle()
+  expect(w.folder.lists).toBe(2)
+  expect(w.store.writes.get(markersKey('session-1'))).toBe(writes + 1)
+  expect(await linesOf(ui, MARKERS_HEAD)).toEqual(['Status messages consumed since 12:00:00 UTC: 1, last at 12:00:00 UTC'])
+})
+
+test('deliveries that pass on change no count', async ($, on) => {
+  const w = world(on)
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  const element = (body: string) => `<cross-session-message from="local_a" name="example">\n${body}\n</cross-session-message>`
+  for (const [text, origin] of [
+    [SENT, BUILDER],
+    [element(`${STATUS_CHANGED_TEXT} Should I merge?`), BUILDER],
+    [CHANGED, { kind: 'coordinator', plugin: 'builder' }],
+    [CHANGED, { kind: 'bridge' }],
+  ] as [string, SessionReceiveOrigin][]) expect(await receive($, text, origin)).toEqual({ text })
+  await w.clock.settle()
+  expect(await linesOf(ui, MARKERS_HEAD)).toEqual(['Status messages consumed since 12:00:00 UTC: none yet'])
+  expect(markersCopy(w)).toEqual({ version: 1, sessionId: 'session-1', since: T0, consumed: 0, first: null, last: null })
+  expect((await linesOf(ui, '\\d\\d:\\d\\d:\\d\\d ')).filter(line => line.includes(FIRST_MARKER_LOG))).toEqual([])
+})
+
+test('a message consumed while foreman is off is counted and copied, and the pane draws no count', async ($, on) => {
+  const w = world(on)
+  const ui = await mountBoth($, on)
+  await start($)
+  await w.clock.advance(MINUTE)
+  expect((await receive($, CHANGED)).consumed).toBeDefined()
+  await w.clock.settle()
+  expect(markersCopy(w)).toEqual({ version: 1, sessionId: 'session-1', since: T0, consumed: 1, first: T0 + MINUTE, last: T0 + MINUTE })
+  expect(await linesOf(ui, MARKERS_HEAD)).toEqual([])
+  expect(await ui.paneText()).toContain('This session is not a parent.')
 })
