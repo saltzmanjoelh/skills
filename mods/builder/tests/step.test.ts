@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { countingRuns, failedRunsOf, hasFailed, isReplaced, isUnfinished, needsJobs, snapshotOf, type GhPullRequest } from '../hooks/github'
-import { baseFactsOf, chooseStep, CLEANUP_SECTIONS, DEFAULT_MERGE_COMMAND, SKILL_POINTS, SKILL_SECTIONS, stepLines, type Step } from '../hooks/step'
+import { baseFactsOf, chooseStep, CLEANUP_SECTIONS, DEFAULT_MERGE_COMMAND, SKILL_POINTS, SKILL_SECTIONS, stepFor, stepLines, type Step } from '../hooks/step'
 import type { BaseFacts, HeadRun, Snapshot } from '../types'
 
 const ME = 'owner'
@@ -313,6 +313,8 @@ const EVERY_STEP: Step[] = [
   { kind: 'changes-requested' },
   { kind: 'runs-unread' },
   { kind: 'waiting' },
+  { kind: 'head-unchecked' },
+  { kind: 'review', head: null },
   { kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'passed', runs: [{ id: 5, attempt: 1 }] },
   { kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'custom', checks: 'passed', runs: [] },
   { kind: 'merge', number: 7, head: C, repo: null, command: 'unread', checks: 'none', runs: [] },
@@ -327,6 +329,18 @@ test('every step text begins with a line naming the step', () => {
   for (const name of names) expect(name).toMatch(/^The step that applies: .+\.$/)
   expect(names[0]).toBe('The step that applies: Merged.')
   expect(names[6]).toBe('The step that applies: Review this head.')
+})
+
+test('a head that is not a full commit sha never reaches a step text, and never leads to a merge', () => {
+  const bad = 'abcdef0123456789'
+  const approvedAt = [review(bad, 'APPROVE', 'APPROVE')]
+  const passed = snapshot({ headRefOid: bad, commits: [{ oid: bad }], reviews: approvedAt }, [headRun()])
+  expect(kind(passed)).toBe('head-unchecked')
+  const none = snapshot({ headRefOid: bad, commits: [{ oid: bad }], reviews: approvedAt, statusCheckRollup: [] }, [], { ...FACTS, checks: 'none' })
+  expect(kind(none)).toBe('head-unchecked')
+  const unreviewed = snapshot({ headRefOid: bad, commits: [{ oid: bad }] }, [headRun()])
+  expect(chooseStep(unreviewed, false)).toEqual({ kind: 'review', head: null })
+  for (const s of [passed, none, unreviewed]) expect(stepFor(s, false).join('\n')).not.toContain(bad)
 })
 
 test('the default merge text holds the merge command with the number and the full head, and the guards', () => {
@@ -462,11 +476,23 @@ test('the merged text keeps updating the linked checkout, the follow-ups and the
   expect(text).toContain('Commits the pull request lacks')
 })
 
-test('no step text holds a check or label name, only the state labels the skill sets', () => {
-  const names = ['tests', 'build', 'lint', 'needs-decision']
-  for (const step of EVERY_STEP) {
-    const text = textOf(step)
-    for (const name of names) expect(text).not.toContain(`"${name}"`)
+test('no step text holds a check, label or run name from GitHub', () => {
+  const names = ['zz-check-name', 'zz-label-name', 'zz-run-name']
+  const check = (conclusion: string, status = 'COMPLETED') => [{ __typename: 'CheckRun', name: names[0]!, status, conclusion }]
+  const labels = [{ name: names[1]! }]
+  const run = (over: Partial<HeadRun> = {}) => [headRun({ name: names[2]!, ...over })]
+  const snapshots = [
+    snapshot({ labels, statusCheckRollup: check('FAILURE') }, run({ conclusion: 'failure' })),
+    snapshot({ labels, statusCheckRollup: check('', 'IN_PROGRESS'), reviews: approved }, run({ completed: false, conclusion: null })),
+    snapshot({ labels, statusCheckRollup: check('SUCCESS'), reviews: approved }, run()),
+    snapshot({ labels, statusCheckRollup: check('SUCCESS') }, run()),
+    snapshot({ labels, statusCheckRollup: [], reviews: approved }),
+  ]
+  for (const s of snapshots) {
+    for (const isAsking of [false, true]) {
+      const text = stepFor(s, isAsking).join('\n')
+      for (const name of names) expect(text).not.toContain(name)
+    }
   }
 })
 

@@ -117,9 +117,11 @@ a head with one run per workflow and event reads no jobs.
 Every turn listed under "Users and trigger" carries the state lines, the
 chosen step's name and the step's full text, on every turn, whatever the
 previous turn carried. The step texts are fixed strings in the mod. The only
-values put into them are checked ones: shas, numbers and run ids. Names that
-come from GitHub, such as check and label names, stay in the quoted state
-lines. The reload line after a compaction stays as it is.
+values put into them are checked ones: the head when it is a full commit sha,
+numbers, workflow run ids and attempts, and the repository when it is a plain
+owner and name. A head that is not a full commit sha leaves the review text
+without a head and holds before any merge. Names that come from GitHub, such
+as check and label names, stay in the quoted state lines. The reload line after a compaction stays as it is.
 
 ### The skill
 
@@ -135,9 +137,10 @@ does not depend on any shared section.
 ## Edge cases
 
 - **The runs read fails.** The snapshot carries the stored runs over, and the
-  chooser holds at step 9. The recovery must wake the session: whether the
-  runs were carried over becomes part of the fingerprint, so a successful read
-  after a failed one is news and starts a turn.
+  chooser holds at step 9. The recovery must wake the session: while both
+  verdicts approve at the head, which is the only step where the hold happens,
+  whether the runs were carried over becomes part of the fingerprint, so a
+  successful read after a failed one is news and starts a turn.
 - **The mergeability is unknown.** It holds nothing. The merge command with
   `--match-head-commit` refuses a conflicting pull request anyway.
 - **The base `CLAUDE.md` cannot be read.** The limits take their defaults. The
@@ -186,8 +189,11 @@ The first four are filed as follow-up issues, each to merge on its own.
 - Tests that the jobs are read only when a replacement is in question.
 - Tests that each step text holds its essentials, such as the merge command
   with `--match-head-commit`, the number and the head in the merge step.
-- A test that every `SKILL.md` section heading a step text names still exists
-  in `SKILL.md`.
+- A test that every `SKILL.md` section heading a step text names is one of
+  the headings the mod pins. The testing kit reads no real file, so no test
+  can read `SKILL.md` itself; the pinned list is changed together with the
+  skill's headings, and the reviewers check that every pinned heading still
+  exists in `SKILL.md`.
 - A test that a successful runs read after a failed one changes the
   fingerprint.
 - Tests that each of the turns under "Users and trigger" carries the step's

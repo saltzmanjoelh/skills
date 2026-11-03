@@ -576,8 +576,9 @@ mod's step **Review this head** says which heads those are).
    dropped, so that the follow-up issue carries it into a spec.
 5. The round's review is always posted at the reviewed head. Choose what
    follows it:
-   - **A verdict requests changes:** push nothing here. Step 8 pushes
-     point 4's commit with the blocking fixes.
+   - **A verdict requests changes:** push nothing here. The mod's step
+     **The newest verdict at this head requests changes** pushes point 4's
+     commit with the blocking fixes.
    - **Both approve and point 4 committed nothing:** nothing follows.
    - **Both approve and every line the commit changed is inert** (defined
      below): push, then post at the new head a short review whose

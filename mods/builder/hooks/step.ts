@@ -4,8 +4,9 @@
 // is a pure function that a turn can call with no await between choosing the
 // snapshot and handing it over. It returns plain data, and stepLines renders
 // that data into the step's name and its fixed text. The only values put
-// into a text are checked ones: the pull request's number, the full head,
-// the repository when it is a plain owner and name, counts and workflow run
+// into a text are checked ones: the pull request's number, the head when it
+// is a full commit sha, the repository when it is a plain owner and name,
+// counts and workflow run
 // ids and attempts. Names written on GitHub, such as check and
 // label names, stay in the quoted state lines. Every step that needs
 // judgement is the session's: a text says what to do, and the mod never does
@@ -13,7 +14,7 @@
 
 import type { BaseFacts, Snapshot } from '../types'
 import { ciOf, countingRuns, failedCheckNames, failedRunsOf, headRunsIn, isChangesRequested, isUnfinished, roundInProgress } from './github'
-import { factIn } from './review'
+import { factIn, isFullSha } from './review'
 
 export type Limit = { which: 'pushes' | 'rounds'; count: number; max: number }
 
@@ -26,11 +27,15 @@ export type Step =
   // The ids of the runs that count as failed; the failed check names are in
   // the state lines.
   | { kind: 'failed'; runs: number[] }
-  | { kind: 'review'; head: string }
+  // `head` is null when the snapshot's head is not a full commit sha, and the
+  // text then names no head.
+  | { kind: 'review'; head: string | null }
   | { kind: 'changes-requested' }
   // The four outcomes of the step where both verdicts approve at the head.
   | { kind: 'runs-unread' }
   | { kind: 'waiting' }
+  // The head is not a full commit sha, so no merge command can carry it.
+  | { kind: 'head-unchecked' }
   // `runs` names every run at the head, the set the mod saw. Before merging,
   // the session reads the runs again and calls the watch tool for any run
   // outside it. `repo` is null when the repository is not a plain owner and
@@ -121,7 +126,8 @@ export function chooseStep(s: Snapshot, isAsking: boolean): Step {
   const headRuns = headRunsIn(s)
   const failedRuns = failedRunsOf(headRuns ?? []).map(run => run.id).sort((a, b) => a - b)
   if (failedCheckNames(s.checks).length > 0 || failedRuns.length > 0) return { kind: 'failed', runs: failedRuns }
-  if (s.verdicts === null) return { kind: 'review', head: s.head }
+  const head = isFullSha(s.head) ? s.head : null
+  if (s.verdicts === null) return { kind: 'review', head }
   if (isChangesRequested(s.verdicts)) return { kind: 'changes-requested' }
   // Both verdicts approve. A snapshot without the runs at the head, as one an
   // older build stored, holds as if the runs could not be read, so it never
@@ -129,7 +135,8 @@ export function chooseStep(s: Snapshot, isAsking: boolean): Step {
   if (s.runsCarriedOver === true || headRuns === null) return { kind: 'runs-unread' }
   const ci = ciOf(s.checks)
   if (ci === 'pending' || countingRuns(headRuns).some(isUnfinished)) return { kind: 'waiting' }
-  const merging = { number: s.number, head: s.head, repo: plainRepoOf(s.repo), command: facts.merge }
+  if (head === null) return { kind: 'head-unchecked' }
+  const merging = { number: s.number, head, repo: plainRepoOf(s.repo), command: facts.merge }
   const runs = headRuns.map(run => ({ id: run.id, attempt: run.attempt }))
   if (ci === 'passed') return { kind: 'merge', ...merging, checks: 'passed', runs }
   if (facts.checks === 'none') return { kind: 'merge', ...merging, checks: 'none', runs }
@@ -201,6 +208,7 @@ function nameOf(step: Step): string {
     case 'changes-requested': return 'The newest verdict at this head requests changes'
     case 'runs-unread': return 'Both verdicts approve at this head, but the workflow runs could not be read'
     case 'waiting': return 'Both verdicts approve at this head, waiting on checks'
+    case 'head-unchecked': return 'Both verdicts approve at this head, but the head is not a full commit sha'
     case 'merge': return 'Both verdicts approve at this head, merge'
     case 'ask-merge': return 'Both verdicts approve at this head, with no checks'
   }
@@ -226,6 +234,10 @@ function textOf(step: Step): string[] {
     case 'waiting': return [
       'Both verdicts approve at this head, and a check is pending or a workflow run that counts is unfinished. Waiting on checks happens here, and only here, so reviews and fixes never wait on them.',
       `Set \`ready-to-merge\` (see ${see('State labels')}), say "waiting on checks" and end the turn. The mod starts a turn when they finish.`,
+    ]
+    case 'head-unchecked': return [
+      'Both verdicts approve at this head, but the head in the mod\'s snapshot is not a full commit sha, so the mod puts no head into a merge command.',
+      'Merge nothing. Call `mcp__builder__watch` once to read the pull request again, and follow the step it names. If it names this step again, set `stuck` (see ' + see('State labels') + '), ask the person, and end the turn.',
     ]
     case 'merge': return mergeText(step)
     case 'ask-merge': return askMergeText(step)
@@ -268,9 +280,9 @@ function failedText(runs: readonly number[]): string[] {
   ]
 }
 
-function reviewText(head: string): string[] {
+function reviewText(head: string | null): string[] {
   return [
-    `No verdict review is at this head, ${head}. Run the first half of ${see('A review round')}, unless the focused reviewers already ran at this head and found nothing to fix; then run its second half and post the review. Do either whether or not checks are still running. The mod cannot tell which half is due, so decide it from the answer of \`mcp__builder__package\` and the reports of this session's own reviewers at this head:`,
+    `No verdict review is at this head${head === null ? '' : `, ${head}`}. Run the first half of ${see('A review round')}, unless the focused reviewers already ran at this head and found nothing to fix; then run its second half and post the review. Do either whether or not checks are still running. The mod cannot tell which half is due, so decide it from the answer of \`mcp__builder__package\` and the reports of this session's own reviewers at this head:`,
     `- The focused reviewers run at every head that changes the pull request's own diff. A head that only merged the base in counts them as run if they ran at the head before it. A head that a review was carried over to, with the verdicts of the approved head before it (see ${seePoint('point 6 of the second half of "A review round" in /implement')}), counts them as run too.`,
     '- The first half launches only the focused reviewers that the package tool\'s answer names, and the ones it does not name count as run at this head.',
     `- A head that the answer says is up for the check after approval runs the check instead (see ${see('The check after approval')}).`,
