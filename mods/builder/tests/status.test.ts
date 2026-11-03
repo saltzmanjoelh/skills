@@ -4,7 +4,7 @@ import { snapshotOf } from '../hooks/github'
 import {
   afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite,
   backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, ERROR_CHARS, errorLineOf, firstPromptOf, FOREMAN_NUDGE_TEXTS, generationIn, HUNG_AFTER_MS, hungAtOf, isBackgroundOnly, isCleanupSkill,
-  isForemanNudge, isProbablyHung, issueOf, newMemo, oldestTaskOf, parentIn, recordOf, shownOrWithheld, startOf, startsBackgrounded, startsIn, startsPruned, startsSeen, startsWithout, STATE_RULES, stateOf,
+  isForemanNudge, isProbablyHung, issueOf, keptTicketIn, keptTicketOf, memoOfKeptTicket, newMemo, oldestTaskOf, parentIn, recordOf, shownOrWithheld, startOf, startsBackgrounded, startsIn, startsPruned, startsSeen, startsWithout, STATE_RULES, stateOf,
   STATUS_CHANGED_TEXT, statusMemoIn, TASK_CHARS, taskKeyOf, taskKeyOfId, ticketIn, WITHHELD, type StatusFacts,
 } from '../hooks/status'
 import { afterCost, afterStep, emptyUsage } from '../hooks/usage'
@@ -669,4 +669,40 @@ test('the record carries the session\'s spending, the tokens by model and the do
   const none = recordOf(facts(), NOW)
   expect('usage' in none).toBe(false)
   expect(none.version).toBe(1)
+})
+
+// A record kept for session-1, unless the case says otherwise.
+const KEPT = { sessionId: 'session-1', ticket: 't-1', path: '/home/me/.claude/foreman/builds/session-1.json', desktopSessionId: 'desk-1', parentSessionId: 'parent-1', cwd: '/repo', at: NOW }
+
+test('a kept record built from a memo reads back as it was, and becomes the memo the first prompt would have built', () => {
+  const found = memo({ desktopSessionId: 'desk-1', parentSessionId: 'parent-1', state: 'working', stateSince: 5 }) as StatusMemo & { ticket: string; path: string }
+  const kept = keptTicketOf(found, NOW)
+
+  expect(kept).toEqual(KEPT)
+  expect(keptTicketIn(kept, 'session-1')).toEqual(KEPT)
+  expect(memoOfKeptTicket(kept, 9)).toEqual(newMemo({ sessionId: 'session-1', ticket: 't-1', path: KEPT.path, desktopSessionId: 'desk-1', parentSessionId: 'parent-1', cwd: '/repo', generation: 9 }))
+})
+
+test('a kept record of another session, or with any field not as the mod stores it, reads as none', () => {
+  const cases: unknown[] = [
+    null, 'x', [KEPT],
+    { ...KEPT, sessionId: 'session-2' },
+    { ...KEPT, ticket: '' }, { ...KEPT, ticket: ' t-1' }, { ...KEPT, ticket: 't-1\nmore' }, { ...KEPT, ticket: 7 },
+    { ...KEPT, path: 'home/me/.claude/foreman/builds/session-1.json' },
+    { ...KEPT, path: '/home/me/.claude/foreman/builds/session-2.json' },
+    { ...KEPT, path: '/etc/hosts' },
+    { ...KEPT, path: '/home/me/../../etc/foreman/builds/session-1.json' },
+    { ...KEPT, path: '/home/me/./foreman/builds/session-1.json' },
+    { ...KEPT, desktopSessionId: 3 }, { ...KEPT, desktopSessionId: '' },
+    { ...KEPT, cwd: null },
+    { ...KEPT, at: Number.NaN }, { ...KEPT, at: '1' },
+  ]
+  for (const raw of cases) expect(keptTicketIn(raw, 'session-1')).toBeNull()
+  expect(keptTicketIn({ ...KEPT, sessionId: '../x' }, '../x')).toBeNull()
+})
+
+test('a kept record whose parent id is not a safe id reads as having no parent, and is kept', () => {
+  const { parentSessionId: _, ...unparented } = KEPT
+  expect(keptTicketIn({ ...KEPT, parentSessionId: 'a b' }, 'session-1')).toEqual(unparented)
+  expect(keptTicketIn(unparented, 'session-1')).toEqual(unparented)
 })

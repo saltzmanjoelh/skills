@@ -18,7 +18,7 @@ import { ADVERSARIAL_REVIEWER, afterReport, afterSeen, endedOf, FOCUSED_REVIEWER
 import { changePrompt, ciEventContext, GITHUB_NAMES_LINE, resumePrompt, stateLines, stuckPrompt } from './prompts'
 import { changedKinds, commitRecordsOf, decidedItems, factIn, INSTRUCTION_PATHSPECS, instructionFileIsLink, isFullSha, isUpForCheck, LATER_CONTEXT_LINES, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pluginRootsOf, reviewedHeadOf, secretIn, specDirOf, trendOf, trendStopLine, underRoot, verdictHeadOf, verdictsLine, type CommitRecord, type EarlierRound, type FileKind, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, backgroundTaskIdOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isMerge, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
-import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isForemanNudge, newMemo, parentIn, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, STATUS_CHANGED_TEXT, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
+import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isForemanNudge, keptTicketIn, keptTicketOf, memoOfKeptTicket, newMemo, parentIn, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, STATUS_CHANGED_TEXT, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type KeptTicket, type Starts, type StatusFacts } from './status'
 import { afterSend, emptySends, sendOutcomeOf, sendsIn, sendsKey, sendsNewest, SENDS_KEPT_MS, SENDS_PREFIX, type SendOutcome, type SendSettled, type SendsRecord } from './sends'
 import { baseFactsOf, chooseStep, labelActionOf, labelFor, labelRecordIn, labelsToRemoveAfterEdit, needsListing, SHORT_HASH, stepFor, UNPUSHED_KEPT, UNREAD_FACTS } from './step'
 import { timeOfDay } from './text'
@@ -3976,6 +3976,14 @@ let parentSendOwedTo: string | null = null
 let sends: SendsRecord | null = null
 // The chain the record's store writes go through, one after another.
 let sendsWrites: Promise<void> = Promise.resolve()
+// The kept ticket's refresh (see keepTicket): the session and the time after
+// which its record is due again, as this copy last read or stored it, or null
+// when it does not know; whether a refresh is running; and this copy's sweep
+// of the kept tickets, which a refresh waits for. A hot reload forgets them,
+// which costs one store read at the next status write.
+let ticketDue: { sessionId: string; at: number } | null = null
+let isTicketRefreshing = false
+let ticketSweep: Promise<void> = Promise.resolve()
 // The minute's tick, and whether the session has ended, after which nothing
 // more is written.
 let statusTick: { cancel: () => void } | undefined
@@ -3991,11 +3999,31 @@ const STATUS_WRITE_TIMEOUT_MS = 30_000
 // How long one message to the parent may take before it is dropped.
 const PARENT_SEND_TIMEOUT_MS = 10_000
 // The time the session's end leaves of the engine's budget for ending a
-// session, for the reads and the delete that follow its wait.
+// session, for the reads, the file's delete and the kept ticket's delete
+// that follow its wait.
 const END_MARGIN_MS = 250
-// The longest the session's end waits for the write in flight, and the
-// longest it lets each `rm -f` run.
+// The longest the session's end waits for the write in flight, the longest
+// it lets each `rm -f` run, and the longest it waits for the kept ticket's
+// delete from the store after a merge.
 const END_WAIT_CAP_MS = 1_000
+
+// A ticketed session's fixed facts are kept in the store under
+// `ticket:<session id>`, so that a process the desktop app stops and starts
+// again takes the ticket up without reading the transcript, whose first user
+// message may by then be a compaction summary (see keptTicketIn). A status
+// write stores the record, and stores it again once its stamp is more than a
+// day old, so a session that waits for weeks keeps it. The session's end
+// deletes it with the file after a merge, and a record whose stamp is two
+// weeks old is dropped when the hooks load.
+const TICKET_PREFIX = 'ticket:'
+const ticketKey = (sessionId: string) => `${TICKET_PREFIX}${sessionId}`
+const TICKET_KEPT_MS = 14 * 24 * 60 * 60_000
+const TICKET_REFRESH_MS = 24 * 60 * 60_000
+// How long one store call for the record may take. The take-up at the hooks'
+// start and at a prompt waits for its read, and a refresh, which runs one at
+// a time, waits for its own calls and for the sweep's, so a call that never
+// settles would otherwise stall the take-up or stop every later refresh.
+const TICKET_STORE_TIMEOUT_MS = 10_000
 
 // Asks for the file to be worked out again and written when it changed, or
 // written in any case when `force` is set. It does nothing in a session that
@@ -4076,6 +4104,7 @@ async function writeStatus($: $, gen: number): Promise<void> {
       await withinTimeout($, trackedWrite($, path, JSON.stringify(record)), STATUS_WRITE_TIMEOUT_MS)
       lastWrittenText = text
       if (changed && facts.memo.parentSessionId !== undefined) tellParent($, facts.memo.parentSessionId)
+      keepTicket($, { ...facts.memo, path }, gen, now)
       if (facts.memo.state === record.state && facts.memo.stateSince === record.stateSince) continue
       await update($, statusMemo, raw => {
         const memo = statusMemoIn(raw, sessionId)
@@ -4370,7 +4399,11 @@ async function takeUpMemo($: $, sessionId: string, found: StatusMemo | null) {
 
 // Looks for the ticket at a prompt, once per session id. A memo of this
 // session is taken up as it is (see startStatus), so a hot reload does not
-// look again. Otherwise the first prompt is the first user message of the
+// look again. Without a memo, startStatus takes up the record kept in the
+// store under `ticket:<session id>` before the transcript is read, which is
+// what keeps the ticket of a process started again after a compaction, whose
+// transcript no longer holds the ticket line. Otherwise the first prompt is
+// the first user message of the
 // transcript, or the prompt being submitted when the transcript holds none
 // or cannot be read. The configuration folder and the desktop id are read
 // only when there is a ticket, so a session without one reads nothing more,
@@ -4435,10 +4468,15 @@ async function memoFrom($: $, sessionId: string, first: string): Promise<StatusM
 // conversation can take up its own memo meanwhile. So once the memo is built
 // the session id is read again, and the look stops when it changed or when
 // writing is closed, before it takes anything up.
-async function lookInTranscript($: $) {
+// When the session's start has just found neither a memo nor a kept record
+// (see startStatus), `isStartDone` is set and the look goes straight to the
+// transcript rather than read the kept record from the store a second time.
+// A turn's look tries the take-up itself, so a record that the start could
+// not read is still taken up before the transcript is read.
+async function lookInTranscript($: $, isStartDone = false) {
   const sessionId = await $.session.id()
   if (knowsTicketFor(sessionId)) return
-  if (await startStatus($)) return
+  if (!isStartDone && await startStatus($)) return
   if (firstMessageKept?.sessionId === sessionId) return
   let first: string
   try {
@@ -4476,11 +4514,89 @@ async function recordTurnStart($: $, turn: number, nudged: boolean) {
 // a prompt before the ticket is looked for, so the two cannot come to take a
 // memo up in different ways. The memo is read first, because `update` writes
 // even when its change hands back the value it was given.
+// When there is no memo, as in a process the desktop app started again, the
+// record kept in the store becomes the memo, as a ticket found in the first
+// prompt would, so the transcript is read only when no record is kept.
 async function startStatus($: $): Promise<boolean> {
   const sessionId = await $.session.id()
-  if (statusMemoIn(await read($, statusMemo), sessionId) === null) return false
+  if (statusMemoIn(await read($, statusMemo), sessionId) === null) {
+    const kept = await keptTicket($, sessionId)
+    if (kept === null) return false
+    await takeUpMemo($, sessionId, memoOfKeptTicket(kept, loadStamp))
+    return true
+  }
   await takeUpMemo($, sessionId, null)
   return true
+}
+
+// The record kept for the session, or null when none is kept, it cannot be
+// read, the read is refused or times out, or its stamp is two weeks old, so
+// that a record the sweep is about to drop is never taken up.
+async function keptTicket($: $, sessionId: string): Promise<KeptTicket | null> {
+  try {
+    const kept = keptTicketIn(await withinTimeout($, $.store.get(ticketKey(sessionId)), TICKET_STORE_TIMEOUT_MS), sessionId)
+    return kept === null || (await $.clock.now()) - kept.at > TICKET_KEPT_MS ? null : kept
+  } catch {
+    return null
+  }
+}
+
+// Starts the refresh of the session's kept record after a status write,
+// unless one is running or this copy knows the record is not yet due. The
+// writer does not wait for it, so a store that is slow or never answers
+// cannot hold the status file still. `now` is the time of the record the
+// writer just wrote.
+function keepTicket($: $, memo: StatusMemo & { ticket: string; path: string }, gen: number, now: number) {
+  if (isTicketRefreshing) return
+  if (ticketDue !== null && ticketDue.sessionId === memo.sessionId && now <= ticketDue.at) return
+  isTicketRefreshing = true
+  void refreshTicket($, memo, gen, now)
+    .catch(() => undefined)
+    .finally(() => {
+      isTicketRefreshing = false
+    })
+}
+
+// Stores the session's record when the record kept is missing, cannot be
+// read or was stamped more than a day ago. It runs after this copy's sweep,
+// so the sweep never deletes a record this refresh has just stored. A refused
+// or timed-out call throws, and the next status write tries again. The
+// record is stored only while the writer's memo is still this copy's, read
+// again from the state: not once the end has begun; not after a /clear, when
+// the new conversation's take-up has set this copy's generation back to the
+// same load stamp but the ended session's memo is gone; and not once a newer
+// copy of the module has taken the memo up after a hot reload, since that
+// copy's end leaves this copy's variables as they were. Nothing is awaited
+// between those checks and the start of the write.
+async function refreshTicket($: $, memo: StatusMemo & { ticket: string; path: string }, gen: number, now: number) {
+  await ticketSweep.catch(() => undefined)
+  const key = ticketKey(memo.sessionId)
+  const kept = keptTicketIn(await withinTimeout($, $.store.get(key), TICKET_STORE_TIMEOUT_MS), memo.sessionId)
+  if (kept !== null && now - kept.at <= TICKET_REFRESH_MS) {
+    ticketDue = { sessionId: memo.sessionId, at: kept.at + TICKET_REFRESH_MS }
+    return
+  }
+  const current = statusMemoIn(await read($, statusMemo), memo.sessionId)
+  if (statusClosed || gen !== statusGen || current?.generation !== gen) return
+  await withinTimeout($, $.store.set(key, keptTicketOf(memo, now)), TICKET_STORE_TIMEOUT_MS)
+  ticketDue = { sessionId: memo.sessionId, at: now + TICKET_REFRESH_MS }
+}
+
+// Drops every kept record whose stamp is two weeks old, whichever session
+// stored it, and at once one that the take-up would read as damaged or as
+// another session's. This copy's refreshes wait for it (see refreshTicket),
+// because the sweep could otherwise read an old or damaged record, a refresh
+// store a fresh one in its place, and the sweep then delete the fresh one.
+function pruneTickets($: $): Promise<void> {
+  ticketSweep = (async () => {
+    const now = await $.clock.now()
+    for (const key of await withinTimeout($, $.store.keys(), TICKET_STORE_TIMEOUT_MS)) {
+      if (!key.startsWith(TICKET_PREFIX)) continue
+      const kept = keptTicketIn(await withinTimeout($, $.store.get(key), TICKET_STORE_TIMEOUT_MS), key.slice(TICKET_PREFIX.length))
+      if (kept === null || now - kept.at > TICKET_KEPT_MS) await withinTimeout($, $.store.delete(key), TICKET_STORE_TIMEOUT_MS)
+    }
+  })()
+  return ticketSweep
 }
 
 // At the session's end nothing more is written. Writing is closed and this
@@ -4514,7 +4630,10 @@ async function endStatus($: $, reason: string, sessionId: string, budget: { rema
 // merge the file stays for the foreman to read. A write that has not settled
 // by the delete, because it took longer than the wait or the writer gave up
 // on it, could still land and bring the file back with an older record, so
-// each one deletes the file again when it settles.
+// each one deletes the file again when it settles. The kept ticket is deleted
+// only after the file's delete has run, and only here, never at an end
+// without a merge, because a process the desktop app will start again ends
+// the same way.
 async function deleteAfterMerge($: $, sessionId: string, budget: { remainingMs: number }) {
   const flight = statusFlight
   const wait = Math.max(0, Math.min(budget.remainingMs - END_MARGIN_MS, END_WAIT_CAP_MS))
@@ -4527,6 +4646,7 @@ async function deleteAfterMerge($: $, sessionId: string, budget: { remainingMs: 
   const unsettled = [...statusWrites]
   await remove()
   for (const write of unsettled) void write.catch(() => undefined).then(remove).catch(() => undefined)
+  await withinTimeout($, $.store.delete(ticketKey(sessionId)), END_WAIT_CAP_MS).catch(() => undefined)
 }
 
 // After a /clear or a resume the memo is reset, and the new conversation
@@ -4536,6 +4656,7 @@ async function reopenForNextConversation($: $) {
   ticketKnown = undefined
   ticketFor = undefined
   firstMessageKept = null
+  ticketDue = null
   lastWrittenText = null
   parentSendOwedTo = null
   sends = null
@@ -4727,9 +4848,16 @@ export const register: Register = on => {
     // session's folder is stored for the memo to name. The look is not
     // awaited, so the session's start never waits on the transcript.
     await stampLoad($).catch(() => undefined)
-    await startStatus($).catch(() => undefined)
+    // The kept tickets' sweep starts before the take-up, so that the first
+    // refresh of this copy waits for it (see refreshTicket).
+    void pruneTickets($).catch(() => undefined)
+    // When the take-up found neither a memo nor a kept record, the look skips
+    // its own, so the kept record is read once here, and a read that never
+    // answers is waited on only once. A take-up that failed is tried again
+    // by the look (see lookInTranscript).
+    const isTakenUp = await startStatus($).catch(() => undefined)
     await update($, cwd, () => e.cwd)
-    void lookInTranscript($).catch(() => undefined)
+    if (isTakenUp !== true) void lookInTranscript($, isTakenUp === false).catch(() => undefined)
     // The hooks start again after a hot reload too, which drops every call in
     // flight from this module, so the records of them go. A question still
     // marked unanswered is settled, and its label taken off, rather than leave
