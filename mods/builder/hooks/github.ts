@@ -325,9 +325,9 @@ export function pullRequestStateIn(out: string | null): Snapshot['state'] | null
 }
 
 // What a look read beside the pull request itself: every run at the head,
-// whether the runs read failed so they were carried over, and the base
-// branch with the facts of its CLAUDE.md.
-export type SnapshotExtras = Pick<Snapshot, 'headRuns' | 'runsCarriedOver' | 'base' | 'facts'>
+// whether the runs read failed so they were carried over, and the facts of
+// the base branch's CLAUDE.md.
+export type SnapshotExtras = Pick<Snapshot, 'headRuns' | 'runsCarriedOver' | 'facts'>
 
 export function snapshotOf(repo: string, pr: GhPullRequest, login: string, runs: WorkflowRun[] = [], extras: SnapshotExtras = {}): Snapshot {
   const head = pr.headRefOid

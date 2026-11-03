@@ -68,10 +68,8 @@ export type Snapshot = {
   // stored snapshot had. While both verdicts approve at the head it is part
   // of the fingerprint, so the first look that reads the runs again is news.
   runsCarriedOver?: true
-  // The pull request's base branch, kept only when it is a plain branch
-  // name, and the facts read from its CLAUDE.md at this look. A snapshot an
-  // older build stored has neither, and the facts then take their defaults.
-  base?: string
+  // The facts read from the base branch's CLAUDE.md at this look. A snapshot
+  // an older build stored has none, and the facts then take their defaults.
   facts?: BaseFacts
   fingerprint: string
 }

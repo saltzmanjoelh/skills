@@ -10537,6 +10537,44 @@ test('the change prompt, the CI event context, the stuck prompt and the watch an
   expect(event?.context.join('\n') ?? '').toContain('\n\nThe step that applies: The newest verdict at this head requests changes.\n')
 })
 
+test('while a question to the person is open, the watch answer, the change prompt and the CI event context name the open question step', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const tools = heldTools(on)
+  const seen: { text: string; context: readonly string[] }[] = []
+  on('prompt.submit', ($, e) => {
+    seen.push({ text: e.text, context: e.context ?? [] })
+    return { text: e.text }
+  })
+  const open = '\n\nThe step that applies: An open question.\nA question to the person is open.'
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  const asked = loose($)({ tool: 'AskUserQuestion', tool_use_id: 'q1', questions: [{ question: 'Which name?' }] })
+
+  // The watch tool's answer.
+  const ran = await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  expect(String(ran.result)).toContain(open)
+
+  // The change prompt, when a check fails. Had the two flags been passed in
+  // each other's place, the prompt would name the review step instead.
+  world.pr = openPullRequest({ statusCheckRollup: [{ __typename: 'CheckRun', name: 'tests', status: 'COMPLETED', conclusion: 'FAILURE' }] })
+  await clock.advance(10 * 60_000)
+  const changed = seen.filter(p => p.text.includes('pull request #7 changed'))
+  expect(changed.length).toBe(1)
+  expect(changed[0]?.text).toContain(open)
+  expect(changed[0]?.text).not.toContain('builder: the conversation was compacted')
+
+  // The CI event context, as of the event.
+  world.pr = openPullRequest({ reviews: [verdictReview(C, 'REQUEST_CHANGES', 'APPROVE')] })
+  await $.prompt.submit({ text: CI_EVENT, origin: { kind: 'sdk' } } as never)
+  const event = seen.find(p => p.text === CI_EVENT)
+  expect(event?.context.join('\n') ?? '').toContain(open)
+
+  tools.get('q1')!.finish({ result: { answers: {} } })
+  await asked
+})
+
 test('the workflow runs are read at the head gh pr view gave, not at the local checkout', async ($, on) => {
   const clock = mock.clock(on)
   mock.store(on)

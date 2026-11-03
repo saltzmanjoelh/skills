@@ -328,7 +328,7 @@ async function fetchSnapshot($: $, r: SnapshotTarget): Promise<Snapshot | null> 
   const live = JSON.parse(out) as GhPullRequest
   const base = plainBranchOf(live.baseRefName)
   const [headRuns, facts] = await Promise.all([readHeadRuns($, r, live.headRefOid), readBaseFacts($, baseFolderOf(r), base)])
-  const extras: SnapshotExtras = { ...(base === null ? {} : { base }), facts }
+  const extras: SnapshotExtras = { facts }
   if (headRuns !== null) return snapshotOf(r.repo, live, r.login, unfinishedOf(headRuns), { ...extras, headRuns })
   const stored = await read($, pr)
   return snapshotOf(r.repo, live, r.login, carriedRuns(stored, r.repo, live.number, live.headRefOid), {

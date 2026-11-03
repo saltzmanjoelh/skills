@@ -48,7 +48,7 @@ const approved = [review(C, 'APPROVE', 'APPROVE')]
 // run at the head, and the base branch's facts.
 function snapshot(over: Partial<GhPullRequest> = {}, headRuns: HeadRun[] = [], facts: BaseFacts = FACTS, carried = false): Snapshot {
   return snapshotOf('o/r', pullRequest(over), ME, headRuns.filter(isUnfinished).map(r => ({ id: r.id, attempt: r.attempt, name: r.name })), {
-    headRuns, facts, base: 'main', ...(carried ? { runsCarriedOver: true as const } : {}),
+    headRuns, facts, ...(carried ? { runsCarriedOver: true as const } : {}),
   })
 }
 
