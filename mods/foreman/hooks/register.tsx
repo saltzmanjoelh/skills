@@ -1326,7 +1326,7 @@ export const register: Register = (on, options) => {
     const id = await $.session.id()
     // The count of status messages starts again at zero on every load. The
     // stored copies too old to keep are deleted in the chain of the count's
-    // writes, ahead of this load's copy, and the start does not wait for it.
+    // writes, ahead of this load's copy, and the start waits for neither.
     await startMarkers($, id).catch(() => undefined)
     void pruneMarkers($).catch(() => undefined)
     const rawParent = await $.store.get(storeKey(id))
@@ -1352,7 +1352,7 @@ export const register: Register = (on, options) => {
         await ensureArmed($)
       }
     }
-    if (await isOn($).catch(() => false)) await copyMarkers($)
+    if (await isOn($).catch(() => false)) void copyMarkers($).catch(() => undefined)
     void ensureOffRoleWork($).catch(() => undefined)
     return next(e)
   })

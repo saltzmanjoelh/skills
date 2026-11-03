@@ -845,6 +845,24 @@ test('a stored copy that a newer load wrote is not overwritten', async ($, on) =
   expect(markersCopy(w)).toEqual(newer)
 })
 
+test('a change of the session id within one load starts a fresh count under the new id, and the first message is still logged only once', async ($, on) => {
+  const w = world(on)
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  const firstLines = async () => (await linesOf(ui, '\\d\\d:\\d\\d:\\d\\d ')).filter(line => line.includes(FIRST_MARKER_LOG))
+  await w.clock.advance(MINUTE)
+  await receive($, CHANGED)
+  await w.clock.settle()
+  w.engine.sessionId = 'session-2'
+  await w.clock.advance(MINUTE)
+  await receive($, CHANGED)
+  await w.clock.settle()
+  expect(await firstLines()).toEqual([`12:01:00 ${FIRST_MARKER_LOG}`])
+  expect(w.stored.get(markersKey('session-2'))).toEqual({ version: 1, sessionId: 'session-2', since: T0 + 2 * MINUTE, consumed: 1, first: T0 + 2 * MINUTE, last: T0 + 2 * MINUTE })
+  expect(markersCopy(w)).toEqual({ version: 1, sessionId: 'session-1', since: T0, consumed: 1, first: T0 + MINUTE, last: T0 + MINUTE })
+})
+
 test('a copy that the hooks from before a reload wrote over this load\'s copy is written again by this load\'s next copy, though the count is unchanged', async ($, on) => {
   const w = world(on, { store: { 'parent:session-1': { isOn: true, slots: null } } })
   await mountBoth($, on)

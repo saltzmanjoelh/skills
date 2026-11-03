@@ -4066,7 +4066,9 @@ function tellParent($: $, parent: string) {
       }
       noteSend($, countedFor, await began, sendOutcomeOf(settled, PARENT_SEND_TIMEOUT_MS))
     } catch {
-      // Dropped, as said above.
+      // The send's own errors are settled above, so only an error in
+      // counting lands here, and it is dropped so that the owed send below
+      // still fires.
     } finally {
       parentSendInFlight = false
       const owedTo = parentSendOwedTo
