@@ -109,8 +109,9 @@ definitions the skill gives today become functions with tests:
   conclusion.
 
 The mod reads a run's jobs only for a completed run that has an older run of
-the same workflow and event, and at most once for each run id and attempt, so
-a head with one run per workflow and event reads no jobs.
+the same workflow and event. A read that gives an answer is kept for each run
+id and attempt and never made again, and a read that fails is made again at
+the next look. A head with one run per workflow and event reads no jobs.
 
 ### What a turn carries
 

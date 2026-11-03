@@ -71,8 +71,25 @@ export type Snapshot = {
   // The facts read from the base branch's CLAUDE.md at this look. A snapshot
   // an older build stored has none, and the facts then take their defaults.
   facts?: BaseFacts
+  // The commits the head branch's worktree holds that the head lacks, listed
+  // only at a look that chose a merge step or the Merged step. Every other
+  // snapshot has none, and the fingerprint never reads it.
+  unpushed?: Unpushed
+  // The head branch's name, kept beside the listing at the same look, so a
+  // step text built later from this stored snapshot can list the commits
+  // again without reading the pull request. The fingerprint never reads it.
+  headBranch?: string
   fingerprint: string
 }
+
+// The commits a worktree holds that the pull request's head lacks: none, some,
+// or could not be listed. With some, `commits` holds at most the first 20
+// short hashes, `total` how many there are, and `isAncestor` whether the head
+// is an ancestor of the worktree's HEAD, so a push would not be forced.
+export type Unpushed =
+  | { kind: 'none' }
+  | { kind: 'some'; commits: string[]; total: number; isAncestor: boolean }
+  | { kind: 'unlisted' }
 
 // The pull request the session works on. Set only when asked: by the watch
 // tool, or by /builder watch.

@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { snapshotOf } from '../hooks/github'
-import { ADVERSARIAL_REVIEWER, afterReport, barOf, endedOf, FOCUSED_REVIEWERS, focusedReviewersFor, MAINTAINABILITY_REVIEWER, modelLabel, plannedOf, progressIn, reportAnswer, reportOf, STAGES, VERDICT_REVIEWERS, type PlannedInput } from '../hooks/progress'
+import { ADVERSARIAL_REVIEWER, afterReport, afterSeen, barOf, endedOf, FOCUSED_REVIEWERS, focusedReviewersFor, MAINTAINABILITY_REVIEWER, modelLabel, plannedOf, progressIn, reportAnswer, reportOf, STAGES, VERDICT_REVIEWERS, type PlannedInput } from '../hooks/progress'
 import { COUNSEL_MEMBERS } from '../hooks/counsel'
 import { OWNERS_ADVOCATE, READ_ONLY_AGENTS, REVIEWERS } from '../hooks/state'
 import type { AgentCard, CounselQuestion, Progress } from '../types'
@@ -307,4 +307,26 @@ test('a model is named short, and an agent with no model shows a hyphen', () => 
   expect(modelLabel('  ')).toBe('-')
   expect(modelLabel(7)).toBe('-')
   expect(modelLabel('\u001b[31m')).toBe('-')
+})
+
+test('a stage the mod sees applies only to a progress record of this work, keeps its title and never moves back', () => {
+  const since = NOW - 60_000
+  const verify = progress({ stage: 'verify', furthest: 'verify', since })
+  // No record, or a watch that began before the record started, reports nothing.
+  expect(afterSeen(null, { stage: 'pr', note: '' }, NOW, NOW)).toBeNull()
+  expect(afterSeen(verify, { stage: 'pr', note: '' }, since - 1, NOW)).toBeNull()
+  expect(afterSeen(verify, { stage: 'pr', note: '' }, null, NOW)).toBeNull()
+  // A watch at or after the start moves the bar on, under the session's title.
+  const pr = afterSeen(verify, { stage: 'pr', note: '' }, since, NOW)
+  expect(pr).toEqual({ ...verify, stage: 'pr', furthest: 'pr', note: '' })
+  // A stage behind the furthest one reached is not reported, so the bar never
+  // moves back, even while the session shows an earlier stage.
+  const fixing = progress({ stage: 'build', furthest: 'review', since })
+  expect(afterSeen(fixing, { stage: 'pr', note: '' }, since, NOW)).toBeNull()
+  expect(afterSeen(fixing, { stage: 'review', note: 'round 2' }, since, NOW)).toEqual({ ...fixing, stage: 'review', note: 'round 2' })
+  // The same stage and note change nothing.
+  const review = progress({ stage: 'review', furthest: 'review', note: 'round 2', since })
+  expect(afterSeen(review, { stage: 'review', note: 'round 2' }, since, NOW)).toBeNull()
+  expect(afterSeen(review, { stage: 'review', note: 'round 3' }, since, NOW)).toEqual({ ...review, note: 'round 3' })
+  expect(afterSeen(review, { stage: 'merge', note: '' }, since, NOW)).toEqual({ ...review, stage: 'merge', furthest: 'merge', note: '' })
 })

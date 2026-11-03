@@ -10,16 +10,16 @@ import { checkoutSentence, otherRepositorySentence, worktreeWithBranch, type Che
 // handed to the session.
 import { afterCompaction, afterFailure, checkoutIn, compactionFacts, compactionsIn, isDue, measureIn, measureOf, owing, told as afterReloadTold, withFacts, type UsageRead } from './context'
 import { afterAskAgain, afterTally, askAgainAnswer, briefAnswer, briefFactsOf, briefRefusal, briefText, counselAnswer, decisionLine, destinationOf, endedDecisionLines, FOLLOW_UP_OPTIONS, followUpAnswer, followUpAskAgainAnswer, followUpsInput, followUpsRefusal, followUpStepOf, followUpVotesOf, keepCounsel, MAX_BRIEF_OPTIONS, MAX_FOLLOW_UPS, MIN_OPTIONS, neverStartedCandidatesOf, neverStartedOf, type PullRequestRef, reviewParagraph, stepOf, type UnreadableVote, votesOf } from './counsel'
-import { carriedHeadRuns, carriedRuns, changesBetween, DECISION_LABEL, headRunsOf, isCiMonitorEvent, isSameState, JOBS_JQ, needsJobs, PR_FIELDS, pullRequestStateIn, realWorkOf, roundInProgress, RUNS_JQ, snapshotIn, snapshotOf, unfinishedOf, verdictsOf, type BaseFacts, type GhPullRequest, type HeadRun, type Snapshot, type SnapshotExtras, type Verdict } from './github'
+import { carriedHeadRuns, carriedRuns, changesBetween, DECISION_LABEL, headRunsOf, isCiMonitorEvent, isSameState, JOBS_JQ, needsJobs, PR_FIELDS, pullRequestStateIn, realWorkOf, roundInProgress, RUNS_JQ, snapshotIn, snapshotOf, unfinishedOf, verdictsOf, type BaseFacts, type GhPullRequest, type HeadRun, type Snapshot, type SnapshotExtras, type StateLabel, type Unpushed, type Verdict } from './github'
 import { ignoredLine, readIssueLink } from './links'
 import { afterComparison, afterLoad, dueComparisons, isStale, LOADED_PATHS, loadBegunAs, loadBegunIn, loadedIn, type Found } from './loaded'
 import { AGENT_PANE, agentPaneTree, bandTree, isDrawable, messagesReadOf, NAMED_AFTER_MS, PANE, paneTree, secondRow, type Elements, type MessagesRead, type View } from './pane'
-import { ADVERSARIAL_REVIEWER, afterReport, endedOf, FOCUSED_REVIEWERS, focusedReviewersFor, plannedOf, progressIn, reportAnswer, reportOf, stageLabel, STAGES, type ReportInput } from './progress'
+import { ADVERSARIAL_REVIEWER, afterReport, afterSeen, endedOf, FOCUSED_REVIEWERS, focusedReviewersFor, plannedOf, progressIn, reportAnswer, reportOf, stageLabel, STAGES, type ReportInput, type StageId } from './progress'
 import { changePrompt, ciEventContext, GITHUB_NAMES_LINE, resumePrompt, stateLines, stuckPrompt } from './prompts'
 import { changedKinds, commitRecordsOf, decidedItems, factIn, INSTRUCTION_PATHSPECS, instructionFileIsLink, isFullSha, isUpForCheck, LATER_CONTEXT_LINES, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pluginRootsOf, reviewedHeadOf, secretIn, specDirOf, trendOf, trendStopLine, underRoot, verdictHeadOf, verdictsLine, type CommitRecord, type EarlierRound, type FileKind, type PackageInput } from './review'
-import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
+import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isMerge, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
 import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isForemanNudge, newMemo, parentIn, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, STATUS_CHANGED_TEXT, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
-import { baseFactsOf, stepFor, UNREAD_FACTS } from './step'
+import { baseFactsOf, chooseStep, labelActionOf, labelFor, labelRecordIn, labelsToRemoveAfterEdit, needsListing, SHORT_HASH, stepFor, UNPUSHED_KEPT, UNREAD_FACTS } from './step'
 import { timeOfDay } from './text'
 import { afterCost, afterStep, emptyUsage, usageIn } from './usage'
 
@@ -325,7 +325,14 @@ async function gh($: $, dir: string | null, args: string[]): Promise<string | nu
 // While both verdicts approve at the head, the mark is part of the
 // fingerprint (see fingerprintOf), so the first look that reads the runs
 // again is news. The two reads after the pull request's own do not depend
-// on each other, so they run together.
+// on each other, so they run together. When the step the snapshot calls for
+// is a merge step or the Merged step, the look then lists the commits the
+// head branch's worktree holds that the head lacks, and stores the listing
+// on the snapshot with the head branch's name, so the step's text states it
+// with no await between choosing the snapshot and handing it over, and a
+// step text built later from the stored snapshot can list them again (see
+// relisted). The step is chosen with no question open, which is safe: Merged
+// comes before the question, and a question step renders no listing.
 type SnapshotTarget = Pick<BuilderRun, 'repo' | 'number' | 'cwd' | 'login' | 'checkout' | 'repoFromCwd'>
 
 async function fetchSnapshot($: $, r: SnapshotTarget): Promise<Snapshot | null> {
@@ -335,13 +342,74 @@ async function fetchSnapshot($: $, r: SnapshotTarget): Promise<Snapshot | null> 
   const base = plainBranchOf(live.baseRefName)
   const [headRuns, facts] = await Promise.all([readHeadRuns($, r, live.headRefOid), readBaseFacts($, baseFolderOf(r), base)])
   const extras: SnapshotExtras = { facts }
-  if (headRuns !== null) return snapshotOf(r.repo, live, r.login, unfinishedOf(headRuns), { ...extras, headRuns })
+  const s = headRuns !== null
+    ? snapshotOf(r.repo, live, r.login, unfinishedOf(headRuns), { ...extras, headRuns })
+    : await carriedSnapshot($, r, live, extras)
+  if (!needsListing(chooseStep(s, false))) return s
+  // The fingerprint is a fixed list of fields that leaves the listing and the
+  // branch out, so the one snapshotOf made still holds.
+  const branch = typeof live.headRefName === 'string' ? { headBranch: live.headRefName } : {}
+  return { ...s, unpushed: await listUnpushed($, r, live), ...branch }
+}
+
+// The snapshot with its listing made again now, for a step text built from
+// the stored snapshot rather than from a look that just ran. A commit made
+// since the look that stored it would be missing from the stored listing, as
+// in a turn a usage limit stopped, whose end runs no look, so the stored
+// listing is never shown. It is made from the number, the head and the branch
+// the snapshot holds, so it needs no read of the pull request, and a snapshot
+// an older build stored holds no branch and reads as could not be listed. A
+// step that renders no listing keeps the snapshot as it is.
+async function relisted($: $, r: SnapshotTarget, s: Snapshot): Promise<Snapshot> {
+  if (!needsListing(chooseStep(s, false))) return s
+  return { ...s, unpushed: await listUnpushed($, r, { number: s.number, headRefOid: s.head, headRefName: s.headBranch }) }
+}
+
+// A snapshot whose runs read failed, keeping the runs the stored snapshot had.
+async function carriedSnapshot($: $, r: SnapshotTarget, live: GhPullRequest, extras: SnapshotExtras): Promise<Snapshot> {
   const stored = await read($, pr)
   return snapshotOf(r.repo, live, r.login, carriedRuns(stored, r.repo, live.number, live.headRefOid), {
     ...extras,
     headRuns: carriedHeadRuns(stored, r.repo, live.number, live.headRefOid),
     runsCarriedOver: true,
   })
+}
+
+// The commits the worktree of the pull request's head branch holds that the
+// head lacks, or could not be listed. It never throws: every git call goes
+// through the git helpers, which answer null on a failure, a throw or a
+// timeout. The number must be a positive integer, the head a full commit sha
+// and the branch a string, which is compared with the worktree list and never
+// passed to git. Only a worktree that has the branch checked out is listed,
+// because the session's folder may stand on any branch. The head is fetched
+// only when the worktree lacks it, so a fork whose origin lacks
+// `pull/<n>/head` can still be listed.
+async function listUnpushed($: $, r: SnapshotTarget, pull: Pick<GhPullRequest, 'number' | 'headRefOid' | 'headRefName'>): Promise<Unpushed> {
+  const unlisted: Unpushed = { kind: 'unlisted' }
+  const head = pull.headRefOid
+  if (!Number.isInteger(pull.number) || pull.number <= 0 || !isFullSha(head) || typeof pull.headRefName !== 'string') return unlisted
+  const checkout = await checkoutOf($, listingFolder(r), pull.headRefName, r.checkout !== undefined)
+  if (checkout.how !== 'worktree') return unlisted
+  const dir = checkout.dir
+  const present = await gitRun($, dir, ['cat-file', '-e', `${head}^{commit}`])
+  if (present === null) return unlisted
+  if (present.exitCode !== 0) {
+    const fetched = await git($, dir, ['fetch', '-q', 'origin', `pull/${pull.number}/head`])
+    if (fetched === null) return unlisted
+  }
+  const listed = await git($, dir, ['rev-list', `${head}..HEAD`])
+  if (listed === null) return unlisted
+  const commits = listed.split('\n').map(line => line.trim()).filter(line => line !== '')
+  if (!commits.every(isFullSha)) return unlisted
+  if (commits.length === 0) return { kind: 'none' }
+  const ancestor = await gitRun($, dir, ['merge-base', '--is-ancestor', head, 'HEAD'])
+  if (ancestor === null || (ancestor.exitCode !== 0 && ancestor.exitCode !== 1)) return unlisted
+  return {
+    kind: 'some',
+    commits: commits.slice(0, UNPUSHED_KEPT).map(commit => commit.slice(0, SHORT_HASH)),
+    total: commits.length,
+    isAncestor: ancestor.exitCode === 0,
+  }
 }
 
 // The base branch's name when it is a plain branch name, which is safe to put
@@ -637,8 +705,10 @@ async function lookAt(
     // throwing in the middle of the look, because isSameState checks both
     // sides with snapshotIn.
     await recordWake($, { at: await $.clock.now(), source, changed: !isSameState(shown, s) })
-    // Label work for an answered question runs behind the look, never in front.
+    // Label work for an answered question, and the state label, run behind
+    // the look, never in front.
     void inLabelQueue(() => takeOffAnsweredLabels($))
+    requestStateLabel($)
   }
 
   await keepSeen($, r)
@@ -1385,6 +1455,11 @@ async function fireStuck($: $, gen: number) {
   const isWaiting = (await read($, busy))
     || (await read($, agents)).some(isRunning)
     || (await isAsking($))
+  // The snapshot is the stored one, so its commits are listed again here,
+  // before the checks below, rather than shown as an earlier look listed them
+  // (see relisted). A session that is waiting gets no prompt, so nothing is
+  // listed for it.
+  const shown = isWaiting ? s : await relisted($, r, s)
   const owedAt = await reloadOwed($)
   // Checked with no await before the submit, as deliver does. A turn about a
   // real change is already coming when one is being handed over, one waits
@@ -1401,7 +1476,7 @@ async function fireStuck($: $, gen: number) {
   ) return markQuiet($)
   // A question being open makes the session waiting above, so the step is
   // chosen with none open.
-  const isAccepted = await submitClaimed($, stuckPrompt(s, now - since, owedAt !== null), owedAt)
+  const isAccepted = await submitClaimed($, stuckPrompt(shown, now - since, owedAt !== null), owedAt)
   // This timer has fired, so the stuck prompt is armed again even when the
   // doubled interval cannot be saved.
   try {
@@ -2026,13 +2101,20 @@ async function resumeAfterClear($: $, cleared: number) {
   // as in a hold during the spec or the build, there is nothing to read. A
   // look that fails leaves the decision to the stored pull request.
   const watched = await read($, run)
-  if (watched !== null) await look($, 'resume', 'observe').catch(() => null)
+  const looked = watched === null ? null : await look($, 'resume', 'observe').catch(() => null)
   const stage = progressIn(await read($, progress))?.stage
   if (!(await isImplementing($)) || (await read($, busy))) return
   // While a pull request is watched, the prompt carries its state and the
   // step that applies, chosen from the snapshot the look above stored, or
-  // the one stored before when that look failed.
-  const shown = watched === null ? null : watchedSnapshotOf(watched, snapshotIn(await read($, pr)))
+  // the one stored before when that look failed or was overtaken. That one
+  // may be from before the turn the limit stopped, so its commits are listed
+  // again here, before the checks below (see relisted).
+  const stored = watched === null ? null : watchedSnapshotOf(watched, snapshotIn(await read($, pr)))
+  let shown: Snapshot | null = null
+  if (watched !== null && stored !== null) {
+    const isStoredByThisLook = looked !== null
+    shown = isStoredByThisLook ? stored : await relisted($, watched, stored)
+  }
   const watchedStep = shown === null ? null : { s: shown, isAsking: await isAsking($) }
   const owedAt = await reloadOwed($)
   // The checks and the claim follow each other with no await between, so the
@@ -2147,6 +2229,7 @@ async function watch($: $, target: Omit<BuilderRun, 'since'>): Promise<Snapshot 
   newestRead = null
   await update($, run, () => r)
   await update($, pr, () => s)
+  requestStateLabel($)
   if (previous !== null && (previous.repo !== r.repo || previous.number !== r.number)) {
     // Through the told queue, so a write for the previous pull request that
     // is already queued cannot land after the delete and bring it back.
@@ -2209,6 +2292,7 @@ async function serveWatch($: $, asked: WatchInput): Promise<string> {
   const target = { repo, number: input.number, cwd: dir ?? '.', login, ...fromCwd }
   const s = await watch($, given === undefined ? target : { ...target, checkout: given })
   if (s === null) return `gh could not read ${repo}#${input.number}; still watching what was watched before.`
+  if (s.state === 'OPEN') await reportSeen($, 'pr')
   const lines = ['Watching this pull request.', ...stateLines(s)]
   // A pull request that merged or closed gets no further review, so the
   // decisions still owed to it are listed here and their keys deleted. This
@@ -2408,11 +2492,11 @@ async function checkoutOf($: $, from: string, branch: string, isGiven = false): 
   return dir === null ? { dir: from, branch, how: 'no-worktree', ...given } : { dir, branch, how: 'worktree', ...given }
 }
 
-// The folder the package and review tools ask git for the worktrees from: the
-// checkout given to the watch tool, for a session whose folder belongs to
-// another repository and so lists only that repository's worktrees, else the
-// session's folder.
-const listingFolder = (r: BuilderRun) => r.checkout ?? r.cwd
+// The folder the package and review tools and the commit listing ask git for
+// the worktrees from: the checkout given to the watch tool, for a session
+// whose folder belongs to another repository and so lists only that
+// repository's worktrees, else the session's folder.
+const listingFolder = (r: Pick<BuilderRun, 'checkout' | 'cwd'>) => r.checkout ?? r.cwd
 
 // Derived files for one head, kept inside the checkout's git folder so they
 // are never committed and go away with the worktree. Writing a file creates
@@ -2434,8 +2518,9 @@ async function counselDir($: $, dir: string): Promise<string | null> {
 type PrForReview = GhPullRequest & { baseRefName: string; headRefName: string }
 
 async function livePullRequest($: $, r: BuilderRun): Promise<PrForReview | null> {
-  // PR_FIELDS already asks for baseRefName, so it is not asked for twice.
-  const out = await gh($, r.cwd, ['pr', 'view', String(r.number), '--repo', r.repo, '--json', `${PR_FIELDS},headRefName`])
+  // PR_FIELDS already asks for baseRefName and headRefName, so neither is
+  // asked for twice.
+  const out = await gh($, r.cwd, ['pr', 'view', String(r.number), '--repo', r.repo, '--json', PR_FIELDS])
   if (out === null) return null
   try {
     return JSON.parse(out) as PrForReview
@@ -2562,6 +2647,12 @@ async function servePackage($: $, input: PackageInput): Promise<string> {
   if (r === null) return 'No pull request is watched; call the watch tool first.'
   const live = await livePullRequest($, r)
   if (live === null) return `gh could not read ${r.repo}#${r.number}.`
+  // The round comes from the live read, never from the stage last reported,
+  // because the session reports build again while it fixes findings. Every
+  // report carries the round, so a second package call in the first round
+  // never clears a note the session gave.
+  const round = roundInProgress(snapshotOf(r.repo, live, r.login))
+  await reportSeen($, 'review', `round ${round}`)
   // Every git command and the project's documents use the folder found here,
   // and a refusal names it, so a wrong folder is never compared in silence.
   const checkout = await checkoutOf($, listingFolder(r), live.headRefName, r.checkout !== undefined)
@@ -2610,7 +2701,7 @@ async function servePackage($: $, input: PackageInput): Promise<string> {
     base: live.baseRefName,
     stat,
     commits,
-    round: roundInProgress(snapshotOf(r.repo, live, r.login)),
+    round,
     ...(await projectDocuments($, checkoutDir)),
     earlier,
     decided: decidedItems(records, earlier),
@@ -2952,9 +3043,9 @@ const inLabelQueue = oneAtATime({ passesErrors: false })
 // was killed while its question was open, which a restarted mod has no
 // record of.
 async function labelForQuestion($: $, r: BuilderRun, at: number) {
-  const names = await gh($, r.cwd, ['pr', 'view', String(r.number), '--repo', r.repo, '--json', 'labels', '--jq', '[.labels[].name]'])
+  const names = await liveLabelNames($, r)
   if (names === null) return
-  const isOn = (JSON.parse(names) as string[]).includes(DECISION_LABEL)
+  const isOn = names.includes(DECISION_LABEL)
   if (!isOn && !(await addLabel($, r, DECISION_LABEL))) return
   await update($, questions, list => list.map(q => q.at === at ? { ...q, labelled: true } : q))
 }
@@ -2974,13 +3065,147 @@ async function takeOffAnsweredLabels($: $) {
   }
 }
 
-async function addLabel($: $, r: BuilderRun, name: string): Promise<boolean> {
-  const args = ['pr', 'edit', String(r.number), '--repo', r.repo, '--add-label', name]
+// Removes the labels in `names` in one edit. True when gh confirmed it.
+async function removeLabels($: $, r: BuilderRun, names: readonly string[]): Promise<boolean> {
+  return (await gh($, r.cwd, ['pr', 'edit', String(r.number), '--repo', r.repo, '--remove-label', names.join(',')])) !== null
+}
+
+// Adds the label `name`, and removes the labels in `remove` in the same edit.
+async function addLabel($: $, r: BuilderRun, name: string, remove: readonly string[] = []): Promise<boolean> {
+  const removing = remove.length > 0 ? ['--remove-label', remove.join(',')] : []
+  const args = ['pr', 'edit', String(r.number), '--repo', r.repo, '--add-label', name, ...removing]
   if ((await gh($, r.cwd, args)) !== null) return true
   // The label may not exist in this repository yet. Creating it without
   // --force leaves an existing label's colour and description alone.
   await gh($, r.cwd, ['label', 'create', name, '--repo', r.repo])
   return (await gh($, r.cwd, args)) !== null
+}
+
+// The state label the mod last set on each pull request, kept in the store
+// under `state-label:<repo>#<number>` as `{ label, at, derived }`, so that it
+// survives a restart. It has no session id, because the label is on the pull
+// request, whichever session set it.
+const STATE_LABEL_PREFIX = 'state-label:'
+const stateLabelKey = (target: Pick<BuilderRun, 'repo' | 'number'>) => `${STATE_LABEL_PREFIX}${target.repo}#${target.number}`
+// A record is kept far longer than a told record, because a pull request can
+// stay open for weeks, and a record lost while `stuck` is on is only
+// recorded again, never written.
+const STATE_LABEL_KEPT_MS = 90 * 24 * 60 * 60_000
+
+// Set while a state label job waits in the label queue, so a burst of looks
+// queues one job. The job clears it before it starts, so a look that lands
+// while the job runs queues the next one.
+let isStateLabelQueued = false
+
+function requestStateLabel($: $) {
+  if (isStateLabelQueued) return
+  isStateLabelQueued = true
+  void inLabelQueue(() => {
+    isStateLabelQueued = false
+    return settleStateLabel($)
+  })
+}
+
+// Sets the state label that follows from the step the stored snapshot calls
+// for. Everything is read again when the job runs, so a backlog never replays
+// an older label: the watch, the stored snapshot, whether a question is open,
+// the record, and the labels the pull request carries now, read fresh as for
+// a question's label because the snapshot can be minutes old. It stops when
+// the snapshot is of another pull request or the watch moved on. Before it
+// reads the labels, it notes the derived label in the record, so that after
+// an edit that failed the next job knows the step's label has not changed. A
+// new label record is saved only once every edit the job needed succeeded:
+// on a write, the edit and the removal that the read after it may call for;
+// when the label is only recorded, the removal of any state label beside
+// `stuck`. So a failed edit, read or removal is tried again at the next look.
+async function settleStateLabel($: $) {
+  const r = await read($, run)
+  const s = snapshotIn(await read($, pr))
+  if (r === null || s === null || s.repo !== r.repo || s.number !== r.number) return
+  if (!Number.isInteger(r.number) || r.number <= 0) return
+  const derived = labelFor(chooseStep(s, await isAsking($)))
+  if (derived === null) return
+  const key = stateLabelKey(r)
+  const record = labelRecordIn(await $.store.get(key))
+  if (derived === (record?.label ?? null)) return
+  if (record !== null && record.derived !== derived) await $.store.set(key, { ...record, derived })
+  const live = await liveLabelNames($, r)
+  if (live === null || !(await stillWatching($, r))) return
+  const action = labelActionOf(derived, record?.label ?? null, live, record?.derived ?? null)
+  if (action.kind === 'none') return
+  if (action.kind === 'write') {
+    if (!(await addLabel($, r, derived, action.remove))) return
+    if (!(await removeOtherStateLabels($, r, derived, live))) return
+  }
+  if (action.kind === 'record' && action.remove.length > 0 && !(await removeLabels($, r, action.remove))) return
+  await $.store.set(key, { label: derived, at: await $.clock.now(), derived })
+}
+
+// Reads the labels again after the edit that added `added`, and removes in one
+// more edit the state labels that labelsToRemoveAfterEdit names. A second
+// session on the same pull request can put one on between the first read
+// (`before`) and the edit, and once the record is saved no later look reads
+// the labels again. A `stuck` the session set by hand in that time stays, and
+// `added` comes off instead. True when the read shows nothing to remove or the
+// removal succeeded, and false when either failed, so the record is not saved
+// and the next look tries again. The labels removed are on the pull request,
+// so they exist in the repository.
+async function removeOtherStateLabels($: $, r: BuilderRun, added: StateLabel, before: readonly string[]): Promise<boolean> {
+  const live = await liveLabelNames($, r)
+  if (live === null) return false
+  const others = labelsToRemoveAfterEdit(added, before, live)
+  if (others.length === 0) return true
+  return removeLabels($, r, others)
+}
+
+// The labels the pull request carries now, read fresh, or null when the read
+// failed or answered something other than a list of names.
+async function liveLabelNames($: $, r: BuilderRun): Promise<string[] | null> {
+  return labelNamesIn(await gh($, r.cwd, ['pr', 'view', String(r.number), '--repo', r.repo, '--json', 'labels', '--jq', '[.labels[].name]']))
+}
+
+// The label names gh printed as a JSON list, or null when it printed nothing
+// or something else.
+function labelNamesIn(out: string | null): string[] | null {
+  if (out === null) return null
+  try {
+    const names: unknown = JSON.parse(out)
+    return Array.isArray(names) && names.every(name => typeof name === 'string') ? names : null
+  } catch {
+    return null
+  }
+}
+
+// Drops each state label record set more than ninety days ago, and one stored
+// in another shape at once.
+async function pruneStateLabels($: $) {
+  const now = await $.clock.now()
+  for (const key of await $.store.keys()) {
+    if (!key.startsWith(STATE_LABEL_PREFIX)) continue
+    const record = labelRecordIn(await $.store.get(key))
+    if (record === null || now - record.at > STATE_LABEL_KEPT_MS) await $.store.delete(key)
+  }
+}
+
+// Reports a stage the mod saw for itself: `pr` when the watch tool watches an
+// open pull request, `review` when the package tool is called, and `merge`
+// when the session runs a merge command. It applies only to a progress record
+// the session started for this work, keeps the session's title and never
+// moves the bar back (see afterSeen). A failure leaves the bar as it was.
+async function reportSeen($: $, stage: StageId, note = '') {
+  try {
+    const watchSince = (await read($, run))?.since ?? null
+    const now = await $.clock.now()
+    let isChanged = false
+    await update($, progress, raw => {
+      const next = afterSeen(progressIn(raw), { stage, note }, watchSince, now)
+      isChanged = next !== null
+      return next ?? raw
+    })
+    if (isChanged) $.ui.invalidate('ui.render')
+  } catch {
+    // The report is the mod's own idea; the call it came with goes on.
+  }
 }
 
 // The lines the agent pane shows for its agent's messages, as last read, so
@@ -4254,6 +4479,7 @@ export const register: Register = on => {
     ensureLive($)
     void pruneTold($).catch(() => undefined)
     void pruneOwed($).catch(() => undefined)
+    void pruneStateLabels($).catch(() => undefined)
     void startUsage($).catch(() => undefined)
     // Watching starts only when asked (the watch tool or /builder watch), so a
     // session that has not named a pull request is never handed one.
@@ -4277,12 +4503,14 @@ export const register: Register = on => {
   // name it while it runs; AskUserQuestion and Agent calls are left out,
   // because the line names the question and the agent already. After a push
   // or merge of the session's own that succeeded, the mod looks at the pull
-  // request soon, even while the turn goes on.
+  // request soon, even while the turn goes on. Before a merge command of the
+  // session's own runs, the mod reports the merge stage.
   // However the call ends, its return closes one permission prompt of its
   // loop and tool for the status file.
   on('tool.call', async ($, e, next) => {
     try {
       if (e.agentId !== undefined || UNNAMED_TOOLS.has(String(e.tool))) return await route($, e, next)
+      if (e.tool === 'Bash' && isMerge(String(e.command), mergePattern)) await reportSeen($, 'merge')
       const ran = await foreground($, e, () => route($, e, next))
       if (e.tool === 'Bash' && succeeded(ran) && isPushOrMerge(String(e.command), mergePattern)) armCommandLooks($)
       return ran

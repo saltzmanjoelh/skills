@@ -97,6 +97,20 @@ export function afterReport(prev: Progress | null, report: Report, now: number):
   return { ...prev, stage, furthest, note }
 }
 
+// The work after a stage the mod saw for itself, or null when it changes
+// nothing: with no record, when the watch began before the record's start, so
+// the record belongs to later work, when the stage is behind the furthest
+// one reached, so the bar never moves back, or when the stage and note are the
+// ones shown. Otherwise it is a report under the record's own title, so the
+// session's title is kept. `watchSince` is when the watch of the pull request
+// began, or null with none.
+export function afterSeen(prev: Progress | null, seen: { stage: StageId; note: string }, watchSince: number | null, now: number): Progress | null {
+  if (prev === null || watchSince === null || watchSince < prev.since) return null
+  if (indexOf(seen.stage) < indexOf(prev.furthest)) return null
+  if (seen.stage === prev.stage && seen.note === prev.note) return null
+  return afterReport(prev, { title: prev.title, stage: seen.stage, note: seen.note }, now)
+}
+
 // The progress tool's answer for a recorded report: the stage reported and
 // the stages before the furthest one reached, out of nine.
 export const reportAnswer = (p: Progress) => `${p.stage} (${indexOf(p.furthest)} of ${STAGES.length})`
