@@ -50,8 +50,17 @@ ended.
 ## Edge cases
 
 - A subagent that starts while the session's own turn runs: the session is
-  busy anyway, and its turn's end clears `busy` and `turnRunning` as it does
-  today, because `ownTurnsStarted` did not move during the turn.
+  busy anyway, and the turn's end clears `busy` and `turnRunning`, because
+  the end reads the count of turns started at its own start. Today such a
+  start still clears `rateLimitSeen`, so a usage limit the turn hit before
+  the subagent started is forgotten; after the fix it is kept.
+- A subagent that starts while the session's own turn's end is still under
+  way, in one of the end's awaits: the count does not move, so the
+  compaction, the clearing of `busy` and the replied turn's clearing of a
+  usage-limit hold all go ahead. Today each of them gives up.
+- A subagent that starts during a saved usage-limit hold: `busy` and
+  `turnRunning` stay false, so the resume prompt still comes at the resume
+  time. Today the resume step sees a running turn and sends nothing.
 - A subagent that starts after the session's own turn ended: `busy` and
   `turnRunning` stay false.
 - A subagent that starts while a usage-limit hold is pending on the
@@ -81,13 +90,20 @@ ended.
 - Builder tests in `mods/builder/tests/register.test.ts`, each failing on the
   code before this change:
   - A subagent that starts after the session's own turn ended leaves `busy`
-    false.
-  - A subagent that starts during the session's own turn leaves the turn's
-    end able to clear `busy`, and the count of the session's own turns
-    unchanged, so the compaction or hold check at the end goes ahead.
+    false, and its event still reaches the engine.
+  - A subagent that starts while the session's own turn's end is under way
+    leaves the compaction at that end to run and `busy` cleared afterwards.
+  - A subagent that starts while a replied turn's end is under way leaves
+    that end to take a usage-limit hold off.
+  - A subagent that starts during the session's own turn, after the turn
+    hit a usage limit, leaves the hold to start when the turn ends with an
+    error.
   - A subagent that starts between a session's error turn and its
     `StopFailure` does not stop the usage-limit hold from starting.
+  - A subagent that starts during a saved hold leaves the resume prompt to
+    come at the resume time.
   - A subagent's start leaves the session's own open permission prompt in
     the status file.
-- The existing tests pass unchanged.
+- The existing tests pass unchanged, including the one that shows a
+  subagent's start leaves the nudge flag alone.
 - The gates in the project's `CLAUDE.md`.
