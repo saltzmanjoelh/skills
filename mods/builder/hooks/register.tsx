@@ -3982,10 +3982,12 @@ const STATUS_WRITE_TIMEOUT_MS = 30_000
 // How long one message to the parent may take before it is dropped.
 const PARENT_SEND_TIMEOUT_MS = 10_000
 // The time the session's end leaves of the engine's budget for ending a
-// session, for the reads and the delete that follow its wait.
+// session, for the reads, the file's delete and the kept ticket's delete
+// that follow its wait.
 const END_MARGIN_MS = 250
-// The longest the session's end waits for the write in flight, and the
-// longest it lets each `rm -f` run.
+// The longest the session's end waits for the write in flight, the longest
+// it lets each `rm -f` run, and the longest it waits for the kept ticket's
+// delete from the store after a merge.
 const END_WAIT_CAP_MS = 1_000
 
 // A ticketed session's fixed facts are kept in the store under

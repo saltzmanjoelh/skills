@@ -49,7 +49,10 @@ no new module and no new module variable.
 2. **The store calls in the refresh have a time limit.** The refresh is
    awaited inside the status write, so a store call that never settled
    would hold that write forever and freeze the file, which is the failure
-   this change exists to end. Each store call in the refresh goes through
+   this change exists to end. The first review round moved the refresh
+   beside the writer, so the writer no longer waits for it, and the time
+   limits now keep one refresh that never settles from blocking the next.
+   Each store call in the refresh goes through
    `withinTimeout`, as the file write beside it does. This came from the
    robust plan.
 3. **The record reader is strict.** The stored path flows into `rm -f`, so
