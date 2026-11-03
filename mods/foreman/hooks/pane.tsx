@@ -91,7 +91,8 @@ export function rowLink(row: SubRow, address: string | null): string | null {
   return keyOf(row) === key ? linkOf(address, key) : null
 }
 
-export type BandPresses = { open: (file: string) => void }
+// `open` opens a chip's sub session, and `pane` opens foreman's pane.
+export type BandPresses = { open: (file: string) => void; pane: () => void }
 
 // The band, in a parent only: the head, a chip for each sub session that
 // fits `width` with `+N more` for the rest, when the next read is due, and
@@ -99,13 +100,13 @@ export type BandPresses = { open: (file: string) => void }
 // left over. The chips are fitted first, exactly as without a report, so they
 // never give up width to it, and the report is dropped when fewer than
 // REPORT_MIN_COLUMNS columns are left for it.
-// Each chip is a button that opens its sub session; it is colored by its
-// state's tone, or dimmed and uncolored when its file is stale. A chip whose
-// issue has a link draws its key as that link, then a space as its own text,
-// then the button holding the rest of the chip. The chips are fitted by their
-// whole text either way. A released sub session has no chip. Null in a
-// session that is not a parent, so the host draws what it would without
-// foreman.
+// The head is a button that opens foreman's pane. Each chip is a button that
+// opens its sub session; it is colored by its state's tone, or dimmed and
+// uncolored when its file is stale. A chip whose issue has a link draws its
+// key as that link, then a space as its own text, then the button holding the
+// rest of the chip. The chips are fitted by their whole text either way. A
+// released sub session has no chip. Null in a session that is not a parent,
+// so the host draws what it would without foreman.
 export function bandTree(ui: Elements, view: View, width: number | undefined, presses: BandPresses) {
   if (!view.isOn) return null
   const v = { ...view, rows: view.rows.filter(row => row.isReleased !== true) }
@@ -119,9 +120,12 @@ export function bandTree(ui: Elements, view: View, width: number | undefined, pr
     if (room < REPORT_MIN_COLUMNS) return null
     return <Text key="report">{`${SEPARATOR}${printable(v.report, room)}`}</Text>
   }
+  // The head is a plain button that opens foreman's pane, drawn with the same
+  // text, so the band's width does not change.
+  const headButton = <Button key="foreman-head" plain onPress={presses.pane}><Text>{head}</Text></Button>
   if (v.rows.length === 0) {
-    const line = `${head}${SEPARATOR}no sub sessions${tail}`
-    return <Box key="foreman-band" flexDirection="row"><Text>{line}</Text>{report(line.length)}</Box>
+    const rest = `${SEPARATOR}no sub sessions${tail}`
+    return <Box key="foreman-band" flexDirection="row">{headButton}<Text key="rest">{rest}</Text>{report(head.length + rest.length)}</Box>
   }
   const chips = v.rows.map(row => chipText(row, v.now))
   const room = width === undefined ? Infinity : width - head.length - tail.length
@@ -133,7 +137,7 @@ export function bandTree(ui: Elements, view: View, width: number | undefined, pr
     : <Button key={`chip-${row.file}`} plain onPress={() => presses.open(row.file)}><Text color={TONE_COLOR[STATE_LOOK[row.record.state].tone]}>{text}</Text></Button>)
   return (
     <Box key="foreman-band" flexDirection="row">
-      <Text>{head}</Text>
+      {headButton}
       {v.rows.slice(0, shown).flatMap((row, i) => {
         const gap = <Text key={`gap-${row.file}`}>{SEPARATOR}</Text>
         const link = rowLink(row, v.issueLink)

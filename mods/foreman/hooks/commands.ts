@@ -32,9 +32,16 @@ export const RANGE = `The slot count must be a whole number from ${MIN_SLOTS} to
 // one sub session in the singular, and every other count in the plural.
 export const slotsAnswer = (count: number) => `This parent now runs ${count} sub ${subSessions(count)} at once.`
 
-// What /start-foreman <n> answers when it also made the session the parent.
-export const becameParentAnswer = (count: number) =>
-  `This session is now the parent and runs ${count} sub ${subSessions(count)} at once, and foreman shows its sub sessions above the prompt and in its pane.`
+// What /start-foreman answers when it made the session the parent, or ran
+// again in one: with the slot count when one was given, or null. `unplaced` is
+// the sentence foreman showed when its open did not place the pane, or null
+// when it did, and then the answer no longer says the pane shows the sub
+// sessions but gives the sentence and says how to open the pane.
+export const becameParentAnswer = (count: number | null, unplaced: string | null = null) => {
+  const runs = count === null ? '' : ` and runs ${count} sub ${subSessions(count)} at once`
+  const shown = unplaced === null ? 'above the prompt and in its pane.' : `above the prompt. ${unplaced} Pressing the band's head opens the pane.`
+  return `This session is now the parent${runs}, and foreman shows its sub sessions ${shown}`
+}
 
 const subSessions = (count: number) => (count === 1 ? 'session' : 'sessions')
 

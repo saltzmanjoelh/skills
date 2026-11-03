@@ -57,11 +57,12 @@ async function expectLinkedRow(ui: Awaited<ReturnType<typeof mountBoth>>, file: 
 // changes from run to run, and so is each drawing's source, as `compared`
 // says. The band is the same on both surfaces. The lines that say what each
 // sub session, the sub sessions together and this session spent came later,
-// with the counting of what sessions spend, and were added here then.
+// with the counting of what sessions spend, and were added here then. The
+// head became a button that opens foreman's pane later still.
 const BAND_BEFORE = {
   type: 'Box', props: { key: 'foreman-band', flexDirection: 'row' },
   children: [
-    { type: 'Text', children: ['foreman: 2 of 2 slots busy'] },
+    { type: 'Button', props: { key: 'foreman-head', label: 'foreman: 2 of 2 slots busy', plain: true }, children: [{ type: 'Text', children: ['foreman: 2 of 2 slots busy'] }] },
     { type: 'Text', children: [' · '] },
     { type: 'Button', props: { key: 'chip-a.json', label: 'ABC-1 plan tournament', plain: true }, children: [{ type: 'Text', children: ['ABC-1 plan tournament'] }] },
     { type: 'Text', children: [' · '] },
