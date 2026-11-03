@@ -66,6 +66,12 @@ fields. It found:
   receives it, and in two of the runs the agent was woken in that gap, one
   and a half and sixteen seconds before its report from before the park
   arrived.
+- **Not every notification passes through the prompt submission hook.**
+  After a burst of idle deliveries, a notification that leaves the engine's
+  queue together with a peer's report, or alone a few seconds after a
+  report, reaches the conversation without passing through
+  `prompt.submit`. A run with a rule that only a notification ends a woken
+  member left five of seven members running and never released its batch.
 - **Clustered notifications can make builder answer the release turn.**
   A third run showed the engine delivering two to four notifications within
   a fraction of a second and starting one turn for them all. Builder raises
@@ -86,14 +92,16 @@ fields. It found:
    it as the engine waking a parked agent. In a batch that is not yet
    released, the agent stays a member and counts as running again, because
    the report it sent before it parked ended it; its later report and
-   notifications are then held or end the batch as any member's are. From
-   its first wake on, a report from that member no longer ends it, because
-   the engine can deliver the report the agent sent before it parked after
-   the wake, and that report would end a member that is still running. A
-   woken member ends at its notification that says the agent finished, or at
-   one that says it failed or was killed. In a batch already released, the
-   agent is forgotten, as a resume forgets it today, so that its final
-   report reaches the model.
+   notifications are then held or end the batch as any member's are. A
+   report that the agent sent before it parked but that the engine delivers
+   after the wake ends the member early, because builder cannot tell that
+   late report from the agent's final one. The batch can then be released,
+   with the completion line, before that agent finishes. Its final report
+   or notification still reaches the conversation, but builder answers its
+   turn with "Noted.", as it answers any delivery from a member of a
+   released batch, so the model reads it at its next turn. In a batch
+   already released, the agent is forgotten, as a resume forgets it today,
+   so that its final report reaches the model.
 2. **A notification that says the agent finished ends its member.** The
    engine accepts one handback report from each agent, so an agent that
    reported before it parked often ends its woken run with plain text and
@@ -106,7 +114,11 @@ fields. It found:
    agent is waiting on its own background work, stays held and ends nothing,
    as the existing spec says. The rule applies to every member, because the
    finished notification comes after any report the agent made, so for a
-   member that already reported it ends nothing new.
+   member that already reported it ends nothing new. Builder sees such a
+   notification only when the engine passes it through the prompt
+   submission hook, which it does not always do, so a woken member that ends
+   with plain text and whose finished notification skips the hook holds its
+   batch until the deadline.
 3. **Every other resume forgets the member,** as the existing spec says: the
    resume is one the session asked for, so the session already has the
    batch's reports in front of it. When every other member has ended, the
@@ -147,11 +159,11 @@ fields. It found:
 
 - **A session message that begins with a `<task-notification>` element**
   would be taken for the engine's wake and keep the member. The member then
-  ends only at a notification that says the agent finished, failed or was
-  killed, as any woken member does, so the worst case is a batch that waits
-  until its deadline. Checking that the
-  notification names the agent's own task is not possible, because that id
-  names the agent's shell task, which builder never sees.
+  ends at its report or at a notification that says the agent finished,
+  failed or was killed, as the batch's other members do, so the worst case
+  is a batch that waits until its deadline. Checking that the notification
+  names the agent's own task is not possible, because that id names the
+  agent's shell task, which builder never sees.
 - **An agent woken by the engine after its batch was released** is
   forgotten in that remembered batch, as today, so its final report wakes
   the model on its own.
@@ -173,8 +185,8 @@ fields. It found:
 - **(b) Telling a session message that begins with a `<task-notification>`
   element apart from the engine's wake.** No check can be built, because the
   notification's task id names a shell task builder never sees. Such a
-  message keeps the member until a notification that says the agent
-  finished, failed or was killed, or until the batch's deadline.
+  message keeps the member until its report, a notification that says the
+  agent finished, failed or was killed, or the batch's deadline.
 - **(c) The mod's other retry policies,** such as the stuck-prompt
   reminder's fixed retry on refusal. They stay as they are.
 - **(d) A member that the session resumed and the engine later woke** stays
@@ -194,6 +206,10 @@ fields. It found:
   version** no longer matches, so a woken member that ends with plain text
   holds its batch until the deadline, which is how such a batch behaved
   before this change. Nothing is lost.
+- **A finished notification that skips the prompt submission hook** never
+  reaches builder, so a woken member that ended with plain text stays
+  running and its batch waits for its deadline, which is how such a batch
+  behaved before this change. Nothing is lost.
 
 ## Verification
 
@@ -202,12 +218,10 @@ fields. It found:
   again after the report it sent before parking, so its final report is
   still held and the batch is released once, with the completion line; such
   a resume after the batch was released forgets the member there, so its
-  final report passes; a
-  resume whose prompt is the session's own text forgets the member, as
-  today; a report from before the park that arrives after the wake does not
-  end the woken member, which ends at its finished notification; a refused deadline line is tried again after 1, 2, 4, 8, 16, 32
-  and then 60 minutes, and again at 60 minutes after that; a stored batch
-  without a wait starts at one minute; a deadline line the engine takes
+  final report passes; a resume whose prompt is the session's own text
+  forgets the member, as today; a refused deadline line is tried again
+  after 1, 2, 4, 8, 16, 32 and then 60 minutes, and again at 60 minutes
+  after that; a stored batch without a wait starts at one minute; a deadline line the engine takes
   after refusals ends the batch; a `completed` notification whose summary
   says the agent finished ends its member, so a woken member that ends with
   no second report still lets its batch be released once, with the
