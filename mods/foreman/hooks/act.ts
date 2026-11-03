@@ -578,11 +578,20 @@ function activeOwners(t: ForemanTickets, rows: readonly SubRow[]): { p: ForemanP
 }
 
 // Whether a stall needs the desktop app's list: some active owned record has
-// the shape of a stall that is not yet handled, as stallHandled says. It asks
-// on every read, so the stall's second nudge and its wake land at their
-// thresholds rather than on whichever later read fetches the list.
+// the shape of a stall that is not yet handled, as stallHandled says, and its
+// stretch has nudged for the stall, as stallsOwn says. It asks on every read,
+// so the stall's second nudge and its wake land at their thresholds rather
+// than on whichever later read fetches the list. Until the first nudge the
+// list is read as slotsNeedList says, on every read while mayBeGone holds, so
+// a record of that shape that never stalls, such as one missing from a list
+// that is not complete or one whose pull request merged and whose session
+// runs, is read no more often than any other stale record.
 export function stallsNeedList(t: ForemanTickets, rows: readonly SubRow[], now: number): boolean {
-  return activeOwners(t, rows).some(({ p, r }) => stalledShape(p, r, now) && !stallHandled(p, r, now))
+  return activeOwners(t, rows).some(({ p, r }) => {
+    if (!stalledShape(p, r, now) || stallHandled(p, r, now)) return false
+    const { stretch } = p.acts
+    return stretch !== null && stallsOwn(stretch, r.mtimeMs)
+  })
 }
 
 // Whether a slot rule needs the desktop app's list: some active owned record

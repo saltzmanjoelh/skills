@@ -984,3 +984,21 @@ test('a stall needs the list on every read until its idle wake, even after a gon
   // A record whose file is fresh asks for nothing.
   expect(needsList(t, [stalledRow({}, T0 + 16 * MINUTE)], T0 + 17 * MINUTE)).toBe(false)
 })
+
+test('a stall-shaped record that never stalls asks for the list as often as on the base: after its gone wake, or after a merge, once every gone wait', () => {
+  const first = T0 + GONE_MS + MINUTE
+  // Missing from a list that is not complete: the gone wake goes, and no stall
+  // ever nudges, so list reads fall back to once every gone wait.
+  const rows = [stalledRow()]
+  const gone = read(paired(), rows, first, { sessions: { kind: 'read', sessions: [] } })
+  expect(gone.reasons.map(r => r.kind)).toEqual(['gone'])
+  expect(needsList(gone.tickets, rows, first + MINUTE)).toBe(false)
+  expect(needsList(gone.tickets, rows, first + GONE_MS)).toBe(true)
+  // Merged, with the list showing the session running: nothing is ever
+  // stalled, and the list is read once every gone wait, as for any merged
+  // record.
+  const merged = [stalledRow({ pr: pr(7, 'MERGED') })]
+  const running = read(paired(), merged, first, { sessions: listing({ isRunning: true }) })
+  expect(needsList(running.tickets, merged, first + MINUTE)).toBe(false)
+  expect(needsList(running.tickets, merged, first + GONE_MS)).toBe(true)
+})

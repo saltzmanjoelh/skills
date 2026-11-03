@@ -85,12 +85,18 @@ last written while a turn ran.
    as today, since a nudge cannot reach it.
 8. **The list is read on time.** Foreman asks for the desktop app's list on
    every read while a pairing's record says `working` without `backgroundOnly`,
-   its file has not changed for more than five minutes, and its idle stretch
-   has not yet woken the parent. After the idle wake has gone, list reads for
-   it fall back to the existing limit of once every five minutes, so a
-   handled record does not make every read wait on the list for good. This
-   way the second nudge and the wake land at their thresholds rather than on
-   whichever later read happens to fetch the list.
+   its file has not changed for more than five minutes, its idle stretch has
+   nudged it for the stall and has not yet woken the parent. Before that first
+   nudge the list is read as today, which is on every read while the record is
+   still due its gone wake, so the first nudge lands on time too. After the
+   idle wake has gone, list reads for it fall back to the existing limit of
+   once every five minutes, so a handled record does not make every read wait
+   on the list for good. A record of that shape that never stalls, such as one
+   missing from a list that is not complete, whose gone wake then goes, or one
+   whose pull request merged and whose session the list shows running, is read
+   no more often than today. This way the second nudge and the wake land at
+   their thresholds rather than on whichever later read happens to fetch the
+   list.
 9. **Without the list nothing changes.** When the list was not read or could
    not be read, or it shows the session running, a working record is treated
    exactly as today, except that a stall's own count is kept as it is rather
@@ -158,9 +164,12 @@ Foreman, in `mods/foreman/tests/act.test.ts`, through `decide`:
   or over handling as today, and no nudge.
 - A working record with `backgroundOnly` keeps the background wait's
   behaviour.
-- `needsList` is true on every read while a stalled-shaped working record
-  has not woken the parent, including a read inside five minutes of the last
-  list check, and it falls back to the five-minute limit after the idle wake.
+- `needsList` is true on every read while a stalled working record has been
+  nudged for the stall and has not woken the parent, including a read inside
+  five minutes of the last list check, and it falls back to the five-minute
+  limit after the idle wake. A record of that shape whose gone wake went, or
+  whose pull request merged, without a stall nudge, keeps the five-minute
+  limit.
 
 Builder, in `mods/builder/tests/register.test.ts`:
 

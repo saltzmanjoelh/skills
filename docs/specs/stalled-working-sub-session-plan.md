@@ -45,8 +45,13 @@ so. Its weaknesses are fixed by the grafts below.
 8. In `goneRule`, return when `isStalled(s)` holds.
 9. Extract the "active owned pairing for this row" lookup from
    `slotsNeedList` into `activeOwners(t, rows)`. Add `stallsNeedList`, which
-   holds when some owned row has `stalledShape` and not `stallHandled`, and
-   make `needsList` ask for the list when it holds. In `slotsNeedList`, the
+   holds when some owned row has `stalledShape`, not `stallHandled`, and a
+   stretch that `stallsOwn` marks as the stall's, and make `needsList` ask for
+   the list when it holds. Until the stall's first nudge, `slotsNeedList`
+   already reads the list on every read while `mayBeGone` holds, so a record
+   of the stall's shape that never stalls, as one missing from a list that is
+   not complete or one whose pull request merged and whose session runs, is
+   read no more often than on the base. In `slotsNeedList`, the
    `mayBeGone` branch becomes `mayBeGone && !stallHandled`, because the gone
    rule no longer sets `goneWokeFor` for a stalled record. `keptByUnreadList`
    gets the line "no stalled sub session was nudged".
@@ -171,7 +176,9 @@ last change:
 - `needsList` holds on a read inside five minutes of the last list check
   while the stall has not woken the parent, including when `goneWokeFor`
   already names the file, and falls back to the five-minute limit after the
-  idle wake.
+  idle wake. A record of the stall's shape that is missing from a list that
+  is not complete, or whose pull request merged and whose session runs, keeps
+  the five-minute limit after its first read.
 - End to end in `acts.test.ts`: the desktop nudge is sent and no gone prompt
   comes.
 
