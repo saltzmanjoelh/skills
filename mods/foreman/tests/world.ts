@@ -167,7 +167,9 @@ export function desktopApp(on: On) {
 // toasts, the panes opened, the notifications, the prompts submitted, the
 // rows appended and the start_session calls, and queues every delivery that
 // reaches it as it came. `notify` and `submit` say how a notification and a
-// prompt fare, `toastThrows` makes every toast throw, and `startAnswer` is
+// prompt fare, `open` says how every pane open fares, `closed` records the
+// panes closed and `listed` the panes the engine lists as open,
+// `toastThrows` makes every toast throw, and `startAnswer` is
 // the text start_session answers, unless `startAnswers` holds a text for this
 // start, which each start takes in turn, with `startFails` making it answer
 // an error and `startThrows` making it throw.
@@ -191,6 +193,11 @@ export function engine(on: On, now: () => number = () => T0) {
     started: [] as Record<string, unknown>[],
     notify: 'sent' as 'sent' | 'off' | 'throws' | 'hang',
     submit: 'ok' as 'ok' | 'dropped' | 'hang',
+    // How a pane open fares: placed, not placed with the engine's reason, or
+    // refused, which rejects the mod's call with the text as its message.
+    open: { isPlaced: true } as { isPlaced: true } | { isPlaced: false; reason: string } | { throws: string },
+    closed: [] as string[],
+    listed: [] as string[],
     toastThrows: false,
     // Called as each prompt is submitted, so a test can see what held then.
     onSubmit: (() => undefined) as () => void,
@@ -241,8 +248,16 @@ export function engine(on: On, now: () => number = () => T0) {
   on('command.run', () => ({ text: '' }))
   on('ui.open', ($, e) => {
     panes.push(e.id)
-    return { value: { isPlaced: true } as never }
+    if ('throws' in answers.open) return { deny: answers.open.throws }
+    if (answers.open.isPlaced && !answers.listed.includes(e.id)) answers.listed.push(e.id)
+    return { value: answers.open as never }
   })
+  on('ui.close', ($, e) => {
+    answers.closed.push(e.id)
+    answers.listed = answers.listed.filter(id => id !== e.id)
+    return { value: undefined }
+  })
+  on('ui.panes', () => ({ value: answers.listed.map(id => ({ id, title: id, isShown: true, isFocused: false, isPlaced: true })) as never }))
   on('ui.toast', ($, e) => {
     if (answers.toastThrows) throw new Error('the engine fell over')
     toasts.push(e.text)

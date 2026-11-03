@@ -34,6 +34,15 @@ test('the slots answer says sub session for one and sub sessions for any other c
   expect(becameParentAnswer(2)).toBe('This session is now the parent and runs 2 sub sessions at once, and foreman shows its sub sessions above the prompt and in its pane.')
 })
 
+test('the answer that makes a parent says the pane shows the sub sessions only when the open placed it', () => {
+  expect(becameParentAnswer(null)).toBe('This session is now the parent, and foreman shows its sub sessions above the prompt and in its pane.')
+  expect(becameParentAnswer(null, null)).toBe(becameParentAnswer(null))
+  expect(becameParentAnswer(2, null)).toBe(becameParentAnswer(2))
+  const line = 'Could not open foreman\'s pane (the engine fell over).'
+  expect(becameParentAnswer(null, line)).toBe(`This session is now the parent, and foreman shows its sub sessions above the prompt. ${line} Pressing the band's head opens the pane.`)
+  expect(becameParentAnswer(1, line)).toBe(`This session is now the parent and runs 1 sub session at once, and foreman shows its sub sessions above the prompt. ${line} Pressing the band's head opens the pane.`)
+})
+
 test('a line that begins with /start-foreman, after white space or opening tags, holds the command as text', () => {
   for (const text of [
     '/start-foreman',
