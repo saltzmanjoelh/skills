@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
+import { listFailedNotice, NO_ANSWER } from '../hooks/act'
 import { BEGIN_TEXT, REASONS } from '../hooks/desktop'
 import { newPairing, ticketsIn, ticketsKey, WAIT_LINE, WAITING_SENTENCE } from '../hooks/tickets'
 import type { ForemanTickets } from '../types'
@@ -190,7 +191,7 @@ test('a slot freed while the desktop app\'s list fails is kept for the queue, an
   await minutesPass(w, 1, rest)
   expect(begins(w)).toEqual(['local_new2'])
   expect(w.engine.prompts).toEqual([])
-  expect(w.engine.notices).toEqual(['foreman began ABC-2, the next issue in the queue, in the slot ABC-1 freed.'])
+  expect(w.engine.notices).toEqual([listFailedNotice(REASONS.listRefused), 'foreman began ABC-2, the next issue in the queue, in the slot ABC-1 freed.'])
   expect(ledger(w).keptSlots).toEqual([])
 })
 
@@ -238,7 +239,7 @@ test('a waiting start answered with a proposal card holds back no slot once its 
   expect(begins(w)).toEqual(['local_card'])
 })
 
-test('a slot that frees soon after a waiting start was answered with a proposal card still wakes the parent', async ($, on) => {
+test('a slot that frees soon after a waiting start was answered with a proposal card wakes the parent with the kept sentence', async ($, on) => {
   const { w } = await parent($, on, 1)
   w.engine.startAnswers = [answer(1), 'Proposed the session as a card for the person to start.']
   await startSession($, keyed('ABC-1'))
@@ -246,7 +247,35 @@ test('a slot that frees soon after a waiting start was answered with a proposal 
   const done = busyFile('ABC-1', ticketOf(w, 0), 'local_new1', { state: 'done' })
   w.desktop.sessions = [listed('local_new1', 'ABC-1', { isArchived: true, isRunning: false })]
   await minutesPass(w, 2, { 'a.json': done })
-  expect(w.engine.prompts).toEqual(['foreman: one slot free; pick the next issue and start it.'])
+  expect(w.engine.prompts).toEqual(['foreman: a slot is free, but foreman keeps it for ABC-2, whose waiting session it could not find in the desktop app\'s list; send that session foreman\'s begin message by hand or release the issue, and do not start a new issue.'])
+})
+
+test('an active sub session archived before its file said done frees its slot, and the next issue in the queue begins in it', async ($, on) => {
+  const { w, live } = await queueOfTwo($, on)
+  const stuck = busyFile('ABC-1', ticketOf(w, 0), 'local_new1', { state: 'waiting-on-builder' })
+  w.desktop.sessions[0] = listed('local_new1', 'ABC-1', { isArchived: true, isRunning: false })
+  await minutesPass(w, 2, { ...live, 'a.json': stuck })
+  expect(begins(w)).toEqual(['local_new2'])
+  expect(w.engine.prompts).toEqual([])
+  expect(w.engine.notices).toEqual(['foreman began ABC-2, the next issue in the queue, in the slot ABC-1 freed.'])
+  expect(ledger(w).pairings.find(p => p.localId === 'local_new1')!.standing).toBe('freed')
+})
+
+test('each way a list read fails raises one notification with its fixed reason, and again only after a read that got the list', async ($, on) => {
+  const ways = [['error', REASONS.listRefused], ['garbage', REASONS.listUnreadable], ['not-connected', REASONS.notConnected], ['hang', NO_ANSWER]] as const
+  const { w, live } = await queueOfTwo($, on)
+  const seen: string[] = []
+  // Each way fails for three reads in a row, then one read gets the list.
+  for (const [how, why] of ways) {
+    w.desktop.list = how
+    await minutesPass(w, 3, live)
+    seen.push(listFailedNotice(why))
+    expect([how, w.engine.notices]).toEqual([how, seen])
+    w.desktop.list = 'ok'
+    await minutesPass(w, 1, live)
+    expect([how, w.engine.notices]).toEqual([how, seen])
+  }
+  expect(w.engine.notices.join(' ')).not.toContain('SECRET')
 })
 
 test('raising the slot count begins the waiting sub sessions in the new slots', async ($, on) => {
@@ -288,7 +317,7 @@ test('a begin that fails raises one notification and is tried again, not while t
   expect(ledger(w).held).toEqual(['ABC-2'])
   expect(ledger(w).pairings.some(q => q.localId === 'local_new2')).toBe(false)
   expect(begins(w)).toEqual(['local_new3'])
-  expect(w.engine.notices).toEqual([failed, 'foreman began ABC-3, the next issue in the queue, in a free slot.'])
+  expect(w.engine.notices).toEqual([failed, listFailedNotice(REASONS.listRefused), 'foreman began ABC-3, the next issue in the queue, in a free slot.'])
 })
 
 test('a restart keeps the queue, and a claim whose begin never went is sent on the first read', async ($, on) => {

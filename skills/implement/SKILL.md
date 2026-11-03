@@ -59,7 +59,9 @@ this skill, and the session tells it which stage it is in by calling
 `mcp__builder__progress` with a `title` (the issue in a few words, such as
 `ABC-123 short issue name`, the same for the whole issue), a `stage`, and,
 when it helps, a `note` for a sub-step such as `round 2`. Report a stage on
-entering it, not on finishing it:
+entering it, not on finishing it. The mod reports the last three stages
+itself, so the session does not report them, except the `review` report that
+a resumed session makes before its watch (see "Resuming"):
 
 | Stage | When |
 |---|---|
@@ -69,9 +71,9 @@ entering it, not on finishing it:
 | `plan` | at the start of step 4 |
 | `build` | at the start of step 5 |
 | `verify` | at the start of step 6 |
-| `pr` | once the pull request is opened and watched in step 7 |
-| `review` | when the first review round starts, with the round as the note on later ones |
-| `merge` | when running the merge command |
+| `pr` | reported by the mod when a watch first sees the pull request open |
+| `review` | reported by the mod at each call to the package tool, with the round as the note |
+| `merge` | reported by the mod just before the merge command runs |
 
 The bar never moves back, so reporting `build` again while fixing a review
 finding only changes the label. The mod marks the bar finished on its own
@@ -155,8 +157,7 @@ for credentials (see "Rules"), then push and open it with
 `gh pr create --base <base>`. The body says what the change does and what
 was measured, written once; history goes in the reviews, not the body. If
 the project's `CLAUDE.md` says the body must begin with particular lines,
-write them. Set the state label to `in-review` (see "State labels"), then
-call `mcp__builder__watch` with the number, and follow the step its answer
+write them. Then call `mcp__builder__watch` with the number, and follow the step its answer
 names in the same turn: the watch records the state at opening as already
 told, so no turn may come for it. From here the pull request drives the
 session. When the pull request is in a different
@@ -218,13 +219,15 @@ session waits on and end the turn. Never sleep or poll inside a tool call.
 
 The worktree can hold commits the pull request does not have: cheap fixes
 whose push failed or never came, or a fix committed just before a restart.
-Read the pull request's state and head with
-`gh pr view <n> --json state,headRefOid`, fetch that head with
-`git fetch origin pull/<n>/head`, since someone else may have moved it,
-and list those commits with `git log <that head>..HEAD` in the worktree.
-When the fetch, the listing or the ancestor check below fails, assume the
-worktree holds commits the pull request lacks: set `stuck`, ask the
-person, and never run `/cleanup`.
+On the merge steps and on **Merged**, the mod lists them before it renders
+the step and puts the result in the step's text, so the session runs no
+listing of its own. The result is one of three: none, a list of the commits
+with whether the pull request's head is an ancestor of the worktree's
+`HEAD`, or that they could not be listed. When they could not be listed,
+treat the worktree as holding commits the pull request lacks: do not
+merge, set `stuck`, ask the person, and never run `/cleanup`. When a push
+fails in a review round, the commits are known to exist, so the rules below
+apply without a listing.
 
 - A cheap-fix commit is the one whose first line is the one the second
   half's point 4 gives. Its message holds the round's
@@ -237,10 +240,9 @@ person, and never run `/cleanup`.
   requests changes, push nothing here: the step **The newest verdict at
   this head requests changes** pushes the commits with the blocking fixes,
   so the next round reviews both together.
-- Otherwise, while the pull request is open, push the commits when the
-  head is an ancestor of the worktree's `HEAD`
-  (`git merge-base --is-ancestor <head> HEAD`), checking for credentials
-  as before any push. When it is not, or the push fails, set `stuck` and
+- Otherwise, while the pull request is open, do not merge, and push the
+  commits when the head is an ancestor of the worktree's `HEAD`, checking
+  for credentials as before any push. When it is not, or the push fails, set `stuck` and
   ask the person. Never force a push.
 - Once the pull request is merged or closed, push nothing and do not run
   `/cleanup`: name the commits in the report, so a person can move them.
@@ -250,10 +252,23 @@ person, and never run `/cleanup`.
 ### State labels
 
 The pull request carries exactly one of `in-review`, `waiting-on-author`,
-`ready-to-merge` and `stuck` at a time. Setting one removes the others
-(`gh pr edit <n> --add-label <new> --remove-label <old>`), and a label the
-repository lacks is created first with `gh label create <name>`. The mod
-manages `needs-decision` itself; it is not a state label. The mod cannot
+`ready-to-merge` and `stuck` at a time. The mod sets the label that follows
+from the step it chooses, removes the other state labels as it does, and
+remembers the label it set, so the session does not set those. **Review this
+head** gives `in-review`; the failed, conflicting and changes-requested steps
+give `waiting-on-author`; the steps where both verdicts approve give
+`ready-to-merge`; **Over a limit** and **Closed** give `stuck`. The session
+sets `stuck` itself only when a step's text asks for its judgement, such as a
+failure outside the code or a person declining to merge without checks. It
+reads the labels the pull request carries now with
+`gh pr view <n> --json labels --jq '[.labels[].name]'`, because the state
+lines may show a label from before the mod's last edit, and removes every
+other state label among them in the same edit:
+`gh pr edit <n> --add-label stuck --remove-label <those labels, comma-separated>`,
+leaving out `--remove-label` when there are none, and creating the label first
+with `gh label create stuck` when the repository lacks it. The mod
+leaves that `stuck` alone until the label that follows from the step
+changes. The mod manages `needs-decision` itself; it is not a state label. The mod cannot
 tell who put that label on, so a `needs-decision` label that a person or
 another tool put on also comes off once the session's question is
 answered.
@@ -1108,10 +1123,10 @@ that began after the title's first report, so a resumed session that
 watched first would never see its bar reach `merged`. Then find the pull
 request's branch and its worktree (make one from the branch if there is
 none), call `mcp__builder__watch`, and read the spec and plan paths from the
-spec directory on the branch (never from the pull request body). When the
-worktree holds commits the pull request lacks, do what "Commits the pull
-request lacks" says. Then follow the step that the watch tool's answer
-names, reporting `merge` when it runs the merge command. A verdict review at the head means
+spec directory on the branch (never from the pull request body). Then follow
+the step that the watch tool's answer names, doing what "Commits the pull
+request lacks" says with the listing that a merge step's or the **Merged**
+step's text gives. A verdict review at the head means
 its first half finished there, and its body names the focused reviewers that
 ran; without one, assume they have not run. A review whose verdicts are
 carried over to the head from the approved head before it counts both

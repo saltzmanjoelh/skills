@@ -352,6 +352,19 @@ test('a ledger left in state holding only a check survives a session start after
   expect(ledger(w).checks).toEqual([])
 })
 
+test('a ledger left in state holding only the mark for a failed list read survives a session start after a hot reload', async ($, on) => {
+  const w = world(on, { store: { 'parent:session-1': { isOn: false, slots: null }, [ticketsKey('session-1')]: { ...TICKETS_EMPTY, unwatched: ['local_old'] } } })
+  leftInState(on, { tickets: { ...TICKETS_EMPTY, listFailNotified: true } })
+  await start($)
+  await w.clock.settle()
+  // An /implement start while the role is off is refused, and the refusal
+  // writes the ledger, which then shows which one the session start kept.
+  await $.tool.call({ tool: 'mcp__ccd_session__start_session', prompt: 'Run /implement ABC-7.', context: 'fresh', title: 'ABC-7: short' } as never)
+  expect(ledger(w).offRefusedFor).toBe('session-1')
+  expect(ledger(w).listFailNotified).toBe(true)
+  expect(ledger(w).unwatched).toEqual([])
+})
+
 test('a still-waits wake while the role is off is submitted when no turn runs and appended when one does', async ($, on) => {
   on('turn.start', ($, e) => ({ turnId: (e as { turnId?: string }).turnId }) as never)
   on('turn.complete', ($, e) => ({ text: e.answer }) as never)

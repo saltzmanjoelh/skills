@@ -4,7 +4,7 @@ import { snapshotOf } from '../hooks/github'
 import { isDrawable } from '../hooks/pane'
 import type { PromptOrigin } from 'claude-code'
 
-import { backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, NEW_HEAD_POLL_MS, nextStuckEvery, pollFor, POLL_MS, QUESTIONS_KEPT, quietIn, RESUME_AFTER_RESET_MS, RESUME_FALLBACK_MS, resumeAt, shownStatus, statusOf, stepDelay, STUCK_CEILING_MS, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, waitingOn } from '../hooks/state'
+import { backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isMerge, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, NEW_HEAD_POLL_MS, nextStuckEvery, pollFor, POLL_MS, QUESTIONS_KEPT, quietIn, RESUME_AFTER_RESET_MS, RESUME_FALLBACK_MS, resumeAt, shownStatus, statusOf, stepDelay, STUCK_CEILING_MS, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, waitingOn } from '../hooks/state'
 import type { AgentCard } from '../types'
 
 const C = 'c'.repeat(40)
@@ -392,4 +392,17 @@ test('a transcript row reports a task as ended only when it is a task notificati
   expect(endedTaskOf({ origin: notice, task: { id: 'b1' } })).toBeNull()
   expect(endedTaskOf({ origin: notice })).toBeNull()
   expect(endedTaskOf({ origin: { kind: 'composer' }, task: { id: 'b1', status: 'completed' } })).toBeNull()
+})
+
+test('a merge command is gh pr merge or the project\'s merge command, and a push is not one', () => {
+  for (const command of ['gh pr merge 7 --merge --match-head-commit abc', 'cd x && gh pr merge 7', '(gh pr merge 7)']) {
+    expect(isMerge(command, null)).toBe(true)
+  }
+  for (const command of ['git push', 'git -c a=b push origin x', 'gh pr view 7', 'grep "gh pr merge" README.md', 'echo gh pr merge']) {
+    expect(isMerge(command, null)).toBe(false)
+  }
+  const gate = mergePatternOf('node scripts/merge-gate.mjs <pr>')
+  expect(isMerge('node scripts/merge-gate.mjs 12', gate)).toBe(true)
+  expect(isMerge('git push', gate)).toBe(false)
+  expect(isMerge('node scripts/other.mjs 12', gate)).toBe(false)
 })

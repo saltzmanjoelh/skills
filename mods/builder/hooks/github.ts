@@ -3,12 +3,12 @@
 // JSON gh printed, so the tests can feed it fixtures and the hooks can call it
 // without touching the network.
 
-import type { BaseFacts, BuildStatus, Check, CheckState, HeadRun, Snapshot, Verdict, Verdicts, WorkflowRun } from '../types'
+import type { BaseFacts, BuildStatus, Check, CheckState, HeadRun, Snapshot, Unpushed, Verdict, Verdicts, WorkflowRun } from '../types'
 
-export type { BaseFacts, Check, CheckState, HeadRun, Snapshot, Verdict, Verdicts, WorkflowRun }
+export type { BaseFacts, Check, CheckState, HeadRun, Snapshot, Unpushed, Verdict, Verdicts, WorkflowRun }
 
 // The JSON fields the snapshot reads, in the order gh is asked for them.
-export const PR_FIELDS = 'number,url,state,headRefOid,labels,reviews,statusCheckRollup,mergeable,commits,baseRefName,createdAt'
+export const PR_FIELDS = 'number,url,state,headRefOid,labels,reviews,statusCheckRollup,mergeable,commits,baseRefName,headRefName,createdAt'
 
 type GhCheck = {
   __typename?: string
@@ -41,6 +41,7 @@ export type GhPullRequest = {
   mergeable?: string
   commits?: { oid: string; committedDate?: string }[]
   baseRefName?: string
+  headRefName?: string
   createdAt?: string
 }
 
@@ -325,9 +326,10 @@ export function pullRequestStateIn(out: string | null): Snapshot['state'] | null
 }
 
 // What a look read beside the pull request itself: every run at the head,
-// whether the runs read failed so they were carried over, and the facts of
-// the base branch's CLAUDE.md.
-export type SnapshotExtras = Pick<Snapshot, 'headRuns' | 'runsCarriedOver' | 'facts'>
+// whether the runs read failed so they were carried over, the facts of the
+// base branch's CLAUDE.md, and, at a look that chose a merge step or the
+// Merged step, the commits the worktree holds that the head lacks.
+export type SnapshotExtras = Pick<Snapshot, 'headRuns' | 'runsCarriedOver' | 'facts' | 'unpushed'>
 
 export function snapshotOf(repo: string, pr: GhPullRequest, login: string, runs: WorkflowRun[] = [], extras: SnapshotExtras = {}): Snapshot {
   const head = pr.headRefOid
@@ -392,12 +394,18 @@ function committedAfter(createdAt: string | undefined, commits: readonly { commi
 // question, and takes off once the question is answered.
 export const DECISION_LABEL = 'needs-decision'
 
+// The state labels /implement moves between. The pull request carries one of
+// them at a time: the mod sets the one that follows from the step it chose,
+// and the session sets `stuck` by its own judgement.
+export const STATE_LABELS = ['in-review', 'waiting-on-author', 'ready-to-merge', 'stuck'] as const
+export type StateLabel = typeof STATE_LABELS[number]
+
 // The labels the workflow sets on the pull request itself: the state labels
-// /implement moves between, and the mod's own decision label. A change to
-// them is the session's own doing, or a person's by hand, and /implement
-// never decides from them, so it is not news to hand the session. The
-// snapshot still keeps them, because the poll interval and the pane read them.
-export const WORKFLOW_LABELS: ReadonlySet<string> = new Set(['in-review', 'waiting-on-author', 'ready-to-merge', 'stuck', DECISION_LABEL])
+// and the mod's own decision label. A change to them is the mod's or the
+// session's own doing, or a person's by hand, and /implement never decides
+// from them, so it is not news to hand the session. The snapshot still keeps
+// them, because the poll interval and the pane read them.
+export const WORKFLOW_LABELS: ReadonlySet<string> = new Set([...STATE_LABELS, DECISION_LABEL])
 
 // The labels that count as a change to the pull request: every label but the
 // workflow's own.
@@ -424,7 +432,9 @@ export function countedLabels(labels: readonly string[]): string[] {
 // is not news there, as it never was. The other names the runs that count as
 // failed, by id and attempt, because a run that fails before any job starts
 // creates no check, and one that starts and fails between two looks changes
-// nothing else here.
+// nothing else here. The parts are a fixed list of fields, so the commits a
+// worktree holds that the head lacks, which a look lists only at a merge step
+// or the Merged step, are never news and never wake the session.
 export function fingerprintOf(s: Omit<Snapshot, 'fingerprint'>): string {
   const verdicts = s.verdicts ? `${s.verdicts.spec}/${s.verdicts.adversarial}@${s.verdicts.sha.slice(0, 8)}` : 'none'
   const parts = [

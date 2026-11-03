@@ -12,7 +12,7 @@
 // quoted in that skill. Change all four together.
 
 import type { RecordVerdicts } from './record'
-import { plural, printable } from './text'
+import { listOf, plural, printable } from './text'
 
 // Why foreman wakes the parent. `who` is already safe to put in the line, as
 // whoOf makes it. The four pull request milestones carry only what builder
@@ -24,7 +24,10 @@ import { plural, printable } from './text'
 // that waits only on background work, with its first task's description as
 // builder wrote it, or null when the record names none. `still-waits` is a
 // sub session that foreman holds no record of, named by its `local_…` id,
-// that still waits after foreman's nudge.
+// that still waits after foreman's nudge. `slot-kept` is a freed slot that
+// foreman keeps for the sub sessions waiting unclaimed in its queue, which it
+// could not find in the desktop app's list, with the names of the waiting
+// issues that a wake line may carry, or none.
 export type Reason =
   | { kind: 'idle'; who: string; nudged: boolean; minutes: number }
   | { kind: 'unseen'; who: string; minutes: number; mismatch: boolean }
@@ -36,6 +39,7 @@ export type Reason =
   | { kind: 'merged'; who: string; number: number }
   | { kind: 'closed'; who: string; number: number }
   | { kind: 'slot-free'; free: number }
+  | { kind: 'slot-kept'; whos: string[] }
   | { kind: 'began'; who: string; by: string | null }
   | { kind: 'still-waits'; id: string }
 
@@ -135,6 +139,13 @@ export const REASON_WORDS: { [K in Reason['kind']]: (r: Extract<Reason, { kind: 
   'merged': r => `${r.who}'s pull request #${r.number} merged.`,
   'closed': r => `${r.who}'s pull request #${r.number} was closed without merging.`,
   'slot-free': r => slotWords(r.free),
+  'slot-kept': r => {
+    if (r.whos.length === 1) {
+      return `a slot is free, but foreman keeps it for ${r.whos[0]}, whose waiting session it could not find in the desktop app's list; send that session foreman's begin message by hand or release the issue, and do not start a new issue.`
+    }
+    const whom = r.whos.length === 0 ? 'the issues waiting in its queue' : listOf(r.whos)
+    return `a slot is free, but foreman keeps it for ${whom}, whose waiting sessions it could not find in the desktop app's list; send each of those sessions foreman's begin message by hand or release its issue, and do not start a new issue.`
+  },
   'began': r => `foreman began ${r.who}, the next issue in the queue, ${r.by === null ? 'in a free slot' : `in the slot ${r.by} freed`}.`,
   'still-waits': r => `the sub session ${r.id}, which foreman holds no record of, still waits after foreman's nudge.`,
 }

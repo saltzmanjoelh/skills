@@ -52,6 +52,12 @@ export type ForemanActs = {
   // The file modification time that the gone wake was last given for, or
   // null.
   goneWokeFor: number | null
+  // When the current gone wait of list checks began: the time of a read that
+  // asked for the desktop app's list, whether or not it got one, after the
+  // last such wait ran out, or null when no read has asked. slotsNeedList
+  // reads it to ask for the list at most once every gone wait for a stale
+  // record that the gone rule rules out.
+  listCheckedAt: number | null
   // Whether the parent was woken because the pairing, started with a desktop
   // session id, still had no status file it could join five minutes after
   // it was paired. It is given once per pairing.
@@ -163,7 +169,9 @@ export type ForemanSpent = ForemanSpend & { ticket: string }
 // not read the desktop app's list while a sub session waited unclaimed, kept
 // for the queue until a later read decides it as if it had freed then.
 // `checks` holds the sub sessions foreman holds no record of that it checks
-// by itself, oldest note first.
+// by itself, oldest note first. `listFailNotified` says that foreman raised
+// the notification for a failed read of the desktop app's list and no read
+// has got the list since, so a run of failed reads raises it only once.
 export type ForemanTickets = {
   pairings: ForemanPairing[]
   folderMissing: boolean
@@ -175,6 +183,7 @@ export type ForemanTickets = {
   earlier: ForemanSpend | null
   keptSlots: string[]
   checks: ForemanCheck[]
+  listFailNotified: boolean
 }
 
 declare module 'claude-code' {

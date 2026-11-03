@@ -176,19 +176,60 @@ with the number in words.
    for every slot.
 
 This line comes once in a wake whose read freed a slot that no waiting
-session in foreman's queue claimed, and it carries the number of slots
+session in foreman's queue claimed, and only when no issue still waits
+unclaimed in that queue, and it carries the number of slots
 free. While a waiting session that foreman can begin is left, foreman begins
 it in a freed slot instead and tells the person so itself, in its band, its
 pane and a notification, without waking the parent's model. So when two
 slots free and only one waiting session claims one, this line names only the
 slot left free. Follow this line for exactly the number of slots it names,
 because foreman has already left out the slot it used for the queued
-session, so do not subtract that slot again. The line can also come while sessions
-wait, when the desktop app's list leaves them out or one is a proposal card
-nobody has started; follow it as above. It can come a read or more after the
-slot freed, when the read that freed it could not read the desktop app's list
+session, so do not subtract that slot again. While an issue still waits
+unclaimed, because the desktop app's list leaves its session out or it is a
+proposal card nobody has started, foreman sends the next section's line
+instead of this one. This line can come a read or more after the slot
+freed, when the read that freed it could not read the desktop app's list
 while a session waited, because foreman keeps such a slot for the queue
-until a read can decide it; follow it as above then too.
+until a read can decide it; follow it as above then.
+
+## a slot is free, but foreman keeps it for <key>, whose waiting session it could not find in the desktop app's list; send that session foreman's begin message by hand or release the issue, and do not start a new issue.
+
+With several keys, the line names them in the order foreman put them in its
+queue, never more than there are free slots, joined with commas and "and",
+and reads "whose waiting sessions it could not find in the desktop app's
+list; send each of those sessions foreman's begin message by hand or release
+its issue". When foreman could not name the issues safely, the line reads
+"keeps it for the issues waiting in its queue" in place of the keys; then
+take as named only the first key, in the order foreman put them in its
+queue, for which this conversation shows foreman's sentence "<key> waits in
+foreman's queue", and that has not started since. The line names only as
+many issues as there are free slots, so beginning more than it names would
+run more sub sessions than foreman's slots allow.
+
+A slot freed while issues still wait in foreman's queue, and foreman could
+not begin any of them, because the desktop app's list did not show their
+sessions as surely open. The slot stays free for them.
+
+1. Start no new issue for this slot, and do not follow the "one slot free"
+   section for it.
+2. For each named issue, find its waiting session in `list_sessions` by its
+   title, which begins with the key followed by a space or a colon. When the
+   list shows that session and it is not archived, send it foreman's begin
+   message word for word with `send_message`, which is: "foreman begins this
+   session now: first bring your branch up to date with the base branch, with
+   the desktop app's sync_with_base_branch tool, and then run the /implement
+   command your brief gives. If you have already begun it, ignore this
+   message."
+3. When no such session is found, tell the person in one line which issue
+   waits and that its waiting session could not be found. When its start was
+   answered with a proposal card, ask them to start that card instead.
+4. Archiving a waiting session takes its issue out of foreman's queue, so
+   archive one only when the person asks to release its issue.
+
+Foreman sends this line once, on the read that freed the slot. When a later
+read of the list shows a waiting session, foreman begins it in the free slot
+by itself. A new start the parent makes anyway waits in the queue behind the
+sessions already waiting.
 
 ## <key> did not start, and foreman holds it; start it first, before anything else, as "Starting a session" says.
 
@@ -335,7 +376,8 @@ only in this order:
    squash merge does not make the branch look merged and a reused branch name
    can carry new work after an older pull request from it merged. If it is
    not merged, stop here and tell the person, without archiving anything,
-   because foreman counts an archived session that has not merged as gone.
+   because foreman frees the slot of an archived session whatever its work
+   has reached, and would stop watching work that has not merged.
 2. Archive that session with `archive_session`, or confirm with
    `list_sessions` that it has stopped, so that nothing writes to the worktree
    while it is checked.
@@ -425,6 +467,12 @@ paragraph above says, including a pull request that is not merged, an open pull
 request for the issue, and a tip that differs from `headRefOid`.
 
 ## <who> has not updated its status file for <n> minutes and its session is not running, so restart it or release the issue.
+
+This line comes for a session that the desktop app's list still shows
+unarchived but not running, or that the list does not show when foreman
+cannot be sure the list is complete. Foreman frees the slot of a session the
+list shows archived, or proves deleted, by itself, and sends no such line for
+it.
 
 Never trust a pull request number from the stale record. Find the issue's
 branches and pull requests yourself. GitHub's search does not look at branch
