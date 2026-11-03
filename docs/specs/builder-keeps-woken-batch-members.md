@@ -42,6 +42,10 @@ fields. It found:
   `parentAgentId`. Its prompt begins with a `<task-notification>` element
   whose `<task-id>` names the agent's own background shell task, an id that
   builder never sees, because the agent's tool calls are not the session's.
+- **A parking agent reports before it parks.** When the agent ends its
+  turn to wait on its background work, the session receives its report and
+  then a notification with status `completed`, and only later the engine's
+  wake. After the wake the agent sends its final report.
 - **A resume the session asks for looks different.** When the session sends
   a running or finished agent a message with SendMessage, `agent.spawn` also
   carries `resume.agentId`, but its prompt is the session's own message.
@@ -58,9 +62,12 @@ fields. It found:
 
 1. **An engine wake keeps the member.** When `agent.spawn` carries a resume
    whose prompt begins with a `<task-notification>` element, builder treats
-   it as the engine waking a parked agent: the agent stays a member of its
-   batch, and its later report and notifications are held or end the batch
-   exactly as before it parked.
+   it as the engine waking a parked agent. In a batch that is not yet
+   released, the agent stays a member and counts as running again, because
+   the report it sent before it parked ended it; its later report and
+   notifications are then held or end the batch as any member's are. In a
+   batch already released, the agent is forgotten, as a resume forgets it
+   today, so that its final report reaches the model.
 2. **Every other resume forgets the member,** as the existing spec says: the
    resume is one the session asked for, so the session already has the
    batch's reports in front of it. When every other member has ended, the
@@ -91,8 +98,14 @@ fields. It found:
   the worst case is a batch that waits until its deadline. Checking that the
   notification names the agent's own task is not possible, because that id
   names the agent's shell task, which builder never sees.
-- **An agent woken by the engine after its batch was released** is not a
-  member of any open batch, so the wake changes nothing, as today.
+- **An agent woken by the engine after its batch was released** is
+  forgotten in that remembered batch, as today, so its final report wakes
+  the model on its own.
+- **Every member parks before any is woken.** Each report before a park
+  ends its member, so the batch is released on those reports with the
+  completion line, and each final report after a wake then reaches the
+  model on its own. Builder cannot know at a report that a wake will
+  follow, so this case keeps today's cost.
 - **An agent woken several times** stays a member through every wake.
 - **A batch that keeps its line refused for hours** costs one hook-chain
   call and one state write an hour once the wait reaches its ceiling.
@@ -127,8 +140,11 @@ fields. It found:
 ## Verification
 
 - `claude plugin test` covers: a resume whose prompt begins with a
-  `<task-notification>` element keeps the member, so a later report from it
-  is still held and the batch is released once, with the completion line; a
+  `<task-notification>` element keeps the member and counts it as running
+  again after the report it sent before parking, so its final report is
+  still held and the batch is released once, with the completion line; such
+  a resume after the batch was released forgets the member there, so its
+  final report passes; a
   resume whose prompt is the session's own text forgets the member, as
   today; a refused deadline line is tried again after 1, 2, 4, 8, 16, 32
   and then 60 minutes, and again at 60 minutes after that; a stored batch
