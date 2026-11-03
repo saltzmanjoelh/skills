@@ -35,9 +35,13 @@ survives the parent being closed.
 2. **The first prompt** is the first user message of the session's
    transcript, read with `$.session.messages()` at the first prompt that
    builder sees in its process. When the transcript holds no user message
-   yet, the prompt being submitted is the first. A resumed session therefore
-   finds the ticket of its original first prompt. Once looked for, the answer
-   is kept in the mod's state, so a hot reload does not look again.
+   yet, the prompt being submitted is the first. Once looked for, the answer
+   is kept in the mod's state, so a hot reload does not look again. A ticket
+   that was found is also kept in the mod's store under the session id, and a
+   process that starts with no answer in its state reads the store before the
+   transcript, so a resumed or restarted session keeps its ticket even when
+   the transcript now begins with a compaction summary (see
+   `docs/specs/builder-ticket-survives-restart.md`).
 3. **A `/clear`** ends the session under its old id. The ticket is dropped
    with it, and the new conversation looks for a ticket in its own first
    prompt.
@@ -160,10 +164,11 @@ session shows it.
   bounds the error either way.
 - **A call run remotely** raises no `PermissionRequest`, so its prompt is
   never reported.
-- **A session resumed** after a restart finds its ticket in the transcript,
-  unless the transcript is longer than the 4096 entries `$.session.messages()`
-  returns, in which case the first entry seen is not the first prompt and no
-  ticket is found.
+- **A session resumed** after a restart reads its ticket from the store
+  first, and from the transcript only when the store holds no record for it.
+  Without a record, a transcript longer than the 4096 entries
+  `$.session.messages()` returns starts after the first prompt, and no ticket
+  is found.
 - **Neither `CLAUDE_CONFIG_DIR` nor `HOME`:** nothing is written.
 - **A cleanup that refuses** (a dirty tree, for example) still leaves the
   session `in-cleanup` until the session ends, as the counsel chose.

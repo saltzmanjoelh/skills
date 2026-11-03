@@ -667,6 +667,75 @@ export function newMemo(found: Pick<StatusMemo, 'sessionId' | 'ticket' | 'path' 
   }
 }
 
+// The facts of a ticketed session that never change, which builder keeps in
+// its store under the session id, so that a process the desktop app starts
+// again takes the ticket up without reading the transcript, whose first user
+// message may by then be a compaction summary. `at` is when the record was
+// last stored. The memo's generation is left out, because it belongs to the
+// copy of the hooks that owns the memo, not to the session.
+export type KeptTicket = {
+  sessionId: string
+  ticket: string
+  path: string
+  desktopSessionId?: string
+  parentSessionId?: string
+  cwd: string
+  at: number
+}
+
+// The record kept for a memo that holds a ticket and a path, stamped `at`.
+export function keptTicketOf(memo: StatusMemo & { ticket: string; path: string }, at: number): KeptTicket {
+  return {
+    sessionId: memo.sessionId,
+    ticket: memo.ticket,
+    path: memo.path,
+    ...(memo.desktopSessionId === undefined ? {} : { desktopSessionId: memo.desktopSessionId }),
+    ...(memo.parentSessionId === undefined ? {} : { parentSessionId: memo.parentSessionId }),
+    cwd: memo.cwd,
+    at,
+  }
+}
+
+// A kept record of `sessionId`, or null when it belongs to another session or
+// any field is not what the mod stores. The path is checked hardest, because
+// the session's end runs `rm -f` on it after a merge: it must be absolute,
+// have no `.` or `..` segment, and name this session's own status file. The
+// ticket must be one the ticket line would read back unchanged. A parent id
+// that is not a safe id reads as none and the record is kept, as in the memo.
+export function keptTicketIn(raw: unknown, sessionId: string): KeptTicket | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
+  const k = raw as Record<string, unknown>
+  if (typeof sessionId !== 'string' || !SAFE_ID.test(sessionId) || k.sessionId !== sessionId) return null
+  if (typeof k.ticket !== 'string' || ticketIn(`foreman-ticket:${k.ticket}`) !== k.ticket) return null
+  if (typeof k.path !== 'string' || !isAbsolute(k.path) || !k.path.endsWith(`/foreman/builds/${sessionId}.json`)) return null
+  if (k.path.split(/[\\/]/).some(segment => segment === '.' || segment === '..')) return null
+  if (k.desktopSessionId !== undefined && (typeof k.desktopSessionId !== 'string' || k.desktopSessionId === '')) return null
+  if (typeof k.cwd !== 'string' || !isFiniteTime(k.at)) return null
+  return {
+    sessionId,
+    ticket: k.ticket,
+    path: k.path,
+    ...(typeof k.desktopSessionId === 'string' ? { desktopSessionId: k.desktopSessionId } : {}),
+    ...(typeof k.parentSessionId === 'string' && SAFE_ID.test(k.parentSessionId) ? { parentSessionId: k.parentSessionId } : {}),
+    cwd: k.cwd,
+    at: k.at,
+  }
+}
+
+// The memo a kept record becomes, built as a ticket found in the first prompt
+// builds one, under `generation`.
+export function memoOfKeptTicket(kept: KeptTicket, generation: number): StatusMemo {
+  return newMemo({
+    sessionId: kept.sessionId,
+    ticket: kept.ticket,
+    path: kept.path,
+    desktopSessionId: kept.desktopSessionId,
+    parentSessionId: kept.parentSessionId,
+    cwd: kept.cwd,
+    generation,
+  })
+}
+
 // A permission prompt opened in `loop` for `tool`: one more is counted open.
 export function afterPermissionRequest(memo: StatusMemo, loop: string, tool: string): StatusMemo {
   const found = memo.prompts.some(p => p.loop === loop && p.tool === tool)

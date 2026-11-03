@@ -963,18 +963,23 @@ test('an agent the engine does not list keeps its tools', async ($, on) => {
 // of a key with that prefix, `hold.deletesRefused` every delete and
 // `hold.keysRefused` every listing of the keys. `hold.listings` counts the
 // listings of the keys, refused ones included, and `hold.sets` lists the key
-// of every write, refused ones included, in the order the writes began.
+// of every write, refused ones included, in the order the writes began, and
+// `hold.gets` the key of every read, in the same way.
+// `hold.onDelete`, when set, is called with the key of every delete as it
+// begins, so a test can see what had already happened by then.
 function memoryStore(on: On, entries: [string, unknown][] = []) {
   const stored = new Map<string, unknown>(entries)
   const hold = {
     prefix: '', skip: 0, until: null as Promise<void> | null, refused: null as string | null, full: false,
     setsRefused: null as string | null, deletesRefused: false, keysRefused: false, listings: 0, sets: [] as string[],
+    gets: [] as string[], onDelete: null as ((key: string) => void) | null,
   }
   on('store.keys', () => {
     hold.listings += 1
     return hold.keysRefused ? { deny: 'the store could not be listed' } : { value: [...stored.keys()] }
   })
   on('store.get', async ($, e) => {
+    hold.gets.push(e.key)
     if (hold.refused !== null && e.key.startsWith(hold.refused)) return { deny: 'the store could not be read' }
     const until = hold.until
     if (until !== null && e.key.startsWith(hold.prefix)) {
@@ -995,6 +1000,7 @@ function memoryStore(on: On, entries: [string, unknown][] = []) {
     return { value: undefined }
   })
   on('store.delete', ($, e) => {
+    hold.onDelete?.(e.key)
     if (hold.deletesRefused) return { deny: 'the store could not delete the key' }
     stored.delete(e.key)
     return { value: undefined }
@@ -12687,6 +12693,303 @@ test('a hot reload takes the ticket from the memo without reading the transcript
   // The tick runs a minute after the reload, not a minute after the start.
   await s.clock.advance(MINUTE)
   expect(s.statusAt()).toMatchObject({ state: 'idle', stateSince: S0, writtenAt: S0 + (3 * MINUTE) / 2 })
+})
+
+// The record of a ticketed session's fixed facts that builder keeps in its
+// store, so that a restarted process takes the ticket up again, and a
+// transcript whose first user message is a compaction summary, which rewords
+// the ticket line as a bullet that the ticket line does not match.
+const UNPARENTED = { sessionId: 'session-1', ticket: 'slot-1', path: BUILD, desktopSessionId: 'desk-1', cwd: '/repo', at: S0 }
+const KEPT = { ...UNPARENTED, parentSessionId: 'parent-1' }
+const COMPACTED = [{ role: 'user', text: 'This session is being continued from an earlier conversation.\n- foreman-ticket: slot-1\n', toolUses: [] }]
+const keptAt = (s: ReturnType<typeof foremanSession>, sessionId = 'session-1') => (s.stored.get(`ticket:${sessionId}`) as { at?: number } | undefined)?.at
+const ticketSets = (s: ReturnType<typeof foremanSession>) => s.stored.hold.sets.filter(key => key.startsWith('ticket:'))
+const startsAgain = async ($: Engine, s: ReturnType<typeof foremanSession>) => {
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await s.clock.settle()
+}
+
+test('a ticketed first prompt keeps the ticket, the path, both ids and the folder in the store, stamped with the time', async ($, on) => {
+  const s = foremanSession(on)
+  parentSends(on, s)
+  await firstPrompt($, s.clock, PARENTED)
+
+  expect(s.stored.get('ticket:session-1')).toEqual(KEPT)
+})
+
+test('a kept record leaves the desktop id out when it is unset', async ($, on) => {
+  const s = foremanSession(on, { env: { HOME: '/home/me' } })
+  await firstPrompt($, s.clock)
+
+  expect(s.stored.get('ticket:session-1')).toEqual({ sessionId: 'session-1', ticket: 'slot-1', path: BUILD, cwd: '/repo', at: S0 })
+})
+
+test('after a restart whose transcript begins with a summary, the hooks\' start takes the kept ticket up and writes the file without reading the transcript', async ($, on) => {
+  const s = foremanSession(on, { stored: [['ticket:session-1', UNPARENTED]], messages: COMPACTED })
+  await startsAgain($, s)
+
+  expect(s.statusAt()).toMatchObject({ sessionId: 'session-1', ticket: 'slot-1', desktopSessionId: 'desk-1', cwd: '/repo', state: 'idle' })
+  expect(s.transcriptReads()).toBe(0)
+})
+
+test('after a restart whose kept ticket could not be read at the hooks\' start, the first prompt takes it up without reading the transcript', async ($, on) => {
+  const s = foremanSession(on, { stored: [['ticket:session-1', UNPARENTED]], messages: COMPACTED })
+  s.stored.hold.refused = 'ticket:'
+  await startsAgain($, s)
+  expect(s.statusAt()).toBeUndefined()
+
+  s.stored.hold.refused = null
+  await $.prompt.submit({ text: 'Carry on.', origin: { kind: 'composer' } } as never)
+  await s.clock.settle()
+  expect(s.statusAt()?.ticket).toBe('slot-1')
+  expect(s.transcriptReads()).toBe(0)
+})
+
+test('after a restart and a merge, the session\'s end deletes the file and then the kept record', async ($, on) => {
+  const s = foremanSession(on, { stored: [['ticket:session-1', UNPARENTED]], messages: COMPACTED })
+  const fileGoneFirst: boolean[] = []
+  s.stored.hold.onDelete = key => {
+    if (key === 'ticket:session-1') fileGoneFirst.push(s.world.calls.includes(`rm -f ${BUILD}`))
+  }
+  await startsAgain($, s)
+  await watchUntilMerged($, s)
+  await endSession($, 'prompt_input_exit')
+
+  expect(s.world.calls).toContain(`rm -f ${BUILD}`)
+  expect(s.stored.has('ticket:session-1')).toBe(false)
+  expect(fileGoneFirst).toEqual([true])
+})
+
+test('a first prompt without a ticket keeps nothing in the store', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock, 'Implement the next issue.')
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await turnEnds($, 't1')
+  await s.clock.advance(5 * MINUTE)
+
+  expect(ticketSets(s)).toEqual([])
+})
+
+test('a first prompt without a ticket keeps nothing in the store when the transcript cannot be read', async ($, on) => {
+  const s = foremanSession(on, { messages: 'refused' })
+  await firstPrompt($, s.clock, 'Implement the next issue.')
+  await s.clock.advance(5 * MINUTE)
+
+  expect(ticketSets(s)).toEqual([])
+})
+
+test('without a merge the session\'s end leaves the kept record as it was', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await s.clock.settle()
+  await endSession($, 'prompt_input_exit')
+
+  expect(s.stored.get('ticket:session-1')).toEqual(UNPARENTED)
+})
+
+test('a /clear leaves the ended conversation\'s kept record, and a new conversation without a ticket keeps none', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  await endSession($, 'clear')
+  s.ids.current = 'session-2'
+  await $.prompt.submit({ text: 'Something new.', origin: { kind: 'composer' } } as never)
+  await s.clock.advance(5 * MINUTE)
+
+  expect(s.stored.get('ticket:session-1')).toEqual(UNPARENTED)
+  expect(s.stored.has('ticket:session-2')).toBe(false)
+})
+
+test('a status write stores the kept record again once its stamp is more than a day old', async ($, on) => {
+  const s = foremanSession(on, { stored: [['ticket:session-1', { ...UNPARENTED, at: S0 - DAY - MINUTE }]], messages: COMPACTED })
+  await startsAgain($, s)
+
+  expect(keptAt(s)).toBe(S0)
+})
+
+test('status writes leave a kept record stamped less than a day ago as it is', async ($, on) => {
+  const s = foremanSession(on, { stored: [['ticket:session-1', { ...UNPARENTED, at: S0 - 23 * HOUR }]], messages: COMPACTED })
+  await startsAgain($, s)
+  await s.clock.advance(30 * MINUTE)
+
+  expect(s.writesOf()).toBeGreaterThan(30)
+  expect(ticketSets(s)).toEqual([])
+  expect(keptAt(s)).toBe(S0 - 23 * HOUR)
+})
+
+test('when the hooks load, a kept record more than fourteen days old, one that is not a record and one whose path names another file are dropped, and one thirteen days old is kept', async ($, on) => {
+  const other = (sessionId: string, at: number) => ({ ...UNPARENTED, sessionId, path: `/home/me/.claude/foreman/builds/${sessionId}.json`, at })
+  const s = foremanSession(on, { stored: [
+    ['ticket:old', other('old', S0 - 14 * DAY - MINUTE)],
+    ['ticket:recent', other('recent', S0 - 13 * DAY)],
+    ['ticket:junk', 'x'],
+    ['ticket:elsewhere', { ...other('elsewhere', S0), path: '/etc/hosts' }],
+  ] })
+  await startsAgain($, s)
+
+  expect([...s.stored.keys()].filter(key => key.startsWith('ticket:'))).toEqual(['ticket:recent'])
+})
+
+test('a kept record that status writes refresh outlives one stamped at the same time that nothing refreshed', async ($, on) => {
+  const at = S0 - 13 * DAY - 30 * MINUTE
+  const s = foremanSession(on, { stored: [
+    ['ticket:session-1', { ...UNPARENTED, at }],
+    ['ticket:quiet', { ...UNPARENTED, sessionId: 'quiet', path: '/home/me/.claude/foreman/builds/quiet.json', at }],
+  ], messages: COMPACTED })
+  await startsAgain($, s)
+  expect(keptAt(s)).toBe(S0)
+
+  await s.clock.advance(DAY + 2 * MINUTE)
+  await reloads($, s.clock)
+  expect(s.stored.has('ticket:quiet')).toBe(false)
+  expect(keptAt(s)).toBeGreaterThan(S0 + DAY)
+})
+
+test('a kept record more than fourteen days old is not taken up', async ($, on) => {
+  const s = foremanSession(on, { stored: [['ticket:session-1', { ...UNPARENTED, at: S0 - 14 * DAY - MINUTE }]], messages: COMPACTED })
+  await startsAgain($, s)
+
+  expect(s.statusAt()).toBeUndefined()
+})
+
+test('a refused read of the kept record falls back to the transcript\'s ticket line', async ($, on) => {
+  const s = foremanSession(on, {
+    stored: [['ticket:session-1', { ...UNPARENTED, ticket: 'from-store' }]],
+    messages: [{ role: 'user', text: TICKETED, toolUses: [] }],
+  })
+  s.stored.hold.refused = 'ticket:'
+  await firstPrompt($, s.clock, 'Carry on.')
+
+  expect(s.statusAt()?.ticket).toBe('slot-1')
+  expect(s.transcriptReads()).toBe(1)
+})
+
+test('a refused write of the kept record leaves the session writing its file, with its state\'s start as it was, and is tried again at the next write', async ($, on) => {
+  const s = foremanSession(on)
+  s.stored.hold.setsRefused = 'ticket:'
+  await firstPrompt($, s.clock)
+  await s.clock.advance(2 * MINUTE)
+
+  expect(s.statusAt()).toMatchObject({ ticket: 'slot-1', state: 'idle', stateSince: S0, writtenAt: S0 + 2 * MINUTE })
+  expect(s.stored.has('ticket:session-1')).toBe(false)
+  expect(ticketSets(s).length).toBeGreaterThan(1)
+})
+
+test('a read of the kept record that never answers is given up on, and the next minute writes the file and keeps the record', async ($, on) => {
+  const s = foremanSession(on)
+  // The hooks' start and the prompt each read the record before the first
+  // write does, and the first write's read never answers.
+  Object.assign(s.stored.hold, { prefix: 'ticket:', skip: 2, until: new Promise(() => {}) })
+  await firstPrompt($, s.clock)
+  expect(s.statusAt()?.writtenAt).toBe(S0)
+
+  await s.clock.advance(MINUTE)
+  expect(s.statusAt()?.writtenAt).toBe(S0 + MINUTE)
+  expect(keptAt(s)).toBe(S0 + MINUTE)
+})
+
+test('a read of the kept record that has not answered holds no status write back', async ($, on) => {
+  const s = foremanSession(on)
+  // The hooks' start and the prompt each read the record before the first
+  // write's refresh does, and the refresh's read never answers.
+  Object.assign(s.stored.hold, { prefix: 'ticket:', skip: 2, until: new Promise(() => {}) })
+  await firstPrompt($, s.clock)
+  expect(s.statusAt()?.state).toBe('idle')
+
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('working')
+})
+
+test('a refresh whose memo a newer copy of the module took up while its read was held stores no record', async ($, on) => {
+  const memo = raisedMemo(on)
+  const s = foremanSession(on)
+  let release = () => {}
+  Object.assign(s.stored.hold, { prefix: 'ticket:', skip: 2, until: new Promise<void>(resolve => {
+    release = resolve
+  }) })
+  await firstPrompt($, s.clock)
+  expect(s.statusAt()?.ticket).toBe('slot-1')
+
+  memo.raise()
+  release()
+  await s.clock.settle()
+  expect(ticketSets(s)).toEqual([])
+  expect(s.stored.has('ticket:session-1')).toBe(false)
+})
+
+test('the first refresh waits for the sweep of the kept records that the hooks\' start began', async ($, on) => {
+  const s = foremanSession(on, { stored: [['ticket:other', 'an older shape']] })
+  let release = () => {}
+  Object.assign(s.stored.hold, { prefix: 'ticket:other', skip: 0, until: new Promise<void>(resolve => {
+    release = resolve
+  }) })
+  await firstPrompt($, s.clock)
+  expect(s.statusAt()?.ticket).toBe('slot-1')
+  expect(ticketSets(s)).toEqual([])
+
+  release()
+  await s.clock.settle()
+  expect(s.stored.has('ticket:other')).toBe(false)
+  expect(s.stored.get('ticket:session-1')).toEqual(UNPARENTED)
+})
+
+test('status writes made while a refresh of the kept record waits on its read start no second refresh', async ($, on) => {
+  const s = foremanSession(on)
+  Object.assign(s.stored.hold, { prefix: 'ticket:', skip: 2, until: new Promise(() => {}) })
+  await firstPrompt($, s.clock)
+  const reads = s.stored.hold.gets.filter(key => key === 'ticket:session-1').length
+
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as never)
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('idle')
+  expect(s.writesOf()).toBeGreaterThan(2)
+  expect(s.stored.hold.gets.filter(key => key === 'ticket:session-1').length).toBe(reads)
+})
+
+test('a sweep of the kept records whose read never answers holds the refresh back only for the store call\'s time limit', async ($, on) => {
+  const s = foremanSession(on, { stored: [['ticket:other', 'an older shape']] })
+  Object.assign(s.stored.hold, { prefix: 'ticket:other', skip: 0, until: new Promise(() => {}) })
+  await firstPrompt($, s.clock)
+  expect(s.stored.has('ticket:session-1')).toBe(false)
+
+  // The refresh the first write started goes on once the sweep's read is
+  // given up on, ten seconds later, and stores the record with that write's
+  // time.
+  await s.clock.advance(11_000)
+  expect(s.stored.get('ticket:session-1')).toEqual(UNPARENTED)
+})
+
+test('after a merge and a /clear, a refresh of the kept record whose read was held across the end never stores the record again', async ($, on) => {
+  // The kept record falls due eleven minutes after the hooks start, a
+  // minute after the watch has seen the merge, and the refresh's read at
+  // the twelfth minute is held.
+  const s = foremanSession(on, { stored: [['ticket:session-1', { ...UNPARENTED, at: S0 - DAY + 11 * MINUTE }]], messages: COMPACTED })
+  await startsAgain($, s)
+  await watchUntilMerged($, s)
+  let release = () => {}
+  Object.assign(s.stored.hold, { prefix: 'ticket:', skip: 0, until: new Promise<void>(resolve => {
+    release = resolve
+  }) })
+  await s.clock.advance(2 * MINUTE)
+  const ended = endSession($, 'clear')
+  await s.clock.advance(1000)
+  await ended
+  expect(s.stored.has('ticket:session-1')).toBe(false)
+
+  // The new conversation's take-up sets the generation back to this copy's
+  // load stamp and opens writing again, so only the ended session's memo,
+  // which is gone by then, tells the ended conversation's refresh apart.
+  s.ids.current = 'session-2'
+  await $.prompt.submit({ text: 'Something new.', origin: { kind: 'composer' } } as never)
+  await s.clock.settle()
+  const sets = ticketSets(s).length
+  release()
+  await s.clock.settle()
+  expect(ticketSets(s).length).toBe(sets)
+  expect(s.stored.has('ticket:session-1')).toBe(false)
 })
 
 test('a turn that starts closes a permission prompt raised while no turn ran, so the file reads working', async ($, on) => {
