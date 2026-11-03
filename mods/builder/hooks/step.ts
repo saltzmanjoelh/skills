@@ -1,0 +1,283 @@
+// Which step of /implement's list applies while a pull request is open, and
+// the text that tells the session how to take it. The chooser reads only a
+// snapshot a look stored and whether a question to the person is open, so it
+// is a pure function that a turn can call with no await between choosing the
+// snapshot and handing it over. It returns plain data, and stepLines renders
+// that data into the step's name and its fixed text. The only values put
+// into a text are checked ones: the pull request's number, the full head,
+// counts and workflow run ids. Names written on GitHub, such as check and
+// label names, stay in the quoted state lines. Every step that needs
+// judgement is the session's: a text says what to do, and the mod never does
+// it.
+
+import type { BaseFacts, Snapshot } from '../types'
+import { ciOf, countingRuns, failedCheckNames, failedRunsOf, headRunsIn, isUnfinished, roundInProgress } from './github'
+import { factIn } from './review'
+
+export type Limit = { which: 'pushes' | 'rounds'; count: number; max: number }
+
+export type Step =
+  | { kind: 'merged' }
+  | { kind: 'closed' }
+  | { kind: 'question' }
+  | { kind: 'over-limit'; limits: Limit[] }
+  | { kind: 'conflicting' }
+  // The ids of the runs that count as failed; the failed check names are in
+  // the state lines.
+  | { kind: 'failed'; runs: number[] }
+  | { kind: 'review'; head: string }
+  | { kind: 'changes-requested' }
+  // The four outcomes of the step where both verdicts approve at the head.
+  | { kind: 'runs-unread' }
+  | { kind: 'waiting' }
+  | { kind: 'merge'; number: number; head: string; command: BaseFacts['merge']; checks: 'passed' | 'none' }
+  // `runs` names every run at the head as `<id>.<attempt>`, the set that an
+  // answer about merging without checks covers.
+  | { kind: 'ask-merge'; number: number; head: string; command: BaseFacts['merge']; runs: string[] }
+
+// The merge command a project gets when its CLAUDE.md names none.
+export const DEFAULT_MERGE_COMMAND = 'gh pr merge <n> --merge --match-head-commit <sha>'
+
+// The facts a base branch's CLAUDE.md that could not be read gives, and a
+// snapshot an older build stored, which has none. `Checks:` leans to
+// expected, so a project that needs checks is never merged as if it had
+// none, and the merge command is read by the session from the base itself.
+export const UNREAD_FACTS: BaseFacts = { maxPushes: 8, maxRounds: 5, checks: 'expected', merge: 'unread' }
+
+// The facts in the text of a base branch's CLAUDE.md. A limit that is
+// missing or not a whole number takes its default. A file without a
+// `Checks:` line takes the skill's default, which depends on whether the
+// base has workflow files: `workflowsListed` says whether
+// `git ls-tree origin/<base> .github/workflows` listed anything, and is null
+// when that listing failed, which leans to expected. A `Checks:` value other
+// than none is expected.
+export function baseFactsOf(claude: string, workflowsListed: boolean | null): BaseFacts {
+  const checks = factIn(claude, 'Checks')
+  const merge = factIn(claude, 'Merge command')
+  return {
+    maxPushes: limitIn(claude, 'Max pushes per round', UNREAD_FACTS.maxPushes),
+    maxRounds: limitIn(claude, 'Max rounds', UNREAD_FACTS.maxRounds),
+    checks: checks === null
+      ? (workflowsListed === false ? 'none' : 'expected')
+      : (checks.toLowerCase() === 'none' ? 'none' : 'expected'),
+    merge: merge === null || merge === DEFAULT_MERGE_COMMAND ? 'default' : 'custom',
+  }
+}
+
+function limitIn(claude: string, label: string, fallback: number): number {
+  const value = factIn(claude, label)
+  return value !== null && /^\d+$/.test(value) ? Number(value) : fallback
+}
+
+// The facts a snapshot holds, or the unread ones when it holds none.
+function factsOf(s: Snapshot): BaseFacts {
+  const f = s.facts as Partial<BaseFacts> | undefined
+  if (typeof f !== 'object' || f === null) return UNREAD_FACTS
+  const isCount = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0
+  return {
+    maxPushes: isCount(f.maxPushes) ? f.maxPushes : UNREAD_FACTS.maxPushes,
+    maxRounds: isCount(f.maxRounds) ? f.maxRounds : UNREAD_FACTS.maxRounds,
+    checks: f.checks === 'none' ? 'none' : 'expected',
+    merge: f.merge === 'default' || f.merge === 'custom' ? f.merge : 'unread',
+  }
+}
+
+// The step that applies, the first of the list in its order. A failed check
+// or run at a head whose verdicts both approve chooses the failed step,
+// because that step comes first. A mergeability of unknown holds nothing,
+// because the merge command refuses a conflicting pull request anyway.
+export function chooseStep(s: Snapshot, isAsking: boolean): Step {
+  if (s.state === 'MERGED') return { kind: 'merged' }
+  if (s.state === 'CLOSED') return { kind: 'closed' }
+  if (isAsking) return { kind: 'question' }
+  const facts = factsOf(s)
+  const limits: Limit[] = []
+  if (s.pushesSinceVerdict > facts.maxPushes) limits.push({ which: 'pushes', count: s.pushesSinceVerdict, max: facts.maxPushes })
+  const round = roundInProgress(s)
+  if (round > facts.maxRounds) limits.push({ which: 'rounds', count: round, max: facts.maxRounds })
+  if (limits.length > 0) return { kind: 'over-limit', limits }
+  if (s.mergeable === 'CONFLICTING') return { kind: 'conflicting' }
+  const headRuns = headRunsIn(s)
+  const failedRuns = failedRunsOf(headRuns ?? []).map(run => run.id).sort((a, b) => a - b)
+  if (failedCheckNames(s.checks).length > 0 || failedRuns.length > 0) return { kind: 'failed', runs: failedRuns }
+  if (s.verdicts === null) return { kind: 'review', head: s.head }
+  if (s.verdicts.spec === 'REQUEST_CHANGES' || s.verdicts.adversarial === 'REQUEST_CHANGES') return { kind: 'changes-requested' }
+  // Both verdicts approve. A snapshot without the runs at the head, as one an
+  // older build stored, holds as if the runs could not be read, so it never
+  // leads to a merge.
+  if (s.runsCarriedOver === true || headRuns === null) return { kind: 'runs-unread' }
+  const ci = ciOf(s.checks)
+  if (ci === 'pending' || countingRuns(headRuns).some(isUnfinished)) return { kind: 'waiting' }
+  if (ci === 'passed') return { kind: 'merge', number: s.number, head: s.head, command: facts.merge, checks: 'passed' }
+  if (facts.checks === 'none') return { kind: 'merge', number: s.number, head: s.head, command: facts.merge, checks: 'none' }
+  return { kind: 'ask-merge', number: s.number, head: s.head, command: facts.merge, runs: headRuns.map(run => `${run.id}.${run.attempt}`) }
+}
+
+// The sections and named paragraphs of skills/implement/SKILL.md that the
+// step texts point to. No test can read the skill, because the testing kit
+// refuses a file outside the mod's folder, so a change to one of these
+// headings in the skill has to be made here too, and the other way round.
+export const SKILL_SECTIONS = [
+  'A review round',
+  'Commits the pull request lacks',
+  'State labels',
+  'Updating the linked checkout',
+  'The line to the starting session',
+  'The check after approval',
+  'When a turn ends',
+] as const
+
+type SkillSection = typeof SKILL_SECTIONS[number]
+
+// How a text points to a section of the skill. Only a pinned section can be
+// named, so a text cannot point to one the list above does not hold.
+const see = (section: SkillSection) => `"${section}" in /implement`
+
+export const STEP_LEAD = 'The step that applies:'
+
+// The step's name line and its text, for a turn to carry after the state
+// lines. Every turn carries the whole text, whatever an earlier turn did.
+export function stepLines(step: Step): string[] {
+  return [`${STEP_LEAD} ${nameOf(step)}.`, ...textOf(step)]
+}
+
+// The step a snapshot calls for, rendered, for the turns that hand one over.
+export function stepFor(s: Snapshot, isAsking: boolean): string[] {
+  return stepLines(chooseStep(s, isAsking))
+}
+
+function nameOf(step: Step): string {
+  switch (step.kind) {
+    case 'merged': return 'Merged'
+    case 'closed': return 'Closed without merging'
+    case 'question': return 'An open question'
+    case 'over-limit': return 'Over a limit'
+    case 'conflicting': return 'Conflicting'
+    case 'failed': return 'A check or a workflow run failed at the head'
+    case 'review': return 'Review this head'
+    case 'changes-requested': return 'The newest verdict at this head requests changes'
+    case 'runs-unread': return 'Both verdicts approve at this head, but the workflow runs could not be read'
+    case 'waiting': return 'Both verdicts approve at this head, waiting on checks'
+    case 'merge': return 'Both verdicts approve at this head, merge'
+    case 'ask-merge': return 'Both verdicts approve at this head, with no checks'
+  }
+}
+
+// What the session does after a push, which several steps end with.
+const AFTER_PUSH = `go on as ${see('When a turn ends')} says`
+
+function textOf(step: Step): string[] {
+  switch (step.kind) {
+    case 'merged': return MERGED
+    case 'closed': return [`Set \`stuck\` (see ${see('State labels')}), say that the pull request was closed without merging, and stop.`]
+    case 'question': return ['A question to the person is open. Wait for their answer, and end the turn. Act on the pull request only once they have answered.']
+    case 'over-limit': return overLimitText(step.limits)
+    case 'conflicting': return [`The pull request conflicts with its base. Merge the base in (never rebase), rerun the gates the merge could move, push, and ${AFTER_PUSH}.`]
+    case 'failed': return failedText(step.runs)
+    case 'review': return reviewText(step.head)
+    case 'changes-requested': return CHANGES_REQUESTED
+    case 'runs-unread': return [
+      'Both verdicts approve at this head, but the workflow runs at the head could not be read at the mod\'s last look, so the runs it shows are the ones it stored before.',
+      'Merge nothing, and end the turn. The mod looks again at its next poll, and starts a turn once the runs can be read.',
+    ]
+    case 'waiting': return [
+      'Both verdicts approve at this head, and a check is pending or a workflow run that counts is unfinished. Waiting on checks happens here, and only here, so reviews and fixes never wait on them.',
+      `Set \`ready-to-merge\` (see ${see('State labels')}), say "waiting on checks" and end the turn. The mod starts a turn when they finish.`,
+    ]
+    case 'merge': return mergeText(step)
+    case 'ask-merge': return askMergeText(step)
+  }
+}
+
+const MERGED = [
+  `First update the linked checkout, as ${see('Updating the linked checkout')} says. Then move the issue to done. Then list the commits the worktree holds and the pull request lacks, as ${see('Commits the pull request lacks')} says, before anything is filed.`,
+  'Then file at most one issue for the follow-ups. The list to file is the `To file:` list of the last verdict review, together with the `To file:` items of any cheap-fix commit that no verdict review lists, whether it is on the pull request or only in the worktree. That list holds what the counsel decided to file, together with the fix decisions and the visible problems that the limit rule of the second half\'s point 4 moved there, what the person decided when the counsel could not sit, and items carried over from reviews posted before the counsel decided follow-ups. So nothing new reaches the issue tracker on the session\'s judgement alone, except a visible problem it meant to fix in this pull request and could not. Take the first of these that applies:',
+  '- The last verdict review has no **Follow-ups** section, because a session that predates it posted the review: file nothing, and say in the report which review holds the follow-ups.',
+  '- The list to file is empty: file nothing.',
+  '- The project names no issue tracker and the session has none connected: file nothing, and say in the report that the list is in the last review.',
+  '- A search of the issue tracker for the exact title `Follow-ups from <owner>/<name>#<n>`, with the repository\'s owner and name as GitHub gives them, finds an issue, because an earlier session filed it: file nothing.',
+  '- The search fails: file nothing, and say so in the report, because filing twice is what this step exists to prevent.',
+  '- Otherwise file one issue with that title in the issue tracker, with a link to the pull request, holding every item of the list, each in one sentence saying what a person would see.',
+  `Then, when the worktree held commits the pull request lacks, do what ${see('Commits the pull request lacks')} says for a merged pull request, and stop. Otherwise run \`/cleanup\`, report, and stop. The person's request for \`/implement\` already counts as their agreement to the archive that ends \`/cleanup\`, whether they started this session directly or through a foreman parent session that they started, so never wait for, or ask for, a second agreement. When that archive, or the call that turns Remote Control off before it, is refused, do what step 7 of \`/cleanup\` says, and nothing more.`,
+]
+
+function overLimitText(limits: readonly Limit[]): string[] {
+  const facts = limits.map(limit => limit.which === 'pushes'
+    ? `- Pushes: ${limit.count} ${limit.count === 1 ? 'push' : 'pushes'} since the last changes-requested verdict, or, before the first one, since the pull request was opened, and \`Max pushes per round\` is ${limit.max}. Commit dates only approximate when a commit was pushed, which is close enough for a limit.`
+    : `- Rounds: Round ${limit.count} is in progress, and \`Max rounds\` is ${limit.max}.`)
+  return [
+    'The pull request is over a limit read from the base branch\'s CLAUDE.md, or over its default when that file could not be read:',
+    ...facts,
+    `Set \`stuck\` (see ${see('State labels')}), ask the person once with a summary of what keeps failing, tell the session that started this one as ${see('The line to the starting session')} says, and wait. When the person has already answered about this limit at these counts, act on their answer rather than asking again.`,
+  ]
+}
+
+function failedText(runs: readonly number[]): string[] {
+  const named = runs.length === 0
+    ? 'No workflow run counts as failed; the failed checks are named in the state lines above.'
+    : `The workflow runs that count as failed are ${runs.join(', ')}, and any failed checks are named in the state lines above. A run can fail without registering any check.`
+  return [
+    `${named} The mod has already applied the rules for which runs count: a completed run failed when its conclusion is anything other than success, skipped or neutral, and a later run of the same workflow and event that has not completed or did real work replaces it.`,
+    'Read each failure with `gh run view <id> --log-failed`, or `gh run view <id>` for a run that failed before its first job, and establish why it is red before changing anything. Then take the first of these that applies:',
+    `- The code is wrong, including a workflow file that is broken and so failed at startup: fix it, set \`waiting-on-author\` (see ${see('State labels')}), push, and ${AFTER_PUSH}. A run that failed at startup is never rerun; rerunning cannot fix its file.`,
+    '- The check never really ran (it was not scheduled, or it timed out waiting for a machine): if `gh run view <id> --json attempt` says this is its first attempt, rerun it with `gh run rerun <id> --failed` and end the turn; otherwise set `stuck` and ask the person.',
+    '- Something outside the code stopped it (Actions is disabled, a billing or spending limit refused it, or it ended `action_required`, waiting for someone to approve it): neither a fix nor a rerun helps. Set `stuck` and ask the person.',
+  ]
+}
+
+function reviewText(head: string): string[] {
+  return [
+    `No verdict review is at this head, ${head}. Run the first half of ${see('A review round')}, unless the focused reviewers already ran at this head and found nothing to fix; then run its second half and post the review. Do either whether or not checks are still running. The mod cannot tell which half is due, so decide it from the answer of \`mcp__builder__package\` and the reports of this session's own reviewers at this head:`,
+    '- The focused reviewers run at every head that changes the pull request\'s own diff. A head that only merged the base in counts them as run if they ran at the head before it. A head that a review was carried over to, with the verdicts of the approved head before it (see the second half\'s point 6), counts them as run too.',
+    '- The first half launches only the focused reviewers that the package tool\'s answer names, and the ones it does not name count as run at this head.',
+    `- A head that the answer says is up for the check after approval runs the check instead (see ${see('The check after approval')}).`,
+    '- After a restart or a compaction, count the first half as run at this head only when a verdict review at this head names the focused reviewers that ran.',
+  ]
+}
+
+const CHANGES_REQUESTED = [
+  `Fix the newest verdict's blocking findings, except those outside the spec and those the owner's answer dropped, in a commit that carries the fix lines (see ${see('A review round')}), set \`waiting-on-author\` (see ${see('State labels')}), push, and ${AFTER_PUSH}. The push also carries the cheap fixes that the second half committed, and the next round reviews them.`,
+  'If it has no blocking finding left to fix, which should not happen (see the second half\'s point 3), set `stuck` and ask the person rather than wait for a change that will not come.',
+]
+
+// The guards before any merge and the merge itself, which the merge step and
+// a yes to merging without checks share.
+function mergeLines(number: number, head: string, command: BaseFacts['merge']): string[] {
+  const run = command === 'default'
+    ? `run \`gh pr merge ${number} --merge --match-head-commit ${head}\``
+    : `read the \`Merge command:\` line of the base branch's CLAUDE.md with \`git show origin/<base>:CLAUDE.md\`, where <base> is the pull request's \`baseRefName\`, and run that command with <n> as ${number} and <sha> as ${head}, because the mod ${command === 'custom' ? 'found a merge command of the project\'s own there' : 'could not read that file'}. Only when the file names no merge command does the default, \`${DEFAULT_MERGE_COMMAND}\`, apply; never merge around a project's own gate with the default command`
+  return [
+    'Before merging:',
+    '- If the branch changes any of the `Merge command:`, `Checks:`, `Max pushes per round:`, `Max rounds:` or `Base branch:` lines of CLAUDE.md, ask the person before merging, because those lines govern the merge and are read from the base branch.',
+    `- When the worktree holds commits the pull request lacks, do not merge: do what ${see('Commits the pull request lacks')} says, and after a push ${AFTER_PUSH}.`,
+    `- Read the pull request again with \`gh pr view ${number} --json headRefOid,statusCheckRollup\`. If the head moved from ${head}, set \`in-review\`, call \`mcp__builder__watch\` and follow the step it names. If a check is no longer passed, call \`mcp__builder__watch\` and follow the step it names.`,
+    `To merge, set \`ready-to-merge\` (see ${see('State labels')}), report the \`merge\` stage with \`mcp__builder__progress\`, and ${run}. Never merge any other way: a project that names a gate means no session merges around it. If the command refuses, say why and wait.`,
+  ]
+}
+
+function mergeText(step: Extract<Step, { kind: 'merge' }>): string[] {
+  const why = step.checks === 'passed'
+    ? 'at least one check exists and every check passed'
+    : 'there are no checks, and the base branch\'s CLAUDE.md says `Checks: none`'
+  return [`Both verdicts approve at this head, ${step.head}, and ${why}. Merge it.`, ...mergeLines(step.number, step.head, step.command)]
+}
+
+function askMergeText(step: Extract<Step, { kind: 'ask-merge' }>): string[] {
+  const runs = step.runs.length === 0
+    ? 'no workflow runs'
+    : step.runs.map(run => {
+      const [id, attempt] = run.split('.')
+      return `run ${id} (attempt ${attempt})`
+    }).join(', ')
+  const checks = step.command === 'unread'
+    ? 'the base branch\'s CLAUDE.md could not be read, which counts as `Checks: expected`'
+    : 'the base branch\'s CLAUDE.md says `Checks: expected`'
+  return [
+    `Both verdicts approve at this head, ${step.head}, but it has no checks, and ${checks}. Nothing will change to start another turn, so the person decides whether to merge this head without checks. An answer covers this head and the set of workflow runs at it, which is ${runs}; it lapses when either changes. A session that restarts has no record of answers and asks again, which is the safe direction.`,
+    '- They already said no to this head and these runs: leave `stuck` as it is and end the turn.',
+    '- They already said yes to this head and these runs: merge after **Read again before merging on a yes** below.',
+    '- Otherwise, ask the person directly, because the counsel cannot settle it. On a no, set \`stuck\`, say what it waits for, and end the turn. On a yes, merge after **Read again before merging on a yes** below.',
+    `**Read again before merging on a yes.** Read the pull request again with \`gh pr view ${step.number} --json headRefOid,statusCheckRollup\`, and its runs with \`gh api --paginate "repos/<repo>/actions/runs?head_sha=${step.head}" --jq '.workflow_runs[] | {id, run_attempt, status}'\`. Merge only if it is still this head with no checks, no unfinished run and no new run; otherwise call \`mcp__builder__watch\` and follow the step it names.`,
+    ...mergeLines(step.number, step.head, step.command),
+  ]
+}

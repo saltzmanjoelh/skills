@@ -3,12 +3,12 @@
 // JSON gh printed, so the tests can feed it fixtures and the hooks can call it
 // without touching the network.
 
-import type { BuildStatus, Check, CheckState, Snapshot, Verdict, Verdicts, WorkflowRun } from '../types'
+import type { BaseFacts, BuildStatus, Check, CheckState, HeadRun, Snapshot, Verdict, Verdicts, WorkflowRun } from '../types'
 
-export type { Check, CheckState, Snapshot, Verdict, Verdicts, WorkflowRun }
+export type { BaseFacts, Check, CheckState, HeadRun, Snapshot, Verdict, Verdicts, WorkflowRun }
 
 // The JSON fields the snapshot reads, in the order gh is asked for them.
-export const PR_FIELDS = 'number,url,state,headRefOid,labels,reviews,statusCheckRollup,mergeable,commits'
+export const PR_FIELDS = 'number,url,state,headRefOid,labels,reviews,statusCheckRollup,mergeable,commits,baseRefName,createdAt'
 
 type GhCheck = {
   __typename?: string
@@ -39,7 +39,9 @@ export type GhPullRequest = {
   reviews?: GhReview[]
   statusCheckRollup?: GhCheck[]
   mergeable?: string
-  commits?: { oid: string }[]
+  commits?: { oid: string; committedDate?: string }[]
+  baseRefName?: string
+  createdAt?: string
 }
 
 const PASSING = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED'])
@@ -108,22 +110,163 @@ function isChangesRequested(verdicts: Verdicts) {
 }
 
 // The filter for `gh api --paginate "repos/<repo>/actions/runs?head_sha=<head>"`.
-// It keeps the runs that have not completed, and only the three fields the
-// snapshot reads. gh prints each result as one compact JSON object per line
-// when its output is not a terminal, and nothing for a head with no runs. It
-// runs on each page alone, which is right because it keeps or drops each run
+// It keeps every run, finished or not, and only the eight fields the snapshot
+// and the step chooser read. gh prints each result as one compact JSON object
+// per line when its output is not a terminal, and nothing for a head with no
+// runs. It runs on each page alone, which is right because it keeps each run
 // on its own.
-export const RUNS_JQ = '.workflow_runs[] | select(.status != "completed") | {id, run_attempt, name}'
+export const RUNS_JQ = '.workflow_runs[] | {id, workflow_id, event, run_number, status, conclusion, run_attempt, name}'
 
-// The unfinished runs in what the runs read printed, or null when any line is
-// not a run, so a read that went wrong counts as a failed read. --paginate
-// reads page by page, so a run queued while it reads can be listed twice;
-// each id is kept once, at its highest attempt. A run without an attempt is
-// on its first, and so is a run whose attempt is null, because jq writes a
-// key the input lacks as null. An attempt that is present but not a number
-// still makes the read fail.
-export function runsOf(out: string): WorkflowRun[] | null {
-  const byId = new Map<number, WorkflowRun>()
+// Every run in what the runs read printed, or null when any line is not a
+// run, so a read that went wrong counts as a failed read. --paginate reads
+// page by page, so a run queued while it reads can be listed twice; each id
+// is kept once, at its highest attempt. A run without an attempt is on its
+// first, and so is a run whose attempt is null, because jq writes a key the
+// input lacks as null. A run without a status counts as unfinished, the side
+// that never merges. The workflow, the event and the run number are null
+// when they are missing, and such a run is never compared for replacement. A
+// field that is present but of the wrong kind still makes the read fail.
+export function headRunsOf(out: string): HeadRun[] | null {
+  const byId = new Map<number, HeadRun>()
+  for (const line of out.split('\n')) {
+    if (line.trim() === '') continue
+    let raw: unknown
+    try {
+      raw = JSON.parse(line)
+    } catch {
+      return null
+    }
+    const run = headRunIn(raw)
+    if (run === null) return null
+    const seen = byId.get(run.id)
+    if (seen !== undefined && seen.attempt >= run.attempt) continue
+    byId.set(run.id, run)
+  }
+  return [...byId.values()].sort((a, b) => a.id - b.id)
+}
+
+// One run as the runs filter prints it, or null when it is not one.
+function headRunIn(raw: unknown): HeadRun | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
+  const r = raw as Record<string, unknown>
+  const attempt = r.run_attempt ?? 1
+  const workflow = r.workflow_id ?? null
+  const number = r.run_number ?? null
+  const event = r.event ?? null
+  const status = r.status ?? null
+  const conclusion = r.conclusion ?? null
+  if (typeof r.id !== 'number' || typeof attempt !== 'number') return null
+  if (workflow !== null && typeof workflow !== 'number') return null
+  if (number !== null && typeof number !== 'number') return null
+  if (event !== null && typeof event !== 'string') return null
+  if (status !== null && typeof status !== 'string') return null
+  if (conclusion !== null && typeof conclusion !== 'string') return null
+  return {
+    id: r.id, workflow, event, number, attempt,
+    name: plainName(typeof r.name === 'string' ? r.name : 'unnamed run'),
+    completed: status === 'completed',
+    conclusion: conclusion === null ? null : conclusion.toLowerCase(),
+  }
+}
+
+// The unfinished runs among every run at the head, the meaning the
+// snapshot's `runs` keeps for the readers that wait on them.
+export function unfinishedOf(headRuns: readonly HeadRun[]): WorkflowRun[] {
+  return headRuns.filter(isUnfinished).map(run => ({ id: run.id, attempt: run.attempt, name: run.name }))
+}
+
+// The runs at the head a snapshot holds, with every entry that is not a run
+// dropped, or null when the snapshot has none, as one an older build stored
+// has not. The chooser and the fingerprint read the stored runs through
+// this, so a damaged entry never throws in the middle of a look.
+export function headRunsIn(s: Pick<Snapshot, 'headRuns'>): HeadRun[] | null {
+  if (!Array.isArray(s.headRuns)) return null
+  return s.headRuns.filter(isStoredRun)
+}
+
+function isStoredRun(value: unknown): value is HeadRun {
+  if (typeof value !== 'object' || value === null) return false
+  const r = value as Record<string, unknown>
+  return typeof r.id === 'number' && typeof r.attempt === 'number' && typeof r.name === 'string' &&
+    typeof r.completed === 'boolean' && (r.conclusion === null || typeof r.conclusion === 'string') &&
+    (r.workflow === null || typeof r.workflow === 'number') && (r.number === null || typeof r.number === 'number') &&
+    (r.event === null || typeof r.event === 'string') && (r.realWork === undefined || typeof r.realWork === 'boolean')
+}
+
+// The definitions /implement decides on for workflow runs. The step chooser
+// and the fingerprint both read them, so the two can never disagree on which
+// runs failed.
+
+// A run is unfinished until its status is completed, whether it is queued,
+// in progress, requested, waiting for an approval or pending in a
+// concurrency group.
+export function isUnfinished(run: HeadRun): boolean {
+  return !run.completed
+}
+
+const RUN_PASSING = new Set(['success', 'skipped', 'neutral'])
+
+// A completed run failed when its conclusion is anything other than success,
+// skipped or neutral. A completed run with no conclusion is not known to have
+// passed, so it counts as failed.
+export function hasFailed(run: HeadRun): boolean {
+  return run.completed && !RUN_PASSING.has(run.conclusion ?? '')
+}
+
+// A completed run did real work when its conclusion is not skipped and at
+// least one of its jobs ended other than skipped. A run whose jobs were not
+// read, or whose read failed or listed no jobs, did none.
+export function didRealWork(run: HeadRun): boolean {
+  return run.completed && run.conclusion !== 'skipped' && run.realWork === true
+}
+
+// Whether `newer` is a later run than `older` of the same workflow, started
+// by the same event. Runs of one workflow from different events never
+// compare, and neither does a run with a field GitHub left out.
+function isLaterOfSameKind(newer: HeadRun, older: HeadRun): boolean {
+  if (newer.workflow === null || newer.event === null || newer.number === null || older.number === null) return false
+  return newer.workflow === older.workflow && newer.event === older.event && newer.number > older.number
+}
+
+// A run is replaced, and stops counting, when a later run of the same
+// workflow and event has not completed or did real work. That holds whatever
+// the older run ended as. A later run that did no real work replaces nothing
+// and counts by its own conclusion, so a run that skipped every job counts as
+// passed. A later run that has not completed replaces the older one only
+// until it completes, and then this rule decides again.
+export function isReplaced(run: HeadRun, all: readonly HeadRun[]): boolean {
+  return all.some(other => isLaterOfSameKind(other, run) && (isUnfinished(other) || didRealWork(other)))
+}
+
+// The runs that count: every run at the head that no later run replaced.
+export function countingRuns(all: readonly HeadRun[]): HeadRun[] {
+  return all.filter(run => !isReplaced(run, all))
+}
+
+// The runs that count as failed at the head.
+export function failedRunsOf(all: readonly HeadRun[]): HeadRun[] {
+  return countingRuns(all).filter(hasFailed)
+}
+
+// Whether a run's jobs must be read to apply the rule above: only a
+// completed run that is not skipped, with an earlier run of the same
+// workflow and event, can replace anything by doing real work. A head with
+// one run per workflow and event reads no jobs.
+export function needsJobs(run: HeadRun, all: readonly HeadRun[]): boolean {
+  return run.completed && run.conclusion !== 'skipped' && all.some(other => isLaterOfSameKind(run, other))
+}
+
+// The filter for `gh api --paginate "repos/<repo>/actions/runs/<id>/attempts/<attempt>/jobs"`,
+// one compact JSON object per job, so output that is not jobs can be told
+// from jobs.
+export const JOBS_JQ = '.jobs[] | {conclusion}'
+
+// Whether the jobs a jobs read printed include one that ended other than
+// skipped, or null when any line is not a job, so the read counts as failed.
+// A job with no conclusion has not ended, so it is not real work. An empty
+// list did no real work.
+export function realWorkOf(out: string): boolean | null {
+  let isReal = false
   for (const line of out.split('\n')) {
     if (line.trim() === '') continue
     let raw: unknown
@@ -133,14 +276,11 @@ export function runsOf(out: string): WorkflowRun[] | null {
       return null
     }
     if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
-    const { id, run_attempt: rawAttempt, name } = raw as { id?: unknown; run_attempt?: unknown; name?: unknown }
-    const attempt = rawAttempt ?? 1
-    if (typeof id !== 'number' || typeof attempt !== 'number') return null
-    const seen = byId.get(id)
-    if (seen !== undefined && seen.attempt >= attempt) continue
-    byId.set(id, { id, attempt, name: plainName(typeof name === 'string' ? name : 'unnamed run') })
+    const conclusion = (raw as { conclusion?: unknown }).conclusion ?? null
+    if (conclusion !== null && typeof conclusion !== 'string') return null
+    if (conclusion !== null && conclusion.toLowerCase() !== 'skipped') isReal = true
   }
-  return [...byId.values()].sort((a, b) => a.id - b.id || a.attempt - b.attempt)
+  return isReal
 }
 
 // The runs a look keeps when its runs read failed: those of the snapshot the
@@ -152,6 +292,15 @@ export function carriedRuns(stored: unknown, repo: string, number: number, head:
   const s = snapshotIn(stored)
   if (s === null || s.repo !== repo || s.number !== number || s.head !== head) return []
   return s.runs ?? []
+}
+
+// Every run at the head that a look keeps when its runs read failed, by the
+// same rule as carriedRuns, so a failed read still shows the runs that had
+// failed. A stored snapshot without them gives none.
+export function carriedHeadRuns(stored: unknown, repo: string, number: number, head: string): HeadRun[] {
+  const s = snapshotIn(stored)
+  if (s === null || s.repo !== repo || s.number !== number || s.head !== head) return []
+  return headRunsIn(s) ?? []
 }
 
 // The state in what `gh pr view <n> --json state` printed: OPEN, MERGED or
@@ -173,7 +322,12 @@ export function pullRequestStateIn(out: string | null): Snapshot['state'] | null
   return state === 'OPEN' || state === 'MERGED' || state === 'CLOSED' ? state : null
 }
 
-export function snapshotOf(repo: string, pr: GhPullRequest, login: string, runs: WorkflowRun[] = []): Snapshot {
+// What a look read beside the pull request itself: every run at the head,
+// whether the runs read failed so they were carried over, and the base
+// branch with the facts of its CLAUDE.md.
+export type SnapshotExtras = Pick<Snapshot, 'headRuns' | 'runsCarriedOver' | 'base' | 'facts'>
+
+export function snapshotOf(repo: string, pr: GhPullRequest, login: string, runs: WorkflowRun[] = [], extras: SnapshotExtras = {}): Snapshot {
   const head = pr.headRefOid
   const commits = (pr.commits ?? []).map(commit => commit.oid)
   // Only verdict reviews this login posted count: a review anyone else posts
@@ -186,7 +340,10 @@ export function snapshotOf(repo: string, pr: GhPullRequest, login: string, runs:
   const atHead = verdictReviews.filter(verdicts => verdicts.sha === head)
   const changesRequested = verdictReviews.filter(isChangesRequested)
   const headsReviewed = new Set(verdictReviews.map(verdicts => verdicts.sha)).size
-  const pushesSinceVerdict = pushesAfter(changesRequested.at(-1)?.sha, commits)
+  const lastChangesRequested = changesRequested.at(-1)?.sha
+  const pushesSinceVerdict = lastChangesRequested === undefined
+    ? committedAfter(pr.createdAt, pr.commits ?? [])
+    : pushesAfter(lastChangesRequested, commits)
 
   const snapshot: Omit<Snapshot, 'fingerprint'> = {
     repo,
@@ -201,17 +358,32 @@ export function snapshotOf(repo: string, pr: GhPullRequest, login: string, runs:
     headsReviewed,
     pushesSinceVerdict,
     runs,
+    ...extras,
   }
   return { ...snapshot, fingerprint: fingerprintOf(snapshot) }
 }
 
-function pushesAfter(sha: string | undefined, commits: readonly string[]): number {
-  if (sha === undefined) return 0
+function pushesAfter(sha: string, commits: readonly string[]): number {
   const at = commits.indexOf(sha)
   // A verdict on a commit the branch no longer holds (a force push) leaves
   // every commit on the branch unreviewed.
   if (at === -1) return commits.length
   return commits.length - at - 1
+}
+
+// Before the first changes-requested verdict, the pushes are the commits
+// committed after the pull request was opened. Commit dates only approximate
+// when a commit was pushed, which is close enough for a limit. A commit whose
+// date is missing or cannot be read counts, the side that stops sooner. With
+// no opening time to compare against, as in a pull request read by an older
+// build, nothing counts, as before.
+function committedAfter(createdAt: string | undefined, commits: readonly { committedDate?: string }[]): number {
+  const opened = Date.parse(createdAt ?? '')
+  if (Number.isNaN(opened)) return 0
+  return commits.filter(commit => {
+    const at = Date.parse(commit.committedDate ?? '')
+    return Number.isNaN(at) || at > opened
+  }).length
 }
 
 // The label the mod puts on the pull request while the owner is asked a
@@ -241,10 +413,19 @@ export function countedLabels(labels: readonly string[]): string[] {
 // before, is not. The workflow's own labels are left out of it. Each
 // unfinished run is in it by its id and attempt alone, so a run appearing,
 // rerun or completing is news, and a move between unfinished statuses, such
-// as queued to in progress, is not.
+// as queued to in progress, is not. Two parts are added only when they
+// apply, so a snapshot without them fingerprints as it did before they
+// existed. One says the runs could not be read while both verdicts approve
+// at the head, where the step chooser holds the merge on it, so the first
+// look that reads them again is news and the session is woken to merge. At
+// any other step a failed read changes nothing the session decides on, so it
+// is not news there, as it never was. The other names the runs that count as
+// failed, by id and attempt, because a run that fails before any job starts
+// creates no check, and one that starts and fails between two looks changes
+// nothing else here.
 export function fingerprintOf(s: Omit<Snapshot, 'fingerprint'>): string {
   const verdicts = s.verdicts ? `${s.verdicts.spec}/${s.verdicts.adversarial}@${s.verdicts.sha.slice(0, 8)}` : 'none'
-  return [
+  const parts = [
     s.state,
     s.head.slice(0, 12),
     countedLabels(s.labels).join(','),
@@ -252,7 +433,11 @@ export function fingerprintOf(s: Omit<Snapshot, 'fingerprint'>): string {
     [...newestRuns(s.checks).values()].map(checkPartOf).join(','),
     s.mergeable === 'CONFLICTING' ? 'conflicting' : 'no-conflict',
     (s.runs ?? []).map(run => `${run.id}.${run.attempt}`).join(','),
-  ].join('|')
+  ]
+  if (s.runsCarriedOver === true && s.verdicts?.spec === 'APPROVE' && s.verdicts.adversarial === 'APPROVE') parts.push('runs-unread')
+  const failed = failedRunsOf(headRunsIn(s) ?? [])
+  if (failed.length > 0) parts.push(`failed-runs:${failed.map(run => `${run.id}.${run.attempt}`).join(',')}`)
+  return parts.join('|')
 }
 
 // A check's part of the fingerprint: its name and state, with its completion
@@ -276,6 +461,9 @@ export function snapshotIn(value: unknown): Snapshot | null {
   // A snapshot an older build stored has no runs, which every reader takes
   // as none; a runs field that is there must be a list.
   if (s.runs !== undefined && !Array.isArray(s.runs)) return null
+  // The same holds for every run at the head, which an older build did not
+  // store either.
+  if (s.headRuns !== undefined && !Array.isArray(s.headRuns)) return null
   const verdicts = s.verdicts as { sha?: unknown } | null | undefined
   if (verdicts !== null && (typeof verdicts !== 'object' || typeof verdicts.sha !== 'string')) return null
   return value as Snapshot
@@ -332,7 +520,16 @@ export function changesBetween(before: Snapshot | null, after: Snapshot): string
   changes.push(...checkSentences(before.checks, after.checks, before.head !== after.head))
   // At a new head the runs are new runs on a new commit, and the head-moved
   // sentence already says so.
-  if (before.head === after.head) changes.push(...runSentences(before.runs ?? [], after.runs ?? []))
+  if (before.head === after.head) {
+    changes.push(...runSentences(before.runs ?? [], after.runs ?? []))
+    changes.push(...failedRunSentences(before, after))
+  }
+  if (before.runsCarriedOver !== true && after.runsCarriedOver === true) {
+    changes.push('The workflow runs at the head could not be read.')
+  }
+  if (before.runsCarriedOver === true && after.runsCarriedOver !== true) {
+    changes.push('The workflow runs at the head could be read again.')
+  }
   const conflictBefore = before.mergeable === 'CONFLICTING'
   if (conflictBefore !== (after.mergeable === 'CONFLICTING')) {
     changes.push(conflictBefore ? 'The merge conflict is gone.' : 'The pull request now has a merge conflict with its base.')
@@ -429,6 +626,15 @@ function runSentences(before: readonly WorkflowRun[], after: readonly WorkflowRu
   if (startedAgain.length > 0) counts.push(`${runsCount(startedAgain.length)} started again.`)
   if (finished.length > 0) counts.push(`${runsCount(finished.length)} finished.`)
   return counts
+}
+
+// One sentence per run that counts as failed now and did not before, at the
+// same head, held to the same limit as the other run sentences.
+function failedRunSentences(before: Snapshot, after: Snapshot): string[] {
+  const was = new Set(failedRunsOf(headRunsIn(before) ?? []).map(run => `${run.id}.${run.attempt}`))
+  const failed = failedRunsOf(headRunsIn(after) ?? []).filter(run => !was.has(`${run.id}.${run.attempt}`))
+  if (failed.length <= CHECK_SENTENCE_LIMIT) return failed.map(run => `Workflow run "${run.name}" failed.`)
+  return [`${runsCount(failed.length)} failed.`]
 }
 
 function runsCount(n: number): string {
