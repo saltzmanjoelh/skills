@@ -8219,6 +8219,32 @@ test('no stuck prompt comes while a question to the person is open', async ($, o
   await asked
 })
 
+test('a stuck prompt that comes while a new watch has saved its record but not yet its snapshot never carries the other pull request', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const prompts = recordPrompts(on)
+  // The new watch's snapshot of #8 waits to be saved, after its record is.
+  let release = () => {}
+  const held = new Promise<void>(resolve => { release = resolve })
+  on('state.set', async ($, e, next) => {
+    if (e.plugin === 'builder' && e.key === 'pr' && (e.value as { number?: number } | null)?.number === 8) await held
+    return next(e)
+  })
+  await watch($)
+  await clock.advance(40 * MINUTE)
+
+  world.pr = openPullRequest({ number: 8 })
+  world.otherNumber = 8
+  const ran = loose($)({ tool: 'mcp__builder__watch', number: 8 })
+  await clock.advance(10 * MINUTE)
+
+  expect(stuckOf(prompts)).toEqual([])
+  release()
+  await ran
+})
+
 test('no stuck prompt comes while a subagent runs, and once it ends one comes 45 minutes later', async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
   mock.store(on)
@@ -10516,6 +10542,7 @@ test('the change prompt, the CI event context, the stuck prompt and the watch an
   const ran = await loose($)({ tool: 'mcp__builder__watch', number: 7 })
   expect(String(ran.result)).toContain('The step that applies: Review this head.')
   expect(String(ran.result)).toContain(review)
+  expect(String(ran.result)).toEndWith(`\n\n${GITHUB_NAMES_LINE}`)
 
   // The stuck prompt, after the session has been quiet.
   await clock.advance(46 * 60_000)

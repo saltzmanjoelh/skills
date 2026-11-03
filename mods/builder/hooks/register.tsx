@@ -15,7 +15,7 @@ import { ignoredLine, readIssueLink } from './links'
 import { afterComparison, afterLoad, dueComparisons, isStale, LOADED_PATHS, loadBegunAs, loadBegunIn, loadedIn, type Found } from './loaded'
 import { AGENT_PANE, agentPaneTree, bandTree, isDrawable, messagesReadOf, NAMED_AFTER_MS, PANE, paneTree, secondRow, type Elements, type MessagesRead, type View } from './pane'
 import { ADVERSARIAL_REVIEWER, afterReport, endedOf, FOCUSED_REVIEWERS, focusedReviewersFor, plannedOf, progressIn, reportAnswer, reportOf, stageLabel, STAGES, type ReportInput } from './progress'
-import { changePrompt, ciEventContext, resumePrompt, stateLines, stuckPrompt } from './prompts'
+import { changePrompt, ciEventContext, GITHUB_NAMES_LINE, resumePrompt, stateLines, stuckPrompt } from './prompts'
 import { changedKinds, commitRecordsOf, decidedItems, factIn, INSTRUCTION_PATHSPECS, instructionFileIsLink, isFullSha, isUpForCheck, LATER_CONTEXT_LINES, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pluginRootsOf, reviewedHeadOf, secretIn, specDirOf, trendOf, trendStopLine, underRoot, verdictHeadOf, verdictsLine, type CommitRecord, type EarlierRound, type FileKind, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
 import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isForemanNudge, newMemo, parentIn, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, STATUS_CHANGED_TEXT, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type Starts, type StatusFacts } from './status'
@@ -1275,11 +1275,14 @@ async function resetStuckInterval($: $) {
 // What the stuck prompt is timed from, read from the atoms, or null when no
 // stuck prompt is due at all: a hold is on, nothing is watched, the pull
 // request is not open, or the session has not gone quiet since it started.
+// The stored snapshot counts only when it is of the watched pull request,
+// because a new watch saves its run record before its snapshot, and a stuck
+// prompt between the two would carry the other pull request's state and step.
 // `quietFrom` is a quiet time that could not be saved, which counts when it
 // is later than the saved one.
 async function stuckDue($: $, quietFrom?: number): Promise<{ r: BuilderRun; s: Snapshot; since: number; every: number; now: number } | null> {
   const r = await read($, run)
-  const s = await read($, pr)
+  const s = watchedSnapshotOf(r, await read($, pr))
   const hold = holdIn(await read($, usageHold))
   const saved = quietIn(await read($, quietSince))
   const since = quietFrom === undefined ? saved : Math.max(saved ?? quietFrom, quietFrom)
@@ -2210,7 +2213,7 @@ async function serveWatch($: $, asked: WatchInput): Promise<string> {
     if (ended.length > 0) lines.push('', ...ended)
     await forgetListed($, owed)
   }
-  lines.push('', ...stepFor(s, await isAsking($)))
+  lines.push('', ...stepFor(s, await isAsking($)), '', GITHUB_NAMES_LINE)
   return lines.join('\n')
 }
 
