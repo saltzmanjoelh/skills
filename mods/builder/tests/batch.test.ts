@@ -3,6 +3,7 @@ import type { PromptOrigin } from 'claude-code'
 
 import { afterDeadline, afterDeadlineSent, afterDelivery, afterLaunch, afterResume, afterWake, afterFirstStep, answersStep, BATCH_LIMIT_MS, BATCH_RETRY_CEILING_MS, BATCH_RETRY_MS, BATCHES_KEPT, batchStateIn, completeLine, deadlineLine, deliveryOf, emptyBatchState, heldReports, incompleteLine, isBatchLaunch, isEngineWake, nextBatchRetry, nextDeadline, REMEMBER_MS, runningLines, type Delivery } from '../hooks/batch'
 import type { BatchState } from '../types'
+import { finishedText, parkText } from './notification-fixture'
 
 const PEER: PromptOrigin = { kind: 'peer' } as PromptOrigin
 const NOTICE: PromptOrigin = { kind: 'task-notification' } as PromptOrigin
@@ -437,30 +438,6 @@ test('a deadline line the engine takes after refusals ends the batch, and the me
   expect(afterDelivery(sent, report(BRAVO), true, (times[2] as number) + 1).act).toEqual({ kind: 'pass' })
 })
 
-// The two kinds of completed notification the engine sends about an agent,
-// in its own shape: one when the agent parks to wait on its own background
-// work, and one when it finished. `result` stands for the agent's own text.
-const parkText = (id: string, result = 'This agent has not reported yet: it is waiting on its own background work.') => `<task-notification>
-<task-id>${id}</task-id>
-<tool-use-id>toolu_example</tool-use-id>
-<output-file>/tmp/example/tasks/${id}.output</output-file>
-<status>completed</status>
-<summary>Agent "Example agent" is waiting on its own background work</summary>
-<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports; the result below may be interim.</note>
-<result>${result}
-</result>
-<usage><subagent_tokens>1</subagent_tokens><tool_uses>1</tool_uses><duration_ms>1</duration_ms></usage>
-</task-notification>`
-const finishedText = (id: string, summary = 'Agent "Example agent" finished') => `<task-notification>
-<task-id>${id}</task-id>
-<output-file>/tmp/example/tasks/${id}.output</output-file>
-<status>completed</status>
-<summary>${summary}</summary>
-<note>A task-notification fires each time this agent stops with no live background children of its own.</note>
-<result>done</result>
-<usage><subagent_tokens>1</subagent_tokens><tool_uses>1</tool_uses><duration_ms>1</duration_ms></usage>
-</task-notification>`
-
 test('a notification is read as finished only when its summary says the agent finished', () => {
   expect(deliveryOf(NOTICE, parkText(ALPHA))).toEqual({ id: ALPHA, isReport: false, status: 'completed', finished: false })
   expect(deliveryOf(NOTICE, finishedText(ALPHA))).toEqual({ id: ALPHA, isReport: false, status: 'completed', finished: true })
@@ -483,10 +460,10 @@ test('a summary with other text around the finished wording is not read as finis
 })
 
 test('a finished notification ends its member, and as the last one releases the batch with the completion line', () => {
-  const finished = deliveryOf(NOTICE, finishedText(BRAVO)) as Delivery
+  const finishedDelivery = deliveryOf(NOTICE, finishedText(BRAVO)) as Delivery
   const state = afterDelivery(launched(), report(ALPHA), true, 0).state
-  expect(afterDelivery(state, finished, true, 1).act).toEqual({ kind: 'release', line: completeLine(2) })
-  const first = afterDelivery(launched(), finished, true, 0)
+  expect(afterDelivery(state, finishedDelivery, true, 1).act).toEqual({ kind: 'release', line: completeLine(2) })
+  const first = afterDelivery(launched(), finishedDelivery, true, 0)
   expect(first.act).toEqual({ kind: 'hold' })
   expect(runningLines(first.state)).toEqual([incompleteLine(['Explore aaaaaaaa'])])
   expect(afterDelivery(first.state, report(ALPHA), true, 1).act).toEqual({ kind: 'release', line: completeLine(2) })
@@ -532,9 +509,9 @@ test('a held delivery from a released batch before the release turn\'s first ste
   expect(early.act).toEqual({ kind: 'hold' })
   expect(early.state.marker).toBe(0)
   expect(early.state.releasing).toBe(true)
-  const finished = afterDelivery(state, deliveryOf(NOTICE, finishedText(BRAVO)) as Delivery, true, 2)
-  expect(finished.act).toEqual({ kind: 'hold' })
-  expect(finished.state.marker).toBe(0)
+  const afterFinished = afterDelivery(state, deliveryOf(NOTICE, finishedText(BRAVO)) as Delivery, true, 2)
+  expect(afterFinished.act).toEqual({ kind: 'hold' })
+  expect(afterFinished.state.marker).toBe(0)
   const late = afterDelivery(afterFirstStep(early.state, false), notice(BRAVO, 'completed'), true, 3)
   expect(late.act).toEqual({ kind: 'hold' })
   expect(late.state.marker).toBe(1)

@@ -5,6 +5,7 @@ import type { Engine } from 'claude-code/testing'
 import { BATCH_LIMIT_MS, BATCH_RETRY_MS, completeLine, deadlineLine, incompleteLine } from '../hooks/batch'
 import { heldLine } from '../hooks/pane'
 import type { BatchState } from '../types'
+import { finishedText, parkText } from './notification-fixture'
 
 // The hooks that make builder wait for a whole batch of background agents
 // before the model reads their reports (see
@@ -605,11 +606,6 @@ test('the band above the prompt never reads the batches, so a batch write does n
   expect(w.state.reads).toContain('batches')
 })
 
-// The engine's completed notification about the agent `id` when it parks to
-// wait on its own background work, and when it finished, in its own shape.
-const parkNotice = (id: string) => `<task-notification>\n<task-id>${id}</task-id>\n<tool-use-id>toolu_example</tool-use-id>\n<status>completed</status>\n<summary>Agent "Example agent" is waiting on its own background work</summary>\n<result>This agent has not reported yet.\n</result>\n</task-notification>`
-const finishedNotice = (id: string) => `<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>\n<summary>Agent "Example agent" finished</summary>\n<result>done</result>\n</task-notification>`
-
 // The engine waking the parked agent `id` once the work it moved into the
 // background has finished: a resume whose prompt begins with the
 // notification about the agent's own shell task, which builder never sees.
@@ -632,7 +628,7 @@ test('a member that reports, parks and is woken twice is held, and the batch is 
   expect(await sent(report(BRAVO))).toEqual({ text: report(BRAVO) })
   expect(w.state.value?.marker).toBe(5)
   expect(await sent(report(ALPHA))).toEqual({ text: report(ALPHA) })
-  expect(await sent(finishedNotice(ALPHA), 'task-notification')).toEqual({ text: finishedNotice(ALPHA), context: [completeLine(2)] })
+  expect(await sent(finishedText(ALPHA), 'task-notification')).toEqual({ text: finishedText(ALPHA), context: [completeLine(2)] })
   expect(contexts.filter(c => c !== undefined)).toEqual([[completeLine(2)]])
 })
 
@@ -640,13 +636,13 @@ test('a report that a member sent before it parked and that arrives after its wa
   const w = world(on)
   await launched($, ['Explore', 'Plan', 'Explore'])
   const { sent, contexts } = recorder($)
-  expect(await sent(parkNotice(ALPHA), 'task-notification')).toEqual({ text: parkNotice(ALPHA) })
+  expect(await sent(parkText(ALPHA), 'task-notification')).toEqual({ text: parkText(ALPHA) })
   await wake($, w, ALPHA)
   expect(await sent(report(BRAVO))).toEqual({ text: report(BRAVO) })
   expect(await sent(report(CHARLIE))).toEqual({ text: report(CHARLIE) })
   expect(await sent(report(ALPHA))).toEqual({ text: report(ALPHA) })
   expect(w.state.value?.batches.every(b => b.releasedAt === null)).toBe(true)
-  expect(await sent(finishedNotice(ALPHA), 'task-notification')).toEqual({ text: finishedNotice(ALPHA), context: [completeLine(3)] })
+  expect(await sent(finishedText(ALPHA), 'task-notification')).toEqual({ text: finishedText(ALPHA), context: [completeLine(3)] })
   expect(contexts.filter(c => c !== undefined)).toEqual([[completeLine(3)]])
 })
 
@@ -745,10 +741,10 @@ test('a woken member that ends with only a finished notification and no second r
   await launched($)
   const { sent, contexts } = recorder($)
   await sent(report(ALPHA))
-  expect(await sent(parkNotice(ALPHA), 'task-notification')).toEqual({ text: parkNotice(ALPHA) })
+  expect(await sent(parkText(ALPHA), 'task-notification')).toEqual({ text: parkText(ALPHA) })
   await wake($, w, ALPHA)
   expect(await sent(report(BRAVO))).toEqual({ text: report(BRAVO) })
-  expect(await sent(finishedNotice(ALPHA), 'task-notification')).toEqual({ text: finishedNotice(ALPHA), context: [completeLine(2)] })
+  expect(await sent(finishedText(ALPHA), 'task-notification')).toEqual({ text: finishedText(ALPHA), context: [completeLine(2)] })
   expect(contexts.filter(c => c !== undefined)).toEqual([[completeLine(2)]])
   await w.clock.advance(2 * BATCH_LIMIT_MS)
   await w.clock.settle()
@@ -809,7 +805,7 @@ test('the releasing member\'s completed notification before the release turn\'s 
 })
 
 test('the releasing member\'s finished notification before the release turn\'s first step leaves that turn to the model', async ($, on) => {
-  const { w, asked, chunks } = await releasedAfterBurst($, on, finishedNotice(CHARLIE))
+  const { w, asked, chunks } = await releasedAfterBurst($, on, finishedText(CHARLIE))
   expect(asked).toBe(1)
   expect(texts(chunks)).toEqual(['From the model.', 'stop'])
   expect(w.state.value?.marker).toBe(0)
@@ -818,9 +814,9 @@ test('the releasing member\'s finished notification before the release turn\'s f
 test('after the release turn\'s first step, a held notification from the releasing member is answered without the model again', async ($, on) => {
   const { w } = await releasedAfterBurst($, on, notice(CHARLIE, 'completed'))
   await turnEnds($, 't3')
-  expect(await deliver($, finishedNotice(CHARLIE), 'task-notification')).toEqual({ text: finishedNotice(CHARLIE) })
+  expect(await deliver($, finishedText(CHARLIE), 'task-notification')).toEqual({ text: finishedText(CHARLIE) })
   expect(w.state.value?.marker).toBe(1)
-  w.talk.messages = [...w.talk.messages, assistant('From the model.'), user(finishedNotice(CHARLIE))]
+  w.talk.messages = [...w.talk.messages, assistant('From the model.'), user(finishedText(CHARLIE))]
   const before = w.asked.calls
   const { chunks } = await step($, { turnId: 't4', index: 0 })
   expect(texts(chunks)).toEqual(['Noted.', 'stop'])
