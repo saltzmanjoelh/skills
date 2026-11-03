@@ -119,10 +119,12 @@ last written while a turn ran.
   wake on time.
 - A stalled record that has had its first nudge and then drops out of a list
   that is not complete: on that read it is not stalled, so the gone rule wakes
-  the parent, and that wake counts as the stall's wake. No further nudge or
-  wake comes for it until its file changes, and its list reads fall back to
-  once every five minutes, because the idle wake needs a list that shows the
-  session and may never come.
+  the parent, and that wake counts as the stall's wake. When the gone wake
+  already went for the same file before that first nudge, no second gone wake
+  comes, and that earlier wake counts as the stall's wake instead. Either way,
+  no further nudge or wake comes for it until its file changes, and its list
+  reads fall back to once every five minutes, because the idle wake needs a
+  list that shows the session and may never come.
 - A relaunched session whose transcript cannot be read at the session's start
   but can be read at its first turn's start: the turn's start takes the memo
   up.

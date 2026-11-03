@@ -1005,6 +1005,21 @@ test('a stall that drops out of a list that is not complete after its first nudg
   }
 })
 
+test('a stall nudged after its gone wake, that then drops out of a list that is not complete again, counts as woken and asks for the list only once every gone wait', () => {
+  const rows = [stalledRow()]
+  const missing: SessionsLook = { kind: 'read', sessions: [] }
+  const gone = read(paired(), rows, T0 + GONE_MS + MINUTE, { sessions: missing })
+  expect(gone.reasons.map(r => r.kind)).toEqual(['gone'])
+  const nudged = read(gone.tickets, rows, T0 + 11 * MINUTE, { sessions: stoppedListing })
+  expect(nudged.effects).toEqual([{ kind: 'nudge', to: 'local_a', name: 'ABC-1' }])
+  const again = read(nudged.tickets, rows, T0 + 12 * MINUTE, { sessions: missing })
+  expect([again.effects, again.reasons]).toEqual([[], []])
+  expect(again.tickets.pairings[0]!.acts.stretch?.woke).toBe(true)
+  const at = again.tickets.pairings[0]!.acts.listCheckedAt!
+  expect(needsList(again.tickets, rows, at + MINUTE)).toBe(false)
+  expect(needsList(again.tickets, rows, at + GONE_MS)).toBe(true)
+})
+
 test('a stall-shaped record that never stalls asks for the list as often as on the base: after its gone wake, or after a merge, once every gone wait', () => {
   const first = T0 + GONE_MS + MINUTE
   // Missing from a list that is not complete: the gone wake goes, and no stall

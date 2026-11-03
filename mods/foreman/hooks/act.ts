@@ -426,15 +426,21 @@ function stallHandled(p: ForemanPairing, row: SubRow, now: number): boolean {
 // gets the gone wake instead, and its stretch is marked as woken, because the
 // parent now knows of it and the idle wake, which needs the list to show the
 // session, may never come. Without the mark stallsNeedList would ask for the
-// list on every read until the file changes.
+// list on every read until the file changes. The same holds for a stall whose
+// gone wake went before its first nudge and that drops out again: the parent
+// already knows of it, so the stretch is marked without a second wake.
 function goneRule(s: Step) {
-  if (s.look === null || s.p.standing !== 'active' || !mayBeGone(s.p, s.row, s.now)) return
-  if (isStalled(s)) return
+  if (s.look === null || s.p.standing !== 'active' || isStalled(s)) return
   if (endedIn(s.look.byId, desktopOf(s.p, s.row)) === null) return
-  s.reasons.push({ kind: 'gone', who: whoOf(s.row.record.issueKey, s.p.ticket), minutes: minutesOf(s.now - s.row.mtimeMs) })
   const { stretch } = s.p.acts
   const stallNudged = stretch !== null && stretch.wait === null && stalledShape(s.p, s.row, s.now) && stallsOwn(stretch, s.row.mtimeMs)
-  setActs(s, stallNudged ? { goneWokeFor: s.row.mtimeMs, stretch: { ...stretch, woke: true } } : { goneWokeFor: s.row.mtimeMs })
+  const woken = stallNudged ? { stretch: { ...stretch, woke: true } } : {}
+  if (!mayBeGone(s.p, s.row, s.now)) {
+    if (stallNudged && s.p.acts.goneWokeFor === s.row.mtimeMs) setActs(s, woken)
+    return
+  }
+  s.reasons.push({ kind: 'gone', who: whoOf(s.row.record.issueKey, s.p.ticket), minutes: minutesOf(s.now - s.row.mtimeMs) })
+  setActs(s, { goneWokeFor: s.row.mtimeMs, ...woken })
 }
 
 // Over, in any state but done: the list shows the session archived, or
