@@ -180,28 +180,37 @@ export function isEngineWake(prompt: string): boolean {
 // because its report or its turn end before it parked may have ended it. Its
 // last turn-end reading stays, so a report it sent before it parked that
 // arrives after the wake still ends nothing while that reading listed its own
-// work. Its later
-// report and notifications are then held, or end the batch, as any member's
-// are. When a turn end had ended the batch's last member and moved its
-// deadline to BATCH_SETTLE_MS from then (see afterMemberStop), the batch is
-// incomplete again, so it gets back the deadline it had before: the time
-// limit, or none when it holds no delivery. A claim the deadline made in that
-// minute was a claim to send the completion line, so it is cleared with its
-// wait, together with its mark, and the batch's own deadline line goes out at
-// its own time. The batch is marked as woken after a claim, because the timer that claimed it may be
-// waiting on the engine to take that line: when the engine takes it, the batch
-// is settled as released all the same (see afterDeadlineSent), and when the
-// engine refuses it, no retry is left to send it. In a
-// released batch, which is only remembered, the agent is forgotten as
+// work. Its later report and notifications are then held, or end the batch,
+// as any member's are.
+//
+// The wake makes the batch incomplete again, so a claim the deadline made to
+// send the completion line no longer fits it. That claim is cleared with its
+// mark, so that a later delivery from the woken member ends it as usual
+// instead of waiting on the line. The batch is marked as woken after a claim,
+// because the timer that claimed it may be waiting on the engine to take that
+// line: when the engine takes it, the batch is settled as released all the
+// same (see afterDeadlineSent), and when the engine refuses it, the next claim
+// sends the line that fits the members then. When a turn end had ended the
+// batch's last member and moved its deadline to BATCH_SETTLE_MS from then
+// (see afterMemberStop), the batch gets back the deadline it had before, the
+// time limit or none when it holds no delivery, and any wait of a claim made
+// in that minute is cleared, so that the batch's own deadline line goes out at
+// its own time. When the deadline had claimed the batch to send the deadline
+// line before its last member ended, no earlier deadline was kept, and the
+// batch keeps the time of its next claim and its wait, because that refused
+// deadline line still has to be tried again with its back-off.
+//
+// In a released batch, which is only remembered, the agent is forgotten as
 // afterResume forgets it, so that its final report reaches the model, and a
 // batch left with no members is dropped. It never releases a batch, because
 // the woken agent is still running.
 export function afterWake(state: BatchState, id: string): BatchState {
   const reopened = (b: Batch): Batch => {
     const members = b.members.map(m => (m.id === id ? { ...m, ended: false, woken: true as const } : m))
-    if (b.deadlineBeforeSettle === undefined || !b.members.some(m => m.id === id)) return { ...b, members }
-    const { deadlineBeforeSettle, fired, retryMs: _, completionClaimed: __, ...rest } = b
-    return { ...rest, members, deadline: deadlineBeforeSettle, ...(fired === true ? { wokenAfterClaim: true as const } : {}) }
+    if (!b.members.some(m => m.id === id) || (b.completionClaimed !== true && b.deadlineBeforeSettle === undefined)) return { ...b, members }
+    const { deadlineBeforeSettle, fired, retryMs, completionClaimed: _, ...rest } = b
+    const timing = deadlineBeforeSettle === undefined ? { ...(retryMs === undefined ? {} : { retryMs }) } : { deadline: deadlineBeforeSettle }
+    return { ...rest, members, ...timing, ...(fired === true ? { wokenAfterClaim: true as const } : {}) }
   }
   const batches = state.batches.map(b => (b.releasedAt === null ? reopened(b) : { ...b, members: b.members.filter(m => m.id !== id) }))
   return { ...state, batches: batches.filter(b => b.members.length > 0) }

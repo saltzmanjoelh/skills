@@ -813,10 +813,12 @@ test('a wake that clears a claim of the completion line drops its mark, and a la
   const completion = afterDeadline(state, BATCH_LIMIT_MS + BATCH_RETRY_MS)
   expect(completion.due).toEqual([{ step: 't1:0', line: completeLine(2) }])
   state = afterWake(completion.state, ALPHA)
-  expect(state.batches[0]?.completionClaimed).toBe(true)
+  expect(state.batches[0]?.completionClaimed).toBeUndefined()
+  expect(state.batches[0]?.wokenAfterClaim).toBe(true)
   const again = afterDeadline(state, nextDeadline(state) as number)
   expect(again.due).toEqual([{ step: 't1:0', line: deadlineLine(['Explore aaaaaaaa']) }])
   expect(again.state.batches[0]?.completionClaimed).toBeUndefined()
+  expect(again.state.batches[0]?.wokenAfterClaim).toBeUndefined()
   expect(afterDelivery(again.state, notice(BRAVO, 'completed'), true, (nextDeadline(state) as number) + 1).act).toEqual({ kind: 'pass' })
 })
 
@@ -826,11 +828,53 @@ test('a completion line claimed after an earlier claim and taken after an engine
   const completion = afterDeadline(state, BATCH_LIMIT_MS + BATCH_RETRY_MS)
   expect(completion.due).toEqual([{ step: 't1:0', line: completeLine(2) }])
   state = afterWake(completion.state, ALPHA)
-  expect(state.batches[0]?.completionClaimed).toBe(true)
-  expect(state.batches[0]?.wokenAfterClaim).toBeUndefined()
+  expect(state.batches[0]?.fired).toBeUndefined()
+  expect(state.batches[0]?.completionClaimed).toBeUndefined()
+  expect(state.batches[0]?.wokenAfterClaim).toBe(true)
   const now = BATCH_LIMIT_MS + BATCH_RETRY_MS + 1
   const sent = afterDeadlineSent(state, ['t1:0'], now)
   expect(sent.batches[0]?.releasedAt).toBe(now)
   expect(members(sent).map(m => m.id)).toEqual([BRAVO])
   expect(afterDelivery(sent, report(ALPHA), true, now + 1).act).toEqual({ kind: 'pass' })
+})
+
+// The state after a deadline line claimed the batch while ALPHA still ran,
+// ALPHA's clean turn end ended it, the retry claimed the completion line, the
+// engine refused that line, and the engine then woke ALPHA.
+function wokenAfterLaterCompletionClaim(): BatchState {
+  let state = afterDeadline(afterDelivery(alphaWoken(), report(BRAVO), true, 0).state, BATCH_LIMIT_MS).state
+  state = afterMemberStop(state, ALPHA, [], BATCH_LIMIT_MS + 1)
+  state = afterDeadline(state, BATCH_LIMIT_MS + BATCH_RETRY_MS).state
+  return afterWake(state, ALPHA)
+}
+
+test('after an engine wake reopens a completion line claimed after an earlier claim, the woken member\'s report ends it and, as the last one, releases the batch', () => {
+  const out = afterDelivery(wokenAfterLaterCompletionClaim(), report(ALPHA), true, BATCH_LIMIT_MS + BATCH_RETRY_MS + 1)
+  expect(out.act).toEqual({ kind: 'release', line: completeLine(2) })
+  expect(out.state.batches[0]?.releasedAt).toBe(BATCH_LIMIT_MS + BATCH_RETRY_MS + 1)
+})
+
+test('after an engine wake reopens a completion line claimed after an earlier claim, a killed notification from the woken member ends it and, as the last one, releases the batch with the completion line', () => {
+  const out = afterDelivery(wokenAfterLaterCompletionClaim(), notice(ALPHA, 'killed'), true, BATCH_LIMIT_MS + BATCH_RETRY_MS + 1)
+  expect(out.act).toEqual({ kind: 'release', line: completeLine(2) })
+  expect(out.state.batches[0]?.releasedAt).toBe(BATCH_LIMIT_MS + BATCH_RETRY_MS + 1)
+})
+
+test('after an engine wake reopens a completion line claimed after an earlier claim, the retry names only the members still running, at the time and with the wait of that claim', () => {
+  let state = emptyBatchState(SESSION)
+  for (const [id, type] of [[ALPHA, 'Explore'], [BRAVO, 'Plan'], [CHARLIE, 'Explore']] as const) state = afterLaunch(state, 't1:0', { id, type })
+  state = afterWake(afterWake(state, ALPHA), BRAVO)
+  state = afterDeadline(afterDelivery(state, report(CHARLIE), true, 0).state, BATCH_LIMIT_MS).state
+  state = afterMemberStop(state, ALPHA, [], BATCH_LIMIT_MS + 1)
+  state = afterMemberStop(state, BRAVO, [], BATCH_LIMIT_MS + 2)
+  const completion = afterDeadline(state, BATCH_LIMIT_MS + BATCH_RETRY_MS)
+  expect(completion.due).toEqual([{ step: 't1:0', line: completeLine(3) }])
+  const retry = nextDeadline(completion.state) as number
+  state = afterWake(afterWake(completion.state, ALPHA), BRAVO)
+  expect(nextDeadline(state)).toBe(retry)
+  const held = afterDelivery(state, report(ALPHA), true, retry - 1)
+  expect(held.act).toEqual({ kind: 'hold' })
+  const again = afterDeadline(held.state, retry)
+  expect(again.due).toEqual([{ step: 't1:0', line: deadlineLine(['Plan bbbbbbbb']) }])
+  expect(nextDeadline(again.state)).toBe(retry + 4 * BATCH_RETRY_MS)
 })
