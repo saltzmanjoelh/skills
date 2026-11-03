@@ -2104,7 +2104,11 @@ async function resumeAfterClear($: $, cleared: number) {
   // may be from before the turn the limit stopped, so its commits are listed
   // again here, before the checks below (see relisted).
   const stored = watched === null ? null : watchedSnapshotOf(watched, snapshotIn(await read($, pr)))
-  const shown = watched === null || stored === null || looked !== null ? stored : await relisted($, watched, stored)
+  let shown: Snapshot | null = null
+  if (watched !== null && stored !== null) {
+    const isStoredByThisLook = looked !== null
+    shown = isStoredByThisLook ? stored : await relisted($, watched, stored)
+  }
   const watchedStep = shown === null ? null : { s: shown, isAsking: await isAsking($) }
   const owedAt = await reloadOwed($)
   // The checks and the claim follow each other with no await between, so the

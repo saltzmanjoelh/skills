@@ -1119,7 +1119,8 @@ request's branch and its worktree (make one from the branch if there is
 none), call `mcp__builder__watch`, and read the spec and plan paths from the
 spec directory on the branch (never from the pull request body). Then follow
 the step that the watch tool's answer names, doing what "Commits the pull
-request lacks" says with the listing that a merge step's text gives. A verdict review at the head means
+request lacks" says with the listing that a merge step's or the **Merged**
+step's text gives. A verdict review at the head means
 its first half finished there, and its body names the focused reviewers that
 ran; without one, assume they have not run. A review whose verdicts are
 carried over to the head from the approved head before it counts both
