@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { PromptOrigin } from 'claude-code'
 
-import { afterDeadline, afterDeadlineSent, afterDelivery, afterLaunch, afterResume, afterWake, afterFirstStep, answersStep, BATCH_LIMIT_MS, BATCH_RETRY_CEILING_MS, BATCH_RETRY_MS, BATCHES_KEPT, batchStateIn, completeLine, deadlineLine, deliveryOf, emptyBatchState, heldReports, incompleteLine, isBatchLaunch, isEngineWake, nextBatchRetry, nextDeadline, REMEMBER_MS, runningLines, type Delivery } from '../hooks/batch'
+import { afterDeadline, afterDeadlineSent, afterDelivery, afterLaunch, afterResume, afterTask, afterMemberStop, afterWake, afterFirstStep, answersStep, BATCH_LIMIT_MS, BATCH_RETRY_CEILING_MS, BATCH_RETRY_MS, BATCH_SETTLE_MS, BATCHES_KEPT, batchStateIn, completeLine, deadlineLine, deliveryOf, emptyBatchState, heldReports, incompleteLine, isBatchLaunch, isEngineWake, listedIdsOf, nextBatchRetry, nextDeadline, REMEMBER_MS, runningLines, taskIdOf, type Delivery } from '../hooks/batch'
 import type { BatchState } from '../types'
 import { finishedText, parkText } from './notification-fixture'
 
@@ -125,7 +125,7 @@ test('the deadline claims the batch with a line naming the members still running
   const out = afterDeadline(state, BATCH_LIMIT_MS)
   expect(out.due).toEqual([{ step: 't1:0', line: deadlineLine(['Plan bbbbbbbb']) }])
   expect(dueLines(out.state, BATCH_LIMIT_MS + BATCH_RETRY_MS - 1)).toEqual([])
-  const sent = afterDeadlineSent(out.state, ['t1:0'])
+  const sent = afterDeadlineSent(out.state, ['t1:0'], BATCH_LIMIT_MS)
   expect(nextDeadline(sent)).toBeNull()
   expect(afterDelivery(sent, report(BRAVO), true, BATCH_LIMIT_MS + 1).act).toEqual({ kind: 'pass' })
 })
@@ -142,7 +142,7 @@ test('a claimed batch whose line is not taken is claimed again a minute later, n
   expect(last.act).toEqual({ kind: 'release', line: completeLine(3) })
   expect(nextDeadline(last.state)).toBeNull()
   expect(dueLines(last.state, BATCH_LIMIT_MS + BATCH_RETRY_MS)).toEqual([])
-  expect(afterDeadlineSent(last.state, ['t1:0'])).toEqual(last.state)
+  expect(afterDeadlineSent(last.state, ['t1:0'], 0)).toEqual(last.state)
 })
 
 test('a fired mark in any other shape reads as empty', () => {
@@ -317,7 +317,7 @@ test('an engine wake never releases a batch, even when every other member has en
   expect(afterDelivery(woken, report(BRAVO), true, 1).act).toEqual({ kind: 'release', line: completeLine(2) })
 })
 
-test('a report from a woken member ends it, so a report it sent before it parked that arrives after its wake releases the batch when it is the last member running', () => {
+test('a report from a woken member for which no turn end was seen ends it, so a report it sent before it parked that arrives after its wake releases the batch when it is the last member running', () => {
   let state = afterDelivery(launched(), notice(ALPHA, 'completed'), true, 0).state
   state = afterWake(state, ALPHA)
   state = afterDelivery(state, report(BRAVO), true, 1).state
@@ -402,7 +402,7 @@ test('a deadline line the engine takes after refusals ends the batch, and the me
   const times = claimTimes(state, 3)
   expect(gapsOf(times)).toEqual([1, 2])
   for (const at of times) state = afterDeadline(state, at).state
-  const sent = afterDeadlineSent(state, ['t1:0'])
+  const sent = afterDeadlineSent(state, ['t1:0'], times[2] as number)
   expect(nextDeadline(sent)).toBeNull()
   expect(sent.batches.some(b => b.step === 't1:0')).toBe(false)
   expect(afterDelivery(sent, report(BRAVO), true, (times[2] as number) + 1).act).toEqual({ kind: 'pass' })
@@ -500,4 +500,150 @@ test('a stored releasing mark reads back when it is true, and any other value re
   for (const bad of [false, 1, 'yes', null]) {
     expect(batchStateIn({ ...state, releasing: bad }, SESSION)).toEqual(emptyBatchState(SESSION))
   }
+})
+
+// The ids of two background tasks, and a turn end's list of in-flight work
+// in the engine's shape, which covers the whole session and names no owner.
+const MONITOR = 'task-monitor-1'
+const SLEEP = 'task-sleep-1'
+const listing = (...ids: string[]) => ids.map(id => ({ id, type: 'shell', status: 'running', description: id }))
+const members = (state: BatchState) => state.batches.find(b => b.step === 't1:0')?.members ?? []
+
+test('a background task id is read from a Bash result\'s backgroundTaskId or a Monitor result\'s taskId, and from nothing else', () => {
+  expect(taskIdOf({ backgroundTaskId: SLEEP, stdout: '' })).toBe(SLEEP)
+  expect(taskIdOf({ taskId: MONITOR })).toBe(MONITOR)
+  expect(taskIdOf({ stdout: 'x' })).toBeUndefined()
+  expect(taskIdOf({ taskId: 7 })).toBeUndefined()
+  expect(taskIdOf({ backgroundTaskId: '' })).toBeUndefined()
+  expect(taskIdOf('text')).toBeUndefined()
+  expect(taskIdOf(null)).toBeUndefined()
+  expect(listedIdsOf(listing(MONITOR, SLEEP))).toEqual([MONITOR, SLEEP])
+  expect(listedIdsOf([{ status: 'running' }, null, 'x', { id: SLEEP }])).toEqual([SLEEP])
+  expect(listedIdsOf('not a list')).toEqual([])
+})
+
+test('a task is recorded only for a member of a batch not yet released, once each', () => {
+  let state = afterTask(launched(), ALPHA, MONITOR)
+  state = afterTask(state, ALPHA, MONITOR)
+  expect(members(state).find(m => m.id === ALPHA)?.tasks).toEqual([MONITOR])
+  expect(afterTask(state, 'unknown-agent', SLEEP)).toBe(state)
+  const released = afterDelivery(afterDelivery(state, report(ALPHA), true, 0).state, report(BRAVO), true, 1).state
+  expect(afterTask(released, ALPHA, SLEEP)).toBe(released)
+})
+
+test('a member that reports while its own Monitor is still listed is not ended, the batch stays open, and its later report after a clean turn end releases the batch once', () => {
+  let state = afterTask(launched(), ALPHA, MONITOR)
+  state = afterMemberStop(state, ALPHA, [MONITOR], 0)
+  const early = afterDelivery(state, report(ALPHA), true, 1)
+  expect(early.act).toEqual({ kind: 'hold' })
+  expect(members(early.state).map(m => m.ended)).toEqual([false, false])
+  state = afterDelivery(early.state, report(BRAVO), true, 2).state
+  expect(state.batches[0]?.releasedAt).toBeNull()
+  expect(runningLines(state)).toEqual([incompleteLine(['Explore aaaaaaaa'])])
+  state = afterWake(state, ALPHA)
+  state = afterMemberStop(state, ALPHA, [], 3)
+  const last = afterDelivery(state, report(ALPHA), true, 4)
+  expect(last.act).toEqual({ kind: 'release', line: completeLine(2) })
+  expect(afterDelivery(last.state, report(ALPHA), true, 5).act).toEqual({ kind: 'hold' })
+})
+
+test('a finished notification does not end a member whose last turn end listed its own work, and a failed one does', () => {
+  const state = afterMemberStop(afterTask(launched(), ALPHA, MONITOR), ALPHA, [MONITOR], 0)
+  expect(members(afterDelivery(state, finished(ALPHA), true, 1).state).map(m => m.ended)).toEqual([false, false])
+  expect(members(afterDelivery(state, notice(ALPHA, 'failed'), true, 1).state).map(m => m.ended)).toEqual([true, false])
+})
+
+test('a woken member whose turn ends with plain text and nothing of its own listed ends there, and the next delivery releases the batch with the completion line', () => {
+  let state = afterTask(launched(), ALPHA, SLEEP)
+  state = afterMemberStop(state, ALPHA, [SLEEP], 0)
+  state = afterDelivery(state, report(ALPHA), true, 1).state
+  state = afterDelivery(state, report(BRAVO), true, 2).state
+  state = afterWake(state, ALPHA)
+  state = afterMemberStop(state, ALPHA, [], 10)
+  expect(members(state).map(m => m.ended)).toEqual([true, true])
+  expect(state.batches[0]?.releasedAt).toBeNull()
+  expect(nextDeadline(state)).toBe(10 + BATCH_SETTLE_MS)
+  expect(runningLines(state)).toEqual([])
+  const out = afterDelivery(state, finished(ALPHA), true, 11)
+  expect(out.act).toEqual({ kind: 'release', line: completeLine(2) })
+  expect(nextDeadline(out.state)).toBeNull()
+})
+
+test('a turn end with work listed, or for an agent in no batch, ends nothing and sets no deadline, and an earlier deadline is kept', () => {
+  const state = afterTask(launched(), ALPHA, SLEEP)
+  const live = afterMemberStop(state, ALPHA, [SLEEP], 0)
+  expect(members(live).map(m => m.ended)).toEqual([false, false])
+  expect(nextDeadline(live)).toBeNull()
+  expect(afterMemberStop(state, CHARLIE, [], 0)).toBe(state)
+  expect(afterMemberStop(state, 'unknown-agent', [], 0)).toBe(state)
+  const held = afterDelivery(afterMemberStop(state, BRAVO, [], 0), report(BRAVO), true, 0).state
+  expect(nextDeadline(afterMemberStop(held, ALPHA, [], 5))).toBe(5 + BATCH_SETTLE_MS)
+  expect(nextDeadline(afterMemberStop(held, ALPHA, [], BATCH_LIMIT_MS - 1000))).toBe(BATCH_LIMIT_MS)
+})
+
+test('a member with no turn end seen ends at its report, as before', () => {
+  const state = afterTask(launched(), ALPHA, MONITOR)
+  const out = afterDelivery(state, report(ALPHA), true, 0)
+  expect(members(out.state).map(m => m.ended)).toEqual([true, false])
+  expect(afterDelivery(out.state, report(BRAVO), true, 1).act).toEqual({ kind: 'release', line: completeLine(2) })
+})
+
+test('a listed task that the member did not start does not hold it', () => {
+  let state = afterTask(launched(), ALPHA, MONITOR)
+  state = afterTask(state, BRAVO, SLEEP)
+  state = afterMemberStop(state, ALPHA, [SLEEP, 'task-of-the-session'], 0)
+  expect(members(state).map(m => m.ended)).toEqual([true, false])
+  expect(afterDelivery(state, report(BRAVO), true, 1).act).toEqual({ kind: 'release', line: completeLine(2) })
+})
+
+test('the task ids and turn-end readings are dropped when the batch is released, by a delivery, a resume or a taken completion line', () => {
+  let state = afterMemberStop(afterTask(launched(), ALPHA, MONITOR), ALPHA, [MONITOR], 0)
+  state = afterMemberStop(afterTask(state, BRAVO, SLEEP), BRAVO, [], 0)
+  const strip = (s: BatchState) => members(s).map(m => Object.keys(m).sort())
+  const byDelivery = afterDelivery(afterMemberStop(state, ALPHA, [], 1), report(ALPHA), true, 2).state
+  expect(byDelivery.batches[0]?.releasedAt).toBe(2)
+  expect(strip(byDelivery)).toEqual([['ended', 'id', 'type'], ['ended', 'id', 'type']])
+  const third = afterMemberStop(afterTask(afterLaunch(state, 't1:0', { id: CHARLIE, type: 'Plan' }), CHARLIE, 'task-3'), CHARLIE, [], 0)
+  const byResume = afterResume(afterDelivery(third, report(BRAVO), true, 1).state, ALPHA, 2)
+  expect(byResume.batches.find(b => b.step === 't1:0')?.releasedAt).toBe(2)
+  expect(strip(byResume)).toEqual([['ended', 'id', 'type'], ['ended', 'id', 'type']])
+  const settled = afterMemberStop(state, ALPHA, [], 1)
+  const claimed = afterDeadline(settled, 1 + BATCH_SETTLE_MS).state
+  const byLine = afterDeadlineSent(claimed, ['t1:0'], 2 + BATCH_SETTLE_MS)
+  expect(byLine.batches[0]?.releasedAt).toBe(2 + BATCH_SETTLE_MS)
+  expect(strip(byLine)).toEqual([['ended', 'id', 'type'], ['ended', 'id', 'type']])
+})
+
+test('the deadline claims a batch whose last member ended at a turn end with the completion line one minute later, releases it once the line is taken, and later deliveries are held', () => {
+  let state = afterMemberStop(afterTask(launched(), ALPHA, SLEEP), ALPHA, [SLEEP], 0)
+  state = afterDelivery(state, report(ALPHA), true, 1).state
+  state = afterDelivery(state, report(BRAVO), true, 2).state
+  state = afterMemberStop(afterWake(state, ALPHA), ALPHA, [], 10)
+  expect(dueLines(state, 10 + BATCH_SETTLE_MS - 1)).toEqual([])
+  const claimed = afterDeadline(state, 10 + BATCH_SETTLE_MS)
+  expect(claimed.due).toEqual([{ step: 't1:0', line: completeLine(2) }])
+  const sent = afterDeadlineSent(claimed.state, ['t1:0'], 11 + BATCH_SETTLE_MS)
+  expect(sent.batches[0]?.releasedAt).toBe(11 + BATCH_SETTLE_MS)
+  expect(nextDeadline(sent)).toBeNull()
+  expect(afterDelivery(sent, finished(ALPHA), true, 12 + BATCH_SETTLE_MS).act).toEqual({ kind: 'hold' })
+})
+
+test('a delivery that arrives while the completion line is claimed and not yet taken is held and carries no second line', () => {
+  let state = afterMemberStop(launched(), BRAVO, [], 0)
+  state = afterDelivery(state, report(BRAVO), true, 1).state
+  state = afterMemberStop(state, ALPHA, [], 10)
+  const claimed = afterDeadline(state, 10 + BATCH_SETTLE_MS).state
+  const out = afterDelivery(claimed, report(ALPHA), true, 11 + BATCH_SETTLE_MS)
+  expect(out.act).toEqual({ kind: 'hold' })
+  expect(dueLines(out.state, 11 + BATCH_SETTLE_MS + BATCH_RETRY_MS)).toEqual([completeLine(2)])
+})
+
+test('stored members with task ids and a turn-end reading read back, and the same fields in another shape read as the empty state', () => {
+  const state = afterMemberStop(afterTask(launched(), ALPHA, MONITOR), ALPHA, [MONITOR], 0)
+  expect(batchStateIn(state, SESSION)).toEqual(state)
+  expect(batchStateIn(launched(), SESSION)).toEqual(launched())
+  const withMember = (m: Record<string, unknown>) => ({ ...state, batches: [{ ...state.batches[0], members: [m] }] })
+  expect(batchStateIn(withMember({ id: ALPHA, type: 'Explore', ended: false, tasks: [7] }), SESSION)).toEqual(emptyBatchState(SESSION))
+  expect(batchStateIn(withMember({ id: ALPHA, type: 'Explore', ended: false, tasks: 'x' }), SESSION)).toEqual(emptyBatchState(SESSION))
+  expect(batchStateIn(withMember({ id: ALPHA, type: 'Explore', ended: false, live: 'yes' }), SESSION)).toEqual(emptyBatchState(SESSION))
 })

@@ -21,6 +21,12 @@ export const BATCH_LIMIT_MS = 10 * 60_000
 // minute.
 export const BATCH_RETRY_MS = 60_000
 export const BATCH_RETRY_CEILING_MS = 60 * 60_000
+// How long a batch whose last member ended at its turn end waits for a
+// delivery from the batch to carry the completion line, before the
+// deadline's timer submits the line itself. A member's report normally
+// follows its turn end within seconds, though the engine can hold one for
+// up to twenty.
+export const BATCH_SETTLE_MS = 60_000
 // How long a released batch's members are remembered, so that a notification
 // coming after the release is held too.
 export const REMEMBER_MS = 10 * 60_000
@@ -41,18 +47,20 @@ export type Delivery = { id: string; isReport: boolean; status: string | null; f
 // it as held, or pass it on with the completion line added.
 export type DeliveryAct = { kind: 'pass' } | { kind: 'end' } | { kind: 'hold' } | { kind: 'release'; line: string }
 
-// The state stays at version 1 although it may now carry two optional
-// fields: `retryMs` on a batch and `releasing` on the state (see
-// types/index.d.ts). The previous build reads a value with either of them as
-// it reads any other, and this build reads a value without them as it did
-// before each was added. A new version would make the old and the new build
+// The state stays at version 1 although it may now carry optional fields:
+// `retryMs` on a batch, `releasing` on the state, and `tasks` and `live` on a
+// member (see types/index.d.ts). The previous build reads a value with any of
+// them as it reads any other, and this build reads a value without them as
+// it did before each was added. A new version would make the old and the new build
 // read each other's state as empty across a hot reload, so a batch whose
 // reports were answered "Noted." would never get its line.
 export const emptyBatchState = (sessionId: string): BatchState => ({ version: 1, sessionId, batches: [], marker: 0 })
 
 const isMember = (raw: unknown): raw is BatchMember => {
   const m = raw as BatchMember | null
-  return typeof m === 'object' && m !== null && typeof m.id === 'string' && typeof m.type === 'string' && typeof m.ended === 'boolean'
+  return typeof m === 'object' && m !== null && typeof m.id === 'string' && typeof m.type === 'string' && typeof m.ended === 'boolean' &&
+    (m.tasks === undefined || (Array.isArray(m.tasks) && m.tasks.every(t => typeof t === 'string'))) &&
+    (m.live === undefined || typeof m.live === 'boolean')
 }
 
 const isTime = (raw: unknown): raw is number | null => raw === null || (typeof raw === 'number' && Number.isFinite(raw))
@@ -109,6 +117,11 @@ function trimmed(batches: Batch[]): Batch[] {
   })
 }
 
+// A member as a released batch keeps it: without its task ids and its last
+// turn-end reading, so that nothing carries over to a later batch.
+const settled = ({ id, type, ended }: BatchMember): BatchMember => ({ id, type, ended })
+const released = (b: Batch, now: number): Batch => ({ ...b, members: b.members.map(settled), heldReports: 0, deadline: null, releasedAt: now })
+
 // Records an agent launched in the step `step` of the session's own loop.
 export function afterLaunch(state: BatchState, step: string, agent: { id: string; type: string }): BatchState {
   const member = { id: agent.id, type: agent.type, ended: false }
@@ -128,7 +141,7 @@ export function afterLaunch(state: BatchState, step: string, agent: { id: string
 // already has the held reports in its conversation.
 export function afterResume(state: BatchState, id: string, now: number): BatchState {
   const batches = withoutMember(state.batches, id).map(b => (isOpenWithHeld(b) && b.members.every(m => m.ended)
-    ? { ...b, heldReports: 0, deadline: null, releasedAt: now }
+    ? released(b, now)
     : b))
   return { ...state, batches: batches.filter(b => b.members.length > 0) }
 }
@@ -139,17 +152,20 @@ const NOTICE = /^<task-notification>([\s\S]*?)<\/task-notification>/
 // Whether a resume is the engine waking a parked agent rather than one the
 // session asked for. An agent that moves its work into the background parks,
 // and when that work finishes the engine starts it again with a prompt that
-// begins with the notification about the agent's own background task. The
-// task id in it names a task builder never sees, so only the shape is
-// checked, with the same anchored pattern that deliveryOf reads: a whole
-// element, closing tag included, at the very start of the text.
+// begins with the notification about the agent's own background task. Only
+// the shape is checked, with the same anchored pattern that deliveryOf
+// reads: a whole element, closing tag included, at the very start of the
+// text.
 export function isEngineWake(prompt: string): boolean {
   return NOTICE.test(prompt)
 }
 
 // Keeps an agent that the engine woke as a member of a batch that is not
-// released, fired or not, and counts it as running again, because the
-// report it sent before it parked ended it. Its later report and
+// released, fired or not, and counts it as running again, because its report
+// or its turn end before it parked may have ended it. Its last turn-end
+// reading stays, so a report it sent before it parked that arrives after the
+// wake still ends nothing while that reading listed its own work. Its later
+// report and
 // notifications are then held, or end the batch, as any member's are. In a
 // released batch, which is only remembered, the agent is forgotten as
 // afterResume forgets it, so that its final report reaches the model, and a
@@ -160,6 +176,61 @@ export function afterWake(state: BatchState, id: string): BatchState {
     ? { ...b, members: b.members.map(m => (m.id === id ? { ...m, ended: false } : m)) }
     : { ...b, members: b.members.filter(m => m.id !== id) }))
   return { ...state, batches: batches.filter(b => b.members.length > 0) }
+}
+
+// The background task id that a tool call's result carries: a Bash call's
+// `backgroundTaskId` when the engine moved it to the background, or a
+// Monitor's `taskId`. Any other result carries none.
+export function taskIdOf(result: unknown): string | undefined {
+  if (typeof result !== 'object' || result === null) return undefined
+  const r = result as { backgroundTaskId?: unknown; taskId?: unknown }
+  const id = typeof r.backgroundTaskId === 'string' ? r.backgroundTaskId : r.taskId
+  return typeof id === 'string' && id !== '' ? id : undefined
+}
+
+// The ids in a turn end's list of background work, which holds only work
+// still in flight, for the whole session and with no owner named.
+export function listedIdsOf(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  return raw.flatMap(t => (typeof t === 'object' && t !== null && typeof (t as { id?: unknown }).id === 'string' ? [(t as { id: string }).id] : []))
+}
+
+// The batch not yet released that has the agent as a member.
+const openBatchOf = (state: BatchState, id: string) => state.batches.find(b => b.releasedAt === null && b.members.some(m => m.id === id))
+
+// Records a background task that a member's own tool call started, once,
+// while its batch is not released. Any other agent's task changes nothing,
+// and the state comes back as it was.
+export function afterTask(state: BatchState, id: string, taskId: string): BatchState {
+  const batch = openBatchOf(state, id)
+  const member = batch?.members.find(m => m.id === id)
+  if (batch === undefined || member === undefined || member.tasks?.includes(taskId) === true) return state
+  const members = batch.members.map(m => (m === member ? { ...m, tasks: [...(m.tasks ?? []), taskId] } : m))
+  return { ...state, batches: state.batches.map(b => (b === batch ? { ...b, members } : b)) }
+}
+
+// Records a member's turn end: `live` says whether any of the member's own
+// tasks is still listed in flight. A task the member did not start does not
+// count. A member with none of its own listed ends here, report or not,
+// because a woken agent can end with plain text. When that ends the last
+// member, the batch is not released here, because the member's report
+// normally follows within seconds and the release should ride on it: the
+// deadline moves to BATCH_SETTLE_MS from now, or stays if it is sooner, so
+// that the deadline's timer submits the completion line if no delivery from
+// the batch comes first (see afterDeadline). An agent in no batch of two or
+// more, or in a released one, changes nothing, and the state comes back as
+// it was.
+export function afterMemberStop(state: BatchState, id: string, listed: string[], now: number): BatchState {
+  const batch = openBatchOf(state, id)
+  if (batch === undefined || !countsAsBatch(batch)) return state
+  const members = batch.members.map(m => {
+    if (m.id !== id) return m
+    const live = (m.tasks ?? []).some(t => listed.includes(t))
+    return { ...m, live, ended: m.ended || !live }
+  })
+  const isComplete = members.every(m => m.ended) && !batch.members.every(m => m.ended)
+  const deadline = isComplete ? Math.min(batch.deadline ?? Infinity, now + BATCH_SETTLE_MS) : batch.deadline
+  return { ...state, batches: state.batches.map(b => (b === batch ? { ...batch, members, deadline } : b)) }
 }
 
 // The summary the engine writes when an agent finished, as the whole text of
@@ -200,19 +271,22 @@ const pruned = (state: BatchState, now: number): BatchState => ({
 // delivery, so that the members left still release it.
 const countsAsBatch = (b: Batch) => b.members.length >= 2 || b.deadline !== null || b.releasedAt !== null
 
-// Whether a delivery ends its member: a report, a notification that the agent
-// failed or was killed, or one whose summary says the agent finished. The
-// engine accepts one report from each agent, so an agent that reported before
-// it parked often ends its woken run with no second report, and the finished
-// notification is its only sign of ending. Every other completed
+// Whether a delivery ends its member: a notification that the agent failed
+// or was killed always does, and a report or a notification whose summary
+// says the agent finished does unless the member's last turn end listed its
+// own work still in flight, because an agent can report while its own
+// Monitor still runs and be woken again when it ends. A member whose turn
+// end builder never saw ends at either, as before. Every other completed
 // notification, such as the one sent when an agent parks to wait on its own
 // background work, ends nothing.
-const ends = (d: Delivery) => d.isReport || d.status === 'failed' || d.status === 'killed' || d.finished
+const ends = (d: Delivery, m: BatchMember) => d.status === 'failed' || d.status === 'killed' || ((d.isReport || d.finished) && m.live !== true)
 
 // What a delivery does to the batches. A delivery from an agent in no batch of
-// two or more passes. A report, a notification that its agent failed or was
-// killed, or one whose summary says the agent finished, ends its member; the
-// one that ends the last member releases the batch. Every other delivery from
+// two or more passes. A delivery that ends its member (see `ends`) and leaves
+// every member ended releases the batch, and so does any delivery from a
+// batch whose last member already ended at its turn end (see afterMemberStop),
+// unless the deadline has claimed that batch, whose completion line is then
+// the timer's to send, so the delivery is held and adds no second line. Every other delivery from
 // a member of an open or remembered batch is held: it starts the batch's
 // deadline if none is set, and raises the marker when it arrives while the
 // session is idle (`isIdle`), because only then does it start a turn of its
@@ -243,16 +317,17 @@ export function afterDelivery(state: BatchState, d: Delivery, isIdle: boolean, n
     act: { kind: 'hold' },
   })
   if (batch.releasedAt !== null) return held(batch)
-  const members = batch.members.map(m => (m.id === d.id && ends(d) ? { ...m, ended: true } : m))
+  if (batch.fired === true && batch.members.every(m => m.ended)) return held(batch)
+  const isEnd = batch.members.some(m => m.id === d.id && ends(d, m))
+  const members = batch.members.map(m => (m.id === d.id && isEnd ? { ...m, ended: true } : m))
   if (members.every(m => m.ended)) {
-    const released = { ...batch, members, heldReports: 0, deadline: null, releasedAt: now }
     return {
-      state: { ...kept, batches: kept.batches.map(b => (b === batch ? released : b)), marker: 0, ...(isIdle ? { releasing: true as const } : {}) },
+      state: { ...kept, batches: kept.batches.map(b => (b === batch ? released({ ...batch, members }, now) : b)), marker: 0, ...(isIdle ? { releasing: true as const } : {}) },
       act: { kind: 'release', line: completeLine(members.length) },
     }
   }
   if (batch.fired === true) {
-    if (!ends(d)) return { state: kept, act: { kind: 'pass' } }
+    if (!isEnd) return { state: kept, act: { kind: 'pass' } }
     return { state: { ...kept, batches: kept.batches.map(b => (b === batch ? { ...batch, members } : b)) }, act: { kind: 'end' } }
   }
   // A report into a running turn is read by that turn's model, so only one
@@ -278,9 +353,10 @@ export function deadlineLine(running: string[]): string {
 }
 
 // The lines a person's prompt carries: one for each open batch that has held
-// deliveries, naming its members still running.
+// deliveries and members still running, naming them. A batch whose members
+// have all ended and that waits for its completion line has none.
 export function runningLines(state: BatchState): string[] {
-  return state.batches.filter(isOpenWithHeld).map(b => incompleteLine(runningOf(b)))
+  return state.batches.filter(isOpenWithHeld).map(runningOf).filter(running => running.length > 0).map(incompleteLine)
 }
 
 // The wait after a refused deadline line that follows a wait of `ms`: twice
@@ -296,7 +372,10 @@ export function nextBatchRetry(ms: number): number {
 const retryOf = (b: Batch) => Math.min(Math.max(b.retryMs ?? BATCH_RETRY_MS, BATCH_RETRY_MS), BATCH_RETRY_CEILING_MS)
 
 // Claims every open batch whose deadline has passed, and answers the line to
-// submit for each, beside the step that names the batch. A claimed batch is
+// submit for each, beside the step that names the batch: the completion line
+// when every member has ended, as when the last one ended at its turn end and
+// no delivery from the batch came within BATCH_SETTLE_MS, and otherwise the
+// deadline line naming the members still running. A claimed batch is
 // marked as fired and stays in the state with its deadline moved on by its
 // wait, so that no other timer claims it in the meantime, and so that a line
 // the engine refuses, or a removal that fails, leaves it to be claimed again
@@ -308,14 +387,23 @@ export function afterDeadline(state: BatchState, now: number): { state: BatchSta
   const claimed = (b: Batch): Batch => ({ ...b, fired: true, deadline: now + retryOf(b), retryMs: nextBatchRetry(retryOf(b)) })
   return {
     state: { ...state, batches: state.batches.map(b => (isDue(b) ? claimed(b) : b)) },
-    due: state.batches.filter(isDue).map(b => ({ step: b.step, line: deadlineLine(runningOf(b)) })),
+    due: state.batches.filter(isDue).map(b => ({ step: b.step, line: b.members.every(m => m.ended) ? completeLine(b.members.length) : deadlineLine(runningOf(b)) })),
   }
 }
 
-// Drops the fired batches of the steps whose deadline line the engine took.
-// Their members' later deliveries then pass.
-export function afterDeadlineSent(state: BatchState, steps: string[]): BatchState {
-  return { ...state, batches: state.batches.filter(b => !(b.fired === true && b.releasedAt === null && steps.includes(b.step))) }
+// Settles the fired batches of the steps whose line the engine took. A batch
+// whose members have all ended got the completion line, so it is released at
+// `now` and remembered, and its members' later deliveries are held as any
+// released batch's are. Any other got the deadline line, so it is dropped,
+// and its members' later deliveries pass.
+export function afterDeadlineSent(state: BatchState, steps: string[], now: number): BatchState {
+  const isSent = (b: Batch) => b.fired === true && b.releasedAt === null && steps.includes(b.step)
+  return {
+    ...state,
+    batches: state.batches
+      .filter(b => !isSent(b) || b.members.every(m => m.ended))
+      .map(b => (isSent(b) ? released(b, now) : b)),
+  }
 }
 
 // The soonest deadline still to pass, or null when no batch has one.

@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On, SessionMessage, TurnStepChunk, TurnStepInput } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
-import { BATCH_LIMIT_MS, BATCH_RETRY_MS, completeLine, deadlineLine, incompleteLine } from '../hooks/batch'
+import { BATCH_LIMIT_MS, BATCH_RETRY_MS, BATCH_SETTLE_MS, completeLine, deadlineLine, incompleteLine } from '../hooks/batch'
 import { heldLine } from '../hooks/pane'
 import type { BatchState } from '../types'
 import { finishedText, parkText } from './notification-fixture'
@@ -174,7 +174,15 @@ function world(on: On, seeded: Record<string, unknown> = {}) {
   const talk = conversation(on)
   const refusing: { on: boolean; then?: () => unknown } = { on: false }
   const passed = promptsBelow(on, refusing)
+  tools(on)
   return { clock, state, asked, talk, passed, refusing }
+}
+
+// The engine beneath the mod's tool.call and SubagentStop hooks: a call is
+// answered with the result its test names, and a subagent's turn end goes on.
+function tools(on: On) {
+  on('tool.call', ($, e) => ({ result: (e as unknown as { answer: unknown }).answer }) as never)
+  on('classic.SubagentStop', () => ({}))
 }
 
 test('agents launched in one step make one batch: an idle held report passes on unchanged, and its turn is answered without the model', async ($, on) => {
@@ -631,7 +639,7 @@ test('a member that reports, parks and is woken twice is held, and the batch is 
   expect(contexts.filter(c => c !== undefined)).toEqual([[completeLine(2)]])
 })
 
-test('a report that a member sent before it parked and that arrives after its wake ends it, and as the last member\'s releases the batch once, with the completion line', async ($, on) => {
+test('a report that a member for which no turn end was seen sent before it parked, and that arrives after its wake, ends it, and as the last member\'s releases the batch once, with the completion line', async ($, on) => {
   const w = world(on)
   await launched($, ['Explore', 'Plan', 'Explore'])
   const { sent, contexts } = recorder($)
@@ -833,4 +841,64 @@ test('a held notification from a member of a released batch is still answered wi
   const { chunks } = await step($, { turnId: 't4', index: 0 })
   expect(texts(chunks)).toEqual(['Noted.', 'stop'])
   expect(w.asked.calls).toBe(before)
+})
+
+// A member's tool call that the engine moved to the background, in the
+// engine's order: the call returns with the task id in its result.
+const backgrounds = ($: Engine, agentId: string, tool: 'Bash' | 'Monitor', taskId: string) =>
+  $.tool.call({ tool, agentId, command: 'sleep 30', run_in_background: true, answer: tool === 'Bash' ? { backgroundTaskId: taskId } : { taskId } } as never)
+
+// A member's turn end, with the session-wide list of work still in flight.
+const memberStops = ($: Engine, agentId: string, inFlight: string[]) =>
+  $.classic.SubagentStop({ stop_hook_active: false, agent_id: agentId, agent_transcript_path: '/t', agent_type: 'Explore', background_tasks: inFlight.map(id => ({ id, type: 'shell', status: 'running', description: id })) } as never)
+
+test('in the engine\'s order, a member that reports while its own Monitor runs is held, and the batch is released once, with the completion line, at its clean final report', async ($, on) => {
+  const w = world(on)
+  await launched($)
+  const { sent, contexts } = recorder($)
+  await backgrounds($, ALPHA, 'Bash', 'sleep-a')
+  await backgrounds($, ALPHA, 'Monitor', 'monitor-a')
+  await backgrounds($, BRAVO, 'Bash', 'sleep-b')
+  await memberStops($, ALPHA, ['sleep-a', 'monitor-a', 'sleep-b'])
+  await memberStops($, BRAVO, ['sleep-a', 'monitor-a', 'sleep-b'])
+  await wake($, w, ALPHA)
+  await memberStops($, ALPHA, ['monitor-a', 'sleep-b'])
+  expect(await sent(report(ALPHA))).toEqual({ text: report(ALPHA) })
+  await wake($, w, BRAVO)
+  await memberStops($, BRAVO, ['monitor-a'])
+  expect(await sent(report(BRAVO))).toEqual({ text: report(BRAVO) })
+  expect(w.state.value?.batches.every(b => b.releasedAt === null)).toBe(true)
+  await wake($, w, ALPHA)
+  await memberStops($, ALPHA, [])
+  expect(await sent(report(ALPHA))).toEqual({ text: report(ALPHA), context: [completeLine(2)] })
+  expect(contexts.filter(c => c !== undefined)).toEqual([[completeLine(2)]])
+  expect(w.state.value?.batches.flatMap(b => b.members.map(m => m.tasks))).toEqual([undefined, undefined])
+})
+
+test('a woken member that ends with plain text, whose finished notification never passes the hook, has the completion line submitted once a minute later', async ($, on) => {
+  const w = world(on)
+  await launched($)
+  const { sent, contexts } = recorder($)
+  await backgrounds($, ALPHA, 'Bash', 'sleep-a')
+  await memberStops($, ALPHA, ['sleep-a'])
+  expect(await sent(report(ALPHA))).toEqual({ text: report(ALPHA) })
+  await memberStops($, BRAVO, ['sleep-a'])
+  expect(await sent(report(BRAVO))).toEqual({ text: report(BRAVO) })
+  await wake($, w, ALPHA)
+  await memberStops($, ALPHA, [])
+  await w.clock.settle()
+  const lines = () => w.passed.filter(p => p.text === completeLine(2)).length
+  await w.clock.advance(BATCH_SETTLE_MS - 1000)
+  await w.clock.settle()
+  expect(lines()).toBe(0)
+  await w.clock.advance(1000)
+  await w.clock.settle()
+  expect(lines()).toBe(1)
+  expect(w.state.value?.batches.every(b => b.releasedAt !== null)).toBe(true)
+  expect(await sent(finishedText(ALPHA), 'task-notification')).toEqual({ text: finishedText(ALPHA) })
+  await w.clock.advance(2 * BATCH_LIMIT_MS)
+  await w.clock.settle()
+  expect(lines()).toBe(1)
+  expect(w.passed.map(p => p.text).filter(t => t.startsWith('builder: the time limit'))).toEqual([])
+  expect(contexts.filter(c => c !== undefined)).toEqual([])
 })

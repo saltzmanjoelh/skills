@@ -3,7 +3,7 @@ import type { EngineInterface, Next, PromptOrigin, PromptSubmitInput, Register, 
 
 import type { AgentCard, BackgroundTask, BatchState, BuilderRun, Compactions, ContextMeasure, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, StatusMemo, UsageLedger, Wake } from '../types'
 import { isSvgSurface } from './art'
-import { afterDeadline, afterDeadlineSent, afterDelivery, BATCH_RETRY_MS, afterLaunch, afterResume, afterWake, afterFirstStep, answersStep, batchStateIn, deliveryOf, heldReports, isBatchLaunch, isEngineWake, nextDeadline, NOTED_REPLY, runningLines, type DeliveryAct } from './batch'
+import { afterDeadline, afterDeadlineSent, afterDelivery, BATCH_RETRY_MS, afterLaunch, afterResume, afterTask, afterMemberStop, afterWake, afterFirstStep, answersStep, batchStateIn, deliveryOf, heldReports, isBatchLaunch, isEngineWake, listedIdsOf, nextDeadline, NOTED_REPLY, runningLines, taskIdOf, type DeliveryAct } from './batch'
 import { checkoutSentence, otherRepositorySentence, worktreeWithBranch, type Checkout } from './checkout'
 // The context module's `told` is the compaction record after a reload was
 // announced; it is renamed here because `told` below is the snapshot last
@@ -1127,7 +1127,9 @@ function rearmBatch($: $, gen: number) {
 }
 
 // Claims each batch whose deadline has passed, in one write, so that only one
-// timer submits its prompt, and submits builder's line for each. It calls
+// timer submits its prompt, and submits builder's line for each: the
+// completion line for a batch whose members have all ended, and the deadline
+// line otherwise. It calls
 // $.prompt.submit directly rather than submitClaimed, because submitClaimed
 // gives back the isDelivering flag when it ends, which would clear it in the
 // middle of a handover that holds it. A claimed batch stays in the state until
@@ -1157,7 +1159,7 @@ async function fireBatch($: $) {
     const submitted = await $.prompt.submit({ text: line }).catch(() => ({ drop: 'the submit failed' }))
     if (submitted.drop === undefined) sent.push(step)
   }
-  if (sent.length > 0) await changeBatches($, state => afterDeadlineSent(state, sent))
+  if (sent.length > 0) await changeBatches($, state => afterDeadlineSent(state, sent, now))
 }
 
 // What builder does to a prompt for the batches. A finishing agent's
@@ -1192,6 +1194,40 @@ async function withBatch($: $, e: PromptSubmitInput): Promise<PromptSubmitInput>
     return act.kind === 'release' ? { ...e, context: [...(e.context ?? []), act.line] } : e
   } catch {
     return e
+  }
+}
+
+// Records, for a batch member, the background task that its own tool call
+// started (see afterTask). A call that started none, and every call when the
+// read fails, writes nothing. It never throws, because the tool.call hook
+// would take a failure for the tool's own.
+async function noteTask($: $, agentId: string, ran: ToolCallResult) {
+  try {
+    const taskId = taskIdOf(ran.result)
+    if (taskId === undefined) return
+    const stored = await storedBatches($)
+    if (afterTask(stored, agentId, taskId) === stored) return
+    await changeBatches($, state => afterTask(state, agentId, taskId))
+  } catch {
+    // The member then ends at its turn end or report, as before.
+  }
+}
+
+// Records a member's turn end against the work still in flight (see
+// afterMemberStop), and arms the deadline's timer, which the turn end that ends
+// a batch's last member moves to one minute on. A turn end of an agent in no
+// open batch writes nothing. It never throws, so the background list is
+// still replaced.
+async function noteTurnEnd($: $, agentId: string, raw: unknown) {
+  try {
+    const listed = listedIdsOf(raw)
+    const now = await $.clock.now()
+    const stored = await storedBatches($)
+    if (afterMemberStop(stored, agentId, listed, now) === stored) return
+    await changeBatches($, state => afterMemberStop(state, agentId, listed, now))
+    void armBatch($).catch(() => undefined)
+  } catch {
+    // The member then ends at its report, as before.
   }
 }
 
@@ -4282,12 +4318,18 @@ export const register: Register = on => {
   // name it while it runs; AskUserQuestion and Agent calls are left out,
   // because the line names the question and the agent already. After a push
   // or merge of the session's own that succeeded, the mod looks at the pull
-  // request soon, even while the turn goes on.
+  // request soon, even while the turn goes on. A subagent's call that started
+  // a background task records that task for the agent's batch.
   // However the call ends, its return closes one permission prompt of its
   // loop and tool for the status file.
   on('tool.call', async ($, e, next) => {
     try {
-      if (e.agentId !== undefined || UNNAMED_TOOLS.has(String(e.tool))) return await route($, e, next)
+      if (e.agentId !== undefined) {
+        const ran = await route($, e, next)
+        await noteTask($, e.agentId, ran)
+        return ran
+      }
+      if (UNNAMED_TOOLS.has(String(e.tool))) return await route($, e, next)
       const ran = await foreground($, e, () => route($, e, next))
       if (e.tool === 'Bash' && succeeded(ran) && isPushOrMerge(String(e.command), mergePattern)) armCommandLooks($)
       return ran
@@ -4361,9 +4403,13 @@ export const register: Register = on => {
   // taken: an older engine sends no field, and its absence says nothing about
   // the session's work, where the Stop's absence means nothing is in flight.
   // It keeps the start times of tasks its list leaves out (see
-  // replaceBackground).
+  // replaceBackground). First it tells the agent's batch whether any of the
+  // agent's own tasks is still in flight (see noteTurnEnd).
   on('classic.SubagentStop', async ($, e, next) => {
-    if (Array.isArray(e.background_tasks)) await replaceBackground($, e.background_tasks, false)
+    if (Array.isArray(e.background_tasks)) {
+      await noteTurnEnd($, e.agent_id, e.background_tasks)
+      await replaceBackground($, e.background_tasks, false)
+    }
     return next(e)
   }).catch(($, e, next) => next(e))
 
