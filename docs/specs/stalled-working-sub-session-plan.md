@@ -6,9 +6,10 @@ Three planners wrote blind plans from different starting points: the
 simplest change, the most robust change and the most extensible change. A
 judge compared them against the spec and the owner's instructions. The most
 extensible plan won, because it keeps the stall count through a failed list
-read without a new ledger field, treats a read whose list shows the session
-running exactly as today, and keeps a turn's nudge flag when that turn's look
-takes the memo up. Its weaknesses are fixed by the grafts below.
+read without a new ledger field, and keeps a turn's nudge flag when that
+turn's look takes the memo up. A later review found that a read whose list
+shows the session running must keep the stall's count too, and step 7 says
+so. Its weaknesses are fixed by the grafts below.
 
 ## Chosen approach
 
@@ -37,10 +38,10 @@ takes the memo up. Its weaknesses are fixed by the grafts below.
    `isStalled(s)` holds, first clear a stretch that `staleStretch` marks,
    then call `idleRule(s, s.row.mtimeMs, null)` and return.
 7. In the same rule's `stretch.wait === null` branch, return without
-   clearing when the step has no list and `stalledShape` holds, so a failed
-   or skipped list read in the middle of a stall neither nudges nor resets
-   the count. A read whose list shows the session running still takes
-   today's path.
+   clearing when `stalledShape` holds and `stallsOwn` holds for the stretch,
+   whatever the list shows, so a failed or skipped list read, or one whose
+   list shows the session running, in the middle of a stall neither nudges
+   nor resets the count. Only a change to the file ends the stall's count.
 8. In `goneRule`, return when `isStalled(s)` holds.
 9. Extract the "active owned pairing for this row" lookup from
    `slotsNeedList` into `activeOwners(t, rows)`. Add `stallsNeedList`, which
@@ -110,13 +111,18 @@ reads. No gate reads these files.
   second by `staleStretch`, both rebuilt from the file on every read. The
   field would touch the types, the ledger reader and every test that
   compares a stretch exactly.
-- Keeping the stall's stretch on a read whose list shows the session
-  running. The spec says such a record is treated as today.
+- Clearing the stall's stretch on a read whose list shows the session
+  running. Each nudge starts a turn that the list shows running, so a nudged
+  turn that changes nothing would start the count again after every nudge,
+  and the parent would never be woken.
 - Letting the gone rule wake once for a stalled record with a closed pull
   request. The spec says the gone rule stays quiet for a stalled record and
   that nothing comes for a closed one.
-- Caching that a transcript's first message has no ticket. The spec says a
-  look never stores that answer.
+- Storing that a transcript's first message has no ticket, in the engine's
+  state or as a memo. The spec says a look never stores that answer. The
+  first message is kept in module memory, so the first prompt and later
+  turns need not read the transcript again, but it is never stored, so a
+  restart or a clear still leaves the first prompt to decide.
 - A chain that runs the ticket looks one at a time. It makes a prompt wait
   behind a slow transcript read and is a promise held in memory that a clear
   or a resume must reset.
@@ -151,6 +157,9 @@ last change:
   nudge and no wake.
 - One failed read between the first and second nudge does not move the
   second nudge.
+- Reads whose list shows the session running during each nudged turn, with
+  the file unchanged, do not move the second nudge or the wake, and after
+  the wake the stall no longer asks for the list on every read.
 - An archived entry and a complete list without the entry free the slot with
   no nudge. An incomplete list without the entry gives the gone wake. A
   record with no desktop session id is never stalled.

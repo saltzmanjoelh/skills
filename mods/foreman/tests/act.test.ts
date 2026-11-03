@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { decide, GONE_MS, keptByUnreadList, listFailedNotice, needsList, NO_ANSWER, slotOutcome, type DecideInput, type Decision, type SessionsLook } from '../hooks/act'
+import { decide, GONE_MS, keptByUnreadList, listFailedNotice, needsList, NO_ANSWER, slotOutcome, stallsNeedList, type DecideInput, type Decision, type SessionsLook } from '../hooks/act'
 import { REASONS } from '../hooks/desktop'
 import { recordIn } from '../hooks/record'
 import { spentSum } from '../hooks/spend'
@@ -908,6 +908,26 @@ test('a failed read of the list in the middle of a stall neither nudges nor move
     { at: 11, nudges: 1, reasons: [] },
     { at: 16, nudges: 0, reasons: ['idle'] },
   ])
+})
+
+test('a nudged turn that shows the session running but changes nothing keeps the stall\'s count, so the second nudge and the wake come on time', () => {
+  // Each nudge starts a turn, which the list shows running for two minutes,
+  // and the turn ends without changing the file.
+  const turns = (now: number): SessionsLook => ([7, 8, 12, 13].includes((now - T0) / MINUTE) ? running : stopped)
+  const run = readEach(paired(), () => [stalledRow()], T0 + 30 * MINUTE, turns)
+  expect(run.seen).toEqual([
+    { at: 6, nudges: 1, reasons: [] },
+    { at: 11, nudges: 1, reasons: [] },
+    { at: 16, nudges: 0, reasons: ['idle'] },
+  ])
+  // A read whose list shows the session running neither nudges nor wakes,
+  // and keeps the stall's stretch as it was.
+  const nudged = readEach(paired(), () => [stalledRow()], T0 + 6 * MINUTE, () => stopped).tickets
+  const during = read(nudged, [stalledRow()], T0 + 7 * MINUTE, { sessions: running })
+  expect({ effects: during.effects, reasons: during.reasons }).toEqual({ effects: [], reasons: [] })
+  expect(during.tickets.pairings[0]!.acts.stretch).toMatchObject({ nudges: 1, lastNudgeAt: T0 + 6 * MINUTE, woke: false })
+  // After the wake the stall asks for the list no more.
+  expect(stallsNeedList(run.tickets, [stalledRow()], T0 + 31 * MINUTE)).toBe(false)
 })
 
 test('a stalled-shaped record whose session is over, missing from a short list or has no desktop id is not stalled', () => {

@@ -93,7 +93,8 @@ last written while a turn ran.
    whichever later read happens to fetch the list.
 9. **Without the list nothing changes.** When the list was not read or could
    not be read, or it shows the session running, a working record is treated
-   exactly as today.
+   exactly as today, except that a stall's own count is kept as it is rather
+   than cleared, so that only a change to the file ends it.
 10. When the file changes again, as when the nudge starts a turn and builder
     takes its memo up, the record is no longer stalled and the usual rules
     apply to whatever it says.
@@ -106,8 +107,10 @@ last written while a turn ran.
   or wake comes for that stretch, as with any idle stretch, and the gone
   rule stays quiet for it.
 - A stalled record whose session starts running again before the second
-  nudge: it is no longer stalled on that read, and the working rule treats it
-  as today.
+  nudge: on such a read the record is not stalled, so nothing is nudged or
+  woken on it, but the stall's count is kept until the file changes, so a
+  nudged turn that changes nothing still leads to the second nudge and the
+  wake on time.
 - A relaunched session whose transcript cannot be read at the session's start
   but can be read at its first turn's start: the turn's start takes the memo
   up.

@@ -205,13 +205,16 @@ const STATE_RULES: Record<BuildState, (s: Step) => void> = {
     if (stretch === null) return
     const progress = progressOf(s.row)
     // A working episode inside an idle stretch keeps the stretch, unless the
-    // record made progress or the work lasted a whole threshold. A read with
-    // no list in the middle of a stall cannot tell whether the session still
-    // stands stopped, so it keeps the stall's own stretch as it is, and a
-    // failed list read neither nudges nor starts the count again. Any other
-    // stretch is treated as before.
+    // record made progress or the work lasted a whole threshold. A read in
+    // the middle of a stall whose list is missing, failed or shows the
+    // session running keeps the stall's own stretch as it is, so only a
+    // change to the file ends the stall's count. Such a read neither nudges
+    // nor wakes, because the record is not stalled on it, but a nudged turn
+    // that changes nothing does not start the count again either, so the
+    // second nudge and the wake still come on time. Any other stretch is
+    // treated as before.
     if (stretch.wait === null) {
-      if (s.look === null && stalledShape(s.p, s.row, s.now) && stallsOwn(stretch, s.row.mtimeMs)) return
+      if (stalledShape(s.p, s.row, s.now) && stallsOwn(stretch, s.row.mtimeMs)) return
       if (stretch.progress !== progress || s.now - s.episode.since >= s.limits.idleMs) setActs(s, { stretch: null })
       return
     }
