@@ -366,7 +366,11 @@ async function readBaseFacts($: $, dir: string | null, base: string | null): Pro
   const claude = await git($, dir, ['show', `origin/${base}:CLAUDE.md`])
   if (claude === null) return UNREAD_FACTS
   if (factIn(claude, 'Checks') !== null) return baseFactsOf(claude, null)
-  const tree = await git($, dir, ['ls-tree', `origin/${base}`, '.github/workflows'])
+  // --full-tree reads the path from the top of the checkout, because without
+  // it git reads the path relative to `dir`, and a session that started in a
+  // subfolder would find no workflow files and take the base for one without
+  // checks.
+  const tree = await git($, dir, ['ls-tree', '--full-tree', `origin/${base}`, '.github/workflows'])
   return baseFactsOf(claude, tree === null ? null : tree.trim() !== '')
 }
 
@@ -385,21 +389,17 @@ async function readPullRequestState($: $, target: Pick<BuilderRun, 'repo' | 'num
 // or a line was not a run. A run whose replacing of an older run is in
 // question (see needsJobs) gets `realWork` from its jobs when they could be
 // read, and none when they could not, which counts as no real work and keeps
-// the older run counting, the safe direction.
+// the older run counting, the safe direction. The jobs reads run at the same
+// time, and the runs keep the order the runs read gave.
 async function readHeadRuns($: $, r: Pick<BuilderRun, 'repo' | 'cwd'>, head: string): Promise<HeadRun[] | null> {
   const out = await gh($, r.cwd, ['api', '--paginate', `repos/${r.repo}/actions/runs?head_sha=${head}&per_page=100`, '--jq', RUNS_JQ])
   const runs = out === null ? null : headRunsOf(out)
   if (runs === null) return null
-  const read: HeadRun[] = []
-  for (const run of runs) {
-    if (!needsJobs(run, runs)) {
-      read.push(run)
-      continue
-    }
+  return await Promise.all(runs.map(async run => {
+    if (!needsJobs(run, runs)) return run
     const realWork = await jobsWork($, r, run)
-    read.push(realWork === null ? run : { ...run, realWork })
-  }
-  return read
+    return realWork === null ? run : { ...run, realWork }
+  }))
 }
 
 // Whether a completed run's jobs include one that ended other than skipped,

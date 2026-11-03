@@ -616,7 +616,7 @@ test('the fingerprint changes when a run newly counts as failed, even one that s
 
 test('an old snapshot, without runs at the head or base facts, fingerprints as it did before they existed', () => {
   const fresh = snapshotOf('o/r', pullRequest(), ME)
-  const extended = snapshotOf('o/r', pullRequest(), ME, [], { headRuns: [headRun()], base: 'main', facts: { maxPushes: 8, maxRounds: 5, checks: 'none', merge: 'default' } })
+  const extended = snapshotOf('o/r', pullRequest(), ME, [], { headRuns: [headRun()], base: 'main', facts: { maxPushes: 8, maxRounds: 5, checks: 'none', merge: 'default', isClaudeRead: true } })
   expect(extended.fingerprint).toBe(fresh.fingerprint)
   expect(isSameState(fresh, extended)).toBe(true)
 })

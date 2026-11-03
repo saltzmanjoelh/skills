@@ -60,8 +60,11 @@ function fakeGitHub(on: On) {
   // `gh api --jq` prints them; a run without a status is unfinished. `jobs`
   // gives what the read of a run's jobs prints, keyed by the run's id and
   // attempt with a dot between, and a read of one not listed exits with an
-  // error. `workflows` is what `git ls-tree` lists for the base's workflow
-  // folder, and that listing exits with an error when it is null.
+  // error, and `jobsHold`, when set, keeps every jobs read waiting until it
+  // resolves. `workflows` is what `git ls-tree` lists for the base's workflow
+  // folder, and that listing exits with an error when it is null. It lists
+  // the folder only when the path it is given names `.github/workflows` from
+  // the top of the checkout, which `toplevels` gives for a folder below it.
   // `runsReadsToFail` makes that many
   // reads of them fail. `runsReadsCut` makes every read of them answer the
   // runs with exit code 0 but say its output was cut off, and
@@ -125,7 +128,8 @@ function fakeGitHub(on: On) {
     hold: null as Promise<void> | null, cutDiff: false, otherNumber: 0, readsToFail: 0,
     gitDirFails: false, postsToFail: 0, onPost: null as (() => void) | null,
     runs: [] as { id: number; run_attempt: number; name: string; workflow_id?: number; event?: string; run_number?: number; status?: string; conclusion?: string | null }[], runsReadsToFail: 0,
-    jobs: {} as Record<string, string>, workflows: null as string | null,
+    jobs: {} as Record<string, string>, jobsHold: null as Promise<void> | null, workflows: null as string | null,
+    toplevels: {} as Record<string, string>,
     runsReadsCut: false, runsReadsThrow: false, readsThrow: false, loginThrows: false, fetchesThrow: false,
     ran: [] as { argv: string; cwd: string | undefined }[],
     heads: {} as Record<string, string>, gitDirs: {} as Record<string, string>,
@@ -196,7 +200,19 @@ function fakeGitHub(on: On) {
     if (argv.startsWith('git rev-list --merges ')) return out(world.merges)
     if (argv.startsWith('git show ') && argv.endsWith('marketplace.json')) return world.marketplace === null ? exit(128) : out(world.marketplace)
     if (argv.startsWith('git show origin/')) return world.baseClaude === null ? exit(128) : out(world.baseClaude)
-    if (argv.startsWith('git ls-tree origin/')) return world.workflows === null ? exit(128) : out(world.workflows)
+    if (argv.startsWith('git ls-tree ')) {
+      // Real git reads the path relative to the folder it runs in, unless
+      // --full-tree makes it relative to the top of the checkout, and a path
+      // that names nothing in the tree lists nothing and still exits 0.
+      const args = e.argv.slice(2)
+      const isFullTree = args[0] === '--full-tree'
+      const path = (isFullTree ? args.slice(1) : args)[1] ?? ''
+      const folder = cwd ?? '/repo'
+      const top = world.toplevels[folder] ?? folder
+      const prefix = isFullTree || folder === top ? '' : `${folder.slice(top.length + 1)}/`
+      if (world.workflows === null) return exit(128)
+      return out(`${prefix}${path}` === '.github/workflows' ? world.workflows : '')
+    }
     if (argv.startsWith('git grep ')) return world.grepFail ? exit(128) : world.grep === '' ? exit(1) : out(world.grep)
     if (argv === 'git rev-parse --show-object-format') return out(`${world.objectFormat}\n`)
     if (argv.startsWith('git diff-tree ')) return world.linksFail ? exit(128) : out(world.links)
@@ -234,6 +250,7 @@ function fakeGitHub(on: On) {
     if (argv.startsWith('gh api --paginate repos/o/r/actions/runs?')) return out(world.runs.map(r => `${JSON.stringify(r)}\n`).join(''))
     const jobsRead = /^gh api --paginate repos\/o\/r\/actions\/runs\/(\d+)\/attempts\/(\d+)\/jobs\?per_page=100 /.exec(argv)
     if (jobsRead !== null) {
+      if (world.jobsHold !== null) await world.jobsHold
       const jobs = world.jobs[`${jobsRead[1]}.${jobsRead[2]}`]
       return jobs === undefined ? { value: { exitCode: 1, stdout: '', stderr: 'HTTP 502', isStdoutTruncated: false, isStderrTruncated: false } } : out(jobs)
     }
@@ -10317,6 +10334,32 @@ test('a failed jobs read counts as no real work and is tried again at the next l
   expect(String(again.result)).toContain('The step that applies: Review this head.')
 })
 
+test('the jobs reads of one look run at the same time rather than one after another', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  // Runs 332 and 333 may each replace an older run of their kind, so both
+  // need their jobs read; 331 is the oldest and needs none.
+  world.runs = [completedRun(331, 1, 'failure'), completedRun(332, 2, 'failure'), completedRun(333, 3, 'success')]
+  world.jobs['332.1'] = '{"conclusion":"success"}\n'
+  world.jobs['333.1'] = '{"conclusion":"success"}\n'
+  let release = () => {}
+  world.jobsHold = new Promise<void>(resolve => { release = resolve })
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  const watching = loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await clock.settle()
+  // Read one after another, the second read would not start until the first
+  // answered, which the hold prevents.
+  expect(jobsReadsOf(world, 331)).toEqual([])
+  expect(jobsReadsOf(world, 332).length).toBe(1)
+  expect(jobsReadsOf(world, 333).length).toBe(1)
+  release()
+  const ran = await watching
+  // Both did real work, so 333 replaces the older runs and nothing failed.
+  expect(String(ran.result)).toContain('The step that applies: Review this head.')
+})
+
 // Both verdicts approve at the head, and no check exists, so the base's
 // `Checks:` line decides between merging and asking.
 const approvedWithoutChecks = () => openPullRequest({ statusCheckRollup: [], reviews: [verdictReview(C, 'APPROVE', 'APPROVE')] })
@@ -10349,6 +10392,63 @@ test('a base CLAUDE.md without a Checks: line asks whether the base has workflow
   world.workflows = '100644 blob 0123 .github/workflows/test.yml\n'
   const listed = await loose($)({ tool: 'mcp__builder__watch', number: 7 })
   expect(String(listed.result)).toContain('The step that applies: Both verdicts approve at this head, with no checks.')
+})
+
+test('a session that started in a subfolder of the checkout still finds the base\'s workflow files', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr = approvedWithoutChecks()
+  world.baseClaude = 'Base branch: main\n'
+  world.workflows = '100644 blob 0123 .github/workflows/test.yml\n'
+  world.toplevels['/repo/sub'] = '/repo'
+  await $.session.start({ cwd: '/repo/sub', surface: null, isInteractive: true })
+  const ran = await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  // Read relative to /repo/sub, the listing would name nothing, and the mod
+  // would take the base for one without checks and merge.
+  expect(world.ran.some(r => r.argv.startsWith('git ls-tree ') && r.cwd === '/repo/sub')).toBe(true)
+  expect(String(ran.result)).toContain('The step that applies: Both verdicts approve at this head, with no checks.')
+})
+
+// Base branch names that are not safe to put in a git argument: one that
+// would read as an option, one that would read as a range, one with a
+// character outside the plain pattern, and one that is too long.
+for (const [what, name] of [
+  ['starts with a dash', '-x'],
+  ['holds two dots in a row', 'a..b'],
+  ['holds a character outside the plain pattern', 'feat;ure'],
+  ['is longer than 200 characters', 'a'.repeat(201)],
+] as const) {
+  test(`a base branch name that ${what} runs no git show and asks before merging without checks`, async ($, on) => {
+    mock.clock(on)
+    mock.store(on)
+    engine(on)
+    const world = fakeGitHub(on)
+    world.pr = { ...approvedWithoutChecks(), baseRefName: name }
+    // The base would allow a merge without checks, if it were read.
+    world.baseClaude = 'Checks: none\n'
+    await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+    const ran = await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+    expect(world.ran.some(r => r.argv.startsWith('git show'))).toBe(false)
+    expect(String(ran.result)).toContain('The step that applies: Both verdicts approve at this head, with no checks.')
+  })
+}
+
+test('a watch given a checkout reads the base CLAUDE.md in that checkout, not in the session folder', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  sessionInAnotherRepository(world, files)
+  world.pr = approvedWithoutChecks()
+  world.baseClaude = 'Checks: none\n'
+  const ran = await watchFromApi($, { repo: 'o/r', checkout: '/web' })
+  const shows = world.ran.filter(r => r.argv === 'git show origin/main:CLAUDE.md')
+  expect(shows.length).toBeGreaterThan(0)
+  expect(shows.every(r => r.cwd === '/web')).toBe(true)
+  expect(String(ran.result)).toContain('The step that applies: Both verdicts approve at this head, merge.')
 })
 
 test('a base CLAUDE.md that cannot be read gives the unread facts, which ask before merging without checks and read the merge command from the base', async ($, on) => {

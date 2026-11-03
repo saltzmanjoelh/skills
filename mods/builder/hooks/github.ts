@@ -283,24 +283,28 @@ export function realWorkOf(out: string): boolean | null {
   return isReal
 }
 
-// The runs a look keeps when its runs read failed: those of the snapshot the
-// mod last stored for the pull request, if that snapshot is of the same
-// repository, number and head, and otherwise none. The fingerprint then never
-// changes because a read failed. `stored` is passed in unchecked, as the
-// state holds it.
-export function carriedRuns(stored: unknown, repo: string, number: number, head: string): WorkflowRun[] {
+// The snapshot the mod last stored for the pull request, when it is of the
+// same repository, number and head, and otherwise null. A look whose runs
+// read failed keeps the runs of this snapshot and no other. `stored` is passed
+// in unchecked, as the state holds it.
+function sameHeadSnapshot(stored: unknown, repo: string, number: number, head: string): Snapshot | null {
   const s = snapshotIn(stored)
-  if (s === null || s.repo !== repo || s.number !== number || s.head !== head) return []
-  return s.runs ?? []
+  return s !== null && s.repo === repo && s.number === number && s.head === head ? s : null
+}
+
+// The runs a look keeps when its runs read failed: those of the stored
+// snapshot at the same head (see sameHeadSnapshot), and otherwise none. The
+// fingerprint then never changes because a read failed.
+export function carriedRuns(stored: unknown, repo: string, number: number, head: string): WorkflowRun[] {
+  return sameHeadSnapshot(stored, repo, number, head)?.runs ?? []
 }
 
 // Every run at the head that a look keeps when its runs read failed, by the
 // same rule as carriedRuns, so a failed read still shows the runs that had
 // failed. A stored snapshot without them gives none.
 export function carriedHeadRuns(stored: unknown, repo: string, number: number, head: string): HeadRun[] {
-  const s = snapshotIn(stored)
-  if (s === null || s.repo !== repo || s.number !== number || s.head !== head) return []
-  return headRunsIn(s) ?? []
+  const s = sameHeadSnapshot(stored, repo, number, head)
+  return s === null ? [] : headRunsIn(s) ?? []
 }
 
 // The state in what `gh pr view <n> --json state` printed: OPEN, MERGED or

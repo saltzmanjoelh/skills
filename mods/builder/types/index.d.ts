@@ -30,8 +30,10 @@ export type HeadRun = {
 // limits, the Checks: fact, and the kind of merge command. `merge` is
 // `default` when the file names no merge command or names the default one,
 // `custom` when it names another, and `unread` when the file could not be
-// read, in which case the other facts are the defaults.
-export type BaseFacts = { maxPushes: number; maxRounds: number; checks: 'none' | 'expected'; merge: 'default' | 'custom' | 'unread' }
+// read, in which case the other facts are the defaults. `isClaudeRead` says
+// whether the file was read at all, so a text that has to say so does not
+// infer it from another fact.
+export type BaseFacts = { maxPushes: number; maxRounds: number; checks: 'none' | 'expected'; merge: 'default' | 'custom' | 'unread'; isClaudeRead: boolean }
 export type Verdict = 'APPROVE' | 'REQUEST_CHANGES'
 export type Verdicts = { sha: string; spec: Verdict; adversarial: Verdict }
 

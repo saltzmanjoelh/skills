@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { countingRuns, failedRunsOf, hasFailed, isReplaced, isUnfinished, needsJobs, snapshotOf, type GhPullRequest } from '../hooks/github'
-import { baseFactsOf, chooseStep, DEFAULT_MERGE_COMMAND, SKILL_SECTIONS, stepLines, type Step } from '../hooks/step'
+import { baseFactsOf, chooseStep, CLEANUP_SECTIONS, DEFAULT_MERGE_COMMAND, SKILL_POINTS, SKILL_SECTIONS, stepLines, type Step } from '../hooks/step'
 import type { BaseFacts, HeadRun, Snapshot } from '../types'
 
 const ME = 'owner'
@@ -41,7 +41,7 @@ function review(sha: string, spec: string, adversarial: string) {
   }
 }
 
-const FACTS: BaseFacts = { maxPushes: 8, maxRounds: 5, checks: 'expected', merge: 'default' }
+const FACTS: BaseFacts = { maxPushes: 8, maxRounds: 5, checks: 'expected', merge: 'default', isClaudeRead: true }
 const approved = [review(C, 'APPROVE', 'APPROVE')]
 
 // A snapshot of #7 at head C as a look stores it: the pull request, every
@@ -243,21 +243,41 @@ test('both verdicts approving with a pending check or an unfinished run waits on
 })
 
 test('both verdicts approving with every check passed merges, with the number, the head and the merge command kind', () => {
-  expect(chooseStep(snapshot({ reviews: approved }, [headRun()]), false)).toEqual({ kind: 'merge', number: 7, head: C, command: 'default', checks: 'passed' })
-  expect(chooseStep(snapshot({ reviews: approved }, [], { ...FACTS, merge: 'custom' }), false)).toEqual({ kind: 'merge', number: 7, head: C, command: 'custom', checks: 'passed' })
+  expect(chooseStep(snapshot({ reviews: approved }, [headRun()]), false)).toEqual({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'passed', runs: [{ id: 1, attempt: 1 }] })
+  expect(chooseStep(snapshot({ reviews: approved }, [], { ...FACTS, merge: 'custom' }), false)).toEqual({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'custom', checks: 'passed', runs: [] })
 })
 
 test('both verdicts approving with no checks merges under Checks: none and asks under Checks: expected or an unread base', () => {
   const none = { reviews: approved, statusCheckRollup: [] }
-  expect(chooseStep(snapshot(none, [], { ...FACTS, checks: 'none' }), false)).toEqual({ kind: 'merge', number: 7, head: C, command: 'default', checks: 'none' })
-  expect(chooseStep(snapshot(none, [headRun({ id: 5 })], FACTS), false)).toEqual({ kind: 'ask-merge', number: 7, head: C, command: 'default', runs: ['5.1'] })
-  const unread: BaseFacts = { maxPushes: 8, maxRounds: 5, checks: 'expected', merge: 'unread' }
-  expect(kind(snapshot(none, [], unread))).toBe('ask-merge')
+  expect(chooseStep(snapshot(none, [], { ...FACTS, checks: 'none' }), false)).toEqual({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'none', runs: [] })
+  expect(chooseStep(snapshot(none, [headRun({ id: 5 })], FACTS), false)).toEqual({ kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'default', runs: [{ id: 5, attempt: 1 }], isClaudeRead: true })
+  const unread: BaseFacts = { maxPushes: 8, maxRounds: 5, checks: 'expected', merge: 'unread', isClaudeRead: false }
+  expect(chooseStep(snapshot(none, [], unread), false)).toEqual({ kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'unread', runs: [], isClaudeRead: false })
 })
 
 test('a snapshot without base facts takes the defaults, which never merge without checks', () => {
   const { facts: _dropped, ...older } = snapshot({ reviews: approved, statusCheckRollup: [] })
-  expect(chooseStep(older as Snapshot, false)).toEqual({ kind: 'ask-merge', number: 7, head: C, command: 'unread', runs: [] })
+  expect(chooseStep(older as Snapshot, false)).toEqual({ kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'unread', runs: [], isClaudeRead: false })
+})
+
+test('stored base facts say whether the base CLAUDE.md was read, and facts that say it was not are the unread ones', () => {
+  const none = { reviews: approved, statusCheckRollup: [] }
+  // Facts an older build stored, with no such field, were read unless their
+  // merge command is unread.
+  const older = { maxPushes: 8, maxRounds: 5, checks: 'expected', merge: 'custom' } as unknown as BaseFacts
+  expect(chooseStep(snapshot(none, [], older), false)).toMatchObject({ kind: 'ask-merge', command: 'custom', isClaudeRead: true })
+  const olderUnread = { maxPushes: 8, maxRounds: 5, checks: 'expected', merge: 'unread' } as unknown as BaseFacts
+  expect(chooseStep(snapshot(none, [], olderUnread), false)).toMatchObject({ kind: 'ask-merge', command: 'unread', isClaudeRead: false })
+  // Facts that say the file was not read never allow a merge without checks
+  // or the default command, whatever else they hold.
+  const damaged: BaseFacts = { maxPushes: 8, maxRounds: 5, checks: 'none', merge: 'default', isClaudeRead: false }
+  expect(chooseStep(snapshot(none, [], damaged), false)).toMatchObject({ kind: 'ask-merge', command: 'unread', isClaudeRead: false })
+})
+
+test('a repository that is not a plain owner and name is left out of the step', () => {
+  const s = { ...snapshot({ reviews: approved }, [headRun()]), repo: 'o/r; rm -rf /' }
+  expect(chooseStep(s, false)).toMatchObject({ kind: 'merge', repo: null })
+  expect(stepLines(chooseStep(s, false)).join('\n')).not.toContain('rm -rf')
 })
 
 test('malformed entries in the stored runs are dropped rather than throwing', () => {
@@ -267,8 +287,8 @@ test('malformed entries in the stored runs are dropped rather than throwing', ()
 })
 
 test('the base facts are read from the base branch CLAUDE.md, with defaults for every line it lacks', () => {
-  expect(baseFactsOf('Max pushes per round: 3\nMax rounds: 2\nChecks: none\n', null)).toEqual({ maxPushes: 3, maxRounds: 2, checks: 'none', merge: 'default' })
-  expect(baseFactsOf('Merge command: `./merge.sh <n> <sha>`\nChecks: expected\n', null)).toEqual({ maxPushes: 8, maxRounds: 5, checks: 'expected', merge: 'custom' })
+  expect(baseFactsOf('Max pushes per round: 3\nMax rounds: 2\nChecks: none\n', null)).toEqual({ maxPushes: 3, maxRounds: 2, checks: 'none', merge: 'default', isClaudeRead: true })
+  expect(baseFactsOf('Merge command: `./merge.sh <n> <sha>`\nChecks: expected\n', null)).toEqual({ maxPushes: 8, maxRounds: 5, checks: 'expected', merge: 'custom', isClaudeRead: true })
   expect(baseFactsOf(`Merge command: ${DEFAULT_MERGE_COMMAND}\nChecks: none\n`, null).merge).toBe('default')
   // A limit that is not a whole number takes its default.
   expect(baseFactsOf('Max pushes per round: many\nChecks: none\n', null).maxPushes).toBe(8)
@@ -293,11 +313,11 @@ const EVERY_STEP: Step[] = [
   { kind: 'changes-requested' },
   { kind: 'runs-unread' },
   { kind: 'waiting' },
-  { kind: 'merge', number: 7, head: C, command: 'default', checks: 'passed' },
-  { kind: 'merge', number: 7, head: C, command: 'custom', checks: 'passed' },
-  { kind: 'merge', number: 7, head: C, command: 'unread', checks: 'none' },
-  { kind: 'ask-merge', number: 7, head: C, command: 'default', runs: ['5.1', '6.2'] },
-  { kind: 'ask-merge', number: 7, head: C, command: 'unread', runs: [] },
+  { kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'passed', runs: [{ id: 5, attempt: 1 }] },
+  { kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'custom', checks: 'passed', runs: [] },
+  { kind: 'merge', number: 7, head: C, repo: null, command: 'unread', checks: 'none', runs: [] },
+  { kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'default', runs: [{ id: 5, attempt: 1 }, { id: 6, attempt: 2 }], isClaudeRead: true },
+  { kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'unread', runs: [], isClaudeRead: false },
 ]
 
 const textOf = (step: Step) => stepLines(step).join('\n')
@@ -310,7 +330,7 @@ test('every step text begins with a line naming the step', () => {
 })
 
 test('the default merge text holds the merge command with the number and the full head, and the guards', () => {
-  const text = textOf({ kind: 'merge', number: 7, head: C, command: 'default', checks: 'passed' })
+  const text = textOf({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'passed', runs: [] })
   expect(text).toContain(`gh pr merge 7 --merge --match-head-commit ${C}`)
   expect(text).toContain('Commits the pull request lacks')
   expect(text).toContain('mcp__builder__progress')
@@ -325,7 +345,7 @@ test('the default merge text holds the merge command with the number and the ful
 
 test('the custom and unread merge texts say to read Merge command: from the base and never to merge around a gate with the default', () => {
   for (const command of ['custom', 'unread'] as const) {
-    const text = textOf({ kind: 'merge', number: 7, head: C, command, checks: 'passed' })
+    const text = textOf({ kind: 'merge', number: 7, head: C, repo: 'o/r', command, checks: 'passed', runs: [] })
     expect(text).toContain('git show origin/<base>:CLAUDE.md')
     expect(text).toContain('`Merge command:`')
     expect(text).toContain('with <n> as 7 and <sha> as ' + C)
@@ -335,13 +355,30 @@ test('the custom and unread merge texts say to read Merge command: from the base
 })
 
 test('the merge text under Checks: none says there are no checks and does not claim they passed', () => {
-  const text = textOf({ kind: 'merge', number: 7, head: C, command: 'default', checks: 'none' })
+  const text = textOf({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'none', runs: [] })
   expect(text).toContain('Checks: none')
   expect(text).not.toContain('every check passed')
 })
 
+test('every merge text reads the head\'s runs again and calls the watch tool for a run the mod did not see', () => {
+  const read = `gh api --paginate "repos/o/r/actions/runs?head_sha=${C}" --jq '.workflow_runs[] | {id, run_attempt, status, conclusion}'`
+  const merges = EVERY_STEP.filter(step => step.kind === 'merge' || step.kind === 'ask-merge')
+  expect(merges.length).toBe(5)
+  for (const step of merges) {
+    const text = textOf(step)
+    expect(text).toContain(step.repo === null ? read.replace('repos/o/r/', 'repos/<repo>/') : read)
+    expect(text).toContain('unfinished, has failed or passed')
+    expect(text).toContain('call `mcp__builder__watch` and follow the step it names')
+  }
+  const seen = textOf({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'passed', runs: [{ id: 5, attempt: 1 }, { id: 6, attempt: 2 }] })
+  expect(seen).toContain('The mod saw run 5 (attempt 1), run 6 (attempt 2) at this head')
+  expect(textOf({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'none', runs: [] })).toContain('The mod saw no workflow runs at this head')
+  // A repository left out is named by a placeholder the text explains.
+  expect(textOf({ kind: 'merge', number: 7, head: C, repo: null, command: 'unread', checks: 'none', runs: [] })).toContain('<repo> as the pull request\'s repository')
+})
+
 test('the question for a merge without checks covers this head and these runs, and keeps the read again before merging on a yes', () => {
-  const text = textOf({ kind: 'ask-merge', number: 7, head: C, command: 'default', runs: ['5.1', '6.2'] })
+  const text = textOf({ kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'default', runs: [{ id: 5, attempt: 1 }, { id: 6, attempt: 2 }], isClaudeRead: true })
   expect(text).toContain(C)
   expect(text).toContain('run 5 (attempt 1), run 6 (attempt 2)')
   expect(text).toContain('They already said no to this head and these runs')
@@ -350,7 +387,16 @@ test('the question for a merge without checks covers this head and these runs, a
   expect(text).toContain('no checks, no unfinished run and no new run')
   expect(text).toContain(`gh pr merge 7 --merge --match-head-commit ${C}`)
   expect(text).toContain('Commits the pull request lacks')
-  expect(textOf({ kind: 'ask-merge', number: 7, head: C, command: 'unread', runs: [] })).toContain('no workflow runs')
+  expect(textOf({ kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'unread', runs: [], isClaudeRead: false })).toContain('no workflow runs')
+})
+
+test('the question for a merge without checks says the base CLAUDE.md could not be read only when it was not read', () => {
+  const step = { kind: 'ask-merge' as const, number: 7, head: C, repo: 'o/r', runs: [] }
+  expect(textOf({ ...step, command: 'unread', isClaudeRead: false })).toContain('could not be read, which counts as `Checks: expected`')
+  // A file that was read and names a merge command of its own says what it says.
+  const read = textOf({ ...step, command: 'custom', isClaudeRead: true })
+  expect(read).toContain('the base branch\'s CLAUDE.md says `Checks: expected`')
+  expect(read).not.toContain('which counts as `Checks: expected`')
 })
 
 test('the failed text holds the run ids and how to read them', () => {
@@ -418,4 +464,31 @@ test('every section of /implement that a step text names is one of the pinned he
   }
   expect(named.size).toBeGreaterThan(0)
   for (const name of named) expect(SKILL_SECTIONS).toContain(name)
+})
+
+// The same holds for the sections of skills/cleanup/SKILL.md that the texts
+// name, pinned in CLEANUP_SECTIONS.
+test('every section of /cleanup that a step text names is one of the pinned headings', () => {
+  const named = new Set<string>()
+  for (const step of EVERY_STEP) {
+    for (const match of textOf(step).matchAll(/"([^"]+)" in \/cleanup/g)) named.add(match[1]!)
+  }
+  expect(named.size).toBeGreaterThan(0)
+  for (const name of named) expect(CLEANUP_SECTIONS).toContain(name)
+})
+
+// A text points to a numbered point of a skill only where the skill gives the
+// point no name, and each such reference is pinned in SKILL_POINTS, so a
+// renumbering in the skill has to be made there too.
+test('every numbered point of a skill that a step text names is one of the pinned references', () => {
+  const pinned = new Set<string>()
+  for (const step of EVERY_STEP) {
+    let text = textOf(step)
+    for (const point of SKILL_POINTS) {
+      if (text.includes(point)) pinned.add(point)
+      text = text.split(point).join('')
+    }
+    expect(text).not.toMatch(/\b(point|step) \d+\b/i)
+  }
+  expect([...pinned].sort()).toEqual([...SKILL_POINTS].sort())
 })

@@ -71,8 +71,9 @@ and no cache; it is one local read per look.
 - The limits are read from `Max pushes per round:` and `Max rounds:`, with the
   defaults 8 and 5.
 - A file without a `Checks:` line takes the skill's default: `expected` when
-  `git ls-tree origin/<base> .github/workflows` lists anything, and `none`
-  when it lists nothing. When that command fails, the value is `expected`.
+  `git ls-tree --full-tree origin/<base> .github/workflows` lists anything,
+  and `none` when it lists nothing. The `--full-tree` flag reads the path
+  from the top of the checkout, whatever folder the session started in. When that command fails, the value is `expected`.
 - When the file cannot be read, the limits take their defaults, `Checks:` is
   `expected`, and the merge command is `unread`.
 - The merge command's string never goes into a step text. For `default` the
