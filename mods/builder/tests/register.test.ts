@@ -2398,9 +2398,17 @@ async function abovePrompt($: Engine, on: On) {
 }
 
 // The session's own turn, as the engine raises it: start, then complete.
-function sessionTurns(on: On) {
+// While `ends.hold` is set, the next end of the session's own turn waits at
+// the bottom until it resolves, which holds the mod's end at its call to the
+// engine. A subagent's end never waits.
+function sessionTurns(on: On, ends?: { hold: Promise<void> | null }) {
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
-  on('turn.complete', ($, e) => ({ text: e.answer }))
+  on('turn.complete', ($, e) => {
+    const hold = ends?.hold ?? null
+    if (hold === null || e.agentId !== undefined) return { text: e.answer }
+    ends!.hold = null
+    return hold.then(() => ({ text: e.answer }))
+  })
 }
 const turnEnds = ($: Engine, turnId: string) =>
   $.turn.complete({ answer: 'pushed', durationMs: 1, isAborted: false, turnId, reason: 'answer' } as never)
@@ -7412,10 +7420,11 @@ test('a pull request closed without merging keeps the count and reads closed, an
 
 // The engine beneath the mod's agent and turn hooks: each spawn is answered
 // with the next id on Opus 5.5, and listed as running in the engine's list,
-// which the test changes as agents finish.
-function spawning(on: On) {
+// which the test changes as agents finish. `ends`, when given, can hold the
+// end of the session's own turn (see sessionTurns).
+function spawning(on: On, ends?: { hold: Promise<void> | null }) {
   const model = 'claude-opus-5-5'
-  sessionTurns(on)
+  sessionTurns(on, ends)
   const listed = engineAgents(on)
   on('agent.spawn', ($, e) => {
     const id = `agent-${listed.length + 1}`
@@ -8973,6 +8982,19 @@ test('a turn that starts during a hold and still runs at the resume time clears 
   expect(await line()).not.toContain('waiting on the usage limit')
 })
 
+test('a subagent that starts during a hold leaves the resume prompt to come at the resume time', async ($, on) => {
+  const { clock, prompts, line } = await holdOnWindow($, on)
+  await clock.advance(HOUR)
+  await $.turn.start({ text: 'look at the log', turnId: 'a1', agentId: 'agent-1' } as never)
+  await clock.settle()
+  expect(await line()).toContain('waiting on the usage limit until 02:01:00')
+
+  await clock.advance(HOUR + MINUTE - 1000)
+  expect(resumesOf(prompts)).toEqual([])
+  await clock.advance(1000)
+  expect(resumeLeadsOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in.'])
+})
+
 test('a handover still being submitted at the resume time clears the hold with no resume prompt', async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
   mock.store(on)
@@ -9558,6 +9580,54 @@ test('a StopFailure of rate_limit that comes after the turn ended still holds', 
   expect(resumesOf(prompts).length).toBe(1)
 })
 
+test('a subagent that starts during the session\'s own turn after the turn hit the usage limit leaves the hold to start when the turn ends with an error', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  sessionTurns(on)
+  stopFailures(on)
+  const usage = usageAnswers(on)
+  usage.fails = true
+  const prompts = recordPrompts(on)
+  const line = await abovePrompt($, on)
+  await watch($)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await rateLimited($)
+  await $.turn.start({ text: 'look at the log', turnId: 'a1', agentId: 'agent-1' } as never)
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'error' } as never)
+  await clock.settle()
+  expect(await line()).toContain('waiting on the usage limit until 00:15:00')
+  await clock.advance(15 * MINUTE)
+  expect(resumesOf(prompts).length).toBe(1)
+})
+
+test('a subagent that starts between the session\'s error turn and its late StopFailure of rate_limit leaves the hold to start, and the resume prompt comes at its time', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  sessionTurns(on)
+  stopFailures(on)
+  const usage = usageAnswers(on)
+  usage.fails = true
+  const prompts = recordPrompts(on)
+  const line = await abovePrompt($, on)
+  await watch($)
+  await ownTurn($, 't1', 'error')
+  await clock.settle()
+  expect(await line()).not.toContain('waiting on the usage limit')
+
+  await $.turn.start({ text: 'look at the log', turnId: 'a1', agentId: 'agent-1' } as never)
+  await rateLimited($)
+  await clock.settle()
+  expect(await line()).toContain('waiting on the usage limit until 00:15:00')
+  await clock.advance(15 * MINUTE - 1000)
+  expect(resumesOf(prompts)).toEqual([])
+  await clock.advance(1000)
+  expect(resumesOf(prompts).length).toBe(1)
+})
+
 test('a late StopFailure of rate_limit whose hold cannot be saved leaves the stuck prompt armed, and it comes one interval after the turn ended', async ($, on) => {
   const refusal = refusedWrites(on, 'usageHold', value => value !== null)
   const clock = mock.clock(on, { now: T0 })
@@ -9917,6 +9987,32 @@ test('a turn of the session\'s own that ends with an answer while a later turn s
   expect(resumeLeadsOf(prompts)).toEqual(['builder: the usage limit has reset; carry on /implement from the stage you were in.'])
   await clock.advance(3 * HOUR)
   expect(resumesOf(prompts).length).toBe(1)
+})
+
+test('a subagent that starts while a replied turn\'s end is still clearing busy leaves that end to take the hold off, and a look runs with no resume prompt', async ($, on) => {
+  const clearingBusy = writeWaits(on, 'busy', value => value === false)
+  const { clock, world, prompts, line } = await holdOnWindow($, on)
+  expect(await line()).toContain('waiting on the usage limit until 02:01:00')
+
+  await $.turn.start({ text: 'go on', turnId: 't3' } as never)
+  clearingBusy.arm()
+  const ended = $.turn.complete({ answer: 'waiting', durationMs: 1, isAborted: false, turnId: 't3', reason: 'answer' } as never)
+  try {
+    await clock.settle()
+    expect(clearingBusy.isWaiting).toBe(true)
+    await $.turn.start({ text: 'look at the log', turnId: 'a1', agentId: 'agent-1' } as never)
+  } finally {
+    clearingBusy.release()
+    await ended
+    await clock.settle()
+  }
+  expect(await line()).not.toContain('waiting on the usage limit')
+
+  world.calls = []
+  await clock.advance(10 * MINUTE)
+  expect(world.calls.some(call => call.startsWith('gh pr view 7'))).toBe(true)
+  await clock.advance(3 * HOUR)
+  expect(resumesOf(prompts)).toEqual([])
 })
 
 test('a turn that dies with neither a window at 100 percent nor a StopFailure does not hold, and the look 10 seconds on runs', async ($, on) => {
@@ -11570,6 +11666,41 @@ test('a subagent that starts during an answer to a nudge leaves the answer recor
   }
 })
 
+test('a subagent that starts after the session\'s own turn ended leaves the session idle and busy false, and its start still reaches the engine', async ($, on) => {
+  const s = foremanSession(on)
+  const state = writtenState(on)
+  await firstPrompt($, s.clock)
+  await ownTurn($, 't1')
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('idle')
+
+  // A background agent the turn launched starts its run after the turn ended.
+  // The bottom hook answers the start with its turn id, so the answer shows
+  // the event reached the engine.
+  const started = await $.turn.start({ text: 'look at the log', turnId: 'a1', agentId: 'agent-1' } as never)
+  await s.clock.settle()
+  expect(started).toMatchObject({ turnId: 'a1' })
+  expect(state.of('busy', false)).toBe(false)
+  expect(s.statusAt()?.state).toBe('idle')
+})
+
+test('a subagent that starts while the session\'s own permission prompt is open leaves the prompt open until the session\'s own turn ends', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await $.classic.PermissionRequest({ tool_name: 'Edit', tool_input: {} } as never)
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('needs-you')
+
+  await $.turn.start({ text: 'look at the log', turnId: 'a1', agentId: 'agent-1' } as never)
+  await s.clock.settle()
+  expect(s.statusAt()).toMatchObject({ state: 'needs-you', reason: 'A permission prompt for Edit in the session is waiting on the person.' })
+
+  await turnEnds($, 't1')
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('idle')
+})
+
 test('the first record that shows the background-only wait after a turn ends already carries that turn\'s end', async ($, on) => {
   const s = foremanSession(on)
   await firstPrompt($, s.clock)
@@ -12507,14 +12638,15 @@ function compactRuns($: Engine, on: On) {
 // session's folder, and the spec and adversarial reviewers spawned, which the
 // engine lists as running until the test finishes them. The usage answers no
 // context figures until the test gives some. A test that records prompts
-// registers its hook before calling this.
-async function reviewing($: Engine, on: On) {
+// registers its hook before calling this. `ends`, when given, can hold the
+// end of the session's own turn (see sessionTurns).
+async function reviewing($: Engine, on: On, ends?: { hold: Promise<void> | null }) {
   const clock = mock.clock(on, { now: T0 })
   mock.store(on)
   engine(on)
   const world = fakeGitHub(on)
   const files = fakeFiles(on)
-  const listed = spawning(on)
+  const listed = spawning(on, ends)
   const usage = usageAnswers(on)
   const compact = compactRuns($, on)
   await watch($)
@@ -12682,6 +12814,40 @@ test('a change held during the turn is handed over after the compact command ret
   expect(changesOf(prompts)[0] ?? '').toStartWith(`${RELOAD_LINE}\n\nbuilder: pull request #7 changed.`)
   expect(changesOf(prompts)[0]).toContain('The checks went from passed to failed.')
   expect(changesOf(prompts)[0] ?? '').toEndWith(REREAD_CLOSING)
+})
+
+test('a subagent that starts while the session\'s own turn\'s end is under way leaves the compaction at that end to run, busy cleared, and the held change handed over with the reload line', async ($, on) => {
+  const prompts = recordPrompts(on)
+  const written = writtenState(on)
+  // The engine's end of the session's own turn waits at the bottom once the
+  // hold is set, which holds the mod's end after it read the number of turns
+  // started and before it compares that number again.
+  const ends = { hold: null as Promise<void> | null }
+  const { clock, world, listed, usage, compact } = await reviewing($, on, ends)
+  await reviewersDone($, listed)
+  usage.context = contextOf(255_000)
+
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  world.pr = failing()
+  await clock.advance(10 * MINUTE)
+  expect(changesOf(prompts)).toEqual([])
+  const ending = gate()
+  ends.hold = ending.until
+  const end = $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as never)
+  try {
+    await clock.settle()
+    expect(ends.hold).toBeNull()
+    await $.turn.start({ text: 'look at the log', turnId: 'a1', agentId: 'agent-1' } as never)
+  } finally {
+    ending.release()
+    await end
+    await clock.settle()
+  }
+
+  expect(compact.args.length).toBe(1)
+  expect(written.of('busy', true)).toBe(false)
+  expect(changesOf(prompts).length).toBe(1)
+  expect(changesOf(prompts)[0] ?? '').toStartWith(`${RELOAD_LINE}\n\nbuilder: pull request #7 changed.`)
 })
 
 test('a compact command that has not returned after five minutes is recorded as failed, the held change is handed over without the reload line, and the next turn end above the threshold tries again', async ($, on) => {
