@@ -68,12 +68,18 @@ export type SessionsLook = { kind: 'unread' } | { kind: 'failed'; reason?: strin
 // for, as SessionsLook says. decide builds it once for every rule.
 type ListLook = { byId: ReadonlyMap<string, Listed>; complete: boolean; known: ReadonlySet<string> | null }
 
+type Over = 'archived' | 'missing'
+
+// The words for each answer of overIn, which the over rule, the queue and
+// endedIn all use.
+const OVER_WORDS: Record<Over, string> = { archived: 'is archived', missing: 'is no longer listed' }
+
 // Whether the list shows the session `id` over: archived when its entry says
 // so exactly, or missing when it has no entry, the list is complete and the
 // ledger held the id when the list was asked for. A pairing with no desktop
 // session id is never over. The over rule and the queue both decide by it,
 // so the two cannot drift apart.
-function overIn(look: ListLook, id: string | null): 'archived' | 'missing' | null {
+function overIn(look: ListLook, id: string | null): Over | null {
   if (id === null) return null
   const entry = look.byId.get(id)
   if (entry !== undefined) return entry.isArchived === true ? 'archived' : null
@@ -138,8 +144,8 @@ export const desktopOf = (p: ForemanPairing, row: SubRow) => p.localId ?? row.re
 // listed.
 function endedIn(byId: ReadonlyMap<string, Listed>, id: string | null): string | null {
   const entry = id === null ? undefined : byId.get(id)
-  if (entry === undefined) return 'is no longer listed'
-  if (entry.isArchived) return 'is archived'
+  if (entry === undefined) return OVER_WORDS.missing
+  if (entry.isArchived) return OVER_WORDS.archived
   if (!entry.isRunning) return 'is no longer running'
   return null
 }
@@ -223,11 +229,17 @@ const STATE_RULES: Record<BuildState, (s: Step) => void> = {
     if (s.look === null) return
     const ended = endedIn(s.look.byId, desktopOf(s.p, s.row))
     if (ended === null) return
-    s.p = { ...s.p, standing: 'freed' }
-    s.freed += 1
-    s.freedBy.push(whoOf(s.row.record.issueKey, s.p.ticket))
+    markFreed(s)
     s.logs.push(`${nameOf(s.row)} is done and its session ${ended}, so its slot is free.`)
   },
+}
+
+// Frees the pairing's slot on this read and names it in `freedBy`. The done
+// rule and the over rule both free by it, each with its own log line.
+function markFreed(s: Step) {
+  s.p = { ...s.p, standing: 'freed' }
+  s.freed += 1
+  s.freedBy.push(whoOf(s.row.record.issueKey, s.p.ticket))
 }
 
 const episodeKey = (s: Step) => `${s.episode.state}@${s.episode.since}`
@@ -323,9 +335,10 @@ function idleRule(s: Step, since: number, background: { task: string | null } | 
 
 // Whether a record may be gone: it is not done, its file has not changed
 // for GONE_MS, its pull request has not merged, and the gone wake has not
-// already gone for this file. The gone rule asks it. The list is read more
-// often than this, as slotsNeedList says, because the over rule can act on
-// a record that this rules out.
+// already gone for this file. The gone rule asks it, and slotsNeedList asks
+// for the list on every read while it holds. The list is also read, less
+// often, for a stale record that this rules out, as slotsNeedList says,
+// because the over rule can act on such a record.
 function mayBeGone(p: ForemanPairing, row: SubRow, now: number): boolean {
   return row.record.state !== 'done'
     && now - row.mtimeMs > GONE_MS
@@ -356,12 +369,9 @@ function overRule(s: Step): boolean {
   if (s.look === null || s.row.record.state === 'done') return false
   const over = overIn(s.look, desktopOf(s.p, s.row))
   if (over === null) return false
-  s.p = { ...s.p, standing: 'freed' }
-  s.freed += 1
-  s.freedBy.push(whoOf(s.row.record.issueKey, s.p.ticket))
+  markFreed(s)
   const { pr, state } = s.row.record
-  const how = over === 'archived' ? 'is archived' : 'is no longer listed'
-  s.logs.push(`The session of ${nameOf(s.row)} ${how} while its status file says ${state}, with ${pr === null ? 'no pull request' : `pull request #${pr.number}`}, so its slot is free.`)
+  s.logs.push(`The session of ${nameOf(s.row)} ${OVER_WORDS[over]} while its status file says ${state}, with ${pr === null ? 'no pull request' : `pull request #${pr.number}`}, so its slot is free.`)
   return true
 }
 
@@ -476,15 +486,22 @@ export function keptByUnreadList(t: ForemanTickets, rows: readonly SubRow[], now
 }
 
 // Whether a slot rule needs the desktop app's list: some active owned record
-// that does not wait is done, or its file has not changed for GONE_MS. That
-// holds even after its gone wake went or its pull request merged, because
-// the over rule frees the slot of such a record once its session is
-// archived, and with no queue nothing else would read the list for it.
+// that does not wait is done, or mayBeGone holds for it, or its file has not
+// changed for GONE_MS and no read got the list for it in the last GONE_MS.
+// The last case covers a record whose gone wake went or whose pull request
+// merged, because the over rule frees its slot once its session is archived,
+// and with no queue nothing else would read the list for it. It asks at most
+// once every GONE_MS, so such a record does not make every read wait on the
+// list while another sub session works, and an archived session still frees
+// its slot within about GONE_MS.
 export function slotsNeedList(t: ForemanTickets, rows: readonly SubRow[], now: number): boolean {
   const active = new Map(t.pairings.flatMap(p => (p.owner !== null && p.standing === 'active' && p.queue === null ? [[p.owner, p] as const] : [])))
   return rows.some(r => {
     const p = active.get(r.record.sessionId)
-    return p !== undefined && ownsTicket(p, r) && (r.record.state === 'done' || now - r.mtimeMs > GONE_MS)
+    if (p === undefined || !ownsTicket(p, r)) return false
+    if (r.record.state === 'done' || mayBeGone(p, r, now)) return true
+    const checked = p.acts.listCheckedAt
+    return now - r.mtimeMs > GONE_MS && (checked === null || now - checked >= GONE_MS)
   })
 }
 
@@ -553,7 +570,7 @@ function queueStep(
     }
     const over = look === null ? null : overIn(look, p.localId)
     if (over === null) return [p]
-    const dropped = `Dropped ${who} from the queue, because its waiting session is ${over === 'archived' ? 'archived' : 'no longer listed'}.`
+    const dropped = `Dropped ${who} from the queue, because its waiting session ${OVER_WORDS[over]}.`
     if (p.queue.claim === null) {
       logs.push(dropped)
       return []
@@ -629,6 +646,8 @@ function queueStep(
 // reason when the ledger's mark says none went since the last read that got
 // a list, and sets the mark. A read that got a list clears it, and a read
 // that did not ask for the list leaves it as it was.
+// A read that got a list records its time in each active pairing it looked
+// at, which slotsNeedList reads.
 export function decide(input: DecideInput): Decision {
   const { rows, now, limits, sessions, folderExists, listed } = input
   const look: ListLook | null = sessions.kind === 'read'
@@ -673,6 +692,7 @@ export function decide(input: DecideInput): Decision {
     // The milestone sentences follow this pairing's other sentences, so that
     // the slot-free sentence, added after every pairing, stays last.
     const milestones = milestoneRule(s)
+    if (look !== null) setActs(s, { listCheckedAt: now })
     if (!overRule(s)) {
       STATE_RULES[row.record.state](s)
       goneRule(s)

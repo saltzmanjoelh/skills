@@ -45,10 +45,14 @@ which runs on a timer and on every status file change.
    This is the test `queueStep` already uses before it drops a waiting session
    as no longer listed, and the two rules share one helper so they cannot
    drift apart. A pairing with no desktop session id never counts as missing.
-3. **The list is read whenever behaviors 1 and 2 could act**, meaning while
-   any active sub session's file is `done` or has not changed for longer than
-   the gone wait. This holds even after its gone wake went out or its pull
-   request merged, so an archived sub session frees its slot with no queue.
+3. **The list is read whenever behaviors 1 and 2 could act.** It is read on
+   every read while any active sub session's file is `done` or its gone wake
+   is still due, and at least once every gone wait while any other active sub
+   session's file has not changed for longer than the gone wait. The second
+   case covers a sub session whose gone wake went out or whose pull request
+   merged, so an archived sub session frees its slot with no queue within
+   about one gone wait, while reads made every 30 seconds for another sub
+   session that works do not each wait on the list for it.
 4. **A sub session that is not running but still listed unarchived keeps its
    slot**, and keeps today's gone wake. Only the person or the parent ends it.
 5. **No "pick the next issue" while an issue waits.** When a read frees a slot,

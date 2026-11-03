@@ -220,6 +220,26 @@ test('the session list is needed for a done record or a file older than the gone
   expect(needsList(t, [merged], T0 + GONE_MS + 1)).toBe(true)
 })
 
+test('a stale record whose gone wake went needs the session list at most once every gone wait, while a done record or one still due its gone wake needs it on every read', () => {
+  const woke = joinOwners(paired(), [row()]).tickets
+  const wokeFor = { ...woke, pairings: woke.pairings.map(p => ({ ...p, acts: { ...p.acts, goneWokeFor: T0 } })) }
+  const first = T0 + GONE_MS + 1
+  expect(needsList(wokeFor, [row()], first)).toBe(true)
+  const checked = read(wokeFor, [row()], first, { sessions: running }).tickets
+  expect(needsList(checked, [row()], first + MINUTE)).toBe(false)
+  expect(needsList(checked, [row()], first + GONE_MS - 1)).toBe(false)
+  expect(needsList(checked, [row()], first + GONE_MS)).toBe(true)
+  // A read that could not get the list does not count as a check.
+  const failed = read(wokeFor, [row()], first, { sessions: { kind: 'failed' } }).tickets
+  expect(needsList(failed, [row()], first + MINUTE)).toBe(true)
+  // A record still due its gone wake, and a done one, ask on every read.
+  const due = read(paired(), [row()], first, { sessions: running }).tickets
+  expect(needsList(due, [row()], first + MINUTE)).toBe(true)
+  const done = [row({ state: 'done' })]
+  const doneChecked = read(paired(), done, first, { sessions: running }).tickets
+  expect(needsList(doneChecked, done, first + MINUTE)).toBe(true)
+})
+
 test('a sub session that is not running but still listed unarchived keeps its slot and gets the gone wake', () => {
   const stopped = [row({ state: 'waiting-on-builder' }, 'a.json', T0)]
   const notRunning: SessionsLook = { kind: 'read', sessions: [{ sessionId: 'local_a', isArchived: false, isRunning: false, title: null, surelyUnarchived: true }], complete: true }

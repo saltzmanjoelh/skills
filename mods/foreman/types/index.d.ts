@@ -52,6 +52,10 @@ export type ForemanActs = {
   // The file modification time that the gone wake was last given for, or
   // null.
   goneWokeFor: number | null
+  // When a read that got the desktop app's list last looked at this pairing,
+  // or null when none has. slotsNeedList reads it to ask for the list at most
+  // once every gone wait for a stale record that the gone rule rules out.
+  listCheckedAt: number | null
   // Whether the parent was woken because the pairing, started with a desktop
   // session id, still had no status file it could join five minutes after
   // it was paired. It is given once per pairing.

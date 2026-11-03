@@ -144,6 +144,18 @@ test('a freed slot that no waiting sub session can take, because the list leaves
   expect(shown.reasons).toEqual([])
 })
 
+test('a freed slot while a sub session waits unclaimed gives no kept sentence when the slot count has dropped so that no slot is free', () => {
+  // Two sub sessions went ahead and the slot count has since dropped to one,
+  // which ft-c still takes, so the slot that ft-a frees leaves none free.
+  const t = ledger(ahead('ft-a', 'ABC-1'), ahead('ft-c', 'ABC-3'), waiting('ft-b', 'ABC-2', 1))
+  const rows = [row('ft-a', { issueKey: 'ABC-1', state: 'done' }), busyRow('ft-c', 'ABC-3'), row('ft-b')]
+  const sessions = list([listed('local_ft-a', { isArchived: true, isRunning: false, surelyUnarchived: false }), listed('local_ft-c')], false)
+  const d = read(t, rows, T0 + MINUTE, { sessions, slots: 1 })
+  expect(d.tickets.pairings.find(p => p.ticket === 'ft-a')!.standing).toBe('freed')
+  expect(begins(d)).toEqual([])
+  expect(d.reasons).toEqual([])
+})
+
 test('two freed slots with one claim give the kept sentence while a second sub session waits unseen, naming only that one', () => {
   const t = ledger(ahead('ft-a', 'ABC-1'), ahead('ft-x', 'ABC-4'), waiting('ft-b', 'ABC-2', 1), waiting('ft-c', 'ABC-3', 2))
   const gone = { isArchived: true, isRunning: false, surelyUnarchived: false }
