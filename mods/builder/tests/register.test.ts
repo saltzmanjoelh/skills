@@ -13565,6 +13565,93 @@ test('a head the worktree lacks is fetched before the listing, and a failed fetc
   expect(await watched()).toContain(unlisted)
 })
 
+// The Merged step is chosen before the head is checked, so a merged pull
+// request with a head branch or head of the wrong shape reaches the listing's
+// own guard, which must stop it before any git call.
+test('a merged pull request with no head branch gives could not be listed, with no listing run', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  // A worktree whose branch is named after the missing value, so only the
+  // guard keeps the listing from finding a worktree and running in it.
+  world.worktrees = [{ path: '/repo', branch: 'main' }, { path: '/repo/.claude/worktrees/x', branch: 'undefined' }]
+  world.pr = openPullRequest({ state: 'MERGED', headRefName: undefined })
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  const merged = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  expect(merged).toContain('The step that applies: Merged.')
+  expect(merged).toContain('The mod could not list the commits the head branch\'s worktree holds that the pull request\'s head lacks, which counts as holding some.')
+  expect(unpushedListings(world)).toEqual([])
+})
+
+test('a merged pull request whose head is not a full commit sha gives could not be listed, with no listing run', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr = openPullRequest({ state: 'MERGED', headRefOid: 'abc123' })
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  const merged = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  expect(merged).toContain('The step that applies: Merged.')
+  expect(merged).toContain('The mod could not list the commits the head branch\'s worktree holds that the pull request\'s head lacks, which counts as holding some.')
+  expect(unpushedListings(world)).toEqual([])
+})
+
+// A step text built from the stored snapshot, rather than from a look that
+// just ran, lists the commits again, because one made since the look that
+// stored it would be missing from the stored listing. A turn a usage limit
+// stops runs no look at its end, so a commit made in it reaches the resume
+// prompt only this way when the look at the resume time fails.
+test('a resume whose look fails lists the commits again rather than showing the stored listing of none', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr = approvedAndPassed()
+  sessionTurns(on)
+  on('command.run', () => ({ text: '' }))
+  const usage = usageAnswers(on)
+  usage.rateLimits = [fiveHourAt('2026-10-12T02:00:00Z')]
+  const prompts = recordPrompts(on)
+  await watch($)
+  await ownTurn($, 't1')
+  // The turn the limit stops makes a commit, and gh is offline from then on.
+  world.unpushed = `${D}\n`
+  world.readsThrow = true
+  await ownTurn($, 't2', 'error')
+  await clock.settle()
+
+  await clock.advance(2 * HOUR + MINUTE)
+  const resumes = resumesOf(prompts)
+  expect(resumes.length).toBe(1)
+  expect(resumes[0]).toContain('The step that applies: Both verdicts approve at this head, merge.')
+  expect(resumes[0]).not.toContain('found none')
+  expect(resumes[0]).toContain(`holds 1 commit that the pull request's head lacks: ${D.slice(0, 12)}.`)
+})
+
+test('the stuck prompt lists the commits again rather than showing the stored listing of none', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr = approvedAndPassed()
+  sessionTurns(on)
+  const prompts = recordPrompts(on)
+  await watch($)
+  await clock.settle()
+  // Every look fails from here, so the stored snapshot keeps the listing of
+  // none that the watch made, while the worktree gains a commit.
+  world.unpushed = `${D}\n`
+  world.readsThrow = true
+
+  await clock.advance(46 * MINUTE)
+  const stuck = stuckOf(prompts)
+  expect(stuck.length).toBe(1)
+  expect(stuck[0]).toContain('The step that applies: Both verdicts approve at this head, merge.')
+  expect(stuck[0]).not.toContain('found none')
+  expect(stuck[0]).toContain(`holds 1 commit that the pull request's head lacks: ${D.slice(0, 12)}.`)
+})
+
 test('a review step and a closed pull request run no listing, and a change in the listing alone never wakes the session', async ($, on) => {
   const clock = mock.clock(on)
   mock.store(on)

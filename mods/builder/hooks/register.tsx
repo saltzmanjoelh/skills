@@ -322,10 +322,11 @@ async function gh($: $, dir: string | null, args: string[]): Promise<string | nu
 // on each other, so they run together. When the step the snapshot calls for
 // is a merge step or the Merged step, the look then lists the commits the
 // head branch's worktree holds that the head lacks, and stores the listing
-// on the snapshot, so the step's text states it with no await between
-// choosing the snapshot and handing it over. The step is chosen with no
-// question open, which is safe: Merged comes before the question, and a
-// question step renders no listing.
+// on the snapshot with the head branch's name, so the step's text states it
+// with no await between choosing the snapshot and handing it over, and a
+// step text built later from the stored snapshot can list them again (see
+// relisted). The step is chosen with no question open, which is safe: Merged
+// comes before the question, and a question step renders no listing.
 type SnapshotTarget = Pick<BuilderRun, 'repo' | 'number' | 'cwd' | 'login' | 'checkout' | 'repoFromCwd'>
 
 async function fetchSnapshot($: $, r: SnapshotTarget): Promise<Snapshot | null> {
@@ -339,9 +340,23 @@ async function fetchSnapshot($: $, r: SnapshotTarget): Promise<Snapshot | null> 
     ? snapshotOf(r.repo, live, r.login, unfinishedOf(headRuns), { ...extras, headRuns })
     : await carriedSnapshot($, r, live, extras)
   if (!needsListing(chooseStep(s, false))) return s
-  // The fingerprint is a fixed list of fields that leaves the listing out, so
-  // the one snapshotOf made still holds.
-  return { ...s, unpushed: await listUnpushed($, r, live) }
+  // The fingerprint is a fixed list of fields that leaves the listing and the
+  // branch out, so the one snapshotOf made still holds.
+  const branch = typeof live.headRefName === 'string' ? { headBranch: live.headRefName } : {}
+  return { ...s, unpushed: await listUnpushed($, r, live), ...branch }
+}
+
+// The snapshot with its listing made again now, for a step text built from
+// the stored snapshot rather than from a look that just ran. A commit made
+// since the look that stored it would be missing from the stored listing, as
+// in a turn a usage limit stopped, whose end runs no look, so the stored
+// listing is never shown. It is made from the number, the head and the branch
+// the snapshot holds, so it needs no read of the pull request, and a snapshot
+// an older build stored holds no branch and reads as could not be listed. A
+// step that renders no listing keeps the snapshot as it is.
+async function relisted($: $, r: SnapshotTarget, s: Snapshot): Promise<Snapshot> {
+  if (!needsListing(chooseStep(s, false))) return s
+  return { ...s, unpushed: await listUnpushed($, r, { number: s.number, headRefOid: s.head, headRefName: s.headBranch }) }
 }
 
 // A snapshot whose runs read failed, keeping the runs the stored snapshot had.
@@ -363,17 +378,17 @@ async function carriedSnapshot($: $, r: SnapshotTarget, live: GhPullRequest, ext
 // because the session's folder may stand on any branch. The head is fetched
 // only when the worktree lacks it, so a fork whose origin lacks
 // `pull/<n>/head` can still be listed.
-async function listUnpushed($: $, r: SnapshotTarget, live: GhPullRequest): Promise<Unpushed> {
+async function listUnpushed($: $, r: SnapshotTarget, pull: Pick<GhPullRequest, 'number' | 'headRefOid' | 'headRefName'>): Promise<Unpushed> {
   const unlisted: Unpushed = { kind: 'unlisted' }
-  const head = live.headRefOid
-  if (!Number.isInteger(live.number) || live.number <= 0 || !isFullSha(head) || typeof live.headRefName !== 'string') return unlisted
-  const checkout = await checkoutOf($, listingFolder(r), live.headRefName, r.checkout !== undefined)
+  const head = pull.headRefOid
+  if (!Number.isInteger(pull.number) || pull.number <= 0 || !isFullSha(head) || typeof pull.headRefName !== 'string') return unlisted
+  const checkout = await checkoutOf($, listingFolder(r), pull.headRefName, r.checkout !== undefined)
   if (checkout.how !== 'worktree') return unlisted
   const dir = checkout.dir
   const present = await gitRun($, dir, ['cat-file', '-e', `${head}^{commit}`])
   if (present === null) return unlisted
   if (present.exitCode !== 0) {
-    const fetched = await git($, dir, ['fetch', '-q', 'origin', `pull/${live.number}/head`])
+    const fetched = await git($, dir, ['fetch', '-q', 'origin', `pull/${pull.number}/head`])
     if (fetched === null) return unlisted
   }
   const listed = await git($, dir, ['rev-list', `${head}..HEAD`])
@@ -1434,6 +1449,11 @@ async function fireStuck($: $, gen: number) {
   const isWaiting = (await read($, busy))
     || (await read($, agents)).some(isRunning)
     || (await isAsking($))
+  // The snapshot is the stored one, so its commits are listed again here,
+  // before the checks below, rather than shown as an earlier look listed them
+  // (see relisted). A session that is waiting gets no prompt, so nothing is
+  // listed for it.
+  const shown = isWaiting ? s : await relisted($, r, s)
   const owedAt = await reloadOwed($)
   // Checked with no await before the submit, as deliver does. A turn about a
   // real change is already coming when one is being handed over, one waits
@@ -1450,7 +1470,7 @@ async function fireStuck($: $, gen: number) {
   ) return markQuiet($)
   // A question being open makes the session waiting above, so the step is
   // chosen with none open.
-  const isAccepted = await submitClaimed($, stuckPrompt(s, now - since, owedAt !== null), owedAt)
+  const isAccepted = await submitClaimed($, stuckPrompt(shown, now - since, owedAt !== null), owedAt)
   // This timer has fired, so the stuck prompt is armed again even when the
   // doubled interval cannot be saved.
   try {
@@ -2075,13 +2095,16 @@ async function resumeAfterClear($: $, cleared: number) {
   // as in a hold during the spec or the build, there is nothing to read. A
   // look that fails leaves the decision to the stored pull request.
   const watched = await read($, run)
-  if (watched !== null) await look($, 'resume', 'observe').catch(() => null)
+  const looked = watched === null ? null : await look($, 'resume', 'observe').catch(() => null)
   const stage = progressIn(await read($, progress))?.stage
   if (!(await isImplementing($)) || (await read($, busy))) return
   // While a pull request is watched, the prompt carries its state and the
   // step that applies, chosen from the snapshot the look above stored, or
-  // the one stored before when that look failed.
-  const shown = watched === null ? null : watchedSnapshotOf(watched, snapshotIn(await read($, pr)))
+  // the one stored before when that look failed or was overtaken. That one
+  // may be from before the turn the limit stopped, so its commits are listed
+  // again here, before the checks below (see relisted).
+  const stored = watched === null ? null : watchedSnapshotOf(watched, snapshotIn(await read($, pr)))
+  const shown = watched === null || stored === null || looked !== null ? stored : await relisted($, watched, stored)
   const watchedStep = shown === null ? null : { s: shown, isAsking: await isAsking($) }
   const owedAt = await reloadOwed($)
   // The checks and the claim follow each other with no await between, so the

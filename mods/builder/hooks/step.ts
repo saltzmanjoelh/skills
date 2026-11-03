@@ -156,6 +156,8 @@ export function needsListing(step: Step): step is Extract<Step, { kind: 'merge' 
 // How many short hashes a listing keeps, and how long each one is.
 export const UNPUSHED_KEPT = 20
 export const SHORT_HASH = 12
+// A short hash as a listing keeps it, built once rather than for every hash.
+const SHORT_HASH_PATTERN = new RegExp(`^[0-9a-f]{${SHORT_HASH}}$`)
 
 // A listing a snapshot holds, or could not be listed when it holds none or
 // one of another shape, which stops the merge and the cleanup, the safe
@@ -166,7 +168,7 @@ export function unpushedIn(raw: unknown): Unpushed {
   if (u.kind === 'none') return { kind: 'none' }
   if (u.kind !== 'some' || !Array.isArray(u.commits) || typeof u.isAncestor !== 'boolean') return { kind: 'unlisted' }
   const commits = u.commits
-  const isHash = (c: unknown): c is string => typeof c === 'string' && new RegExp(`^[0-9a-f]{${SHORT_HASH}}$`).test(c)
+  const isHash = (c: unknown): c is string => typeof c === 'string' && SHORT_HASH_PATTERN.test(c)
   if (commits.length === 0 || commits.length > UNPUSHED_KEPT || !commits.every(isHash)) return { kind: 'unlisted' }
   if (typeof u.total !== 'number' || !Number.isInteger(u.total) || u.total < commits.length) return { kind: 'unlisted' }
   return { kind: 'some', commits: [...commits], total: u.total, isAncestor: u.isAncestor }

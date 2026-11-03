@@ -75,6 +75,10 @@ export type Snapshot = {
   // only at a look that chose a merge step or the Merged step. Every other
   // snapshot has none, and the fingerprint never reads it.
   unpushed?: Unpushed
+  // The head branch's name, kept beside the listing at the same look, so a
+  // step text built later from this stored snapshot can list the commits
+  // again without reading the pull request. The fingerprint never reads it.
+  headBranch?: string
   fingerprint: string
 }
 
