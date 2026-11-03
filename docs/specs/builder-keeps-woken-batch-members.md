@@ -61,6 +61,15 @@ fields. It found:
   deadline. The engine's notification for that end has a summary saying
   the agent finished, while the notification for a park has a summary
   saying the agent is waiting on its own background work.
+- **Clustered notifications can make builder answer the release turn.**
+  A third run showed the engine delivering two to four notifications within
+  a fraction of a second and starting one turn for them all. Builder raises
+  its count of turns to answer without the model once for each held
+  delivery that arrives while the session is idle, so the count was left
+  higher than the turns it answered. The spare counts then answered the
+  turn that released the batch with "Noted.", because that turn's last
+  message is a report from a member of the batch just released, and the
+  model never read the completion line in that turn.
 - **The completion line reaches the model on an idle release.** A second run
   released a batch while the session was idle, and the model quoted the
   completion line back.
@@ -102,7 +111,14 @@ fields. It found:
    one minute. While the batch waits, a person's prompt still carries the
    line naming the members still running, and a member's later report or
    notification still ends the batch in the usual way.
-5. **The test rename.** The hook test that claimed a person's prompt after a
+5. **The release turn reaches the model.** When a delivery releases a
+   batch with the completion line, builder clears its count of turns to
+   answer without the model, so the turn that carries the line goes to the
+   model. A held delivery that arrives after the release raises the count
+   again as usual. If another batch is open at the same moment, its next
+   held delivery may then reach the model once, which costs one model turn
+   and loses nothing.
+6. **The test rename.** The hook test that claimed a person's prompt after a
    held member's notification goes to the model is renamed to claim only
    that a report whose turn finds the last member's notification last is
    answered without the model, and its second half, which could not fail,
@@ -178,7 +194,9 @@ fields. It found:
   no second report still lets its batch be released once, with the
   completion line; a `completed` notification whose summary says the agent
   is waiting on its own background work ends nothing; and the word
-  finished in the result or note, outside the summary, ends nothing. Each
+  finished in the result or note, outside the summary, ends nothing; and a
+  release that comes after more idle deliveries than turns clears the count,
+  so the release turn reaches the model. Each
   new test fails when its change is removed.
 - The four gates pass for both mods.
 - Before the pull request merges, the headless probe on the desktop app's
