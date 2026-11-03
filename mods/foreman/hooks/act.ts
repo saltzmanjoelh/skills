@@ -6,7 +6,7 @@
 // hooks/register.tsx carries them out. Every function is pure.
 
 import type { LastTurn } from 'builder'
-import type { Listed } from './desktop'
+import { REASONS, type Listed } from './desktop'
 import { beginHeldLog, beginHeldNotice, releasedBy } from './held'
 import { prStateOf, type BuildState, type RecordVerdicts } from './record'
 import { folded, withReadings } from './spend'
@@ -39,6 +39,18 @@ export const UNOWNED_FOR_MS = 24 * 60 * 60_000
 // last try is this old, so a try still waiting on its answer is not doubled.
 export const CALL_TIMEOUT_MS = 30_000
 
+// The words for a call that did not answer within CALL_TIMEOUT_MS.
+export const NO_ANSWER = `the desktop app did not answer within ${CALL_TIMEOUT_MS / 1000} seconds`
+
+// The reasons a failed read of the desktop app's list may show the person.
+// Any other text came from somewhere foreman does not control, so it is
+// shown as the refused reason instead.
+const LIST_FAILURES: ReadonlySet<string> = new Set([REASONS.notConnected, REASONS.listRefused, REASONS.listUnreadable, NO_ANSWER])
+
+// The notification for reads of the desktop app's list that started failing,
+// with the fixed reason `why`.
+export const listFailedNotice = (why: string) => `foreman cannot read the desktop app's list of sessions, so it cannot begin a waiting issue or free a finished slot until it can: ${why}.`
+
 // The desktop app's list of sessions for this read: not read because no rule
 // needed it, failed, or read. `complete` says the list came back shorter than
 // the most foreman asks for, so a session missing from it is surely gone. A
@@ -46,8 +58,27 @@ export const CALL_TIMEOUT_MS = 30_000
 // `known` holds the desktop session ids the ledger held when the list was
 // asked for: a session whose id the ledger learned while the list call was
 // out may have started after the list was made, so its absence from the list
-// says nothing. Without `known`, every id counts as held then.
-export type SessionsLook = { kind: 'unread' } | { kind: 'failed' } | { kind: 'read'; sessions: Listed[]; complete?: boolean; known?: readonly string[] }
+// says nothing. Without `known`, every id counts as held then. A failed look
+// carries the fixed reason it failed, which the notice for a failed read
+// shows, and one without a reason counts as refused.
+export type SessionsLook = { kind: 'unread' } | { kind: 'failed'; reason?: string } | { kind: 'read'; sessions: Listed[]; complete?: boolean; known?: readonly string[] }
+
+// A list that was read, as the rules look things up in it: its sessions by
+// id, whether it is complete, and the ids the ledger held when it was asked
+// for, as SessionsLook says. decide builds it once for every rule.
+type ListLook = { byId: ReadonlyMap<string, Listed>; complete: boolean; known: ReadonlySet<string> | null }
+
+// Whether the list shows the session `id` over: archived when its entry says
+// so exactly, or missing when it has no entry, the list is complete and the
+// ledger held the id when the list was asked for. A pairing with no desktop
+// session id is never over. The over rule and the queue both decide by it,
+// so the two cannot drift apart.
+function overIn(look: ListLook, id: string | null): 'archived' | 'missing' | null {
+  if (id === null) return null
+  const entry = look.byId.get(id)
+  if (entry !== undefined) return entry.isArchived === true ? 'archived' : null
+  return look.complete && (look.known === null || look.known.has(id)) ? 'missing' : null
+}
 
 export type DecideInput = {
   tickets: ForemanTickets
@@ -122,8 +153,8 @@ type Step = {
   row: SubRow
   now: number
   limits: Limits
-  // The desktop app's sessions by id, or null when the list was not read.
-  sessionsById: ReadonlyMap<string, Listed> | null
+  // The desktop app's list, or null when it was not read.
+  look: ListLook | null
   effects: ForemanEffect[]
   reasons: Reason[]
   logs: string[]
@@ -189,8 +220,8 @@ const STATE_RULES: Record<BuildState, (s: Step) => void> = {
   },
   'done': s => {
     setActs(s, { stretch: null })
-    if (s.sessionsById === null) return
-    const ended = endedIn(s.sessionsById, desktopOf(s.p, s.row))
+    if (s.look === null) return
+    const ended = endedIn(s.look.byId, desktopOf(s.p, s.row))
     if (ended === null) return
     s.p = { ...s.p, standing: 'freed' }
     s.freed += 1
@@ -290,11 +321,11 @@ function idleRule(s: Step, since: number, background: { task: string | null } | 
   setActs(s, { stretch: { ...stretch, woke: true } })
 }
 
-// Whether a record may be gone, before the desktop app's list is asked: it
-// is not done, its file has not changed for GONE_MS, its pull request has
-// not merged, and the gone wake has not already gone for this file. The gone
-// rule and needsList both ask it, so the list is read only when the rule
-// could act on it.
+// Whether a record may be gone: it is not done, its file has not changed
+// for GONE_MS, its pull request has not merged, and the gone wake has not
+// already gone for this file. The gone rule asks it. The list is read more
+// often than this, as slotsNeedList says, because the over rule can act on
+// a record that this rules out.
 function mayBeGone(p: ForemanPairing, row: SubRow, now: number): boolean {
   return row.record.state !== 'done'
     && now - row.mtimeMs > GONE_MS
@@ -306,10 +337,32 @@ function mayBeGone(p: ForemanPairing, row: SubRow, now: number): boolean {
 // does not show the session running, and the pull request has not merged.
 // One stretch is one unchanged modification time.
 function goneRule(s: Step) {
-  if (s.sessionsById === null || !mayBeGone(s.p, s.row, s.now)) return
-  if (endedIn(s.sessionsById, desktopOf(s.p, s.row)) === null) return
+  if (s.look === null || s.p.standing !== 'active' || !mayBeGone(s.p, s.row, s.now)) return
+  if (endedIn(s.look.byId, desktopOf(s.p, s.row)) === null) return
   s.reasons.push({ kind: 'gone', who: whoOf(s.row.record.issueKey, s.p.ticket), minutes: minutesOf(s.now - s.row.mtimeMs) })
   setActs(s, { goneWokeFor: s.row.mtimeMs })
+}
+
+// Over, in any state but done: the list shows the session archived, or
+// missing as overIn says, so the sub session will never write done and its
+// slot is freed on this read, whatever its file says and whether or not its
+// pull request merged. The log line names the state the file says and the
+// pull request, or that it has none. It answers whether it freed the slot,
+// and the caller then runs no state rule and no gone rule for the pairing,
+// so a session that is over gets no last nudge, notification or wake. A done
+// record keeps the done rule, which also frees on a session that is not
+// running.
+function overRule(s: Step): boolean {
+  if (s.look === null || s.row.record.state === 'done') return false
+  const over = overIn(s.look, desktopOf(s.p, s.row))
+  if (over === null) return false
+  s.p = { ...s.p, standing: 'freed' }
+  s.freed += 1
+  s.freedBy.push(whoOf(s.row.record.issueKey, s.p.ticket))
+  const { pr, state } = s.row.record
+  const how = over === 'archived' ? 'is archived' : 'is no longer listed'
+  s.logs.push(`The session of ${nameOf(s.row)} ${how} while its status file says ${state}, with ${pr === null ? 'no pull request' : `pull request #${pr.number}`}, so its slot is free.`)
+  return true
 }
 
 // A started sub session that foreman cannot watch: an active pairing with a
@@ -423,12 +476,15 @@ export function keptByUnreadList(t: ForemanTickets, rows: readonly SubRow[], now
 }
 
 // Whether a slot rule needs the desktop app's list: some active owned record
-// that does not wait is done, or may be gone, as mayBeGone says.
+// that does not wait is done, or its file has not changed for GONE_MS. That
+// holds even after its gone wake went or its pull request merged, because
+// the over rule frees the slot of such a record once its session is
+// archived, and with no queue nothing else would read the list for it.
 export function slotsNeedList(t: ForemanTickets, rows: readonly SubRow[], now: number): boolean {
   const active = new Map(t.pairings.flatMap(p => (p.owner !== null && p.standing === 'active' && p.queue === null ? [[p.owner, p] as const] : [])))
   return rows.some(r => {
     const p = active.get(r.record.sessionId)
-    return p !== undefined && ownsTicket(p, r) && (r.record.state === 'done' || mayBeGone(p, r, now))
+    return p !== undefined && ownsTicket(p, r) && (r.record.state === 'done' || now - r.mtimeMs > GONE_MS)
   })
 }
 
@@ -461,9 +517,8 @@ const showsProgress = (row: SubRow) => row.record.issueKey !== null || row.recor
 
 // What the queue leads to on one read, after every pairing's own rules:
 // - a waiting sub session whose record shows progress counts as begun;
-// - when the list was read, a waiting sub session that it shows archived, or
-//   that is missing from a complete list asked for once the ledger held its
-//   desktop session id, leaves the queue: an unclaimed one
+// - when the list was read, a waiting sub session that it shows over, as
+//   overIn says, leaves the queue: an unclaimed one
 //   has its issue dropped, as the app can delete an inactive session without
 //   archiving it, while a claimed one has its key held, with a notification
 //   only when no failed begin was told for it already;
@@ -478,11 +533,11 @@ const showsProgress = (row: SubRow) => row.record.issueKey !== null || row.recor
 function queueStep(
   t: ForemanTickets,
   q: {
-    rows: readonly SubRow[]; byFile: ReadonlyMap<string, SubRow>; now: number; slots: number; byId: ReadonlyMap<string, Listed> | null; complete: boolean; known: ReadonlySet<string> | null
+    rows: readonly SubRow[]; byFile: ReadonlyMap<string, SubRow>; now: number; slots: number; look: ListLook | null
     freedBy: string[]; effects: ForemanEffect[]; logs: string[]
   },
 ): ForemanTickets {
-  const { rows, now, byId, effects, logs } = q
+  const { rows, now, look, effects, logs } = q
   const ownerRow = (p: ForemanPairing) => {
     const row = p.ownerFile === null ? undefined : q.byFile.get(p.ownerFile)
     return row !== undefined && ownsTicket(p, row) ? row : undefined
@@ -496,17 +551,16 @@ function queueStep(
       logs.push(`${who} began before foreman's begin message, so foreman counts it as busy.`)
       return [{ ...p, queue: null }]
     }
-    const entry = byId === null || p.localId === null ? undefined : byId.get(p.localId)
-    const isArchived = entry?.isArchived === true
-    const isGone = byId !== null && p.localId !== null && entry === undefined && q.complete && (q.known === null || q.known.has(p.localId))
-    if (!isArchived && !isGone) return [p]
+    const over = look === null ? null : overIn(look, p.localId)
+    if (over === null) return [p]
+    const dropped = `Dropped ${who} from the queue, because its waiting session is ${over === 'archived' ? 'archived' : 'no longer listed'}.`
     if (p.queue.claim === null) {
-      logs.push(`Dropped ${who} from the queue, because its waiting session is ${isArchived ? 'archived' : 'no longer listed'}.`)
+      logs.push(dropped)
       return []
     }
     const key = p.issueKey !== null && isWholeKey(p.issueKey) ? p.issueKey : null
     if (key === null) {
-      logs.push(`Dropped ${who} from the queue, because its waiting session is ${isArchived ? 'archived' : 'no longer listed'}.`)
+      logs.push(dropped)
       return []
     }
     logs.push(beginHeldLog(key))
@@ -516,7 +570,7 @@ function queueStep(
     }
     return []
   })
-  const isShown = (p: ForemanPairing) => p.localId !== null && byId?.get(p.localId)?.surelyUnarchived === true
+  const isShown = (p: ForemanPairing) => p.localId !== null && look?.byId.get(p.localId)?.surelyUnarchived === true
   let free = freeSlots({ ...t, pairings }, rows, now, q.slots)
   const claims = new Map<string, string | null>()
   for (const p of queueOf({ ...t, pairings })) {
@@ -550,11 +604,17 @@ function queueStep(
 // rather than waking the parent with them, since splitReasons in wake.ts sets
 // them apart. A list that was read releases each held key that a session in
 // it shows started.
+// An active pairing whose session the list shows over is freed by the over
+// rule before its state rules, but after its milestones, so a merge on the
+// same read is still reported.
 // When this read freed a slot and a freed slot is left that no claim of
 // queueStep filled, the parent is woken with the number of slots free, unless
 // none is free once the claims are counted. Each claim counts against one
 // freed slot, whichever slot it actually takes. The number counts every free
-// slot, not only the freed ones, and leaves out each slot a claim took.
+// slot, not only the freed ones, and leaves out each slot a claim took. While
+// a sub session still waits unclaimed, the parent is woken with the kept
+// sentence instead, which names the waiting issues and says not to start a
+// new one, so foreman never asks for a new issue while one waits.
 // A read that could not read the desktop app's list cannot claim, so while a
 // sub session waits unclaimed it keeps its freed slots in `keptSlots` instead
 // of waking the parent for them. The slots kept count as freed by the next
@@ -565,9 +625,15 @@ function queueStep(
 // pairings as the read found them, and the spent list is folded after the
 // pairings are decided, so an entry whose pairing this read forgot can fold
 // in the same ledger.
+// A failed read of the list raises one quiet notification with its fixed
+// reason when the ledger's mark says none went since the last read that got
+// a list, and sets the mark. A read that got a list clears it, and a read
+// that did not ask for the list leaves it as it was.
 export function decide(input: DecideInput): Decision {
   const { rows, now, limits, sessions, folderExists, listed } = input
-  const byId = sessions.kind === 'read' ? new Map(sessions.sessions.map(x => [x.sessionId, x])) : null
+  const look: ListLook | null = sessions.kind === 'read'
+    ? { byId: new Map(sessions.sessions.map(x => [x.sessionId, x])), complete: sessions.complete === true, known: sessions.known === undefined ? null : new Set(sessions.known) }
+    : null
   const effects: ForemanEffect[] = []
   const reasons: Reason[] = []
   const logs: string[] = []
@@ -603,12 +669,14 @@ export function decide(input: DecideInput): Decision {
     }
     if (!ownsTicket(p, row) || p.standing !== 'active' || waits) return [p]
     const episode = episodeOf(p.acts.episode, row, now)
-    const s: Step = { p: { ...p, acts: { ...p.acts, episode } }, episode, row, now, limits, sessionsById: byId, effects, reasons, logs, due, freed: 0, freedBy }
+    const s: Step = { p: { ...p, acts: { ...p.acts, episode } }, episode, row, now, limits, look, effects, reasons, logs, due, freed: 0, freedBy }
     // The milestone sentences follow this pairing's other sentences, so that
     // the slot-free sentence, added after every pairing, stays last.
     const milestones = milestoneRule(s)
-    STATE_RULES[row.record.state](s)
-    goneRule(s)
+    if (!overRule(s)) {
+      STATE_RULES[row.record.state](s)
+      goneRule(s)
+    }
     reasons.push(...milestones)
     freed += s.freed
     return [s.p]
@@ -621,14 +689,21 @@ export function decide(input: DecideInput): Decision {
     if (released.logs.length > 0) tickets = { ...tickets, held: released.held }
     logs.push(...released.logs)
   }
-  const complete = sessions.kind === 'read' && sessions.complete === true
-  const known = sessions.kind === 'read' && sessions.known !== undefined ? new Set(sessions.known) : null
+  if (sessions.kind === 'failed' && !tickets.listFailNotified) {
+    const why = sessions.reason !== undefined && LIST_FAILURES.has(sessions.reason) ? sessions.reason : REASONS.listRefused
+    // The failure's log line already holds the reason, so the notification
+    // is quiet.
+    effects.push({ kind: 'notify', text: listFailedNotice(why), quiet: true })
+    tickets = { ...tickets, listFailNotified: true }
+  }
+  if (sessions.kind === 'read') tickets = { ...tickets, listFailNotified: false }
   const freedNow = freedBy.slice(kept.length)
-  tickets = queueStep(tickets, { rows, byFile, now, slots: input.slots, byId, complete, known, freedBy, effects, logs })
+  tickets = queueStep(tickets, { rows, byFile, now, slots: input.slots, look, freedBy, effects, logs })
+  const unclaimed = waitingUnclaimed(tickets, now, GONE_MS)
   // A read without the list claims nothing, so while a sub session waits
   // unclaimed every freed slot is kept for it. A name the ledger's reader
   // would drop, from a damaged ticket, is not kept, so its slot still wakes.
-  const keeps = byId === null && waitingUnclaimed(tickets, now, GONE_MS).length > 0
+  const keeps = look === null && unclaimed.length > 0
   const left = keeps ? freedBy.filter(who => !isWhoName(who)) : freedBy
   if (keeps) {
     for (const who of freedNow.filter(isWhoName)) logs.push(`Kept the slot of ${who} for the queue, because the desktop app's list of sessions could not be read.`)
@@ -637,11 +712,18 @@ export function decide(input: DecideInput): Decision {
   // Each claim took the name of a slot this read freed, or of one an earlier
   // read kept, so a name left over is a freed slot that no waiting sub
   // session could take: one the list does not show surely unarchived, or a
-  // proposal card that has not started. The parent is woken for it as
-  // before, so a freed slot is never lost.
+  // proposal card that has not started. The parent is woken for it, so a
+  // freed slot is never lost: with the kept sentence while someone still
+  // waits unclaimed, naming each waiting issue whose name a wake line may
+  // carry, and with the slot-free sentence otherwise.
   if (freed > 0 && left.length > 0) {
-    const outcome = slotOutcome(freeSlots(tickets, rows, now, input.slots))
-    if (outcome.kind === 'wake') reasons.push(outcome.reason)
+    const free = freeSlots(tickets, rows, now, input.slots)
+    if (unclaimed.length === 0) {
+      const outcome = slotOutcome(free)
+      if (outcome.kind === 'wake') reasons.push(outcome.reason)
+    } else if (free > 0) {
+      reasons.push({ kind: 'slot-kept', whos: [...new Set(unclaimed.map(p => whoOf(p.issueKey, p.ticket)).filter(isWhoName))] })
+    }
   }
   return { tickets, effects, reasons, logs, nextDueAt: due.length === 0 ? null : Math.min(...due) }
 }

@@ -259,6 +259,15 @@ test('the kept slots keep only names a wake line may carry, repeats included, th
   expect(ticketsIn(JSON.parse(JSON.stringify(t))).keptSlots).toEqual(['ABC-1', who])
 })
 
+test('the mark for a failed list read is set only when stored as exactly true, so an old ledger reads with it unset', () => {
+  expect(TICKETS_EMPTY.listFailNotified).toBe(false)
+  expect(ticketsIn({ pairings: [], folderMissing: false }).listFailNotified).toBe(false)
+  expect(ticketsIn({ listFailNotified: 'true' }).listFailNotified).toBe(false)
+  expect(ticketsIn({ listFailNotified: 1 }).listFailNotified).toBe(false)
+  expect(ticketsIn({ listFailNotified: true }).listFailNotified).toBe(true)
+  expect(ticketsIn(JSON.parse(JSON.stringify({ ...TICKETS_EMPTY, listFailNotified: true }))).listFailNotified).toBe(true)
+})
+
 test('the unwatched list keeps only whole local_ ids, each once, the newest 50', () => {
   expect(ticketsIn({ unwatched: 'local_a' }).unwatched).toEqual([])
   expect(ticketsIn({ unwatched: ['local_a', 'local_a', 'local_b', 'Local_c', 'local_', 'x local_d', 'local_e f', 'local_g!', 7, null, 'local_h-1_x'] }).unwatched)

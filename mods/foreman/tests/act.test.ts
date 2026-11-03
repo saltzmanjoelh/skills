@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import { decide, GONE_MS, needsList, type DecideInput, type Decision, type SessionsLook } from '../hooks/act'
+import { decide, GONE_MS, listFailedNotice, needsList, NO_ANSWER, type DecideInput, type Decision, type SessionsLook } from '../hooks/act'
+import { REASONS } from '../hooks/desktop'
 import { recordIn } from '../hooks/record'
 import { spentSum } from '../hooks/spend'
 import type { SubRow } from '../hooks/subs'
@@ -205,13 +206,62 @@ test('a sub session whose file stopped and whose session is not running wakes th
   expect(read(paired(), stopped, later, { sessions: { kind: 'failed' } }).reasons).toEqual([])
 })
 
-test('the session list is needed only for a done record or a file older than the gone threshold', () => {
+test('the session list is needed for a done record or a file older than the gone threshold, even after its gone wake or a merge', () => {
   const t = joinOwners(paired(), [row()]).tickets
   expect(needsList(t, [row()], T0 + MINUTE)).toBe(false)
   expect(needsList(t, [row({ state: 'done' })], T0)).toBe(true)
   expect(needsList(t, [row()], T0 + GONE_MS + 1)).toBe(true)
+  // A record whose gone wake already went, or whose pull request merged, may
+  // still have been archived since, which frees its slot.
   const woke = { ...t, pairings: t.pairings.map(p => ({ ...p, acts: { ...p.acts, goneWokeFor: T0 } })) }
-  expect(needsList(woke, [row()], T0 + GONE_MS + 1)).toBe(false)
+  expect(needsList(woke, [row()], T0 + GONE_MS + 1)).toBe(true)
+  expect(needsList(woke, [row()], T0 + MINUTE)).toBe(false)
+  const merged = row({ state: 'working', pr: { repo: 'o/r', number: 7, state: 'MERGED', checks: 'passed' } })
+  expect(needsList(t, [merged], T0 + GONE_MS + 1)).toBe(true)
+})
+
+test('a sub session that is not running but still listed unarchived keeps its slot and gets the gone wake', () => {
+  const stopped = [row({ state: 'waiting-on-builder' }, 'a.json', T0)]
+  const notRunning: SessionsLook = { kind: 'read', sessions: [{ sessionId: 'local_a', isArchived: false, isRunning: false, title: null, surelyUnarchived: true }], complete: true }
+  const d = read(paired(), stopped, T0 + GONE_MS + MINUTE, { sessions: notRunning })
+  expect(d.tickets.pairings[0]!.standing).toBe('active')
+  expect(d.reasons).toEqual([{ kind: 'gone', who: 'ABC-1', minutes: 6 }])
+})
+
+const notices = (d: Decision) => d.effects.filter(e => e.kind === 'notify')
+const failed = (reason?: string): SessionsLook => ({ kind: 'failed', ...(reason === undefined ? {} : { reason }) })
+
+test('the notice for a failed list read is pinned', () => {
+  expect(listFailedNotice(REASONS.notConnected))
+    .toBe('foreman cannot read the desktop app\'s list of sessions, so it cannot begin a waiting issue or free a finished slot until it can: the desktop app\'s tools are not connected in this session.')
+})
+
+test('a run of failed list reads raises one quiet notification, a read that skipped the list keeps the mark, and only a read that got a list clears it', () => {
+  let d = read(paired(), [row()], T0, { sessions: failed(REASONS.notConnected) })
+  expect(notices(d)).toEqual([{ kind: 'notify', text: listFailedNotice(REASONS.notConnected), quiet: true }])
+  expect(d.tickets.listFailNotified).toBe(true)
+  d = read(d.tickets, [row()], T0 + MINUTE, { sessions: failed(REASONS.notConnected) })
+  expect(notices(d)).toEqual([])
+  d = read(d.tickets, [row()], T0 + 2 * MINUTE, { sessions: { kind: 'unread' } })
+  expect(d.tickets.listFailNotified).toBe(true)
+  d = read(d.tickets, [row()], T0 + 3 * MINUTE, { sessions: failed(REASONS.listUnreadable) })
+  expect(notices(d)).toEqual([])
+  d = read(d.tickets, [row()], T0 + 4 * MINUTE, { sessions: running })
+  expect(notices(d)).toEqual([])
+  expect(d.tickets.listFailNotified).toBe(false)
+  d = read(d.tickets, [row()], T0 + 4 * MINUTE + 1, { sessions: failed(NO_ANSWER) })
+  expect(notices(d)).toEqual([{ kind: 'notify', text: listFailedNotice(NO_ANSWER), quiet: true }])
+  expect(d.tickets.listFailNotified).toBe(true)
+})
+
+test('a failure reason outside the fixed set, or none, gives the refused reason, so the tool\'s own text never reaches the person', () => {
+  for (const reason of ['SECRET-ERROR-TEXT', undefined]) {
+    const d = read(paired(), [row()], T0, { sessions: failed(reason) })
+    expect(notices(d)).toEqual([{ kind: 'notify', text: listFailedNotice(REASONS.listRefused), quiet: true }])
+  }
+  for (const reason of [REASONS.notConnected, REASONS.listRefused, REASONS.listUnreadable, NO_ANSWER]) {
+    expect(notices(read(paired(), [row()], T0, { sessions: failed(reason) }))).toEqual([{ kind: 'notify', text: listFailedNotice(reason), quiet: true }])
+  }
 })
 
 test('a pairing that no status file carried for a day is forgotten, and a younger one is kept', () => {

@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PromptSubmitInput, Register, ResolveInput, ToolCallResult } from 'claude-code'
 
 import { checkOutcome, clampedDue, endsOf, isClaimed, soonestDue, withNote, withoutPaired, type CheckDone } from './checks'
-import { CALL_TIMEOUT_MS, decide, desktopOf, freeSlots, GONE_MS, keptByUnreadList, needsList, slotOutcome, startWaits, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
+import { CALL_TIMEOUT_MS, decide, desktopOf, freeSlots, GONE_MS, keptByUnreadList, needsList, NO_ANSWER, slotOutcome, startWaits, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
 import { isSvgSurface } from './art'
 import { becameParentAnswer, COMMAND, commandOf, PASSED_ON, PASTED_LINE, pastedCommandIn, slotsAnswer, type Command } from './commands'
 import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, failureLine, linkedFamily, listSessions, NUDGE_TEXT, openSession, readHeader, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
@@ -49,9 +49,6 @@ export const LOG_KEPT = 20
 // How often the band is drawn again while the role is on, so the time until
 // the next read and a stale file's age stay true.
 const REDRAW_MS = 1_000
-
-// The words for a call that did not answer in time.
-const NO_ANSWER = `the desktop app did not answer within ${CALL_TIMEOUT_MS / 1000} seconds`
 
 // The soonest the next read may come, when a nudge or a wake falls due.
 const SOONEST_READ_MS = 1_000
@@ -348,7 +345,8 @@ function later($: $, work: () => Promise<unknown>) {
 // decision, so the caller schedules the checks without reading it again. A
 // list that could not be read is logged with what it kept from happening: a
 // freed slot when a slot rule needed it, else a released hold when a key is
-// held, and otherwise a queued issue begun or dropped.
+// held, and otherwise a queued issue begun or dropped. Its fixed reason goes
+// to decide too, which raises the notification for it.
 async function decideNow($: $, folderExists: boolean, listed: boolean, now: number): Promise<{ decision: Decision; rows: SubRow[]; written: ForemanTickets }> {
   const rows = await rowsNow($)
   const before = joinOwners(ticketsIn(await read($, tickets)), rows).tickets
@@ -357,7 +355,7 @@ async function decideNow($: $, folderExists: boolean, listed: boolean, now: numb
     const sessionList = await within($, listSessions(desktopCall($)))
     if (sessionList === TIMED_OUT || 'reason' in sessionList) {
       const why = sessionList === TIMED_OUT ? NO_ANSWER : sessionList.reason
-      sessions = { kind: 'failed' }
+      sessions = { kind: 'failed', reason: why }
       await addLog($, `Could not read the desktop app's list of sessions, so ${keptByUnreadList(before, rows, now)}: ${why}.`)
     } else {
       const known = before.pairings.flatMap(p => (p.localId === null ? [] : [p.localId]))
@@ -1214,6 +1212,7 @@ export const register: Register = (on, options) => {
         const held = ticketsIn(heldRaw)
         const isEmpty = held.pairings.length === 0 && !hasWork(held.outbox) && held.held.length === 0 && held.offRefusedFor === null && held.unwatched.length === 0
           && held.spent.length === 0 && held.earlier === null && held.keptSlots.length === 0 && held.checks.length === 0
+          && !held.listFailNotified
         return isEmpty ? storedTickets : held
       })
     }

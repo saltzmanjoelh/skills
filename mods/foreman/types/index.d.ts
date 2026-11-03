@@ -163,7 +163,9 @@ export type ForemanSpent = ForemanSpend & { ticket: string }
 // not read the desktop app's list while a sub session waited unclaimed, kept
 // for the queue until a later read decides it as if it had freed then.
 // `checks` holds the sub sessions foreman holds no record of that it checks
-// by itself, oldest note first.
+// by itself, oldest note first. `listFailNotified` says that foreman raised
+// the notification for a failed read of the desktop app's list and no read
+// has got the list since, so a run of failed reads raises it only once.
 export type ForemanTickets = {
   pairings: ForemanPairing[]
   folderMissing: boolean
@@ -175,6 +177,7 @@ export type ForemanTickets = {
   earlier: ForemanSpend | null
   keptSlots: string[]
   checks: ForemanCheck[]
+  listFailNotified: boolean
 }
 
 declare module 'claude-code' {

@@ -165,7 +165,7 @@ export const ticketsKey = (sessionId: string) => `tickets:${sessionId}`
 
 export const OUTBOX_EMPTY: ForemanOutbox = { logs: [], effects: [], lines: [], reports: [] }
 
-export const TICKETS_EMPTY: ForemanTickets = { pairings: [], folderMissing: false, outbox: OUTBOX_EMPTY, held: [], offRefusedFor: null, unwatched: [], spent: [], earlier: null, keptSlots: [], checks: [] }
+export const TICKETS_EMPTY: ForemanTickets = { pairings: [], folderMissing: false, outbox: OUTBOX_EMPTY, held: [], offRefusedFor: null, unwatched: [], spent: [], earlier: null, keptSlots: [], checks: [], listFailNotified: false }
 
 // Whether the outbox holds anything to carry out.
 export const hasWork = (o: ForemanOutbox) => o.logs.length > 0 || o.effects.length > 0 || o.lines.length > 0 || o.reports.length > 0
@@ -387,7 +387,9 @@ const spentIn = (raw: unknown): ForemanSpent[] => (Array.isArray(raw)
 // given and no unwatched sub sessions, and one from before foreman kept
 // spending reads with none, and one from before slots were kept keeps none.
 // One from before foreman checked sub sessions itself holds no checks, and an
-// outbox from before reports were kept holds none.
+// outbox from before reports were kept holds none. The mark for a failed list
+// read is set only when it was stored as exactly true, so a ledger from
+// before the mark existed reads with it unset.
 export function ticketsIn(raw: unknown): ForemanTickets {
   const t = objectOf(raw)
   if (t === null) return TICKETS_EMPTY
@@ -403,6 +405,7 @@ export function ticketsIn(raw: unknown): ForemanTickets {
     earlier: spendIn(t.earlier),
     keptSlots: keptSlotsIn(t.keptSlots),
     checks: checksIn(t.checks),
+    listFailNotified: t.listFailNotified === true,
   }
 }
 
