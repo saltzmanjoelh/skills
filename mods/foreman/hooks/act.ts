@@ -487,12 +487,14 @@ export function keptByUnreadList(t: ForemanTickets, rows: readonly SubRow[], now
 
 // Whether a slot rule needs the desktop app's list: some active owned record
 // that does not wait is done, or mayBeGone holds for it, or its file has not
-// changed for GONE_MS and no read got the list for it in the last GONE_MS.
+// changed for GONE_MS and no read asked for the list for it in the last
+// GONE_MS.
 // The last case covers a record whose gone wake went or whose pull request
 // merged, because the over rule frees its slot once its session is archived,
 // and with no queue nothing else would read the list for it. It asks at most
-// once every GONE_MS, so such a record does not make every read wait on the
-// list while another sub session works, and an archived session still frees
+// once every GONE_MS, a failed ask included, so such a record does not make
+// every read wait on the list while another sub session works or while the
+// list keeps failing, and an archived session still frees
 // its slot within about GONE_MS.
 export function slotsNeedList(t: ForemanTickets, rows: readonly SubRow[], now: number): boolean {
   const active = new Map(t.pairings.flatMap(p => (p.owner !== null && p.standing === 'active' && p.queue === null ? [[p.owner, p] as const] : [])))
@@ -646,8 +648,8 @@ function queueStep(
 // reason when the ledger's mark says none went since the last read that got
 // a list, and sets the mark. A read that got a list clears it, and a read
 // that did not ask for the list leaves it as it was.
-// A read that got a list records its time in each active pairing it looked
-// at, which slotsNeedList reads.
+// A read that asked for the list, whether or not it got one, records its time
+// in each active pairing it looked at, which slotsNeedList reads.
 export function decide(input: DecideInput): Decision {
   const { rows, now, limits, sessions, folderExists, listed } = input
   const look: ListLook | null = sessions.kind === 'read'
@@ -692,7 +694,7 @@ export function decide(input: DecideInput): Decision {
     // The milestone sentences follow this pairing's other sentences, so that
     // the slot-free sentence, added after every pairing, stays last.
     const milestones = milestoneRule(s)
-    if (look !== null) setActs(s, { listCheckedAt: now })
+    if (sessions.kind !== 'unread') setActs(s, { listCheckedAt: now })
     if (!overRule(s)) {
       STATE_RULES[row.record.state](s)
       goneRule(s)

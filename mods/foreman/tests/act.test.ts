@@ -229,9 +229,14 @@ test('a stale record whose gone wake went needs the session list at most once ev
   expect(needsList(checked, [row()], first + MINUTE)).toBe(false)
   expect(needsList(checked, [row()], first + GONE_MS - 1)).toBe(false)
   expect(needsList(checked, [row()], first + GONE_MS)).toBe(true)
-  // A read that could not get the list does not count as a check.
+  // A read that asked for the list and could not get it counts as a check
+  // too, so a list that keeps failing does not make every read wait on it.
+  // A read that never asked for the list does not count.
   const failed = read(wokeFor, [row()], first, { sessions: { kind: 'failed' } }).tickets
-  expect(needsList(failed, [row()], first + MINUTE)).toBe(true)
+  expect(needsList(failed, [row()], first + MINUTE)).toBe(false)
+  expect(needsList(failed, [row()], first + GONE_MS)).toBe(true)
+  const unread = read(wokeFor, [row()], first, { sessions: { kind: 'unread' } }).tickets
+  expect(needsList(unread, [row()], first + MINUTE)).toBe(true)
   // A record still due its gone wake, and a done one, ask on every read.
   const due = read(paired(), [row()], first, { sessions: running }).tickets
   expect(needsList(due, [row()], first + MINUTE)).toBe(true)

@@ -40,10 +40,10 @@ they were decided on, and no state lives in module variables.
    still ask for the list on every read. Any other active record whose file
    has not changed for longer than `GONE_MS` asks for it at most once every
    `GONE_MS`, timed by a new `listCheckedAt` in the pairing's acts that a read
-   which got the list sets, and that reads as never checked when it is missing
-   or damaged. Asking on every read instead would call the list every 30
-   seconds while another sub session works, each call waiting up to 30
-   seconds when the list fails. The comments above `slotsNeedList` and
+   which asked for the list sets, whether or not it got one, and that reads
+   as never checked when it is missing or damaged. Asking on every read
+   instead would call the list every 30 seconds while another sub session
+   works, each call waiting up to 30 seconds when the list fails. The comments above `slotsNeedList` and
    `mayBeGone` and the test that pins the old gate are rewritten. The spec
    gains one line saying so.
 4. **The new wake.** `wake.ts` gains the reason
