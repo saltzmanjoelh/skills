@@ -4002,8 +4002,10 @@ const TICKET_PREFIX = 'ticket:'
 const ticketKey = (sessionId: string) => `${TICKET_PREFIX}${sessionId}`
 const TICKET_KEPT_MS = 14 * 24 * 60 * 60_000
 const TICKET_REFRESH_MS = 24 * 60 * 60_000
-// How long one store call for the record may take, so that a call that never
-// settles cannot hold the status write it runs in.
+// How long one store call for the record may take. The take-up at the hooks'
+// start and at a prompt waits for its read, and a refresh, which runs one at
+// a time, waits for its own calls and for the sweep's, so a call that never
+// settles would otherwise stall the take-up or stop every later refresh.
 const TICKET_STORE_TIMEOUT_MS = 10_000
 
 // Asks for the file to be worked out again and written when it changed, or
@@ -4485,10 +4487,10 @@ async function refreshTicket($: $, memo: StatusMemo & { ticket: string; path: st
 function pruneTickets($: $): Promise<void> {
   ticketSweep = (async () => {
     const now = await $.clock.now()
-    for (const key of await $.store.keys()) {
+    for (const key of await withinTimeout($, $.store.keys(), TICKET_STORE_TIMEOUT_MS)) {
       if (!key.startsWith(TICKET_PREFIX)) continue
-      const kept = keptTicketIn(await $.store.get(key), key.slice(TICKET_PREFIX.length))
-      if (kept === null || now - kept.at > TICKET_KEPT_MS) await $.store.delete(key)
+      const kept = keptTicketIn(await withinTimeout($, $.store.get(key), TICKET_STORE_TIMEOUT_MS), key.slice(TICKET_PREFIX.length))
+      if (kept === null || now - kept.at > TICKET_KEPT_MS) await withinTimeout($, $.store.delete(key), TICKET_STORE_TIMEOUT_MS)
     }
   })()
   return ticketSweep

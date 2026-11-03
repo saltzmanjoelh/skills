@@ -963,7 +963,8 @@ test('an agent the engine does not list keeps its tools', async ($, on) => {
 // of a key with that prefix, `hold.deletesRefused` every delete and
 // `hold.keysRefused` every listing of the keys. `hold.listings` counts the
 // listings of the keys, refused ones included, and `hold.sets` lists the key
-// of every write, refused ones included, in the order the writes began.
+// of every write, refused ones included, in the order the writes began, and
+// `hold.gets` the key of every read, in the same way.
 // `hold.onDelete`, when set, is called with the key of every delete as it
 // begins, so a test can see what had already happened by then.
 function memoryStore(on: On, entries: [string, unknown][] = []) {
@@ -971,13 +972,14 @@ function memoryStore(on: On, entries: [string, unknown][] = []) {
   const hold = {
     prefix: '', skip: 0, until: null as Promise<void> | null, refused: null as string | null, full: false,
     setsRefused: null as string | null, deletesRefused: false, keysRefused: false, listings: 0, sets: [] as string[],
-    onDelete: null as ((key: string) => void) | null,
+    gets: [] as string[], onDelete: null as ((key: string) => void) | null,
   }
   on('store.keys', () => {
     hold.listings += 1
     return hold.keysRefused ? { deny: 'the store could not be listed' } : { value: [...stored.keys()] }
   })
   on('store.get', async ($, e) => {
+    hold.gets.push(e.key)
     if (hold.refused !== null && e.key.startsWith(hold.refused)) return { deny: 'the store could not be read' }
     const until = hold.until
     if (until !== null && e.key.startsWith(hold.prefix)) {
@@ -12929,6 +12931,34 @@ test('the first refresh waits for the sweep of the kept records that the hooks\'
   release()
   await s.clock.settle()
   expect(s.stored.has('ticket:other')).toBe(false)
+  expect(s.stored.get('ticket:session-1')).toEqual(UNPARENTED)
+})
+
+test('status writes made while a refresh of the kept record waits on its read start no second refresh', async ($, on) => {
+  const s = foremanSession(on)
+  Object.assign(s.stored.hold, { prefix: 'ticket:', skip: 2, until: new Promise(() => {}) })
+  await firstPrompt($, s.clock)
+  const reads = s.stored.hold.gets.filter(key => key === 'ticket:session-1').length
+
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as never)
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('idle')
+  expect(s.writesOf()).toBeGreaterThan(2)
+  expect(s.stored.hold.gets.filter(key => key === 'ticket:session-1').length).toBe(reads)
+})
+
+test('a sweep of the kept records whose read never answers holds the refresh back only for the store call\'s time limit', async ($, on) => {
+  const s = foremanSession(on, { stored: [['ticket:other', 'an older shape']] })
+  Object.assign(s.stored.hold, { prefix: 'ticket:other', skip: 0, until: new Promise(() => {}) })
+  await firstPrompt($, s.clock)
+  expect(s.stored.has('ticket:session-1')).toBe(false)
+
+  // The refresh the first write started goes on once the sweep's read is
+  // given up on, ten seconds later, and stores the record with that write's
+  // time.
+  await s.clock.advance(11_000)
   expect(s.stored.get('ticket:session-1')).toEqual(UNPARENTED)
 })
 
