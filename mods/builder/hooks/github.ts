@@ -204,13 +204,11 @@ export function isUnfinished(run: HeadRun): boolean {
   return !run.completed
 }
 
-const RUN_PASSING = new Set(['success', 'skipped', 'neutral'])
-
 // A completed run failed when its conclusion is anything other than success,
-// skipped or neutral. A completed run with no conclusion is not known to have
-// passed, so it counts as failed.
+// skipped or neutral, the conclusions a check passes with too. A completed run
+// with no conclusion is not known to have passed, so it counts as failed.
 export function hasFailed(run: HeadRun): boolean {
-  return run.completed && !RUN_PASSING.has(run.conclusion ?? '')
+  return run.completed && !PASSING.has((run.conclusion ?? '').toUpperCase())
 }
 
 // A completed run did real work when its conclusion is not skipped and at

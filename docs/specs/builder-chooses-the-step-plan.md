@@ -7,8 +7,9 @@ most robust plan won, with the grafts below.
 
 ## Chosen approach
 
-One new pure file, `mods/builder/hooks/step.ts`, holds the run definitions,
-the chooser and the step texts. The chooser is synchronous, because `deliver`
+One new pure file, `mods/builder/hooks/step.ts`, holds the chooser and the
+step texts. The run definitions live in `github.ts`, beside the fingerprint
+that reads them too, and `step.ts` imports them. The chooser is synchronous, because `deliver`
 in `register.tsx` forbids any await between choosing the snapshot it submits
 and `$.prompt.submit`. So every input the chooser needs is read during the
 look and stored on the snapshot: every run at the head, whether each run did
