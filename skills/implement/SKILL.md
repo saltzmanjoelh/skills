@@ -60,7 +60,8 @@ this skill, and the session tells it which stage it is in by calling
 `ABC-123 short issue name`, the same for the whole issue), a `stage`, and,
 when it helps, a `note` for a sub-step such as `round 2`. Report a stage on
 entering it, not on finishing it. The mod reports the last three stages
-itself, so the session does not report them:
+itself, so the session does not report them, except the `review` report that
+a resumed session makes before its watch (see "Resuming"):
 
 | Stage | When |
 |---|---|
