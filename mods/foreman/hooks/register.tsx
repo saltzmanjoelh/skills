@@ -1182,14 +1182,15 @@ async function applyCommand($: $, command: Exclude<Command, { kind: 'refused' }>
   return becameParentAnswer(null, await becomeParent($))
 }
 
-// Turns the role on, copies the count of status messages to the store, reads
-// the Issue link fact when the session was not already the parent, reads the
+// Turns the role on, starts a copy of the count of status messages to the
+// store without waiting for it, as the session start does, reads the Issue
+// link fact when the session was not already the parent, reads the
 // status folder, hands the checks to the read loop and opens the pane. It
 // answers what openPane answers.
 async function becomeParent($: $): Promise<string | null> {
   const wasOn = await isOn($)
   await writeParent($, p => ({ ...p, isOn: true }))
-  await copyMarkers($)
+  void copyMarkers($).catch(() => undefined)
   if (!wasOn) await readLinkFact($, workingFolder)
   // Arming makes the first read of the status folder, so it has to come
   // before the pane opens. Opened first, the pane would draw from no read at
@@ -1263,8 +1264,8 @@ async function noteConsumed($: $) {
 // last wrote, because the hooks from before a hot reload can finish a write
 // they had under way after this load's write and leave their older copy in
 // the store; the next copy this load makes then writes its own again. A
-// write that fails is ignored, and the next change writes the copy again.
-// It never throws.
+// write that fails rejects, every caller ignores it, and the next change
+// writes the copy again.
 async function copyMarkers($: $) {
   const next = markerWrites.then(async () => {
     const record = markers
@@ -1280,7 +1281,7 @@ async function copyMarkers($: $) {
     await $.store.set(key, record)
   })
   markerWrites = next.catch(() => undefined)
-  await markerWrites
+  await next
 }
 
 // Deletes every stored count whose newest time is more than two weeks old,

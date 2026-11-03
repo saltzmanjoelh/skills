@@ -826,6 +826,22 @@ test('the count is copied under the parent\'s session id when the role is turned
   expect(markersCopy(w)).toEqual({ version: 1, sessionId: 'session-1', since: T0, consumed: 1, first: T0 + 2 * MINUTE, last: T0 + 2 * MINUTE })
 })
 
+test('turning the role on opens the pane without waiting for the copy of the count, which lands once the store answers', async ($, on) => {
+  const w = world(on)
+  await mountBoth($, on)
+  await start($)
+  await w.clock.settle()
+  let release = () => {}
+  w.store.held.set(markersKey('session-1'), new Promise<void>(resolve => { release = resolve }))
+  const answer = await foreman($)
+  expect(answer.text).toBe('This session is now the parent, and foreman shows its sub sessions above the prompt and in its pane.')
+  expect(w.panes).toEqual(['foreman'])
+  expect(w.store.writes.get(markersKey('session-1'))).toBeUndefined()
+  release()
+  await w.clock.settle()
+  expect(markersCopy(w)).toEqual({ version: 1, sessionId: 'session-1', since: T0, consumed: 0, first: null, last: null })
+})
+
 test('a parent that starts again writes a fresh copy of its count at once', async ($, on) => {
   const old = { version: 1, sessionId: 'session-1', since: T0 - DAY, consumed: 4, first: T0 - DAY, last: T0 - MINUTE }
   const w = world(on, { store: { 'parent:session-1': { isOn: true, slots: null }, [markersKey('session-1')]: old } })

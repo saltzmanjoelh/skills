@@ -269,13 +269,17 @@ export function engine(on: On, now: () => number = () => T0) {
 // The usual world: the clock at T0, a store in memory that the test can read,
 // empty unless one is given, HOME set, the folder, the desktop app and the
 // engine. `store.writes` counts the store writes by key, a key in
-// `store.refused` has its writes refused, and `store.deleted` records each key
+// `store.refused` has its writes refused, a key in `store.held` has its reads
+// wait until its promise settles, and `store.deleted` records each key
 // deleted, in order.
 export function world(on: On, options: { store?: Record<string, unknown>; env?: Record<string, string>; at?: string } = {}) {
   const clock = mock.clock(on, { now: T0 })
   const stored = new Map<string, unknown>(Object.entries(options.store ?? {}))
-  on('store.get', ($, e) => ({ value: stored.get(e.key) }))
-  const store = { writes: new Map<string, number>(), refused: new Set<string>(), deleted: [] as string[] }
+  const store = { writes: new Map<string, number>(), refused: new Set<string>(), held: new Map<string, Promise<void>>(), deleted: [] as string[] }
+  on('store.get', async ($, e) => {
+    await store.held.get(e.key)
+    return { value: stored.get(e.key) }
+  })
   on('store.set', ($, e) => {
     store.writes.set(e.key, (store.writes.get(e.key) ?? 0) + 1)
     if (store.refused.has(e.key)) return { deny: 'the store is full' }
