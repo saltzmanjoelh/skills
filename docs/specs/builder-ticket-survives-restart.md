@@ -122,8 +122,11 @@ and starts again. Foreman reads the file; the person reads foreman's pane.
 
 ## Verification
 
-Tests in `mods/builder/tests/register.test.ts`, each of which fails on the
-base branch or without the part of the change it names:
+Tests in `mods/builder/tests/register.test.ts`. Each test for items 1, 2,
+4, 5 and 6 fails on the base branch or without the part of the change it
+names. The tests for item 3 pass on the base branch, which stores no record
+at all, and guard against a later change that stores one for a session
+without a ticket:
 
 1. A ticketed first prompt stores the record under the session id, with the
    ticket, the path, the desktop id, the parent id and a stamp.
