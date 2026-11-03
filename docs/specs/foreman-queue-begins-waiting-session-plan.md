@@ -36,11 +36,16 @@ they were decided on, and no state lives in module variables.
    today asks for the list only for a `done` record or one `mayBeGone` allows,
    which leaves out a record whose gone wake already fired or whose pull
    request merged. With no queue, such an archived record would never trigger
-   a read and would hold its slot. The check becomes
-   `state === 'done' || now - row.mtimeMs > GONE_MS`, rebuilt from the file's
-   modification time on every read. The comment above `mayBeGone` and the
-   test that pins the old gate are rewritten. The spec gains one line saying
-   so.
+   a read and would hold its slot. A `done` record and one `mayBeGone` allows
+   still ask for the list on every read. Any other active record whose file
+   has not changed for longer than `GONE_MS` asks for it at most once every
+   `GONE_MS`, timed by a new `listCheckedAt` in the pairing's acts that a read
+   which got the list sets, and that reads as never checked when it is missing
+   or damaged. Asking on every read instead would call the list every 30
+   seconds while another sub session works, each call waiting up to 30
+   seconds when the list fails. The comments above `slotsNeedList` and
+   `mayBeGone` and the test that pins the old gate are rewritten. The spec
+   gains one line saying so.
 4. **The new wake.** `wake.ts` gains the reason
    `{ kind: 'slot-kept'; whos: string[] }`, not a report kind. At the end of
    `decide`, where the slot-free reason is pushed today, foreman computes
@@ -109,8 +114,8 @@ they were decided on, and no state lives in module variables.
 - **Keeping `slotsNeedList` unchanged** (the simplest plan). With no queue, an
   archived sub session whose gone wake already fired would never cause a list
   read, so it would hold its slot and the parent would never hear the slot is
-  free. The widened check costs about one list call every two minutes while a
-  stale sub session exists, and nothing in the incident, where the queue
+  free. The widened check costs at most one list call every gone wait for
+  each such stale sub session, and nothing in the incident, where the queue
   already forced a read every time.
 - **Replacing `endedIn` with a five-way classification and a policy set**
   (the extensible plan). It risks the mapping for `done` records, which still
