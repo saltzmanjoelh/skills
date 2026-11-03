@@ -45,9 +45,13 @@ which runs on a timer and on every status file change.
    This is the test `queueStep` already uses before it drops a waiting session
    as no longer listed, and the two rules share one helper so they cannot
    drift apart. A pairing with no desktop session id never counts as missing.
-3. **A sub session that is not running but still listed unarchived keeps its
+3. **The list is read whenever behaviors 1 and 2 could act**, meaning while
+   any active sub session's file is `done` or has not changed for longer than
+   the gone wait. This holds even after its gone wake went out or its pull
+   request merged, so an archived sub session frees its slot with no queue.
+4. **A sub session that is not running but still listed unarchived keeps its
    slot**, and keeps today's gone wake. Only the person or the parent ends it.
-4. **No "pick the next issue" while an issue waits.** When a read frees a slot,
+5. **No "pick the next issue" while an issue waits.** When a read frees a slot,
    no waiting session can take it, and someone still waits unclaimed in the
    queue, foreman wakes the parent with a new sentence in place of the
    slot-free line. The sentence names the waiting issues foreman could not
@@ -59,7 +63,7 @@ which runs on a timer and on every status file change.
    line does today. The slot stays free, so a later read whose list shows the
    waiting session claims it, and a new start the parent makes anyway waits in
    the queue behind the unclaimed sessions.
-5. **A failed list read reaches the person.** When foreman's read of the list
+6. **A failed list read reaches the person.** When foreman's read of the list
    fails (the desktop app's tools are not connected, the tool answers an
    error, the answer cannot be parsed, or no answer comes within 30 seconds),
    foreman shows a notification with the fixed reason once when reads start
@@ -69,7 +73,7 @@ which runs on a timer and on every status file change.
    actually got a list. A read that skipped the list because no rule needed it
    does not clear it. The log line on every failure stays as it is today. Only
    the fixed reasons appear, never the tool's own error text.
-6. The `foreman:wake` skill describes the new sentence, and its text about
+7. The `foreman:wake` skill describes the new sentence, and its text about
    "one slot free" says it comes only when no issue waits in the queue.
 
 ## Edge cases
