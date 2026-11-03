@@ -61,6 +61,11 @@ fields. It found:
   deadline. The engine's notification for that end has a summary saying
   the agent finished, while the notification for a park has a summary
   saying the agent is waiting on its own background work.
+- **A report can reach the session after its agent's wake.** The engine
+  can hold an agent's report for 13 to 19 seconds before the session
+  receives it, and in two of the runs the agent was woken in that gap, one
+  and a half and sixteen seconds before its report from before the park
+  arrived.
 - **Clustered notifications can make builder answer the release turn.**
   A third run showed the engine delivering two to four notifications within
   a fraction of a second and starting one turn for them all. Builder raises
@@ -81,9 +86,14 @@ fields. It found:
    it as the engine waking a parked agent. In a batch that is not yet
    released, the agent stays a member and counts as running again, because
    the report it sent before it parked ended it; its later report and
-   notifications are then held or end the batch as any member's are. In a
-   batch already released, the agent is forgotten, as a resume forgets it
-   today, so that its final report reaches the model.
+   notifications are then held or end the batch as any member's are. From
+   its first wake on, a report from that member no longer ends it, because
+   the engine can deliver the report the agent sent before it parked after
+   the wake, and that report would end a member that is still running. A
+   woken member ends at its notification that says the agent finished, or at
+   one that says it failed or was killed. In a batch already released, the
+   agent is forgotten, as a resume forgets it today, so that its final
+   report reaches the model.
 2. **A notification that says the agent finished ends its member.** The
    engine accepts one handback report from each agent, so an agent that
    reported before it parked often ends its woken run with plain text and
@@ -193,7 +203,8 @@ fields. It found:
   a resume after the batch was released forgets the member there, so its
   final report passes; a
   resume whose prompt is the session's own text forgets the member, as
-  today; a refused deadline line is tried again after 1, 2, 4, 8, 16, 32
+  today; a report from before the park that arrives after the wake does not
+  end the woken member, which ends at its finished notification; a refused deadline line is tried again after 1, 2, 4, 8, 16, 32
   and then 60 minutes, and again at 60 minutes after that; a stored batch
   without a wait starts at one minute; a deadline line the engine takes
   after refusals ends the batch; a `completed` notification whose summary
