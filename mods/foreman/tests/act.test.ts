@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { decide, GONE_MS, listFailedNotice, needsList, NO_ANSWER, slotOutcome, type DecideInput, type Decision, type SessionsLook } from '../hooks/act'
+import { decide, GONE_MS, keptByUnreadList, listFailedNotice, needsList, NO_ANSWER, slotOutcome, type DecideInput, type Decision, type SessionsLook } from '../hooks/act'
 import { REASONS } from '../hooks/desktop'
 import { recordIn } from '../hooks/record'
 import { spentSum } from '../hooks/spend'
@@ -191,7 +191,9 @@ test('a released or freed pairing gets no action', () => {
 })
 
 test('a sub session whose file stopped and whose session is not running wakes the parent once, unless its pull request merged', () => {
-  const stopped = [row({ state: 'working' }, 'a.json', T0)]
+  // A working record would be stalled here and go through the idle rule
+  // instead, so the gone rule is pinned with a record that waits on builder.
+  const stopped = [row({ state: 'waiting-on-builder' }, 'a.json', T0)]
   const notRunning: SessionsLook = { kind: 'read', sessions: [{ sessionId: 'local_a', isArchived: false, isRunning: false, title: null, surelyUnarchived: true }] }
   const later = T0 + GONE_MS + MINUTE
   let d = read(paired(), stopped, later, { sessions: notRunning })
@@ -201,7 +203,7 @@ test('a sub session whose file stopped and whose session is not running wakes th
   expect(read(paired(), stopped, later, { sessions: running }).reasons).toEqual([])
   // A merged pull request gets no gone wake. A new pairing that first reads
   // it is told of the opening and the merge instead.
-  expect(read(paired(), [row({ state: 'working', pr: { repo: 'o/r', number: 7, state: 'MERGED', checks: 'passed' } })], later, { sessions: notRunning }).reasons.map(r => r.kind))
+  expect(read(paired(), [row({ state: 'waiting-on-builder', pr: { repo: 'o/r', number: 7, state: 'MERGED', checks: 'passed' } })], later, { sessions: notRunning }).reasons.map(r => r.kind))
     .toEqual(['opened', 'merged'])
   expect(read(paired(), stopped, later, { sessions: { kind: 'failed' } }).reasons).toEqual([])
 })
@@ -430,7 +432,7 @@ test('the milestone sentences come after the state and gone sentences of the sam
   const cleaning = row({ state: 'in-cleanup', cleanup: { failedCalls: 3, lastError: '' }, pr: pr(7, 'MERGED') })
   expect(read(paired(), [cleaning], T0).reasons.map(r => r.kind)).toEqual(['cleanup', 'opened', 'merged'])
   const notRunning: SessionsLook = { kind: 'read', sessions: [{ sessionId: 'local_a', isArchived: false, isRunning: false, title: null, surelyUnarchived: true }] }
-  const stopped = row({ state: 'working', pr: pr(7) }, 'a.json', T0)
+  const stopped = row({ state: 'waiting-on-builder', pr: pr(7) }, 'a.json', T0)
   expect(read(paired(), [stopped], T0 + GONE_MS + MINUTE, { sessions: notRunning }).reasons.map(r => r.kind)).toEqual(['gone', 'opened'])
   const done = row({ state: 'done', pr: pr(7, 'MERGED') })
   expect(read(paired(), [done], T0, { sessions: { kind: 'read', sessions: [] } }).reasons.map(r => r.kind)).toEqual(['opened', 'merged', 'slot-free'])
@@ -852,4 +854,121 @@ test('a freed slot leads to nothing when none is free, the kept sentence while s
   expect(slotOutcome(1, ['ABC-2'])).toEqual({ kind: 'wake', reason: { kind: 'slot-kept', whos: ['ABC-2'] } })
   // Someone waits but no name may go in a wake line: the unnamed form.
   expect(slotOutcome(1, [])).toEqual({ kind: 'wake', reason: { kind: 'slot-kept', whos: [] } })
+})
+
+// A working record whose file stopped at T0 while its episode began an hour
+// before, as one whose session stopped mid-turn after a relaunch.
+const stalledRow = (over: Record<string, unknown> = {}, mtimeMs = T0) => row({ state: 'working', stateSince: T0 - 60 * MINUTE, ...over }, 'a.json', mtimeMs)
+const listing = (entry: Partial<{ isArchived: boolean; isRunning: boolean }>): SessionsLook =>
+  ({ kind: 'read', sessions: [{ sessionId: 'local_a', isArchived: false, isRunning: false, title: null, surelyUnarchived: true, ...entry }] })
+const stopped = listing({})
+
+// Reads every minute from T0 to `until`, like readEvery, with the list of
+// each read given by `sessionsAt`, and answers what each read did, its gone
+// reasons included.
+function readEach(tickets: ForemanTickets, rowAt: (now: number) => SubRow[], until: number, sessionsAt: (now: number) => SessionsLook, over: Partial<DecideInput> = {}) {
+  const seen: { at: number; nudges: number; reasons: string[] }[] = []
+  let t = tickets
+  for (let now = T0; now <= until; now += MINUTE) {
+    const d = read(t, rowAt(now), now, { sessions: sessionsAt(now), ...over })
+    t = d.tickets
+    const nudges = d.effects.filter(e => e.kind === 'nudge').length
+    if (nudges > 0 || d.reasons.length > 0) seen.push({ at: (now - T0) / MINUTE, nudges, reasons: d.reasons.map(r => r.kind) })
+  }
+  return { seen, tickets: t }
+}
+
+test('a working record whose file stopped and whose session the list shows not running is nudged as idle, counted from the file\'s last change, with no gone wake', () => {
+  expect(readEach(paired(), () => [stalledRow()], T0 + 40 * MINUTE, () => stopped).seen).toEqual([
+    { at: 6, nudges: 1, reasons: [] },
+    { at: 11, nudges: 1, reasons: [] },
+    { at: 16, nudges: 0, reasons: ['idle'] },
+  ])
+  // With a ten-minute threshold the first nudge waits for ten minutes after
+  // the file's last change, not for the stall to begin at six.
+  expect(readEach(paired(), () => [stalledRow()], T0 + 50 * MINUTE, () => stopped, { limits: { ...LIMITS, idleMs: 10 * MINUTE } }).seen).toEqual([
+    { at: 10, nudges: 1, reasons: [] },
+    { at: 20, nudges: 1, reasons: [] },
+    { at: 30, nudges: 0, reasons: ['idle'] },
+  ])
+  const d = read(paired(), [stalledRow()], T0 + GONE_MS + MINUTE, { sessions: stopped })
+  expect(d.effects).toEqual([{ kind: 'nudge', to: 'local_a', name: 'ABC-1' }])
+})
+
+test('a working record whose file stopped gets no nudge and no wake while the list shows it running, fails or is not read', () => {
+  for (const look of [running, { kind: 'failed' } as const, { kind: 'unread' } as const]) {
+    expect(readEach(paired(), () => [stalledRow()], T0 + 40 * MINUTE, () => look).seen).toEqual([])
+  }
+})
+
+test('a failed read of the list in the middle of a stall neither nudges nor moves the next nudge', () => {
+  const at8 = (now: number): SessionsLook => (now === T0 + 8 * MINUTE ? { kind: 'failed' } : stopped)
+  expect(readEach(paired(), () => [stalledRow()], T0 + 20 * MINUTE, at8).seen).toEqual([
+    { at: 6, nudges: 1, reasons: [] },
+    { at: 11, nudges: 1, reasons: [] },
+    { at: 16, nudges: 0, reasons: ['idle'] },
+  ])
+})
+
+test('a stalled-shaped record whose session is over, missing from a short list or has no desktop id is not stalled', () => {
+  const later = T0 + GONE_MS + MINUTE
+  const archived = read(paired(), [stalledRow()], later, { sessions: listing({ isArchived: true }) })
+  expect({ effects: archived.effects, standing: archived.tickets.pairings[0]!.standing }).toEqual({ effects: [], standing: 'freed' })
+  const missing = read(paired(), [stalledRow()], later, { sessions: { kind: 'read', sessions: [], complete: true } })
+  expect({ effects: missing.effects, standing: missing.tickets.pairings[0]!.standing }).toEqual({ effects: [], standing: 'freed' })
+  const unsure = read(paired(), [stalledRow()], later, { sessions: { kind: 'read', sessions: [] } })
+  expect({ effects: unsure.effects, reasons: unsure.reasons.map(r => r.kind) }).toEqual({ effects: [], reasons: ['gone'] })
+  const noDesktop = readEach(paired(null), () => [stalledRow({ desktopSessionId: undefined })], T0 + 30 * MINUTE, () => stopped).seen
+  expect(noDesktop).toEqual([{ at: 6, nudges: 0, reasons: ['gone'] }])
+})
+
+test('a working record that waits only on background work keeps the background wait\'s nudge and the gone wake', () => {
+  const d = read(paired(), [stalledRow({ backgroundOnly: { since: T0, tasks: ['run the tests'] } })], T0 + GONE_MS + MINUTE, { sessions: stopped })
+  expect(d.effects).toEqual([{ kind: 'nudge', to: 'local_a', name: 'ABC-1', about: 'background' }])
+  expect(d.reasons.map(r => r.kind)).toEqual(['gone'])
+})
+
+test('an old idle stretch that already woke the parent does not silence a stall', () => {
+  const progress = JSON.stringify(['ABC-1', 'build', 4, null, null])
+  const withStretch = (stretch: NonNullable<ForemanTickets['pairings'][number]['acts']['stretch']>) => {
+    const t = joinOwners(paired(), [stalledRow()]).tickets
+    return { ...t, pairings: t.pairings.map(p => ({ ...p, acts: { ...p.acts, stretch } })) }
+  }
+  const nudgedBefore = withStretch({ progress, nudges: 2, lastNudgeAt: T0 - 20 * MINUTE, countFrom: null, woke: true, wait: null, turnProgress: false })
+  expect(read(nudgedBefore, [stalledRow()], T0 + GONE_MS + MINUTE, { sessions: stopped }).effects).toEqual([{ kind: 'nudge', to: 'local_a', name: 'ABC-1' }])
+  const wokeUnnudged = withStretch({ progress, nudges: 0, lastNudgeAt: null, countFrom: null, woke: true, wait: null, turnProgress: false })
+  expect(read(wokeUnnudged, [stalledRow()], T0 + GONE_MS + MINUTE, { sessions: stopped }).effects).toEqual([{ kind: 'nudge', to: 'local_a', name: 'ABC-1' }])
+})
+
+test('a file that changes again after a stall\'s nudge stops the nudges', () => {
+  const rowAt = (now: number) => [now < T0 + 8 * MINUTE ? stalledRow() : stalledRow({}, now)]
+  expect(readEach(paired(), rowAt, T0 + 30 * MINUTE, () => stopped).seen).toEqual([{ at: 6, nudges: 1, reasons: [] }])
+})
+
+test('a stalled record whose pull request is closed gets no nudge and no gone wake, and needs the list only once every gone wait', () => {
+  const closed = () => [stalledRow({ pr: pr(7, 'CLOSED') })]
+  const run = readEach(paired(), closed, T0 + 30 * MINUTE, () => stopped)
+  expect(run.seen).toEqual([{ at: 0, nudges: 0, reasons: ['opened', 'closed'] }])
+  const checked = read(run.tickets, closed(), T0 + 31 * MINUTE, { sessions: stopped }).tickets
+  const at = checked.pairings[0]!.acts.listCheckedAt!
+  expect(needsList(checked, closed(), at + MINUTE)).toBe(false)
+  expect(needsList(checked, closed(), at + GONE_MS)).toBe(true)
+})
+
+test('a stall needs the list on every read until its idle wake, even after a gone wake for the same file, and then once every gone wait', () => {
+  const rows = [stalledRow()]
+  const first = T0 + GONE_MS + MINUTE
+  let t = read(paired(), rows, first, { sessions: stopped }).tickets
+  expect(t.pairings[0]!.acts.listCheckedAt).toBe(first)
+  expect(needsList(t, rows, first + MINUTE)).toBe(true)
+  expect(keptByUnreadList(t, rows, first + MINUTE)).toBe('no stalled sub session was nudged')
+  const goneWoke = { ...t, pairings: t.pairings.map(p => ({ ...p, acts: { ...p.acts, goneWokeFor: T0 } })) }
+  expect(needsList(goneWoke, rows, first + MINUTE)).toBe(true)
+  for (let now = first + MINUTE; now <= T0 + 16 * MINUTE; now += MINUTE) t = read(t, rows, now, { sessions: stopped }).tickets
+  expect(t.pairings[0]!.acts.stretch?.woke).toBe(true)
+  const at = t.pairings[0]!.acts.listCheckedAt!
+  expect(needsList(t, rows, at + MINUTE)).toBe(false)
+  expect(needsList(t, rows, at + GONE_MS)).toBe(true)
+  // A record whose file is fresh asks for nothing.
+  expect(needsList(t, [stalledRow({}, T0 + 16 * MINUTE)], T0 + 17 * MINUTE)).toBe(false)
 })

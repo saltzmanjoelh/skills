@@ -150,6 +150,15 @@ function endedIn(byId: ReadonlyMap<string, Listed>, id: string | null): string |
   return null
 }
 
+// Whether the list shows the session `id` stopped: it has an entry that is
+// not archived and not running. A session that the list leaves out is not
+// stopped, because a nudge cannot reach it, and the gone and over rules handle
+// it instead.
+function stoppedIn(byId: ReadonlyMap<string, Listed>, id: string): boolean {
+  const entry = byId.get(id)
+  return entry !== undefined && !entry.isArchived && !entry.isRunning
+}
+
 // What one rule may change and add while it looks at one pairing.
 type Step = {
   p: ForemanPairing
@@ -182,12 +191,27 @@ const STATE_RULES: Record<BuildState, (s: Step) => void> = {
       idleRule(s, wait.since, { task: wait.tasks[0] ?? null })
       return
     }
+    // A stalled record, whose session stopped mid-turn and left its file
+    // saying working, goes through the idle rule, counted from the file's
+    // last change. A stretch from before the stall is cleared first, so an
+    // old idle stretch that already woke the parent cannot silence it.
+    if (isStalled(s)) {
+      const old = s.p.acts.stretch
+      if (old !== null && staleStretch(old, s.row.mtimeMs)) setActs(s, { stretch: null })
+      idleRule(s, s.row.mtimeMs, null)
+      return
+    }
     const { stretch } = s.p.acts
     if (stretch === null) return
     const progress = progressOf(s.row)
     // A working episode inside an idle stretch keeps the stretch, unless the
-    // record made progress or the work lasted a whole threshold.
+    // record made progress or the work lasted a whole threshold. A read with
+    // no list in the middle of a stall cannot tell whether the session still
+    // stands stopped, so it keeps the stall's own stretch as it is, and a
+    // failed list read neither nudges nor starts the count again. Any other
+    // stretch is treated as before.
     if (stretch.wait === null) {
+      if (s.look === null && stalledShape(s.p, s.row, s.now) && stallsOwn(stretch, s.row.mtimeMs)) return
       if (stretch.progress !== progress || s.now - s.episode.since >= s.limits.idleMs) setActs(s, { stretch: null })
       return
     }
@@ -346,11 +370,58 @@ function mayBeGone(p: ForemanPairing, row: SubRow, now: number): boolean {
     && !/^merged$/i.test(row.record.pr?.state ?? '')
 }
 
+// Whether a record has the shape of a stall, without reading the list: it
+// says working, does not wait only on background work, its file has not
+// changed for GONE_MS, and it has a desktop session that the list can show
+// running or not. isStalled adds what the list shows, and the list reads ask
+// it on their own.
+function stalledShape(p: ForemanPairing, row: SubRow, now: number): boolean {
+  return row.record.state === 'working'
+    && row.record.backgroundOnly === undefined
+    && now - row.mtimeMs > GONE_MS
+    && desktopOf(p, row) !== null
+}
+
+// Whether the record is stalled on this read: it has the shape of a stall and
+// the list, read on this read, shows its session stopped. It is the one place
+// that decides it, so the working rule and the gone rule cannot disagree.
+function isStalled(s: Step): boolean {
+  if (s.look === null || !stalledShape(s.p, s.row, s.now)) return false
+  return stoppedIn(s.look.byId, desktopOf(s.p, s.row)!)
+}
+
+// Whether a stretch has nudged for the stall of a file last changed at
+// `mtimeMs`: its last nudge came more than GONE_MS after that change. A
+// stall's nudges always do, because a record is stalled only once its file
+// is GONE_MS old, so a nudge any earlier came from another stretch.
+const stallsOwn = (stretch: NonNullable<ForemanActs['stretch']>, mtimeMs: number) => stretch.lastNudgeAt !== null && stretch.lastNudgeAt - mtimeMs > GONE_MS
+
+// Whether a stored stretch began before the stall of a file last changed at
+// `mtimeMs`: it nudged, but not for the stall, as stallsOwn says, or it woke
+// without nudging. A stall always has a desktop session, so its own wake
+// always follows two nudges.
+function staleStretch(stretch: NonNullable<ForemanActs['stretch']>, mtimeMs: number): boolean {
+  if (stretch.lastNudgeAt !== null) return !stallsOwn(stretch, mtimeMs)
+  return stretch.woke
+}
+
+// Whether a record with the shape of a stall needs no more from the list: its
+// pull request is closed, so the idle rule neither nudges nor wakes for it, or
+// the stall's own stretch has already woken the parent.
+function stallHandled(p: ForemanPairing, row: SubRow, now: number): boolean {
+  if (!stalledShape(p, row, now)) return false
+  if (prStateOf(row.record.pr) === 'CLOSED') return true
+  const { stretch } = p.acts
+  return stretch !== null && stretch.wait === null && stretch.woke && !staleStretch(stretch, row.mtimeMs)
+}
+
 // Gone, in any state but done: the file has not changed for GONE_MS, the list
 // does not show the session running, and the pull request has not merged.
-// One stretch is one unchanged modification time.
+// One stretch is one unchanged modification time. A stalled record is left to
+// the idle rule, which wakes the parent itself at its third threshold.
 function goneRule(s: Step) {
   if (s.look === null || s.p.standing !== 'active' || !mayBeGone(s.p, s.row, s.now)) return
+  if (isStalled(s)) return
   if (endedIn(s.look.byId, desktopOf(s.p, s.row)) === null) return
   s.reasons.push({ kind: 'gone', who: whoOf(s.row.record.issueKey, s.p.ticket), minutes: minutesOf(s.now - s.row.mtimeMs) })
   setActs(s, { goneWokeFor: s.row.mtimeMs })
@@ -473,38 +544,60 @@ export function slotOutcome(free: number, waiting: string[] | null = null): Slot
 }
 
 // Whether this read needs the desktop app's list: a slot rule needs it, as
-// slotsNeedList says, a key is held, which a session in the list releases, or
-// a sub session waits in the queue, which the list shows archived or open.
+// slotsNeedList says, a stall waits on the idle rule, as stallsNeedList says,
+// a key is held, which a session in the list releases, or a sub session waits
+// in the queue, which the list shows archived or open.
 export function needsList(t: ForemanTickets, rows: readonly SubRow[], now: number): boolean {
-  return t.held.length > 0 || queueOf(t).length > 0 || slotsNeedList(t, rows, now)
+  return t.held.length > 0 || queueOf(t).length > 0 || slotsNeedList(t, rows, now) || stallsNeedList(t, rows, now)
 }
 
 // What a list that could not be read kept from happening, for the log: a
-// freed slot when a slot rule needed the list, else a released hold when a
-// key is held, and otherwise a queued issue begun or dropped. needsList asks
-// the same three things.
+// stalled sub session nudged when a stall needed the list, else a freed slot
+// when a slot rule needed it, else a released hold when a key is held, and
+// otherwise a queued issue begun or dropped. needsList asks the same four
+// things. The stall comes first, because a stall that is not handled makes
+// slotsNeedList hold too.
 export function keptByUnreadList(t: ForemanTickets, rows: readonly SubRow[], now: number): string {
+  if (stallsNeedList(t, rows, now)) return 'no stalled sub session was nudged'
   if (slotsNeedList(t, rows, now)) return 'no slot was freed'
   if (t.held.length > 0) return 'no held issue was released'
   return 'no queued issue was begun or dropped'
 }
 
-// Whether a slot rule needs the desktop app's list: some active owned record
-// that does not wait is done, or mayBeGone holds for it, or its file has not
-// changed for GONE_MS and its gone wait of list checks, which listCheckedAt
-// starts, has run out. The last case covers a record whose gone wake went or
-// whose pull request merged, because the over rule frees its slot once its
-// session is archived, and with no queue nothing else would read the list for
-// it. It asks at most once every GONE_MS, a failed ask included, so such a
-// record does not make every read wait on the list while another sub session
-// works or while the list keeps failing, and an archived session still frees
-// its slot within about GONE_MS.
-export function slotsNeedList(t: ForemanTickets, rows: readonly SubRow[], now: number): boolean {
+// Each row that an active pairing, not waiting in the queue, owns, with that
+// pairing.
+function activeOwners(t: ForemanTickets, rows: readonly SubRow[]): { p: ForemanPairing; r: SubRow }[] {
   const active = new Map(t.pairings.flatMap(p => (p.owner !== null && p.standing === 'active' && p.queue === null ? [[p.owner, p] as const] : [])))
-  return rows.some(r => {
+  return rows.flatMap(r => {
     const p = active.get(r.record.sessionId)
-    if (p === undefined || !ownsTicket(p, r)) return false
-    if (r.record.state === 'done' || mayBeGone(p, r, now)) return true
+    return p === undefined || !ownsTicket(p, r) ? [] : [{ p, r }]
+  })
+}
+
+// Whether a stall needs the desktop app's list: some active owned record has
+// the shape of a stall that is not yet handled, as stallHandled says. It asks
+// on every read, so the stall's second nudge and its wake land at their
+// thresholds rather than on whichever later read fetches the list.
+export function stallsNeedList(t: ForemanTickets, rows: readonly SubRow[], now: number): boolean {
+  return activeOwners(t, rows).some(({ p, r }) => stalledShape(p, r, now) && !stallHandled(p, r, now))
+}
+
+// Whether a slot rule needs the desktop app's list: some active owned record
+// that does not wait is done, or mayBeGone holds for it and it is not a
+// handled stall, or its file has not changed for GONE_MS and its gone wait of
+// list checks, which listCheckedAt starts, has run out. A handled stall is left
+// out of the second case because the gone rule never wakes for a stall, so
+// goneWokeFor never ends that case for it. The last case covers a record whose
+// gone wake went, whose pull request merged, or whose stall is handled,
+// because the over rule frees its slot once its session is archived, and with
+// no queue nothing else would read the list for it. It asks at most once
+// every GONE_MS, a failed ask included, so such a record does not make every
+// read wait on the list while another sub session works or while the list
+// keeps failing, and an archived session still frees its slot within about
+// GONE_MS.
+export function slotsNeedList(t: ForemanTickets, rows: readonly SubRow[], now: number): boolean {
+  return activeOwners(t, rows).some(({ p, r }) => {
+    if (r.record.state === 'done' || (mayBeGone(p, r, now) && !stallHandled(p, r, now))) return true
     const checked = p.acts.listCheckedAt
     return now - r.mtimeMs > GONE_MS && (checked === null || now - checked >= GONE_MS)
   })
