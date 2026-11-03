@@ -588,7 +588,11 @@ export type BatchMember = { id: string; type: string; ended: boolean; tasks?: st
 // released and any other is dropped. `retryMs` is how long the next claim of the
 // batch waits before it is claimed again. It doubles at each claim from one
 // minute up to one hour, and a batch stored without it waits one minute.
-export type Batch = { step: string; members: BatchMember[]; heldReports: number; deadline: number | null; releasedAt: number | null; fired?: true; retryMs?: number }
+// `deadlineBeforeSettle` is the deadline that the one-minute deadline after
+// the turn end that ended the last member replaced, set only when the
+// deadline had not claimed the batch, so that an engine wake of a member can
+// give it back, and dropped at the release.
+export type Batch = { step: string; members: BatchMember[]; heldReports: number; deadline: number | null; releasedAt: number | null; fired?: true; retryMs?: number; deadlineBeforeSettle?: number | null }
 
 // The batches, oldest first, and the counter marker: how many held deliveries
 // have arrived while the session was idle and still owe a turn answered

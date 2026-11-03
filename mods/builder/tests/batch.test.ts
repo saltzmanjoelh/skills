@@ -647,3 +647,52 @@ test('stored members with task ids and a turn-end reading read back, and the sam
   expect(batchStateIn(withMember({ id: ALPHA, type: 'Explore', ended: false, tasks: 'x' }), SESSION)).toEqual(emptyBatchState(SESSION))
   expect(batchStateIn(withMember({ id: ALPHA, type: 'Explore', ended: false, live: 'yes' }), SESSION)).toEqual(emptyBatchState(SESSION))
 })
+
+test('an engine wake after a turn end that ended the last member, listing work builder did not record, gives the batch back its time limit, and no line goes out at the minute', () => {
+  let state = afterDelivery(launched(), report(BRAVO), true, 1000).state
+  state = afterMemberStop(state, ALPHA, ['task-not-recorded'], 2000)
+  expect(nextDeadline(state)).toBe(2000 + BATCH_SETTLE_MS)
+  state = afterWake(state, ALPHA)
+  expect(members(state).map(m => m.ended)).toEqual([false, true])
+  expect(nextDeadline(state)).toBe(1000 + BATCH_LIMIT_MS)
+  expect(dueLines(state, 2000 + BATCH_SETTLE_MS)).toEqual([])
+  expect(afterDelivery(state, report(ALPHA), true, 3000 + BATCH_SETTLE_MS).act).toEqual({ kind: 'release', line: completeLine(2) })
+})
+
+test('an engine wake after the settle minute claimed the completion line clears that claim, and a wake in a batch that held nothing leaves it with no deadline', () => {
+  let state = afterDelivery(launched(), report(BRAVO), true, 1000).state
+  state = afterMemberStop(state, ALPHA, [], 2000)
+  state = afterDeadline(state, 2000 + BATCH_SETTLE_MS).state
+  state = afterWake(state, ALPHA)
+  expect(state.batches[0]?.fired).toBeUndefined()
+  expect(state.batches[0]?.retryMs).toBeUndefined()
+  expect(nextDeadline(state)).toBe(1000 + BATCH_LIMIT_MS)
+  expect(dueLines(state, 2000 + BATCH_SETTLE_MS + BATCH_RETRY_MS)).toEqual([])
+  expect(afterDelivery(state, report(ALPHA), true, 3000 + BATCH_SETTLE_MS).act).toEqual({ kind: 'release', line: completeLine(2) })
+  let quiet = afterMemberStop(launched(), BRAVO, [], 0)
+  quiet = afterMemberStop(quiet, ALPHA, [], 10)
+  expect(nextDeadline(quiet)).toBe(10 + BATCH_SETTLE_MS)
+  expect(nextDeadline(afterWake(quiet, ALPHA))).toBeNull()
+})
+
+test('a repeat turn end of a batch whose members had all ended, after the deadline claimed it, leaves its deadline as it was', () => {
+  let state = afterMemberStop(launched(), BRAVO, [], 0)
+  state = afterDelivery(state, report(BRAVO), true, 1).state
+  state = afterMemberStop(state, ALPHA, [], 10)
+  state = afterDeadline(state, 10 + BATCH_SETTLE_MS).state
+  state = afterDeadline(state, 10 + BATCH_SETTLE_MS + BATCH_RETRY_MS).state
+  const claimed = nextDeadline(state)
+  expect(claimed).toBe(10 + BATCH_SETTLE_MS + BATCH_RETRY_MS + 2 * BATCH_RETRY_MS)
+  expect(nextDeadline(afterMemberStop(state, ALPHA, [], 11 + BATCH_SETTLE_MS + BATCH_RETRY_MS))).toBe(claimed)
+})
+
+test('a stored deadline from before the settle reads back as a time or null, and in any other shape reads as the empty state', () => {
+  const state = afterMemberStop(afterDelivery(launched(), report(BRAVO), true, 1000).state, ALPHA, [], 2000)
+  expect(state.batches[0]?.deadlineBeforeSettle).toBe(1000 + BATCH_LIMIT_MS)
+  expect(batchStateIn(state, SESSION)).toEqual(state)
+  const withField = (v: unknown) => ({ ...state, batches: [{ ...state.batches[0], deadlineBeforeSettle: v }, ...state.batches.slice(1)] })
+  expect(batchStateIn(withField(null), SESSION)).toEqual(withField(null))
+  expect(batchStateIn(withField('soon'), SESSION)).toEqual(emptyBatchState(SESSION))
+  expect(batchStateIn(withField(Infinity), SESSION)).toEqual(emptyBatchState(SESSION))
+  expect(afterDelivery(state, report(ALPHA), true, 2001).state.batches[0]?.deadlineBeforeSettle).toBeUndefined()
+})

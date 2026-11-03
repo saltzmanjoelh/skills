@@ -616,7 +616,10 @@ test('the band above the prompt never reads the batches, so a batch write does n
 
 // The engine waking the parked agent `id` once the work it moved into the
 // background has finished: a resume whose prompt begins with the
-// notification about the agent's own shell task, which builder never sees.
+// notification about the agent's own shell task. Builder recognises the wake
+// by that shape alone and does not match its task id against the tasks it
+// recorded for the member, as non-goal (b) of
+// docs/specs/builder-keeps-woken-batch-members.md decides.
 async function wake($: Engine, w: { clock: { settle: () => Promise<void> } }, id: string) {
   await $.agent.spawn(launch('Explore', { resume: { agentId: id }, prompt: notice('shell-task-1', 'completed') }))
   await w.clock.settle()
