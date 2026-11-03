@@ -56,6 +56,7 @@ function view(over: Partial<View> = {}): View {
     compactions: null,
     usage: null,
     heldReports: 0,
+    sends: null,
     ...over,
   }
 }

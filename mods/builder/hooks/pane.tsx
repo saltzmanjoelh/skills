@@ -9,6 +9,7 @@ import { linkOf } from './links'
 import { barOf, modelLabel, stageLabel, type Bar } from './progress'
 import { isRunning, shownStatus, waitingOn } from './state'
 import { HUNG_AFTER_MS, isProbablyHung, issueOf, oldestTaskOf, startOf } from './status'
+import { sendsLine, type SendsRecord } from './sends'
 import { clockTime, printable, timeOfDay } from './text'
 import { usageLines } from './usage'
 
@@ -72,6 +73,10 @@ export type View = {
   // agents finishes, as heldReports in hooks/batch.ts counts them. It is
   // always zero in the band's view, which never reads the batches.
   heldReports: number
+  // The sends to the foreman parent since the hooks loaded, as hooks/sends.ts
+  // keeps them. It is null in a session without a parent, before its memo is
+  // taken up, and always in the band's view, which never reads it.
+  sends: SendsRecord | null
 }
 
 type El = Pick<EngineElements['terminal'], 'Box' | 'Text'>
@@ -592,6 +597,15 @@ function usageTree({ Text }: El, v: View) {
   return usageLines(v.usage).map((line, i) => <Text key={`usage-${i}`} dimColor={i > 0}>{line}</Text>)
 }
 
+// The line for the sends to the foreman parent, as sendsLine words it, in
+// yellow while the newest send failed, or no line in a session without a
+// parent. The line is a string child, so markup in a reason is drawn as text.
+function sendsTree({ Text }: El, v: View) {
+  if (v.sends === null) return []
+  const { text, isWarning } = sendsLine(v.sends, v.now)
+  return [<Text key="sends" color={isWarning ? 'yellow' : undefined}>{text}</Text>]
+}
+
 // The agents as the pane lists them: running ones first, newest first within
 // each group.
 function agentsInOrder(cards: readonly AgentCard[]): AgentCard[] {
@@ -750,11 +764,12 @@ function staleTree({ Text }: El, v: View) {
 
 // The pane, with a pull request watched or not: the stale warning when the
 // session is stale, then the work, then the pull request's state when one is
-// watched, then the context lines and what the session has spent, then the
-// agents, the background work, the open questions, the counsel and, with a
-// pull request, the next step and the last look. With none watched, as during
-// /spec, it still shows the context and the spending, and lists the agents,
-// the background work and the counsel.
+// watched, then the context lines, what the session has spent and, with a
+// foreman parent, its messages to the parent, then the agents, the
+// background work, the open questions, the counsel and, with a pull request,
+// the next step and the last look. With none watched, as during /spec, it
+// still shows the context, the spending and the messages to the parent, and
+// lists the agents, the background work and the counsel.
 export function paneTree(ui: Elements, v: View, presses: PanePresses, columns?: number) {
   const { Box, Text } = ui
   const s = v.pr
@@ -766,6 +781,7 @@ export function paneTree(ui: Elements, v: View, presses: PanePresses, columns?: 
         <Text dimColor>{NOTHING_WATCHED}</Text>
         {contextTree(ui, v)}
         {usageTree(ui, v)}
+        {sendsTree(ui, v)}
         <Text> </Text>
         {agentsTree(ui, v, columns, presses)}
         {counselTree(ui, v.counsel)}
@@ -790,6 +806,7 @@ export function paneTree(ui: Elements, v: View, presses: PanePresses, columns?: 
       <Text>{`Round ${roundInProgress(s)} (${s.headsReviewed} reviewed) · ${s.pushesSinceVerdict} ${s.pushesSinceVerdict === 1 ? 'push' : 'pushes'} since the last changes-requested verdict`}</Text>
       {contextTree(ui, v)}
       {usageTree(ui, v)}
+      {sendsTree(ui, v)}
       <Text> </Text>
       {agentsTree(ui, v, columns, presses)}
       {open.length > 0 && <Text> </Text>}
