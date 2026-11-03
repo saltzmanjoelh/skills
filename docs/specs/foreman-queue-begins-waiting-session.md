@@ -20,7 +20,8 @@ issues still waited.
 Three things must hold after this change. A slot whose sub session the desktop
 app's list shows is over frees on that read, so the queue begins the waiting
 session. Foreman never tells the parent to pick a new issue while an issue
-waits unclaimed in its queue. And when foreman cannot read the list, so it
+waits unclaimed in its queue, apart from a proposal card that nobody has
+started within the gone wait (see Edge cases). And when foreman cannot read the list, so it
 cannot tell what waits, the person learns of it instead of only a log line.
 
 ## Users and trigger
@@ -99,6 +100,13 @@ which runs on a timer and on every status file change.
   neither. The new sentence names only the first of them in the queue's
   order, because the parent begins each issue it names, and naming both would
   run more sub sessions than the slots allow.
+- A queued start that was answered with a proposal card, and that nobody has
+  started within the gone wait (five minutes) of its pairing, no longer counts
+  as waiting unclaimed. A slot that frees after that gets the slot-free line,
+  as on the base, so a card nobody ever starts does not hold back every new
+  start until foreman forgets it a day later. Once its session starts, its
+  status file gives it a desktop session id, and it counts as waiting again
+  at its place.
 
 ## Non-goals
 
