@@ -574,7 +574,9 @@ test('a derived label equal to the record, or no derived label, changes nothing'
 })
 
 test('with no record while stuck is on, the derived label is recorded without a write, so a reload never removes it', () => {
-  expect(labelActionOf('in-review', null, ['bug', 'stuck'])).toEqual({ kind: 'record' })
+  expect(labelActionOf('in-review', null, ['bug', 'stuck'])).toEqual({ kind: 'record', remove: [] })
+  // Another state label beside that stuck still comes off.
+  expect(labelActionOf('in-review', null, ['in-review', 'stuck', 'ready-to-merge'])).toEqual({ kind: 'record', remove: ['in-review', 'ready-to-merge'] })
 })
 
 test('otherwise the derived label is written, removing only the other state labels the live read saw', () => {

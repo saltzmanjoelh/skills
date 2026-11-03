@@ -258,9 +258,14 @@ head** gives `in-review`; the failed, conflicting and changes-requested steps
 give `waiting-on-author`; the steps where both verdicts approve give
 `ready-to-merge`; **Over a limit** and **Closed** give `stuck`. The session
 sets `stuck` itself only when a step's text asks for its judgement, such as a
-failure outside the code or a person declining to merge without checks:
-`gh pr edit <n> --add-label stuck --remove-label <old>`, creating the label
-first with `gh label create stuck` when the repository lacks it. The mod
+failure outside the code or a person declining to merge without checks. It
+reads the labels the pull request carries now with
+`gh pr view <n> --json labels --jq '[.labels[].name]'`, because the state
+lines may show a label from before the mod's last edit, and removes every
+other state label among them in the same edit:
+`gh pr edit <n> --add-label stuck --remove-label <those labels, comma-separated>`,
+leaving out `--remove-label` when there are none, and creating the label first
+with `gh label create stuck` when the repository lacks it. The mod
 leaves that `stuck` alone until the label that follows from the step
 changes. The mod manages `needs-decision` itself; it is not a state label. The mod cannot
 tell who put that label on, so a `needs-decision` label that a person or

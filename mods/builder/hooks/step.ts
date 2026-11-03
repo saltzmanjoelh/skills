@@ -204,14 +204,16 @@ export function labelFor(step: Step): StateLabel | null {
 // `record` is the label the mod last set on the pull request, and
 // `liveLabels` the labels it carries now. With no record while `stuck` is on,
 // as after a restart, the derived label is only recorded, so a reload never
-// removes a `stuck` the session set by its own judgement. Only labels the
+// removes a `stuck` the session set by its own judgement; any other state
+// label beside that `stuck`, such as one an edit put on just before the
+// session set it, still comes off. Only labels the
 // live read saw are removed, because a label on the pull request exists in
 // the repository, so removing it cannot fail for lack of the label.
-export type LabelAction = { kind: 'none' } | { kind: 'record' } | { kind: 'write'; remove: StateLabel[] }
+export type LabelAction = { kind: 'none' } | { kind: 'record'; remove: StateLabel[] } | { kind: 'write'; remove: StateLabel[] }
 
 export function labelActionOf(derived: StateLabel | null, record: StateLabel | null, liveLabels: readonly string[]): LabelAction {
   if (derived === null || derived === record) return { kind: 'none' }
-  if (record === null && liveLabels.includes('stuck')) return { kind: 'record' }
+  if (record === null && liveLabels.includes('stuck')) return { kind: 'record', remove: otherStateLabelsOf('stuck', liveLabels) }
   return { kind: 'write', remove: otherStateLabelsOf(derived, liveLabels) }
 }
 

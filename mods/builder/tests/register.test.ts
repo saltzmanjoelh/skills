@@ -13782,6 +13782,28 @@ test('a stuck the session puts on between the read and the edit stays, the added
   expect(world.pr.labels).toEqual([{ name: 'stuck' }])
 })
 
+test('when the removal after a stuck appeared fails, the next look records the label and removes the one beside stuck', async ($, on) => {
+  const clock = mock.clock(on)
+  const stored = memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  let release = () => {}
+  world.labelsHold = new Promise(resolve => { release = resolve })
+  world.removalsToFail = 1
+  await watch($)
+  await clock.settle()
+  world.pr.labels = [{ name: 'stuck' }]
+  release()
+  await clock.settle()
+  expect(stored.get(STATE_LABEL_KEY)).toBeUndefined()
+  expect(world.pr.labels).toEqual([{ name: 'stuck' }, { name: 'in-review' }])
+
+  await clock.advance(30 * 60_000)
+  expect(labelEdits(world).slice(2)).toEqual(['gh pr edit 7 --repo o/r --remove-label in-review'])
+  expect(world.pr.labels).toEqual([{ name: 'stuck' }])
+  expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ label: 'in-review' })
+})
+
 test('a failed read of the labels after the edit, or a failed removal after it, saves no record', async ($, on) => {
   const clock = mock.clock(on)
   const stored = memoryStore(on)

@@ -3121,6 +3121,9 @@ async function settleStateLabel($: $) {
     if (!(await addLabel($, r, derived, action.remove))) return
     if (!(await removeOtherStateLabels($, r, derived, live))) return
   }
+  if (action.kind === 'record' && action.remove.length > 0) {
+    if ((await gh($, r.cwd, ['pr', 'edit', String(r.number), '--repo', r.repo, '--remove-label', action.remove.join(',')])) === null) return
+  }
   await $.store.set(key, { label: derived, at: await $.clock.now() })
 }
 
