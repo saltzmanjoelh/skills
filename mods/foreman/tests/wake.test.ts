@@ -105,6 +105,18 @@ test('a background sentence with no task, or one that is empty once cleaned, end
   expect(wakeLine([{ kind: 'unseen', who: 'ABC-1', minutes: 5, mismatch: true }])).not.toContain(DATA_NOTE)
 })
 
+// The wake skill quotes the kept sentence as a heading, in all three forms,
+// so they are pinned.
+test('the kept sentence names one waiting issue, several, or none it may name', () => {
+  expect(REASON_WORDS['slot-kept']({ kind: 'slot-kept', whos: ['ABC-2'] }))
+    .toBe('a slot is free, but foreman keeps it for ABC-2, whose waiting session it could not find in the desktop app\'s list; send that session foreman\'s begin message by hand or release the issue, and do not start a new issue.')
+  expect(REASON_WORDS['slot-kept']({ kind: 'slot-kept', whos: ['ABC-2', 'ABC-3'] }))
+    .toBe('a slot is free, but foreman keeps it for ABC-2 and ABC-3, whose waiting sessions it could not find in the desktop app\'s list; send each of those sessions foreman\'s begin message by hand or release its issue, and do not start a new issue.')
+  expect(REASON_WORDS['slot-kept']({ kind: 'slot-kept', whos: [] }))
+    .toBe('a slot is free, but foreman keeps it for the issues waiting in its queue, whose waiting sessions it could not find in the desktop app\'s list; send each of those sessions foreman\'s begin message by hand or release its issue, and do not start a new issue.')
+  expect(REPORT_KINDS.has('slot-kept')).toBe(false)
+})
+
 // The README quotes both forms of the began sentence, so they are pinned.
 // Foreman shows the sentence itself rather than waking the parent's model
 // with it, so it no longer tells that model what to do.

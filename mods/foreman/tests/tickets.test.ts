@@ -226,6 +226,12 @@ test('old acts read with no unseen wake given and a stretch without a wait as an
   expect(stored({ stretch: { progress: 'p', nudges: 0, lastNudgeAt: null, woke: false, wait: 1500, turnProgress: true } }).stretch?.turnProgress).toBe(true)
   expect(stored({ stretch: { progress: 'p', nudges: 0, lastNudgeAt: null, woke: false, wait: 1500, turnProgress: 'yes' } }).stretch?.turnProgress).toBe(false)
   expect(newPairing('ft-a', null, 1).acts.unseenWoke).toBe(false)
+  // A missing or damaged list check time reads as never checked, so a stale
+  // record asks for the list on its next read.
+  expect(stored({}).listCheckedAt).toBeNull()
+  expect(stored({ listCheckedAt: 'then' }).listCheckedAt).toBeNull()
+  expect(stored({ listCheckedAt: 5 }).listCheckedAt).toBe(5)
+  expect(newPairing('ft-a', null, 1).acts.listCheckedAt).toBeNull()
 })
 
 test('a stored nudge keeps its kind only when it is exactly background', () => {
@@ -257,6 +263,15 @@ test('the kept slots keep only names a wake line may carry, repeats included, th
   expect(ticketsIn({ keptSlots: many }).keptSlots).toEqual(many.slice(5))
   const t = { ...TICKETS_EMPTY, keptSlots: ['ABC-1', who] }
   expect(ticketsIn(JSON.parse(JSON.stringify(t))).keptSlots).toEqual(['ABC-1', who])
+})
+
+test('the mark for a failed list read is set only when stored as exactly true, so an old ledger reads with it unset', () => {
+  expect(TICKETS_EMPTY.listFailNotified).toBe(false)
+  expect(ticketsIn({ pairings: [], folderMissing: false }).listFailNotified).toBe(false)
+  expect(ticketsIn({ listFailNotified: 'true' }).listFailNotified).toBe(false)
+  expect(ticketsIn({ listFailNotified: 1 }).listFailNotified).toBe(false)
+  expect(ticketsIn({ listFailNotified: true }).listFailNotified).toBe(true)
+  expect(ticketsIn(JSON.parse(JSON.stringify({ ...TICKETS_EMPTY, listFailNotified: true }))).listFailNotified).toBe(true)
 })
 
 test('the unwatched list keeps only whole local_ ids, each once, the newest 50', () => {
