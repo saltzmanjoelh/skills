@@ -744,15 +744,18 @@ export function decide(input: DecideInput): Decision {
   // session could take: one the list does not show surely unarchived, or a
   // proposal card that has not started. The parent is woken for it, so a
   // freed slot is never lost: with the kept sentence while someone still
-  // waits unclaimed, naming each waiting issue whose name a wake line may
-  // carry, and with the slot-free sentence otherwise. The kept sentence
-  // names only as many waiting issues, in the queue's order, as there are
-  // free slots, because the parent begins each one it names, and naming more
-  // would run more sub sessions than the slots allow.
+  // waits unclaimed, and with the slot-free sentence otherwise. The parent
+  // begins each issue the kept sentence names, so it names at most as many
+  // as there are free slots: the first waiting issues in the queue's order
+  // are taken first, and only then are names a wake line may not carry and
+  // repeated names dropped. A damaged or repeated entry among those first
+  // ones therefore makes the sentence name fewer issues, never more than the
+  // slots allow.
   if (freed > 0 && left.length > 0) {
     const free = freeSlots(tickets, rows, now, input.slots)
-    const waiting = unclaimed.length === 0 ? null : [...new Set(unclaimed.slice(0, Math.max(free, 0)).map(p => whoOf(p.issueKey, p.ticket)).filter(isWhoName))]
-    const outcome = slotOutcome(free, waiting)
+    const firstInQueue = unclaimed.slice(0, Math.max(free, 0))
+    const names = [...new Set(firstInQueue.map(p => whoOf(p.issueKey, p.ticket)).filter(isWhoName))]
+    const outcome = slotOutcome(free, unclaimed.length === 0 ? null : names)
     if (outcome.kind === 'wake') reasons.push(outcome.reason)
   }
   return { tickets, effects, reasons, logs, nextDueAt: due.length === 0 ? null : Math.min(...due) }
