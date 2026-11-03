@@ -458,13 +458,17 @@ function mergedOnLeaving(p: ForemanPairing): Reason[] {
   return [{ kind: 'merged', who: whoOf(p.issueKey, p.ticket), number: told.number }]
 }
 
-// What a freed slot leads to, given how many slots are free now: nothing
-// when none is, and otherwise a wake with the number free. A read and Release
-// both decide by it.
+// What a freed slot leads to, given how many slots are free now and, when
+// someone still waits unclaimed in the queue, the names of the waiting issues
+// a wake line may carry: nothing when no slot is free, the kept sentence when
+// someone waits, and otherwise a wake with the number free. A read and
+// Release both decide by it. Release passes no names, because it defers to a
+// read whenever someone waits unclaimed.
 export type SlotOutcome = { kind: 'none' } | { kind: 'wake'; reason: Reason }
 
-export function slotOutcome(free: number): SlotOutcome {
+export function slotOutcome(free: number, waiting: string[] | null = null): SlotOutcome {
   if (free <= 0) return { kind: 'none' }
+  if (waiting !== null) return { kind: 'wake', reason: { kind: 'slot-kept', whos: waiting } }
   return { kind: 'wake', reason: { kind: 'slot-free', free } }
 }
 
@@ -743,13 +747,9 @@ export function decide(input: DecideInput): Decision {
   // waits unclaimed, naming each waiting issue whose name a wake line may
   // carry, and with the slot-free sentence otherwise.
   if (freed > 0 && left.length > 0) {
-    const free = freeSlots(tickets, rows, now, input.slots)
-    if (unclaimed.length === 0) {
-      const outcome = slotOutcome(free)
-      if (outcome.kind === 'wake') reasons.push(outcome.reason)
-    } else if (free > 0) {
-      reasons.push({ kind: 'slot-kept', whos: [...new Set(unclaimed.map(p => whoOf(p.issueKey, p.ticket)).filter(isWhoName))] })
-    }
+    const waiting = unclaimed.length === 0 ? null : [...new Set(unclaimed.map(p => whoOf(p.issueKey, p.ticket)).filter(isWhoName))]
+    const outcome = slotOutcome(freeSlots(tickets, rows, now, input.slots), waiting)
+    if (outcome.kind === 'wake') reasons.push(outcome.reason)
   }
   return { tickets, effects, reasons, logs, nextDueAt: due.length === 0 ? null : Math.min(...due) }
 }

@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { decide, GONE_MS, listFailedNotice, needsList, NO_ANSWER, type DecideInput, type Decision, type SessionsLook } from '../hooks/act'
+import { decide, GONE_MS, listFailedNotice, needsList, NO_ANSWER, slotOutcome, type DecideInput, type Decision, type SessionsLook } from '../hooks/act'
 import { REASONS } from '../hooks/desktop'
 import { recordIn } from '../hooks/record'
 import { spentSum } from '../hooks/spend'
@@ -843,4 +843,13 @@ test('past 200 entries a read folds, in the same ledger, the entry of a pairing 
   expect(d.tickets.spent.at(-1)!.ticket).toBe('ft-b')
   expect(d.tickets.earlier).toEqual({ counts: { input: 500, output: 0, cacheRead: 0, cacheWrite: 0 }, usd: null })
   expect(spentSum(d.tickets)).toEqual({ counts: { input: 500 + 199 + 4000, output: 0, cacheRead: 0, cacheWrite: 0 }, usd: 1 })
+})
+
+test('a freed slot leads to nothing when none is free, the kept sentence while someone waits, and the slot-free sentence otherwise', () => {
+  expect(slotOutcome(0)).toEqual({ kind: 'none' })
+  expect(slotOutcome(0, ['ABC-2'])).toEqual({ kind: 'none' })
+  expect(slotOutcome(2)).toEqual({ kind: 'wake', reason: { kind: 'slot-free', free: 2 } })
+  expect(slotOutcome(1, ['ABC-2'])).toEqual({ kind: 'wake', reason: { kind: 'slot-kept', whos: ['ABC-2'] } })
+  // Someone waits but no name may go in a wake line: the unnamed form.
+  expect(slotOutcome(1, [])).toEqual({ kind: 'wake', reason: { kind: 'slot-kept', whos: [] } })
 })
