@@ -870,7 +870,7 @@ const listing = (entry: Partial<{ isArchived: boolean; isRunning: boolean }>): S
   ({ kind: 'read', sessions: [{ sessionId: 'local_a', isArchived: false, isRunning: false, title: null, surelyUnarchived: true, ...entry }] })
 const stoppedListing = listing({})
 
-test('a working record whose file stoppedListing and whose session the list shows not running is nudged as idle, counted from the file\'s last change, with no gone wake', () => {
+test('a working record whose file stopped and whose session the list shows not running is nudged as idle, counted from the file\'s last change, with no gone wake', () => {
   expect(readEach(paired(), () => [stalledRow()], T0 + 40 * MINUTE, () => stoppedListing).seen).toEqual([
     { at: 6, nudges: 1, reasons: [] },
     { at: 11, nudges: 1, reasons: [] },
@@ -887,7 +887,7 @@ test('a working record whose file stoppedListing and whose session the list show
   expect(d.effects).toEqual([{ kind: 'nudge', to: 'local_a', name: 'ABC-1' }])
 })
 
-test('a working record whose file stoppedListing gets no nudge and no wake while the list shows it running, fails or is not read', () => {
+test('a working record whose file stopped gets no nudge and no wake while the list shows it running, fails or is not read', () => {
   for (const look of [running, { kind: 'failed' } as const, { kind: 'unread' } as const]) {
     expect(readEach(paired(), () => [stalledRow()], T0 + 40 * MINUTE, () => look).seen).toEqual([])
   }
