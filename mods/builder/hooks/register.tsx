@@ -32,7 +32,9 @@ const agents = atom({ plugin: 'builder', key: 'agents' } as const, [])
 const questions = atom({ plugin: 'builder', key: 'questions' } as const, [])
 const wakes = atom({ plugin: 'builder', key: 'wakes' } as const, [])
 const cwd = atom({ plugin: 'builder', key: 'cwd' } as const, null)
-const busy = atom({ plugin: 'builder', key: 'busy' } as const, false)
+// Whether the session's own turn runs. Only a turn of the session's own sets
+// it; a subagent's start leaves it alone.
+const busy =atom({ plugin: 'builder', key: 'busy' } as const, false)
 const nextLook = atom({ plugin: 'builder', key: 'nextLook' } as const, null)
 const counsel = atom({ plugin: 'builder', key: 'counsel' } as const, [])
 const background = atom({ plugin: 'builder', key: 'background' } as const, [])
