@@ -147,8 +147,9 @@ fields. It found:
 
 - **A session message that begins with a `<task-notification>` element**
   would be taken for the engine's wake and keep the member. The member then
-  ends at its report or notification, as the batch's other members do, so
-  the worst case is a batch that waits until its deadline. Checking that the
+  ends only at a notification that says the agent finished, failed or was
+  killed, as any woken member does, so the worst case is a batch that waits
+  until its deadline. Checking that the
   notification names the agent's own task is not possible, because that id
   names the agent's shell task, which builder never sees.
 - **An agent woken by the engine after its batch was released** is
@@ -172,8 +173,8 @@ fields. It found:
 - **(b) Telling a session message that begins with a `<task-notification>`
   element apart from the engine's wake.** No check can be built, because the
   notification's task id names a shell task builder never sees. Such a
-  message keeps the member until its report, a `failed` or `killed`
-  notification, or the batch's deadline.
+  message keeps the member until a notification that says the agent
+  finished, failed or was killed, or until the batch's deadline.
 - **(c) The mod's other retry policies,** such as the stuck-prompt
   reminder's fixed retry on refusal. They stay as they are.
 - **(d) A member that the session resumed and the engine later woke** stays

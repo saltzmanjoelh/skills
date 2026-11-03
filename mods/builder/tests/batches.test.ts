@@ -132,6 +132,18 @@ type Submitted = { text?: string; drop?: string; context?: readonly string[] }
 const deliver = ($: Engine, text: string, kind: 'peer' | 'task-notification' | 'composer' | 'sdk' = 'peer', over: Record<string, unknown> = {}) =>
   $.prompt.submit({ text, wait: false, origin: { kind }, ...(kind === 'peer' ? { isMeta: true } : {}), ...over } as never) as Promise<Submitted>
 
+// Delivers as deliver does and records the context each delivery passed on
+// with, so that a test can check how often the completion line was added.
+const recorder = ($: Engine) => {
+  const contexts: (readonly string[] | undefined)[] = []
+  const sent = async (text: string, kind: 'peer' | 'task-notification' = 'peer') => {
+    const out = await deliver($, text, kind)
+    contexts.push(out.context)
+    return out
+  }
+  return { sent, contexts }
+}
+
 const ALPHA = 'agent-1-xxxxxxxxxx'
 const BRAVO = 'agent-2-xxxxxxxxxx'
 const CHARLIE = 'agent-3-xxxxxxxxxx'
@@ -609,12 +621,7 @@ async function wake($: Engine, w: { clock: { settle: () => Promise<void> } }, id
 test('a member that reports, parks and is woken twice is held, and the batch is released once, with the completion line, at its finished notification', async ($, on) => {
   const w = world(on)
   await launched($)
-  const contexts: (readonly string[] | undefined)[] = []
-  const sent = async (text: string, kind: 'peer' | 'task-notification' = 'peer') => {
-    const out = await deliver($, text, kind)
-    contexts.push(out.context)
-    return out
-  }
+  const { sent, contexts } = recorder($)
   await sent(report(ALPHA))
   await sent(notice(ALPHA, 'completed'), 'task-notification')
   await wake($, w, ALPHA)
@@ -632,12 +639,7 @@ test('a member that reports, parks and is woken twice is held, and the batch is 
 test('a report that a member sent before it parked and that arrives after its wake is held without releasing the batch, and its finished notification releases it once, with the completion line', async ($, on) => {
   const w = world(on)
   await launched($, ['Explore', 'Plan', 'Explore'])
-  const contexts: (readonly string[] | undefined)[] = []
-  const sent = async (text: string, kind: 'peer' | 'task-notification' = 'peer') => {
-    const out = await deliver($, text, kind)
-    contexts.push(out.context)
-    return out
-  }
+  const { sent, contexts } = recorder($)
   expect(await sent(parkNotice(ALPHA), 'task-notification')).toEqual({ text: parkNotice(ALPHA) })
   await wake($, w, ALPHA)
   expect(await sent(report(BRAVO))).toEqual({ text: report(BRAVO) })
@@ -741,12 +743,7 @@ test('a deadline line the engine takes after refusals is not sent before its dou
 test('a woken member that ends with only a finished notification and no second report releases the batch once, with the completion line, without waiting for the deadline', async ($, on) => {
   const w = world(on)
   await launched($)
-  const contexts: (readonly string[] | undefined)[] = []
-  const sent = async (text: string, kind: 'peer' | 'task-notification' = 'peer') => {
-    const out = await deliver($, text, kind)
-    contexts.push(out.context)
-    return out
-  }
+  const { sent, contexts } = recorder($)
   await sent(report(ALPHA))
   expect(await sent(parkNotice(ALPHA), 'task-notification')).toEqual({ text: parkNotice(ALPHA) })
   await wake($, w, ALPHA)
