@@ -195,6 +195,17 @@ test('the kept sentence stamps the pairing it stands for, not every pairing that
   expect(shared.map(p => p.queue)).toEqual([{ place: 1, claim: null, keptAt: T0 + MINUTE }, { place: 2, claim: null }])
 })
 
+test('a claim for a pairing that shares its ticket with a reserved one never reaches the reserved one', () => {
+  const kept = { ...waiting('ft-b', 'ABC-2', 1), queue: { place: 1, claim: null, keptAt: T0 } }
+  const twin = waiting('ft-b', 'ABC-3', 2, null, 'local_other')
+  const sessions = list([listed('local_ft-b'), listed('local_other')])
+  const d = read(ledger(kept, twin), [], T0 + MINUTE, { sessions, slots: 2 })
+  expect(begins(d)).toEqual([['local_other', 'ABC-3', null]])
+  const shared = d.tickets.pairings.filter(p => p.ticket === 'ft-b')
+  expect(shared[0]!.queue).toEqual({ place: 1, claim: null, keptAt: T0 })
+  expect(shared[1]!.queue!.claim).toEqual({ attemptAt: T0 + MINUTE, notified: false })
+})
+
 // The desktop app's entry for a session that is archived.
 const ARCHIVED = { isArchived: true, isRunning: false, surelyUnarchived: false }
 const OPEN_PR = { number: 7, url: 'https://example.com/pull/7', state: 'OPEN', verdicts: null }

@@ -732,19 +732,22 @@ function queueStep(
   })
   const isShown = (p: ForemanPairing) => p.localId !== null && look?.byId.get(p.localId)?.surelyUnarchived === true
   let free = freeSlots({ ...t, pairings }, rows, now, q.slots)
-  const claims = new Map<string, string | null>()
+  // Each claim goes by the pairing itself rather than by its ticket, so a
+  // claim for one pairing never reaches a reserved pairing that shares its
+  // ticket in a damaged ledger.
+  const claims = new Map<ForemanPairing, string | null>()
   for (const p of queueOf({ ...t, pairings })) {
     if (free <= 0) break
     if (p.queue!.claim !== null || !isShown(p) || isReserved(p, now, GONE_MS)) continue
-    claims.set(p.ticket, q.freedBy.shift() ?? null)
+    claims.set(p, q.freedBy.shift() ?? null)
     free -= 1
   }
   pairings = pairings.map(p => {
     if (p.queue === null || p.standing !== 'active' || p.localId === null) return p
-    const claimed = claims.has(p.ticket)
+    const claimed = claims.has(p)
     const retried = !claimed && p.queue.claim !== null && isShown(p) && now - p.queue.claim.attemptAt >= CALL_TIMEOUT_MS
     if (!claimed && !retried) return p
-    effects.push({ kind: 'begin', to: p.localId, ticket: p.ticket, key: p.issueKey, by: claimed ? claims.get(p.ticket)! : null })
+    effects.push({ kind: 'begin', to: p.localId, ticket: p.ticket, key: p.issueKey, by: claimed ? claims.get(p)! : null })
     return { ...p, queue: { ...p.queue, claim: { attemptAt: now, notified: p.queue.claim?.notified ?? false } } }
   })
   const next = { ...t, pairings, held }
