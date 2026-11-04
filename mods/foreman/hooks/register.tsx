@@ -5,7 +5,7 @@ import { checkOutcome, clampedDue, endsOf, isClaimed, soonestDue, withNote, with
 import { CALL_TIMEOUT_MS, decide, desktopOf, freeSlots, GONE_MS, keptByUnreadList, needsList, NO_ANSWER, slotOutcome, startWaits, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
 import { isSvgSurface } from './art'
 import { becameParentAnswer, COMMAND, commandOf, PASSED_ON, PASTED_LINE, pastedCommandIn, slotsAnswer, type Command } from './commands'
-import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, failureLine, linkedFamily, listSessions, NUDGE_TEXT, openSession, readHeader, REASONS, sendMessage, type DesktopCall, type SavedCopies, type SendResult } from './desktop'
+import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, everySession, failureLine, linkedFamily, listSessions, NUDGE_TEXT, openSession, readHeader, REASONS, sendMessage, type DesktopCall, type Listed, type SavedCopies, type SendResult } from './desktop'
 import { acceptedLog, beginFailedNotice, heldLine, heldLog, heldNotice, heldSentence, isHeldRefusal, isPersonPrompt, keyOfTitle } from './held'
 import { ignoredLine, readIssueLink } from './links'
 import { afterConsumed, emptyMarkers, FIRST_MARKER_LOG, MARKERS_KEPT_MS, MARKERS_PREFIX, markersIn, markersKey, markersNewest, type MarkersRecord } from './markers'
@@ -375,7 +375,9 @@ function later($: $, work: () => Promise<unknown>) {
 // decision, so the caller schedules the checks without reading it again. A
 // list that could not be read is logged with what it kept from happening: a
 // freed slot when a slot rule needed it, else a released hold when a key is
-// held, and otherwise a queued issue begun or dropped. Its fixed reason goes
+// held, and otherwise a queued issue begun or dropped. While a key is held,
+// the desktop app's whole list is read too, because a session the person
+// started by hand for a held issue is outside the family. Its fixed reason goes
 // to decide too, which raises the notification for it.
 async function decideNow($: $, folderExists: boolean, listed: boolean, now: number): Promise<{ decision: Decision; rows: SubRow[]; written: ForemanTickets }> {
   const rows = await rowsNow($)
@@ -389,7 +391,7 @@ async function decideNow($: $, folderExists: boolean, listed: boolean, now: numb
       await addLog($, `Could not read the desktop app's list of sessions, so ${keptByUnreadList(before, rows, now)}: ${why}.`)
     } else {
       const known = before.pairings.flatMap(p => (p.localId === null ? [] : [p.localId]))
-      sessions = { kind: 'read', sessions: sessionList.sessions, complete: sessionList.complete, known }
+      sessions = { kind: 'read', sessions: sessionList.sessions, complete: sessionList.complete, known, holders: before.held.length > 0 ? await heldHolders($) : [] }
     }
   }
   const settings = parentIn(await read($, parent))
@@ -405,6 +407,16 @@ async function decideNow($: $, folderExists: boolean, listed: boolean, now: numb
     return { ...decision.tickets, checks, outbox: addWork(decision.tickets.outbox, work) }
   })
   return { decision, rows, written }
+}
+
+// The sessions of the desktop app's whole list, which may release a held key
+// that the person started by hand outside the parent's linked family, or none
+// when that list could not be read, which is logged.
+async function heldHolders($: $): Promise<Listed[]> {
+  const whole = await within($, everySession(desktopCall($), savedCopies($)))
+  if (whole !== TIMED_OUT && !('reason' in whole)) return whole.sessions
+  await addLog($, `Could not read the desktop app's whole list of sessions, so no held issue started by hand was released: ${whole === TIMED_OUT ? NO_ANSWER : whole.reason}.`)
+  return []
 }
 
 // What `within` answers when the call did not answer in time.

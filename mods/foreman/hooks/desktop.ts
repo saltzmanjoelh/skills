@@ -233,30 +233,43 @@ export async function sendMessage(call: DesktopCall, sessionId: string, text: st
 // archived flag as exactly false, which only the release of a hold reads.
 export type Listed = { sessionId: string; isArchived: boolean; isRunning: boolean; title: string | null; surelyUnarchived: boolean }
 
+// The sessions in a list's entries, each with whether it is archived and
+// whether it runs. An entry whose flags are not true or false reads as not
+// archived and running, so a doubtful entry frees no slot and wakes no one.
+// The same doubtful entry is not sure to be unarchived, so it releases no
+// hold either.
+function listedIn(entries: readonly unknown[]): Listed[] {
+  return entries.flatMap(entry => {
+    const s = entry as { sessionId?: unknown; isArchived?: unknown; isRunning?: unknown; title?: unknown } | null
+    if (typeof s?.sessionId !== 'string') return []
+    const title = typeof s.title === 'string' ? s.title : null
+    return [{ sessionId: s.sessionId, isArchived: s.isArchived === true, isRunning: s.isRunning !== false, title, surelyUnarchived: s.isArchived === false }]
+  })
+}
+
 // The sessions of the parent's family of linked sessions, as the desktop
 // app's list gives them when asked for that family alone, archived ones
-// included, each with whether it is archived and whether it runs, and whether
-// the list is complete, or why they could not be read. Every session foreman
-// tracks is one the parent started, so it is in that family. The list holds
-// only the most recently active sessions, so it is complete only when it came
-// back shorter than LIST_LIMIT, entries foreman could not read included,
-// whether they came from the answer or from its saved copy. An entry whose
-// flags are not true or false reads as not archived and running, so a
-// doubtful entry frees no slot and wakes no one. The same doubtful entry is
-// not sure to be unarchived, so it releases no hold either.
+// included, and whether the list is complete, or why they could not be read.
+// Every session foreman tracks is one the parent started, so it is in that
+// family. The list holds only the most recently active sessions, so it is
+// complete only when it came back shorter than LIST_LIMIT, entries foreman
+// could not read included, whether they came from the answer or from its
+// saved copy.
 export async function listSessions(call: DesktopCall, saved: SavedCopies): Promise<{ sessions: Listed[]; complete: boolean } | { reason: string }> {
   const read = await listEntries(call, saved, { linked: true, limit: LIST_LIMIT, include_archived: true })
   if ('reason' in read) return read
-  const raw = read.entries
-  return {
-    sessions: raw.flatMap(entry => {
-      const s = entry as { sessionId?: unknown; isArchived?: unknown; isRunning?: unknown; title?: unknown } | null
-      if (typeof s?.sessionId !== 'string') return []
-      const title = typeof s.title === 'string' ? s.title : null
-      return [{ sessionId: s.sessionId, isArchived: s.isArchived === true, isRunning: s.isRunning !== false, title, surelyUnarchived: s.isArchived === false }]
-    }),
-    complete: raw.length < LIST_LIMIT,
-  }
+  return { sessions: listedIn(read.entries), complete: read.entries.length < LIST_LIMIT }
+}
+
+// The desktop app's most recently active sessions, whoever started them,
+// archived ones included, or why they could not be read. Only the release of
+// a held key reads this list, because the person may start a held issue by
+// hand, and a session started by hand is outside the parent's linked family.
+// Its answer is read from the saved copy when it is too large to pass back
+// whole, as every list read is.
+export async function everySession(call: DesktopCall, saved: SavedCopies): Promise<{ sessions: Listed[] } | { reason: string }> {
+  const read = await listEntries(call, saved, { limit: LIST_LIMIT, include_archived: true })
+  return 'reason' in read ? read : { sessions: listedIn(read.entries) }
 }
 
 // The ids of this parent's family of linked sessions, archived ones included,

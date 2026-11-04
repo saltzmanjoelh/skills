@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { McpToolResult } from 'claude-code'
 
-import { EVENTS_TOOL, failureLine, linkedFamily, LIST_LIMIT, listSessions, openSession, readHeader, REASONS, type DesktopCall, type SavedCopies } from '../hooks/desktop'
+import { everySession, EVENTS_TOOL, failureLine, linkedFamily, LIST_LIMIT, listSessions, openSession, readHeader, REASONS, type DesktopCall, type SavedCopies } from '../hooks/desktop'
 import { desktopApp, eventsAnswer, savedNotice } from './world'
 
 const SECRET = 'SECRET-ERROR-TEXT'
@@ -215,6 +215,17 @@ const SAVED = '/cfg/projects/-work-parent/session-1/tool-results/toolu_01.txt'
 
 // An answer of the list replaced by the notice for `path`.
 const replaced = (path: string) => async () => text(savedNotice(path))
+
+test('the whole list that releases held keys asks for every session, archived ones included, and reads its saved copy when replaced', async () => {
+  const d = desktop({ list: async () => sessions([{ sessionId: 'local_h', title: 'ABC-7: by hand', isArchived: false, isRunning: true }]) })
+  expect(await everySession(d.call, none())).toEqual({ sessions: [{ sessionId: 'local_h', isArchived: false, isRunning: true, title: 'ABC-7: by hand', surelyUnarchived: true }] })
+  expect(d.calls.map(c => [c.server, c.tool, c.args])).toEqual([['ccd_session_mgmt', 'list_sessions', { limit: LIST_LIMIT, include_archived: true }]])
+  const c = copies({ [SAVED]: JSON.stringify([{ sessionId: 'local_h', title: 'ABC-7: by hand', isArchived: false }]) })
+  expect(await everySession(desktop({ list: replaced(SAVED) }).call, c.saved)).toEqual({ sessions: [{ sessionId: 'local_h', isArchived: false, isRunning: true, title: 'ABC-7: by hand', surelyUnarchived: true }] })
+  expect(c.seen.reads).toEqual([SAVED])
+  expect(await everySession(desktop({ list: replaced(SAVED) }).call, none())).toEqual({ reason: REASONS.savedMissing })
+  expect(await everySession(desktop({ list: async () => text(SECRET) }).call, none())).toEqual({ reason: REASONS.listUnreadable })
+})
 
 // What each of the three reads answers for the list answer `list`, with the
 // reader `saved`: listSessions, linkedFamily, and an open of the folder

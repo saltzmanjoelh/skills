@@ -347,6 +347,16 @@ test('a held key needs the list, and only a list that was read releases it, with
   for (const sessions of [{ kind: 'unread' }, { kind: 'failed' }] as SessionsLook[]) expect(read(holding, [], T0, { sessions }).tickets.held).toEqual(['ABC-7'])
 })
 
+test('a held key is released by a session in the whole list read beside the family, which frees no slot', () => {
+  const holding: ForemanTickets = { ...TICKETS_EMPTY, held: ['ABC-7'] }
+  const byHand = { sessionId: 'local_h', isArchived: false, isRunning: true, title: 'ABC-7: by hand', surelyUnarchived: true }
+  const d = read(holding, [], T0, { sessions: { kind: 'read', sessions: [], complete: true, holders: [byHand] } })
+  expect(d.tickets.held).toEqual([])
+  expect(d.logs).toEqual(['Stopped holding ABC-7, because the desktop app\'s list shows a session for it.'])
+  const kept = read(holding, [], T0, { sessions: { kind: 'read', sessions: [], complete: true, holders: [{ ...byHand, title: 'ABC-77: other' }] } })
+  expect(kept.tickets.held).toEqual(['ABC-7'])
+})
+
 // A pull request in a record, and a verdict pair whose sha is the character
 // `c` forty times.
 const pr = (number: number, state = 'OPEN', verdicts: unknown = null) => ({ repo: 'o/r', number, state, checks: 'passed', verdicts })

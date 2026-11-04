@@ -51,6 +51,13 @@ beside the parent.
      an archived session is never opened.
    A family of 21 sessions answers about 13,000 characters today, well inside
    the limit.
+   - While any key is held, the release of a hold also reads the whole list
+     with `{ limit: 100, include_archived: true }`, as every read did before.
+     The hold spec, `docs/specs/foreman-holds-refused-start.md`, promises that
+     a session the person starts by hand for a held issue releases its key,
+     and a session started by hand is outside the parent's family. This read
+     feeds only the release of holds, gets the saved-copy read below like the
+     other three, and a failure of it releases nothing and is logged.
 2. **A replaced answer is read from its saved copy.** When the first text
    block of any of the three answers is Claude Code's notice, foreman reads
    the saved copy instead and treats its contents exactly as it treats an
@@ -164,6 +171,9 @@ beside the parent.
   reason contains the path or the file's text. The not-a-list cases include
   a copy that is an empty array and a copy that is an array of content
   blocks.
+- An engine test shows that a session outside the parent's family, as one
+  the person started by hand, releases a held key through the whole list,
+  and that the whole list is read only while a key is held.
 - A test in `mods/foreman/tests/act.test.ts` shows that each new reason keeps
   a freed slot and wakes no one, as `listUnreadable` does.
 - The four gates in the project's `CLAUDE.md` pass.

@@ -916,6 +916,35 @@ test('a neighbouring key, an archived entry, an entry with a doubtful archived f
   expect(logs).not.toContain('so no slot was freed')
 })
 
+test('a session the person starts by hand outside the parent\'s family releases a held key through the whole list, which is read only while a key is held', async ($, on) => {
+  const { w, ui } = await refusingParent($, on)
+  const whole = () => w.desktop.calls.filter(c => c.tool === 'list_sessions' && c.args.linked !== true).length
+  await startFull($, KEYED_START)
+  await w.clock.settle()
+  w.desktop.sessions = [{ sessionId: 'local_h', cwd: '/w', title: 'ABC-7: by hand', isArchived: false, isRunning: true, outside: true }]
+  await minutesPass(w, 2)
+  expect(whole()).toBeGreaterThan(0)
+  expect(ledger(w).held).toEqual([])
+  expect(await ui.paneText()).toContain('Stopped holding ABC-7, because the desktop app\'s list shows a session for it.')
+  const after = whole()
+  await minutesPass(w, 4)
+  expect(whole()).toBe(after)
+})
+
+test('a whole list that cannot be read releases no held key and is logged, and the family list still releases one', async ($, on) => {
+  const { w, ui } = await refusingParent($, on)
+  await startFull($, KEYED_START)
+  await w.clock.settle()
+  w.desktop.sessions = [{ sessionId: 'local_h', cwd: '/w', title: 'ABC-7: by hand', isArchived: false, isRunning: true, outside: true }]
+  w.desktop.wholeList = 'error'
+  await minutesPass(w, 2)
+  expect(ledger(w).held).toEqual(['ABC-7'])
+  expect(await ui.paneText()).toContain(`Could not read the desktop app's whole list of sessions, so no held issue started by hand was released: ${REASONS.listRefused}.`)
+  w.desktop.sessions = [{ sessionId: 'local_h', cwd: '/w', title: 'ABC-7: by hand', isArchived: false, isRunning: true }]
+  await minutesPass(w, 2)
+  expect(ledger(w).held).toEqual([])
+})
+
 // A start whose brief runs /implement, and one whose brief does not.
 const IMPLEMENT = { prompt: 'Run /implement ABC-7.', context: 'fresh', title: 'ABC-7: short' }
 const OTHER = { prompt: 'Tidy the docs.', context: 'fresh', title: 'No issue: tidy' }

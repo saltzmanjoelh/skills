@@ -119,18 +119,24 @@ export const savedNotice = (path: string, size = '57,997 characters across 1,441
 // that `events` does not hold answers as one the app does not know.
 // `beforeSend`, when set, is awaited once, by the next send_message call
 // before it answers, so a test can change what happens while the send is out.
-// list_sessions answers only when asked for the parent's linked family alone,
-// as every read of foreman asks, and answers a tool error otherwise, so a read
-// that drops the argument fails loudly. The family is every session in
-// `sessions`, and after them a bare entry for each id of `linkedIds` that
-// `sessions` does not hold, or for each id `events` holds when `linkedIds` is
-// null, so a sub session a test checks is in the parent's family unless the
-// test says otherwise.
+// list_sessions answers the parent's linked family when asked for it alone,
+// the whole list when asked for every session with archived ones included,
+// as the release of a held key asks, and a tool error otherwise, so a read
+// that drops an argument fails loudly. The family is every session in
+// `sessions` that is not marked `outside`, and after them a bare entry for
+// each id of `linkedIds` that `sessions` does not hold, or for each id
+// `events` holds when `linkedIds` is null, so a sub session a test checks is
+// in the parent's family unless the test says otherwise. The whole list is
+// the family with the sessions marked `outside` added, such as one the
+// person started by hand. `wholeList`, when set, says how the whole list
+// answers in place of `list`.
 export function desktopApp(on: On, saved = new Map<string, string>()) {
   const d = {
     calls: [] as { server: string; tool: string; args: Record<string, unknown> }[],
-    sessions: [] as { sessionId: string; cwd: string; title?: string; isArchived?: boolean; isRunning?: boolean }[],
+    sessions: [] as { sessionId: string; cwd: string; title?: string; isArchived?: boolean; isRunning?: boolean; outside?: boolean }[],
     list: 'ok' as 'ok' | 'error' | 'garbage' | 'not-connected' | 'hang' | 'saved',
+    // How the whole list answers, in place of `list`, when it is set.
+    wholeList: undefined as undefined | 'error',
     linkedIds: null as string[] | null,
     send: 'ok' as 'ok' | 'error' | 'not-connected' | 'hang',
     open: 'ok' as 'ok' | 'error' | 'error-empty' | 'not-connected',
@@ -159,8 +165,9 @@ export function desktopApp(on: On, saved = new Map<string, string>()) {
   })
   // How every tool but list_events answers.
   function other(e: { server: string; tool: string; args: Record<string, unknown> }) {
-    if (e.tool === 'list_sessions' && e.args.linked !== true) return answer({ content: [{ type: 'text', text: 'list_sessions was asked for every session.' }], isError: true })
-    const how = e.tool === 'list_sessions' ? d.list : e.tool === 'send_message' ? d.sendTo.get(String(e.args.session_id)) ?? d.send : d.open
+    const whole = e.args.linked !== true
+    if (e.tool === 'list_sessions' && whole && e.args.include_archived !== true) return answer({ content: [{ type: 'text', text: 'list_sessions was asked for every session without archived ones.' }], isError: true })
+    const how = e.tool === 'list_sessions' ? (whole ? d.wholeList ?? d.list : d.list) : e.tool === 'send_message' ? d.sendTo.get(String(e.args.session_id)) ?? d.send : d.open
     if (how === 'hang') return new Promise<never>(() => {})
     if (how === 'ok' && e.tool === 'send_message') {
       d.sent.push([String(e.args.session_id), String(e.args.message)])
@@ -173,7 +180,8 @@ export function desktopApp(on: On, saved = new Map<string, string>()) {
     if (e.tool === 'list_sessions') {
       const listed = new Set(d.sessions.map(s => s.sessionId))
       const rest = (d.linkedIds ?? [...d.events.keys()]).filter(id => !listed.has(id)).map(sessionId => ({ sessionId, startedBy: 'session-1' }))
-      const text = JSON.stringify([...d.sessions, ...rest])
+      const shown = d.sessions.filter(s => whole || s.outside !== true).map(({ outside: _, ...s }) => s)
+      const text = JSON.stringify([...shown, ...rest])
       if (how !== 'saved') return answer({ content: [{ type: 'text', text }], isError: false })
       saved.set(SAVED_PATH, text)
       return answer({ content: [{ type: 'text', text: savedNotice(SAVED_PATH) }], isError: false })

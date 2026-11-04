@@ -60,8 +60,10 @@ export const listFailedNotice = (why: string) => `foreman cannot read the deskto
 // out may have started after the list was made, so its absence from the list
 // says nothing. Without `known`, every id counts as held then. A failed look
 // carries the fixed reason it failed, which the notice for a failed read
-// shows, and one without a reason counts as refused.
-export type SessionsLook = { kind: 'unread' } | { kind: 'failed'; reason?: string } | { kind: 'read'; sessions: Listed[]; complete?: boolean; known?: readonly string[] }
+// shows, and one without a reason counts as refused. `holders` holds the
+// sessions of the desktop app's whole list, read beside the family's only
+// while a key is held, which only the release of a hold reads.
+export type SessionsLook = { kind: 'unread' } | { kind: 'failed'; reason?: string } | { kind: 'read'; sessions: Listed[]; complete?: boolean; known?: readonly string[]; holders?: readonly Listed[] }
 
 // A list that was read, as the rules look things up in it: its sessions by
 // id, whether it is complete, and the ids the ledger held when it was asked
@@ -766,7 +768,7 @@ function queueStep(
 // milestones come after its other reasons, and foreman reports them itself
 // rather than waking the parent with them, since splitReasons in wake.ts sets
 // them apart. A list that was read releases each held key that a session in
-// it shows started.
+// it, or in the whole list read beside it as `holders`, shows started.
 // An active pairing whose session the list shows over is freed by the over
 // rule before its state rules, but after its milestones, so a merge on the
 // same read is still reported.
@@ -859,7 +861,7 @@ export function decide(input: DecideInput): Decision {
   if (!folderExists && !tickets.folderMissing) logs.push('The status folder is missing, so foreman frees no slot until it is back.')
   tickets = { ...tickets, folderMissing: !folderExists }
   if (sessions.kind === 'read' && tickets.held.length > 0) {
-    const released = releasedBy(tickets.held, sessions.sessions)
+    const released = releasedBy(tickets.held, [...sessions.sessions, ...(sessions.holders ?? [])])
     if (released.logs.length > 0) tickets = { ...tickets, held: released.held }
     logs.push(...released.logs)
   }
