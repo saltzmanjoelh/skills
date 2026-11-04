@@ -1229,8 +1229,13 @@ async function withForemanLines($: $, e: PromptSubmitInput): Promise<PromptSubmi
   if (!settings.isOn) return e
   const ledger = ticketsIn(await read($, tickets))
   const lines = ledger.held.length === 0 ? [] : [heldLine(ledger.held)]
-  const count = e.turnId !== undefined || isStartForeman(e) ? 0 : await topUpFrom($, settings, ledger).catch(() => 0)
-  if (count > 0) lines.push(topUpLine(count))
+  const inRunningTurn = e.turnId !== undefined
+  const skipsTopUp = inRunningTurn || isStartForeman(e)
+  if (!skipsTopUp) {
+    const failedCount = 0
+    const count = await topUpFrom($, settings, ledger).catch(() => failedCount)
+    if (count > 0) lines.push(topUpLine(count))
+  }
   return lines.length === 0 ? e : { ...e, context: [...(e.context ?? []), ...lines] }
 }
 
