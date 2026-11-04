@@ -445,7 +445,7 @@ for (const f of LINKED_FAILURES) {
     const { w, seen } = await notedOff($, on)
     w.desktop.events.set('local_v', { state: 'idle' })
     await submit($, note('local_v'))
-    w.desktop.linked = f.linked
+    w.desktop.list = f.linked
     await pass(w, 5 * MINUTE)
     await pass(w, 30 * SECOND)
     const u = `Stopped checking the sub session local_u, because ${f.reason}.`

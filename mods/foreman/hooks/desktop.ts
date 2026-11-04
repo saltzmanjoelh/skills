@@ -9,6 +9,12 @@ import type { SubRecord } from './record'
 
 export type DesktopCall = (server: string, tool: string, args?: Record<string, unknown>) => Promise<McpToolResult>
 
+// What a read of the list needs from Claude Code's saved tool results, which
+// register.tsx makes from the engine, so the tests can answer it from memory:
+// the configuration folder without trailing slashes, a saved copy's text, and
+// a file's size in bytes. Each may reject.
+export type SavedCopies = { config: () => Promise<string>; read: (path: string) => Promise<string>; size: (path: string) => Promise<number> }
+
 // The desktop app's servers and tools that foreman calls.
 export const WINDOW_SERVER = 'ccd_window'
 export const OPEN_TOOL = 'open_session_in'
@@ -40,10 +46,14 @@ export const BACKGROUND_NUDGE_TEXT: ForemanNudgeText = 'could you check that you
 // begin that arrives twice harmless. The wait line in tickets.ts quotes it, so
 // the sub session knows it when it comes.
 export const BEGIN_TEXT = 'foreman begins this session now: first bring your branch up to date with the base branch, with the desktop app\'s sync_with_base_branch tool, and then run the /implement command your brief gives. If you have already begun it, ignore this message.'
-// How many sessions to ask the list for. The list answers the most recently
-// active ones, twenty when not told otherwise, and a sub session that has been
-// quiet a while could fall outside twenty.
+// How many sessions to ask the list for. Every read asks for the parent's
+// linked family alone, which the list answers most recently active first,
+// twenty when not told otherwise, and a sub session that has been quiet a
+// while could fall outside twenty.
 export const LIST_LIMIT = 100
+
+// The most a saved copy may hold for $.fs.read to read it, 4 MiB.
+const SAVED_LIMIT = 4 * 1024 * 1024
 
 // Why an open failed, one fixed reason for each cause. A tool's own error
 // text is never repeated, because it is not foreman's to show and may be
@@ -59,6 +69,10 @@ export const REASONS = {
   eventsRefused: 'the desktop app could not read its events',
   eventsUnreadable: 'the desktop app\'s answer about its events could not be read',
   notLinked: 'it is not a session in this parent\'s family of linked sessions',
+  savedOutside: 'the desktop app\'s list of sessions was too large to pass back whole, and the place named for its saved copy is outside Claude Code\'s saved tool results',
+  savedMissing: 'the desktop app\'s list of sessions was too large to pass back whole, and its saved copy is missing',
+  savedTooLarge: 'the desktop app\'s list of sessions was too large to pass back whole, and its saved copy is over the 4 MiB foreman can read',
+  savedNotList: 'the desktop app\'s list of sessions was too large to pass back whole, and its saved copy is not a list of sessions',
 } as const
 
 export type OpenResult = { opened: string } | { reason: string }
@@ -88,12 +102,8 @@ function firstTextOf(result: McpToolResult): string | null {
   return block === undefined || typeof block.text !== 'string' ? null : block.text
 }
 
-// The entries of the list's answer: its first text block parsed as a JSON
-// array, or null when the answer is not such a list. Each caller picks the
-// fields it needs from the entries.
-function entriesIn(result: McpToolResult): unknown[] | null {
-  const text = firstTextOf(result)
-  if (text === null) return null
+// The text parsed as a JSON array, or null when it is not one.
+function arrayIn(text: string): unknown[] | null {
   let raw: unknown
   try {
     raw = JSON.parse(text)
@@ -103,27 +113,91 @@ function entriesIn(result: McpToolResult): unknown[] | null {
   return Array.isArray(raw) ? raw : null
 }
 
-// The sessions in the list's answer, each kept when it has a string session
-// id and folder, or null when the answer is not a list.
-function sessionsIn(result: McpToolResult): { sessionId: string; cwd: string }[] | null {
-  const raw = entriesIn(result)
-  if (raw === null) return null
-  return raw.flatMap(entry => {
-    const s = entry as { sessionId?: unknown; cwd?: unknown } | null
-    return typeof s?.sessionId === 'string' && typeof s.cwd === 'string' ? [{ sessionId: s.sessionId, cwd: s.cwd }] : []
-  })
+// The notice Claude Code passes back in place of a tool answer too large to
+// pass back whole, after saving the answer to a file. The greedy capture
+// backs up to the last full stop before the first newline, so the path is
+// everything between "saved to " and that final full stop.
+const SAVED_NOTICE = /^Error: result \([^)]*\) exceeds maximum allowed tokens\. Output has been saved to ([^\n]*)\.\n/
+
+// The path the notice names, or null when the text is not the notice in
+// exactly that shape.
+export function savedPathIn(text: string): string | null {
+  return SAVED_NOTICE.exec(text)?.[1] ?? null
+}
+
+// Whether `path` lies in Claude Code's saved tool results under the
+// configuration folder `config`: exactly
+// <config>/projects/<folder>/<folder>/tool-results/<file>, each part one
+// segment that is not empty, `.` or `..`. The notice is text a tool answer
+// could imitate, so no other file is ever read for it.
+export function isSavedResult(path: string, config: string): boolean {
+  const root = `${config}/projects/`
+  if (!path.startsWith('/') || !path.startsWith(root)) return false
+  const parts = path.slice(root.length).split('/')
+  return parts.length === 4 && parts.every(p => p !== '' && p !== '.' && p !== '..') && parts[2] === 'tool-results'
+}
+
+// The entries of the saved copy at `path`, or why they could not be read.
+// When the read fails, the file's size tells a copy too large to read from
+// one that is missing; the engine's error text is never parsed. Claude Code
+// saves a copy only for an answer too large to pass back, so a copy in which
+// no entry has a string session id cannot be an honest list.
+async function savedEntries(saved: SavedCopies, path: string): Promise<{ entries: unknown[] } | { reason: string }> {
+  let config: string
+  try {
+    config = await saved.config()
+  } catch {
+    return { reason: REASONS.savedOutside }
+  }
+  if (!isSavedResult(path, config)) return { reason: REASONS.savedOutside }
+  let text: string
+  try {
+    text = await saved.read(path)
+  } catch {
+    let size: number | null
+    try {
+      size = await saved.size(path)
+    } catch {
+      size = null
+    }
+    return { reason: size !== null && size > SAVED_LIMIT ? REASONS.savedTooLarge : REASONS.savedMissing }
+  }
+  const entries = typeof text === 'string' ? arrayIn(text) : null
+  const honest = entries !== null && entries.some(entry => typeof (entry as { sessionId?: unknown } | null)?.sessionId === 'string')
+  return honest ? { entries: entries! } : { reason: REASONS.savedNotList }
+}
+
+// The entries of the list's answer to `args`, or why they could not be read.
+// The answer's first text block is parsed as a JSON array, unless it is
+// Claude Code's notice that it saved the answer, when the saved copy is read
+// instead. A tool error reads as refused even when its text is the notice.
+// Every call is caught, so this never rejects. Each caller picks the fields it
+// needs from the entries.
+async function listEntries(call: DesktopCall, saved: SavedCopies, args: Record<string, unknown>): Promise<{ entries: unknown[] } | { reason: string }> {
+  const answer = await answerOf(call, SESSIONS_SERVER, LIST_TOOL, args)
+  if (answer === 'not-connected') return { reason: REASONS.notConnected }
+  if (answer === 'refused') return { reason: REASONS.listRefused }
+  const text = firstTextOf(answer)
+  if (text === null) return { reason: REASONS.listUnreadable }
+  const path = savedPathIn(text)
+  if (path !== null) return savedEntries(saved, path)
+  const entries = arrayIn(text)
+  return entries === null ? { reason: REASONS.listUnreadable } : { entries }
 }
 
 // The desktop session id for a record: its own when it has one, else the
-// first listed session whose folder is the record's.
-async function sessionIdOf(call: DesktopCall, record: Pick<SubRecord, 'desktopSessionId' | 'cwd'>): Promise<{ id: string } | { reason: string }> {
+// first session in the parent's linked family whose folder is the record's.
+// It leaves archived sessions out, because an archived session is never
+// opened.
+async function sessionIdOf(call: DesktopCall, record: Pick<SubRecord, 'desktopSessionId' | 'cwd'>, saved: SavedCopies): Promise<{ id: string } | { reason: string }> {
   if (record.desktopSessionId !== undefined) return { id: record.desktopSessionId }
   if (record.cwd === null) return { reason: REASONS.noAddress }
-  const answer = await answerOf(call, SESSIONS_SERVER, LIST_TOOL, { limit: LIST_LIMIT })
-  if (answer === 'not-connected') return { reason: REASONS.notConnected }
-  if (answer === 'refused') return { reason: REASONS.listRefused }
-  const list = sessionsIn(answer)
-  if (list === null) return { reason: REASONS.listUnreadable }
+  const read = await listEntries(call, saved, { linked: true, limit: LIST_LIMIT })
+  if ('reason' in read) return read
+  const list = read.entries.flatMap(entry => {
+    const s = entry as { sessionId?: unknown; cwd?: unknown } | null
+    return typeof s?.sessionId === 'string' && typeof s.cwd === 'string' ? [{ sessionId: s.sessionId, cwd: s.cwd }] : []
+  })
   const wanted = folderOf(record.cwd)
   const found = list.find(s => folderOf(s.cwd) === wanted)
   return found === undefined ? { reason: REASONS.noSessionInFolder } : { id: found.sessionId }
@@ -133,8 +207,8 @@ async function sessionIdOf(call: DesktopCall, record: Pick<SubRecord, 'desktopSe
 // band and pane stay on screen. Answers the id it opened, or why it could
 // not. An answer that is not an error counts as opened, including the
 // desktop app's answer that the session is already showing.
-export async function openSession(call: DesktopCall, record: Pick<SubRecord, 'desktopSessionId' | 'cwd'>): Promise<OpenResult> {
-  const found = await sessionIdOf(call, record)
+export async function openSession(call: DesktopCall, record: Pick<SubRecord, 'desktopSessionId' | 'cwd'>, saved: SavedCopies): Promise<OpenResult> {
+  const found = await sessionIdOf(call, record, saved)
   if ('reason' in found) return found
   const answer = await answerOf(call, WINDOW_SERVER, OPEN_TOOL, { session_id: found.id, target: 'split' })
   if (answer === 'not-connected') return { reason: REASONS.notConnected }
@@ -158,20 +232,21 @@ export async function sendMessage(call: DesktopCall, sessionId: string, text: st
 // archived flag as exactly false, which only the release of a hold reads.
 export type Listed = { sessionId: string; isArchived: boolean; isRunning: boolean; title: string | null; surelyUnarchived: boolean }
 
-// The desktop app's sessions, archived ones included, each with whether it
-// is archived and whether it runs, and whether the list is complete, or why
-// they could not be read. The list holds only the most recently active
-// sessions, so it is complete only when it came back shorter than
-// LIST_LIMIT, entries foreman could not read included. An entry
-// whose flags are not true or false reads as not archived and running, so a
+// The sessions of the parent's family of linked sessions, as the desktop
+// app's list gives them when asked for that family alone, archived ones
+// included, each with whether it is archived and whether it runs, and whether
+// the list is complete, or why they could not be read. Every session foreman
+// tracks is one the parent started, so it is in that family. The list holds
+// only the most recently active sessions, so it is complete only when it came
+// back shorter than LIST_LIMIT, entries foreman could not read included,
+// whether they came from the answer or from its saved copy. An entry whose
+// flags are not true or false reads as not archived and running, so a
 // doubtful entry frees no slot and wakes no one. The same doubtful entry is
 // not sure to be unarchived, so it releases no hold either.
-export async function listSessions(call: DesktopCall): Promise<{ sessions: Listed[]; complete: boolean } | { reason: string }> {
-  const answer = await answerOf(call, SESSIONS_SERVER, LIST_TOOL, { limit: LIST_LIMIT, include_archived: true })
-  if (answer === 'not-connected') return { reason: REASONS.notConnected }
-  if (answer === 'refused') return { reason: REASONS.listRefused }
-  const raw = entriesIn(answer)
-  if (raw === null) return { reason: REASONS.listUnreadable }
+export async function listSessions(call: DesktopCall, saved: SavedCopies): Promise<{ sessions: Listed[]; complete: boolean } | { reason: string }> {
+  const read = await listEntries(call, saved, { linked: true, limit: LIST_LIMIT, include_archived: true })
+  if ('reason' in read) return read
+  const raw = read.entries
   return {
     sessions: raw.flatMap(entry => {
       const s = entry as { sessionId?: unknown; isArchived?: unknown; isRunning?: unknown; title?: unknown } | null
@@ -189,12 +264,10 @@ export async function listSessions(call: DesktopCall): Promise<{ sessions: Liste
 // their own linked sessions. Answers those ids and whether the list is
 // complete, which it is only when it came back shorter than LIST_LIMIT,
 // entries foreman could not read included, or why it could not be read.
-export async function linkedFamily(call: DesktopCall): Promise<{ ids: string[]; complete: boolean } | { reason: string }> {
-  const answer = await answerOf(call, SESSIONS_SERVER, LIST_TOOL, { linked: true, limit: LIST_LIMIT, include_archived: true })
-  if (answer === 'not-connected') return { reason: REASONS.notConnected }
-  if (answer === 'refused') return { reason: REASONS.listRefused }
-  const raw = entriesIn(answer)
-  if (raw === null) return { reason: REASONS.listUnreadable }
+export async function linkedFamily(call: DesktopCall, saved: SavedCopies): Promise<{ ids: string[]; complete: boolean } | { reason: string }> {
+  const read = await listEntries(call, saved, { linked: true, limit: LIST_LIMIT, include_archived: true })
+  if ('reason' in read) return read
+  const raw = read.entries
   return {
     ids: raw.flatMap(entry => {
       const s = entry as { sessionId?: unknown } | null

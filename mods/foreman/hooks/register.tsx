@@ -5,7 +5,7 @@ import { checkOutcome, clampedDue, endsOf, isClaimed, soonestDue, withNote, with
 import { CALL_TIMEOUT_MS, decide, desktopOf, freeSlots, GONE_MS, keptByUnreadList, needsList, NO_ANSWER, slotOutcome, startWaits, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
 import { isSvgSurface } from './art'
 import { becameParentAnswer, COMMAND, commandOf, PASSED_ON, PASTED_LINE, pastedCommandIn, slotsAnswer, type Command } from './commands'
-import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, failureLine, linkedFamily, listSessions, NUDGE_TEXT, openSession, readHeader, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
+import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, failureLine, linkedFamily, listSessions, NUDGE_TEXT, openSession, readHeader, REASONS, sendMessage, type DesktopCall, type SavedCopies, type SendResult } from './desktop'
 import { acceptedLog, beginFailedNotice, heldLine, heldLog, heldNotice, heldSentence, isHeldRefusal, isPersonPrompt, keyOfTitle } from './held'
 import { ignoredLine, readIssueLink } from './links'
 import { afterConsumed, emptyMarkers, FIRST_MARKER_LOG, MARKERS_KEPT_MS, MARKERS_PREFIX, markersIn, markersKey, markersNewest, type MarkersRecord } from './markers'
@@ -113,12 +113,17 @@ let markerLogged = false
 // in order.
 let markerWrites: Promise<void> = Promise.resolve()
 
-// The status folder: under CLAUDE_CONFIG_DIR when it is set, else under the
-// home folder's `.claude`.
-async function statusFolderOf($: $): Promise<string> {
+// Claude Code's configuration folder, without trailing slashes:
+// CLAUDE_CONFIG_DIR when it is set, else the home folder's `.claude`.
+async function configFolderOf($: $): Promise<string> {
   const config = await $.env.get('CLAUDE_CONFIG_DIR')
   const base = typeof config === 'string' && config !== '' ? config : `${(await $.env.get('HOME')) ?? ''}/.claude`
-  return `${base.replace(/\/+$/, '')}/foreman/builds`
+  return base.replace(/\/+$/, '')
+}
+
+// The status folder, inside the configuration folder.
+async function statusFolderOf($: $): Promise<string> {
+  return `${await configFolderOf($)}/foreman/builds`
 }
 
 // Adds a line to the log, keeping the newest LOG_KEPT. A line the same as the
@@ -377,7 +382,7 @@ async function decideNow($: $, folderExists: boolean, listed: boolean, now: numb
   const before = joinOwners(ticketsIn(await read($, tickets)), rows).tickets
   let sessions: SessionsLook = { kind: 'unread' }
   if (needsList(before, rows, now)) {
-    const sessionList = await within($, listSessions(desktopCall($)))
+    const sessionList = await within($, listSessions(desktopCall($), savedCopies($)))
     if (sessionList === TIMED_OUT || 'reason' in sessionList) {
       const why = sessionList === TIMED_OUT ? NO_ANSWER : sessionList.reason
       sessions = { kind: 'failed', reason: why }
@@ -593,7 +598,7 @@ async function runDueChecks($: $) {
       return { ...t, checks: kept.map(c => claims.find(claim => claim.id === c.id) ?? c) }
     })
     if (claims.length === 0) return
-    const family = await within($, linkedFamily(desktopCall($))).catch(() => ({ reason: REASONS.notConnected }))
+    const family = await within($, linkedFamily(desktopCall($), savedCopies($))).catch(() => ({ reason: REASONS.notConnected }))
     const refusal = (id: string): string | null => {
       if (family === TIMED_OUT) return NO_ANSWER
       if ('reason' in family) return family.reason
@@ -777,13 +782,21 @@ function columnsOf(columns: unknown): number | undefined {
 // The desktop app's tools, called through the engine.
 const desktopCall = ($: $): DesktopCall => (server, tool, args) => $.mcp.call(server, tool, args)
 
+// Claude Code's saved tool results, read through the engine, for a list
+// answer that Claude Code saved to a file rather than pass back whole.
+const savedCopies = ($: $): SavedCopies => ({
+  config: () => configFolderOf($),
+  read: path => $.fs.read(path),
+  size: async path => (await $.fs.stat(path)).size,
+})
+
 // Opens the sub session whose file is `file` beside the parent, and says
 // what happened: a line in the log when it opened, and a toast with the same
 // line in the log when it did not.
 async function openRow($: $, file: string) {
   const row = (await shownNow($)).find(r => r.file === file)
   if (row === undefined) return
-  const result = await openSession(desktopCall($), row.record)
+  const result = await openSession(desktopCall($), row.record, savedCopies($))
   if ('opened' in result) {
     await addLog($, `Opened ${nameOf(row)} beside this session.`)
     return
