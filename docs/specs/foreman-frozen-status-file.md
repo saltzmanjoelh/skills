@@ -88,7 +88,10 @@ changed for longer than the new limit.
     parent for every live sub session. The five-minute gap limit stays above
     foreman's slowest read interval of two minutes, or every quiet read would
     begin a new watch, and well below `FROZEN_MS`. A file whose builder really
-    stopped still gets the wake, two minutes into the watch.
+    stopped still gets the wake, on the first read two minutes or more into
+    the watch. That read comes within one read interval of the two-minute
+    mark, as the ten-minute wake comes within one read interval of its
+    limit.
 
 ## Edge cases
 
@@ -117,9 +120,11 @@ changed for longer than the new limit.
 - The machine wakes from a sleep longer than five minutes, or the folder's
   listings fail for that long. The first listing that works begins a new
   watch, so a live file that its builder has not yet rewritten does not wake
-  the parent; a file still unchanged two minutes later does.
+  the parent; a file still unchanged gets the wake on the first read two
+  minutes or more into the watch.
 - Foreman starts with files already more than ten minutes old. The first
-  listing begins a watch, so the wake comes two minutes later.
+  listing begins a watch, so the wake comes on the first read two minutes or
+  more after it.
 
 ## Non-goals
 
