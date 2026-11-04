@@ -916,7 +916,7 @@ test('a neighbouring key, an archived entry, an entry with a doubtful archived f
   expect(logs).not.toContain('so no slot was freed')
 })
 
-test('a session the person starts by hand outside the parent\'s family releases a held key through the whole list, which is read only while a key is held', async ($, on) => {
+test('a session the person starts by hand outside the parent\'s family releases a held key through the whole list', async ($, on) => {
   const { w, ui } = await refusingParent($, on)
   const whole = () => w.desktop.calls.filter(c => c.tool === 'list_sessions' && c.args.linked !== true).length
   await startFull($, KEYED_START)
@@ -926,9 +926,6 @@ test('a session the person starts by hand outside the parent\'s family releases 
   expect(whole()).toBeGreaterThan(0)
   expect(ledger(w).held).toEqual([])
   expect(await ui.paneText()).toContain('Stopped holding ABC-7, because the desktop app\'s list shows a session for it.')
-  const after = whole()
-  await minutesPass(w, 4)
-  expect(whole()).toBe(after)
 })
 
 test('a whole list that cannot be read releases no held key and is logged, and the family list still releases one', async ($, on) => {

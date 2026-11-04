@@ -366,6 +366,10 @@ test('an active sub session archived before its file said done frees its slot, a
   const stuck = busyFile('ABC-1', ticketOf(w, 0), 'local_new1', { state: 'waiting-on-builder' })
   w.desktop.sessions[0] = listed('local_new1', 'ABC-1', { isArchived: true, isRunning: false })
   await minutesPass(w, 2, { ...live, 'a.json': stuck })
+  // The queue needs the list, but no key is held, so only the family's list
+  // is read and the whole list is never asked for.
+  expect(w.desktop.calls.some(c => c.tool === 'list_sessions')).toBe(true)
+  expect(w.desktop.calls.filter(c => c.tool === 'list_sessions' && c.args.linked !== true)).toEqual([])
   expect(begins(w)).toEqual(['local_new2'])
   expect(w.engine.prompts).toEqual([])
   expect(w.engine.notices).toEqual(['foreman began ABC-2, the next issue in the queue, in the slot ABC-1 freed.'])

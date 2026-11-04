@@ -384,14 +384,21 @@ async function decideNow($: $, folderExists: boolean, listed: boolean, now: numb
   const before = joinOwners(ticketsIn(await read($, tickets)), rows).tickets
   let sessions: SessionsLook = { kind: 'unread' }
   if (needsList(before, rows, now)) {
-    const sessionList = await within($, listSessions(desktopCall($), savedCopies($)))
+    const family = within($, listSessions(desktopCall($), savedCopies($)))
+    // The whole list is asked for only while a key is held, at the same time
+    // as the family's, so a read waits for the slower of the two calls rather
+    // than for both in turn. It is used only when the family's list was read.
+    const whole = before.held.length > 0 ? within($, everySession(desktopCall($), savedCopies($))) : null
+    const sessionList = await family
+    const wholeList = whole === null ? null : await whole
     if (sessionList === TIMED_OUT || 'reason' in sessionList) {
       const why = sessionList === TIMED_OUT ? NO_ANSWER : sessionList.reason
       sessions = { kind: 'failed', reason: why }
       await addLog($, `Could not read the desktop app's list of sessions, so ${keptByUnreadList(before, rows, now)}: ${why}.`)
     } else {
       const known = before.pairings.flatMap(p => (p.localId === null ? [] : [p.localId]))
-      sessions = { kind: 'read', sessions: sessionList.sessions, complete: sessionList.complete, known, holders: before.held.length > 0 ? await heldHolders($) : [] }
+      const holders = wholeList === null ? [] : await holdersIn($, wholeList)
+      sessions = { kind: 'read', sessions: sessionList.sessions, complete: sessionList.complete, known, holders }
     }
   }
   const settings = parentIn(await read($, parent))
@@ -412,8 +419,7 @@ async function decideNow($: $, folderExists: boolean, listed: boolean, now: numb
 // The sessions of the desktop app's whole list, which may release a held key
 // that the person started by hand outside the parent's linked family, or none
 // when that list could not be read, which is logged.
-async function heldHolders($: $): Promise<Listed[]> {
-  const whole = await within($, everySession(desktopCall($), savedCopies($)))
+async function holdersIn($: $, whole: Awaited<ReturnType<typeof everySession>> | typeof TIMED_OUT): Promise<Listed[]> {
   if (whole !== TIMED_OUT && !('reason' in whole)) return whole.sessions
   await addLog($, `Could not read the desktop app's whole list of sessions, so no held issue started by hand was released: ${whole === TIMED_OUT ? NO_ANSWER : whole.reason}.`)
   return []
