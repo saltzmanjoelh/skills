@@ -15042,6 +15042,40 @@ test('the note is cleared when the step goes back to the recorded label, so a la
   expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'waiting-on-author', at: clock.now() })
 })
 
+test('a note whose clear the store refused counts as gone, so a later change still removes an older stuck', async ($, on) => {
+  const clock = mock.clock(on)
+  const stored = memoryStore(on, [[STATE_LABEL_KEY, { label: 'in-review', at: 0 }]])
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr = openPullRequest({ reviews: [verdictReview(C, 'REQUEST_CHANGES', 'APPROVE')], labels: [{ name: 'in-review' }] })
+  // One watch runs one state label job, and that job tries the edit twice,
+  // so two failing edits fail exactly that job.
+  world.editsToFail = 2
+  await watch($)
+  await clock.settle()
+  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'in-review', at: 0, note: { label: 'waiting-on-author', sawStuck: false } })
+
+  // The step goes back to the recorded label while the store refuses to
+  // write state label records, so the write that clears the note fails and
+  // the stale note stays in the store.
+  stored.hold.setsRefused = 'state-label:'
+  world.pr = openPullRequest({ labels: [{ name: 'in-review' }] })
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await clock.settle()
+  expect(labelEdits(world).length).toBe(2)
+  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'in-review', at: 0, note: { label: 'waiting-on-author', sawStuck: false } })
+
+  // The store writes again, the session puts stuck on while the step gives
+  // in-review, and the step then changes to the noted label again. That
+  // stuck was on before the change, so it comes off.
+  stored.hold.setsRefused = null
+  world.pr = openPullRequest({ reviews: [verdictReview(C, 'REQUEST_CHANGES', 'APPROVE')], labels: [{ name: 'in-review' }, { name: 'stuck' }] })
+  await clock.advance(30 * 60_000)
+  expect(labelEdits(world).at(-1)).toBe('gh pr edit 7 --repo o/r --add-label waiting-on-author --remove-label in-review,stuck')
+  expect(world.pr.labels).toEqual([{ name: 'waiting-on-author' }])
+  expectFinishedRecord(stored, 'waiting-on-author')
+})
+
 test('a store that refuses to write the note still lets the edit remove an older stuck, and the record is saved once it writes again', async ($, on) => {
   const clock = mock.clock(on)
   const stored = memoryStore(on, [[STATE_LABEL_KEY, { label: 'ready-to-merge', at: 0 }]])

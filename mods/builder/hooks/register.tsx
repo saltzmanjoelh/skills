@@ -3334,6 +3334,13 @@ const STATE_LABEL_KEPT_MS = 90 * 24 * 60 * 60_000
 // while the job runs queues the next one.
 let isStateLabelQueued = false
 
+// The keys of state label records whose note a clear failed to remove. The
+// job reads such a record as holding no note until a later write replaces
+// it, so a stale note never decides a later change. The set lives in memory
+// only, so after a restart a note whose clear the store refused counts again,
+// and that is the risk that remains.
+const staleNoteKeys = new Set<string>()
+
 function requestStateLabel($: $) {
   if (isStateLabelQueued) return
   isStateLabelQueued = true
@@ -3350,12 +3357,14 @@ function requestStateLabel($: $) {
 // a question's label because the snapshot can be minutes old. It stops when
 // the snapshot is of another pull request or the watch moved on. When the
 // step's label is back to the recorded one, it only clears any note the
-// record holds. Otherwise, once the read of the labels succeeded and before
-// any edit, it notes in the record the derived label and whether that read
-// saw `stuck`, unless the record already holds a note for that label, so
-// that after an edit that failed the next job can tell a `stuck` that was on
-// before the step's label changed from one the session set by its own
-// judgement afterwards. A note the store refuses is let go, because the next
+// record holds, and when the store refuses that clear the job treats the
+// note as gone from then on, so the first successful read after a later
+// change still decides. Otherwise, once the read of the labels succeeded
+// and before any edit, it notes in the record the derived label and whether
+// that read saw `stuck`, unless the record already holds a note for that
+// label, so that after an edit that failed the next job can tell a `stuck`
+// that was on before the step's label changed from one the session set by
+// its own judgement afterwards. A note the store refuses is let go, because the next
 // job then sees no note for this label and writes it, which is the safe
 // side. A new label record, with no note, is saved only once every edit the
 // job needed succeeded: on a write, the edit and the removal that the read
@@ -3373,9 +3382,16 @@ async function settleStateLabel($: $) {
   const derived = labelFor(chooseStep(s, await isAsking($)))
   if (derived === null) return
   const key = stateLabelKey(r)
-  const record = labelRecordIn(await $.store.get(key))
-  if (record !== null && derived === record.label) {
-    if (record.note !== undefined) await $.store.set(key, { label: record.label, at: record.at })
+  const stored = labelRecordIn(await $.store.get(key))
+  const record = stored !== null && staleNoteKeys.has(key) ? { label: stored.label, at: stored.at } : stored
+  if (stored !== null && derived === stored.label) {
+    if (stored.note !== undefined) {
+      // The key is added before the write, so a refused clear leaves the
+      // note counted as gone, and taken out only once the write succeeded.
+      staleNoteKeys.add(key)
+      await $.store.set(key, { label: stored.label, at: stored.at })
+      staleNoteKeys.delete(key)
+    }
     return
   }
   const live = await liveLabelNames($, r)
@@ -3384,6 +3400,7 @@ async function settleStateLabel($: $) {
   if (record !== null && note !== null) {
     try {
       await $.store.set(key, { label: record.label, at: record.at, note })
+      staleNoteKeys.delete(key)
     } catch {
       // A lost note only means the next job sees no note for this label
       // and writes it, so the edits below still run.
@@ -3397,6 +3414,7 @@ async function settleStateLabel($: $) {
   }
   if (action.kind === 'record' && action.remove.length > 0 && !(await removeLabels($, r, action.remove))) return
   await $.store.set(key, { label: derived, at: await $.clock.now() })
+  staleNoteKeys.delete(key)
 }
 
 // Reads the labels again after the edit that added `added`, and removes in one
