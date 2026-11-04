@@ -397,16 +397,44 @@ test('a slot freed outside a read, as by Release, reports the dry queue once, an
   expect(first.tickets.dryNotified).toBe(true)
   const again = freedSlotIn(first.tickets, rows, T0 + MINUTE, 1)
   expect([again.reasons, again.logs]).toEqual([[], [DRY_AGAIN_LOG]])
-  // A claimed waiting sub session in the queue arms the report again.
-  const claimed = { ...first.tickets, pairings: [...first.tickets.pairings, waiting('ft-b', 'ABC-2', 1, { attemptAt: T0, notified: false })] }
-  const rearmed = freedSlotIn(claimed, rows, T0 + MINUTE, 2)
+  // A waiting sub session that is not claimed yet arms the report again.
+  const unclaimed = { ...first.tickets, pairings: [...first.tickets.pairings, waiting('ft-b', 'ABC-2', 1)] }
+  const rearmed = freedSlotIn(unclaimed, rows, T0 + MINUTE, 2)
   expect(rearmed.reasons).toEqual([{ kind: 'queue-dry' }])
+  // One that a read already claimed does not, because it joined the queue
+  // before the dry spell that was reported.
+  const claimed = { ...first.tickets, pairings: [...first.tickets.pairings, waiting('ft-b', 'ABC-2', 1, { attemptAt: T0, notified: false })] }
+  const notRearmed = freedSlotIn(claimed, rows, T0 + MINUTE, 2)
+  expect([notRearmed.reasons, notRearmed.logs]).toEqual([[], [DRY_AGAIN_LOG]])
   // A proposal card older than the gone wait does not.
   const card = { ...first.tickets, pairings: [...first.tickets.pairings, waiting('ft-c', 'ABC-3', 1, null, null)] }
   expect(freedSlotIn(card, rows, T0 + GONE_MS + MINUTE, 1).reasons).toEqual([])
   // With no slot free, nothing happens at all.
   const busy = owned(rows, ahead('ft-a', 'ABC-1'))
   expect(freedSlotIn(busy, rows, T0 + MINUTE, 1)).toEqual({ tickets: busy, reasons: [], logs: [] })
+})
+
+test('a waiting sub session that a read claimed but whose begin is not sent does not arm the dry-queue report again', () => {
+  // Three slots, each busy, and one sub session waiting.
+  const all = [busyRow('ft-a', 'ABC-1'), busyRow('ft-b', 'ABC-2'), busyRow('ft-c', 'ABC-3'), row('ft-w')]
+  let t = owned(all, ahead('ft-a', 'ABC-1'), ahead('ft-b', 'ABC-2'), ahead('ft-c', 'ABC-3'), waiting('ft-w', 'ABC-4', 1))
+  // The first slot frees and the waiting sub session is claimed for it. Its
+  // begin message is not answered, so the claim stays in the queue.
+  const first = read(t, all.slice(1), T0 + MINUTE, { slots: 3, sessions: list([listed('local_ft-a', ARCHIVED), listed('local_ft-b'), listed('local_ft-c'), listed('local_ft-w')]) })
+  expect(begins(first).map(([to]) => to)).toEqual(['local_ft-w'])
+  t = first.tickets
+  // The second slot frees with nobody waiting unclaimed, so the dry queue is
+  // reported.
+  const second = read(t, all.slice(2), T0 + 2 * MINUTE, { slots: 3, sessions: list([listed('local_ft-b', ARCHIVED), listed('local_ft-c'), listed('local_ft-w')]) })
+  expect(second.reasons).toEqual([{ kind: 'queue-dry' }])
+  t = second.tickets
+  // A read that frees nothing leaves the mark set.
+  const quiet = read(t, all.slice(2), T0 + 2 * MINUTE + 1000, { slots: 3, sessions: list([listed('local_ft-c'), listed('local_ft-w')]) })
+  expect(quiet.tickets.dryNotified).toBe(true)
+  t = quiet.tickets
+  // The third slot frees in the same dry spell, so it gives only the log line.
+  const third = read(t, all.slice(3), T0 + 2 * MINUTE + 2000, { slots: 3, sessions: list([listed('local_ft-c', ARCHIVED), listed('local_ft-w')]) })
+  expect([third.reasons, third.logs.includes(DRY_AGAIN_LOG)]).toEqual([[], true])
 })
 
 test('a slot that was free already claims a waiting sub session, with no name for the slot, but only once the list shows it unarchived', () => {

@@ -12,7 +12,7 @@ import { prStateOf, type BuildState, type RecordVerdicts } from './record'
 import { folded, withReadings } from './spend'
 import type { ForemanActs, ForemanEffect, ForemanPairing, ForemanTickets } from '../types'
 import { busyCount, nameOf, type SubRow } from './subs'
-import { ANNOUNCED_NONE, capped, isReserved, keptSlotsIn, ownsTicket, queuedShown, queueOf, shownRows, waitingUnclaimed } from './tickets'
+import { ANNOUNCED_NONE, capped, isReserved, keptSlotsIn, ownsTicket, queueOf, shownRows, waitingUnclaimed } from './tickets'
 import { printable } from './text'
 import { byTicket, isWholeKey, isWhoName, whoOf, type Reason } from './wake'
 
@@ -688,13 +688,16 @@ export function dryStep(t: ForemanTickets): { tickets: ForemanTickets; reasons: 
 }
 
 // The ledger with the dry-queue mark cleared when a sub session waits in the
-// queue as foreman shows it, claimed or not, so the queue's next dry spell is
-// reported again. A proposal card nobody started is left out, as queuedShown
-// says, so it cannot clear the mark on every read and repeat the report. A
-// start that waits clears the mark in its own ledger write too, so one whose
-// session is archived before any read sees it still counts.
+// queue unclaimed, as waitingUnclaimed says, so the queue's next dry spell is
+// reported again. A claimed sub session is left out: a read claimed it before
+// the dry spell began, so it is not new to the queue, and while its begin
+// message is not yet sent, or keeps failing, it would otherwise clear the
+// mark on every read and repeat the report for each slot that frees. A
+// proposal card nobody started is left out for the same reason. A start that
+// waits clears the mark in its own ledger write too, so one whose session is
+// claimed or archived before any read sees it still counts.
 export function dryRearmed(t: ForemanTickets, now: number): ForemanTickets {
-  return t.dryNotified && queuedShown(t, now, GONE_MS).length > 0 ? { ...t, dryNotified: false } : t
+  return t.dryNotified && waitingUnclaimed(t, now, GONE_MS).length > 0 ? { ...t, dryNotified: false } : t
 }
 
 // What a slot freed outside a read leads to, as Release frees one while
@@ -950,8 +953,8 @@ function queueStep(
 // free once the claims are counted, as dryStep decides: once for each dry
 // spell, with a log line for each later freed slot in it. Each claim counts
 // against one freed slot, whichever slot it actually takes. A sub session
-// waiting in the queue as foreman shows it clears the dry mark before the
-// freed slots are decided, as dryRearmed says. While
+// waiting in the queue unclaimed clears the dry mark before the freed slots
+// are decided, as dryRearmed says. While
 // a sub session still waits unclaimed, the parent is woken with the kept
 // sentence instead, which names the waiting issues and says not to start a
 // new one, so foreman never asks for a new issue while one waits. The read

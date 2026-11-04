@@ -937,7 +937,7 @@ test('a slot freed with the queue empty reports the dry queue once, and a later 
   expect([quiet.reasons, quiet.logs]).toEqual([[], []])
 })
 
-test('a read whose queue shows a waiting sub session clears the dry mark before its freed slots are decided, so the next dry queue reports again', () => {
+test('a read whose queue shows an unclaimed waiting sub session clears the dry mark before its freed slots are decided, so the next dry queue reports again', () => {
   const waiting = newPairing('ft-w', 'local_w', T0, 'ABC-3', { place: 1, claim: null })
   const marked = { ...pairedTwo(), dryNotified: true }
   const first = read(marked, [row({ state: 'working' }), rowB()], T0)
@@ -949,11 +949,12 @@ test('a read whose queue shows a waiting sub session clears the dry mark before 
   const begun = { ...queued.tickets, pairings: queued.tickets.pairings.filter(p => p.ticket !== 'ft-w') }
   const left = read(begun, [rowB()], T0 + 2 * MINUTE)
   expect(left.reasons).toEqual([{ kind: 'queue-dry' }])
-  // A slot freed on the same read that still shows a claimed waiting sub
-  // session reports the dry queue too, since nobody waits unclaimed.
+  // A claimed waiting sub session does not clear the mark, because a read
+  // claimed it before the dry spell was reported, so a slot freed on the same
+  // read gives only the log line.
   const claimed = newPairing('ft-w', 'local_w', T0, 'ABC-3', { place: 1, claim: { attemptAt: T0, notified: false } })
   const both = read({ ...first.tickets, pairings: [...first.tickets.pairings, claimed] }, [rowB()], T0 + MINUTE, { slots: 3 })
-  expect(both.reasons).toEqual([{ kind: 'queue-dry' }])
+  expect([both.reasons, both.logs.includes(DRY_AGAIN_LOG)]).toEqual([[], true])
   expect(both.tickets.dryNotified).toBe(true)
 })
 
