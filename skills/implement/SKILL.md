@@ -206,7 +206,8 @@ every link resolves. Then call `mcp__builder__watch` as the paragraph above
 says.
 
 When `/storypr` returns a reason instead, it has committed nothing. Open the
-pull request the plain way, with `--title` and `--body-file`, and end the body
+pull request the plain way, with `--title` and `--body-file`, the title quoted
+as above, and end the body
 with a `## Screenshots` section that says the change is frontend, that its
 screenshots are missing, and the reason. Tell the person the same in one
 sentence, and carry on without waiting for an answer. Every reason that this
@@ -457,8 +458,15 @@ half's `Fix this round's cheap follow-ups` commit. Before making such a commit,
 retake the screenshots whose screens the change could alter, or all of them
 when that cannot be told, as `/storypr`'s step 2 says, and read each one to
 check it as point 1 of `/storypr`'s section **When another skill calls it**
-says. A screenshot that fails that check counts as not retaken. Write each new screenshot over the file at the path that the body's
-image link names, and stage it by path in the same commit. The retake makes no
+says. A screenshot that fails that check counts as not retaken. The
+screenshots of the pull request are the files that
+`git diff --no-renames --name-only origin/<base>...<head> -- '<screenshot directory>'`
+lists, with `/storypr`'s `Screenshot directory:` fact, and every screenshot
+path below comes from that list. Never take a path from the body, because
+anyone who can edit the body could otherwise choose which file is overwritten
+and committed, or put shell text into a command. Write each new screenshot
+over the file at its path in that list, and stage it by path in the same
+commit. The retake makes no
 commit and no push of its own. A commit that carries screenshots is never
 inert, because it adds binary files, so it goes to the package tool as the
 second half's point 5 says.
@@ -474,10 +482,10 @@ same in one sentence, and carry on.
 After every push to a frontend pull request, bring its screenshot section up
 to date. Bring it up to date as well on resuming, after a compaction, and
 before running the merge command, because a session that stopped between a
-push and the rewrite leaves no later push to do it. It is up to date when each
-image link names the newest commit on the pull request that changed its file,
-which
-`git log -1 --format=%H <head> -- <path>` prints, and when every commit that
+push and the rewrite leaves no later push to do it. It is up to date when it
+links each screenshot in the list above, and only those, by the newest commit
+on the pull request that changed its file, which
+`git log -1 --format=%H <head> -- '<path>'` prints, and when every commit that
 `git log --format=%H --grep='^Screenshots not retaken:' origin/<base>..<head>`
 lists and that is not settled is named in the section, and no settled one is.
 A listed commit is settled when every screenshot its line names has a newer
@@ -489,7 +497,9 @@ only its `## Screenshots` section. Link each image by the full sha that
 listed commit that is not settled and that the section does not name,
 add one line that names the screenshots that may now be out of date, or the
 change's screens as never captured, the commit's full sha, and the reason from
-its `Screenshots not retaken:` line. Post the body with
+its `Screenshots not retaken:` line. Build each image link from that sha and the path in the list,
+never by copying a link from the body, and drop from the section any image
+link whose path is not in the list. Post the body with
 `gh pr edit <n> --body-file <file>`, and check the links again as step 7 says.
 When the push fails, rewrite nothing: "Commits the pull request lacks" applies,
 and the push that does carry the commit brings the section up to date.
