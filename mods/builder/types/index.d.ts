@@ -513,6 +513,37 @@ export type BuildTiming = {
   olderRounds: number
 }
 
+// The one record builder keeps of how long the session's issue takes, in its
+// state and in the store under `timing:<session id>`. `sessionId` is the
+// session it was kept for, and a reader treats a record stamped with another
+// session id as absent, as for the spending. `startedAt`, `stages`,
+// `prOpenedAt`, `prMergedAt`, `rounds` and `olderRounds` are as BuildTiming
+// says. `title` is the progress title the stages were reached under, or null
+// before the first stage. `pr` is the pull request the two stamps belong to,
+// or null before a watch saw one. `state` is the status state that is open,
+// or null before the first status write worked one out, and `stateSince` is
+// when it began counting; a merge stops it counting, and a different pull
+// request watched after a merge starts it again from that moment. `states`
+// holds the totals of the stretches already closed, so the open stretch is
+// added only when the totals are read. `at` is when anything last changed,
+// from which a stored record is pruned after 14 days. Read through timingIn
+// in hooks/timing.ts.
+export type TimingLedger = {
+  sessionId: string
+  startedAt: number
+  title: string | null
+  stages: BuildStageStamp[]
+  pr: { repo: string; number: number } | null
+  prOpenedAt: number | null
+  prMergedAt: number | null
+  state: BuildState | null
+  stateSince: number
+  states: Record<BuildState, number>
+  rounds: BuildRound[]
+  olderRounds: number
+  at: number
+}
+
 // One turn whose steps the session counted: the turn's id and the highest
 // step index added for it.
 export type CountedTurn = { turnId: string; index: number }
@@ -760,6 +791,12 @@ declare module 'claude-code' {
       // `usd`; the other fields are builder's own bookkeeping. Read through
       // usageIn in hooks/usage.ts.
       usage: UsageLedger | null
+      // How long the session's issue has taken, kept in every session,
+      // ticketed or not, or null before the session's start seeded it. Only
+      // a ticketed session works out a status state, so only its record
+      // holds a split of the time by state. Read through timingIn in
+      // hooks/timing.ts.
+      timing: TimingLedger | null
       // The batches of background agents the session's own loop launched and
       // the marker of turns builder answers without the model, or null before
       // the first launch. It survives a hot reload; a restart starts without
