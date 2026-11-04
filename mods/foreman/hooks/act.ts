@@ -38,12 +38,15 @@ export const FROZEN_MS = 2 * GONE_MS
 export const SETTLE_MS = 2 * 60_000
 
 // The longest gap between two successful folder listings that still counts
-// as watching without a break. Reads come at most two minutes apart, so a gap
-// of more than five minutes means the machine slept, the listings failed, or
-// foreman was not running. It is its own value rather than GONE_MS, so tuning
-// the gone rule does not change how a sleep is noticed, but it must stay well
-// below FROZEN_MS: a live file can look as old as this gap plus builder's
-// one-minute rewrite interval without starting a new watch.
+// as watching without a break. Reads come at most READ_LATER_MS, two
+// minutes, apart, so a gap of more than five minutes means the machine slept,
+// the listings failed, or foreman was not running. It is its own value rather
+// than GONE_MS, so tuning the gone rule does not change how a sleep is
+// noticed. It must stay between two bounds, which a test pins. It must stay
+// above READ_LATER_MS, or every quiet read would start a new watch and the
+// frozen rule would never run. And it must stay well below FROZEN_MS, because
+// a live file can look as old as this gap plus builder's one-minute rewrite
+// interval without starting a new watch.
 export const READ_GAP_MS = 5 * 60_000
 
 // When foreman began watching the folder without a break, given the previous

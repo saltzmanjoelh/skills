@@ -1,10 +1,10 @@
 import { expect, test } from 'claude-code/testing'
 
-import { decide, FROZEN_MS, GONE_MS, keptByUnreadList, listFailedNotice, needsList, NO_ANSWER, slotOutcome, stallsNeedList, watchingFrom, type DecideInput, type Decision, type SessionsLook } from '../hooks/act'
+import { decide, FROZEN_MS, GONE_MS, keptByUnreadList, listFailedNotice, needsList, NO_ANSWER, slotOutcome, READ_GAP_MS, SETTLE_MS, stallsNeedList, watchingFrom, type DecideInput, type Decision, type SessionsLook } from '../hooks/act'
 import { REASONS } from '../hooks/desktop'
 import { recordIn, STATES } from '../hooks/record'
 import { spentSum, TIMES_UNKNOWN } from '../hooks/spend'
-import type { SubRow } from '../hooks/subs'
+import { READ_LATER_MS, type SubRow } from '../hooks/subs'
 import { joinOwners, newPairing, TICKETS_EMPTY, ticketsIn } from '../hooks/tickets'
 import { DATA_NOTE, wakeLine } from '../hooks/wake'
 import type { ForemanStanding, ForemanTickets } from '../types'
@@ -1238,6 +1238,12 @@ test('a read just after the machine wakes from sleep brings no frozen wake for a
   const stillOld = read(first.tickets, before, woke + 2 * MINUTE, { sessions: running, watchingSince: since })
   expect(stillOld.reasons).toEqual([{ kind: 'frozen', who: 'ABC-1', minutes: 31, state: 'working' }])
   expect(read(first.tickets, before, woke + 2 * MINUTE - 1, { sessions: running, watchingSince: since }).reasons).toEqual([])
+})
+
+test('the gap that starts a new watch lies above the slow read interval and well below the frozen limit, with room for a live file to be rewritten', () => {
+  expect(READ_LATER_MS).toBeLessThan(READ_GAP_MS)
+  expect(READ_GAP_MS + MINUTE).toBeLessThan(FROZEN_MS)
+  expect(SETTLE_MS).toBeGreaterThanOrEqual(2 * MINUTE)
 })
 
 test('a watch goes on across reads that come at most five minutes apart, and starts again after a longer gap or with no earlier read', () => {
