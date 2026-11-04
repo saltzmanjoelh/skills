@@ -288,13 +288,18 @@ function actsIn(raw: unknown): ForemanActs {
 // wait line, and a place in it that is not a number reads as NaN, which
 // ticketsIn moves to the back of the queue. A claim without an attempt time
 // reads as none, so the session is claimed afresh, which the begin message's
-// last sentence makes harmless.
+// last sentence makes harmless. A stamp for a kept slot that is missing, as
+// in a ledger stored before slots were kept for a begin by hand, or that is
+// not a finite number of zero or more, reads as no stamp, and the pairing
+// keeps the rest of its queue.
 function queueIn(raw: unknown): ForemanPairing['queue'] {
   const q = objectOf(raw)
   if (q === null) return null
   const c = objectOf(q.claim)
   const attemptAt = numberOr(c?.attemptAt, null)
-  return { place: numberOr(q.place, Number.NaN), claim: attemptAt === null ? null : { attemptAt, notified: c?.notified === true } }
+  const keptAt = numberOr(q.keptAt, null)
+  const queue = { place: numberOr(q.place, Number.NaN), claim: attemptAt === null ? null : { attemptAt, notified: c?.notified === true } }
+  return keptAt === null || keptAt < 0 ? queue : { ...queue, keptAt }
 }
 
 function pairingIn(raw: unknown): ForemanPairing | null {
@@ -322,6 +327,15 @@ export function queueOf(t: ForemanTickets): ForemanPairing[] {
     .sort((a, b) => a.queue!.place - b.queue!.place || a.pairedAt - b.pairedAt || (a.ticket < b.ticket ? -1 : a.ticket > b.ticket ? 1 : 0))
 }
 
+// Whether pairing `p` is a waiting sub session whose slot is kept for the
+// parent's begin by hand: it is active, waits unclaimed, and was named by a
+// kept sentence no more than `goneMs` ago. A stamp later than `now` is not a
+// reservation, so a damaged stamp, or a clock that moved back, never holds a
+// slot past the next read.
+export const isReserved = (p: ForemanPairing, now: number, goneMs: number) =>
+  p.standing === 'active' && p.queue !== null && p.queue.claim === null
+    && p.queue.keptAt !== undefined && now - p.queue.keptAt >= 0 && now - p.queue.keptAt <= goneMs
+
 // The sub sessions that wait in the queue and are not yet claimed for a
 // slot, in the queue's order. Each of them is owed a slot before any new
 // start goes ahead. One with no desktop session id is owed one only for
@@ -329,9 +343,11 @@ export function queueOf(t: ForemanTickets): ForemanPairing[] {
 // start answered with a proposal card the person never starts would
 // otherwise hold back a slot, and the slot wake, until it is forgotten a day
 // later. Once its session starts, its status file gives it the id, and it is
-// owed its slot again at its place.
+// owed its slot again at its place. One whose slot is kept for the parent's
+// begin by hand, as isReserved says, already counts as busy in that slot, so
+// it is not owed another and no later kept sentence names it again.
 export const waitingUnclaimed = (t: ForemanTickets, now: number, goneMs: number) =>
-  queueOf(t).filter(p => p.queue!.claim === null && (p.localId !== null || now - p.pairedAt <= goneMs))
+  queueOf(t).filter(p => p.queue!.claim === null && !isReserved(p, now, goneMs) && (p.localId !== null || now - p.pairedAt <= goneMs))
 
 // The place a start that waits now takes: one after the last place in the
 // queue, or 1 when nobody waits.

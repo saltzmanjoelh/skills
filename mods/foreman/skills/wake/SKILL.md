@@ -208,7 +208,12 @@ run more sub sessions than foreman's slots allow.
 
 A slot freed while issues still wait in foreman's queue, and foreman could
 not begin any of them, because the desktop app's list did not show their
-sessions as surely open. The slot stays free for them.
+sessions as surely open. Foreman holds the slot for each named issue's
+waiting session for five minutes from this line, so that you can begin it by
+hand. In those five minutes foreman counts the slot as busy, gives it to no
+other waiting session, and sends the named session no begin message of its
+own, even when the list shows it open. So send the begin message promptly,
+well within those five minutes, and start no other session for that slot.
 
 1. Start no new issue for this slot, and do not follow the "one slot free"
    section for it.
@@ -226,10 +231,18 @@ sessions as surely open. The slot stays free for them.
 4. Archiving a waiting session takes its issue out of foreman's queue, so
    archive one only when the person asks to release its issue.
 
-Foreman sends this line once, on the read that freed the slot. When a later
-read of the list shows a waiting session, foreman begins it in the free slot
-by itself. A new start the parent makes anyway waits in the queue behind the
-sessions already waiting.
+Foreman sends this line once, on the read that freed the slot, or on a later
+read when the read that freed the slot could not read the desktop app's
+list. The hold ends early when the named session begins, which its status
+file shows within about a minute of the begin message, or when the person
+archives it, which takes its issue out of the queue. Once the five minutes
+are over and the named session has still not begun, foreman writes one line
+in its log saying that the slot is no longer kept, and the slot stays free
+for the queue: only from then on, when a later read of the list shows a
+waiting session, does foreman begin it in the free slot by itself, and that
+may be an issue earlier in the queue than the one you were asked to begin.
+A new start the parent makes anyway waits in the queue behind the sessions
+already waiting.
 
 ## <key> did not start, and foreman holds it; start it first, before anything else, as "Starting a session" says.
 

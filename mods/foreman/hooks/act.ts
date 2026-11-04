@@ -12,7 +12,7 @@ import { prStateOf, type BuildState, type RecordVerdicts } from './record'
 import { folded, withReadings } from './spend'
 import type { ForemanActs, ForemanEffect, ForemanPairing, ForemanTickets } from '../types'
 import { busyCount, nameOf, type SubRow } from './subs'
-import { ANNOUNCED_NONE, capped, MAX_PAIRINGS, ownsTicket, queueOf, shownRows, waitingUnclaimed } from './tickets'
+import { ANNOUNCED_NONE, capped, isReserved, MAX_PAIRINGS, ownsTicket, queueOf, shownRows, waitingUnclaimed } from './tickets'
 import { printable } from './text'
 import { byTicket, isWholeKey, isWhoName, whoOf, type Reason } from './wake'
 
@@ -633,13 +633,18 @@ export function slotsNeedList(t: ForemanTickets, rows: readonly SubRow[], now: n
 // start that went ahead and has no status file yet, for GONE_MS after it was
 // paired or begun, so several starts in one turn see each other, and for each
 // waiting sub session claimed for a slot whose begin message has not gone. A
-// sub session that waits unclaimed is not busy.
+// sub session that waits unclaimed is not busy, unless a kept sentence named
+// it no more than GONE_MS ago, as isReserved says: its slot is then kept for
+// the parent's begin by hand, so it counts as busy and nothing else takes
+// that slot. A reserved pairing has no claim and has a queue, so it is never
+// also counted as claimed or as a start with no status file.
 export function freeSlots(t: ForemanTickets, rows: readonly SubRow[], now: number, slots: number): number {
   const shown = busyCount(shownRows(rows, t))
   const active = t.pairings.filter(p => p.standing === 'active')
   const unseen = active.filter(p => p.queue === null && p.owner === null && now - p.pairedAt <= GONE_MS).length
   const claimed = active.filter(p => p.queue?.claim != null).length
-  return slots - shown - unseen - claimed
+  const reserved = active.filter(p => isReserved(p, now, GONE_MS)).length
+  return slots - shown - unseen - claimed - reserved
 }
 
 // Whether a keyed start made now waits in the queue: no slot is free once
@@ -662,9 +667,15 @@ const showsProgress = (row: SubRow) => row.record.issueKey !== null || row.recor
 //   has its issue dropped, as the app can delete an inactive session without
 //   archiving it, while a claimed one has its key held, with a notification
 //   only when no failed begin was told for it already;
+// - a waiting sub session whose slot a kept sentence kept, and which neither
+//   of those two ended, gets one log line once the kept slot is more than
+//   GONE_MS old, or its stamp is later than the clock, and loses its stamp,
+//   so from then on it waits unclaimed like any other;
 // - each free slot claims the first waiting sub session that the list shows
 //   unarchived, in the queue's order, naming, in order, the sub session whose
-//   slot this read freed or an earlier read kept, when there is one;
+//   slot this read freed or an earlier read kept, when there is one. A sub
+//   session whose slot is still kept for the parent's begin by hand is never
+//   claimed, so the parent's begin is the only one while the slot is kept;
 // - a claim whose begin did not go is tried again once its last try is
 //   CALL_TIMEOUT_MS old and the list shows its session unarchived.
 // A claim and a try add a begin effect and record the try's time.
@@ -696,7 +707,12 @@ function queueStep(
       return [{ ...p, queue: null }]
     }
     const over = look === null ? null : overIn(look, p.localId)
-    if (over === null) return [p]
+    if (over === null) {
+      if (p.queue.keptAt === undefined || isReserved(p, now, GONE_MS)) return [p]
+      logs.push(`The slot kept for ${who} is no longer kept, because its waiting session showed no progress within five minutes.`)
+      const { keptAt: _, ...queue } = p.queue
+      return [{ ...p, queue }]
+    }
     const dropped = `Dropped ${who} from the queue, because its waiting session ${OVER_WORDS[over]}.`
     if (p.queue.claim === null) {
       logs.push(dropped)
@@ -716,19 +732,22 @@ function queueStep(
   })
   const isShown = (p: ForemanPairing) => p.localId !== null && look?.byId.get(p.localId)?.surelyUnarchived === true
   let free = freeSlots({ ...t, pairings }, rows, now, q.slots)
-  const claims = new Map<string, string | null>()
+  // Each claim goes by the pairing itself rather than by its ticket, so a
+  // claim for one pairing never reaches a reserved pairing that shares its
+  // ticket in a damaged ledger.
+  const claims = new Map<ForemanPairing, string | null>()
   for (const p of queueOf({ ...t, pairings })) {
     if (free <= 0) break
-    if (p.queue!.claim !== null || !isShown(p)) continue
-    claims.set(p.ticket, q.freedBy.shift() ?? null)
+    if (p.queue!.claim !== null || !isShown(p) || isReserved(p, now, GONE_MS)) continue
+    claims.set(p, q.freedBy.shift() ?? null)
     free -= 1
   }
   pairings = pairings.map(p => {
     if (p.queue === null || p.standing !== 'active' || p.localId === null) return p
-    const claimed = claims.has(p.ticket)
+    const claimed = claims.has(p)
     const retried = !claimed && p.queue.claim !== null && isShown(p) && now - p.queue.claim.attemptAt >= CALL_TIMEOUT_MS
     if (!claimed && !retried) return p
-    effects.push({ kind: 'begin', to: p.localId, ticket: p.ticket, key: p.issueKey, by: claimed ? claims.get(p.ticket)! : null })
+    effects.push({ kind: 'begin', to: p.localId, ticket: p.ticket, key: p.issueKey, by: claimed ? claims.get(p)! : null })
     return { ...p, queue: { ...p.queue, claim: { attemptAt: now, notified: p.queue.claim?.notified ?? false } } }
   })
   const next = { ...t, pairings, held }
@@ -758,7 +777,10 @@ function queueStep(
 // slot, not only the freed ones, and leaves out each slot a claim took. While
 // a sub session still waits unclaimed, the parent is woken with the kept
 // sentence instead, which names the waiting issues and says not to start a
-// new one, so foreman never asks for a new issue while one waits.
+// new one, so foreman never asks for a new issue while one waits. The read
+// that wakes the parent with the kept sentence stamps each waiting sub
+// session the sentence stands for with its time, so that its slot stays kept
+// for the parent's begin by hand for GONE_MS, as isReserved says.
 // A read that could not read the desktop app's list cannot claim, so while a
 // sub session waits unclaimed it keeps its freed slots in `keptSlots` instead
 // of waking the parent for them. The slots kept count as freed by the next
@@ -879,6 +901,15 @@ export function decide(input: DecideInput): Decision {
     const names = [...new Set(firstInQueue.map(p => whoOf(p.issueKey, p.ticket)).filter(isWhoName))]
     const outcome = slotOutcome(free, unclaimed.length === 0 ? null : names)
     if (outcome.kind === 'wake') reasons.push(outcome.reason)
+    // The kept sentence stands for exactly the first waiting sub sessions,
+    // even when it cannot name them safely and speaks of the issues waiting
+    // in the queue, so each of them is stamped. The stamp goes by the
+    // pairing itself rather than by its ticket, so two pairings that share
+    // a ticket in a damaged ledger cannot widen it.
+    if (outcome.kind === 'wake' && outcome.reason.kind === 'slot-kept') {
+      const stamped = new Set(firstInQueue)
+      tickets = { ...tickets, pairings: tickets.pairings.map(p => (stamped.has(p) && p.queue !== null ? { ...p, queue: { ...p.queue, keptAt: now } } : p)) }
+    }
   }
   return { tickets, effects, reasons, logs, nextDueAt: due.length === 0 ? null : Math.min(...due) }
 }
