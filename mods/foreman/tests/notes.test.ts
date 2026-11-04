@@ -32,7 +32,7 @@ test('an archived note, a SendMessage delivery and foreman\'s own wake line are 
   expect(turnEndIds(ARCHIVED)).toBeNull()
   expect(turnEndIds(`${note('local_a')}\n${ARCHIVED}`)).toBeNull()
   expect(turnEndIds(SENT)).toBeNull()
-  expect(turnEndIds('foreman: one slot free; pick the next issue and start it.')).toBeNull()
+  expect(turnEndIds('foreman: ABC-1 is still idle after two nudges.')).toBeNull()
 })
 
 test('a tag in another case, an unclosed block and an opening tag inside a block are not recognised', () => {
@@ -144,7 +144,7 @@ test('the Noted line is not wanted with no note or delivery, with typing, or wit
   expect(wantsNoted(EVENT)).toBe(false)
   expect(wantsNoted(`${STATUS}\n\n${EVENT}`)).toBe(false)
   expect(wantsNoted('')).toBe(false)
-  expect(wantsNoted('foreman: one slot free; pick the next issue and start it.')).toBe(false)
+  expect(wantsNoted('foreman: ABC-1 is still idle after two nudges.')).toBe(false)
   expect(wantsNoted(`${note('local_a')}\nhello`)).toBe(false)
   expect(wantsNoted(`${MESSAGE}\n\nPlease merge it.`)).toBe(false)
   expect(wantsNoted(`${WORKTREE}\n${note('local_a')}`)).toBe(false)

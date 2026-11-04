@@ -5,7 +5,9 @@ import type { Engine } from 'claude-code/testing'
 import { REASONS } from '../hooks/desktop'
 import { FIRST_MARKER_LOG, markersKey } from '../hooks/markers'
 import { STATUS_CHANGED_TEXT } from '../hooks/notes'
-import { ticketsIn, ticketsKey, TICKETS_EMPTY } from '../hooks/tickets'
+import { START_FOREMAN_FALLBACK, START_FOREMAN_OFF, startForemanText } from '../hooks/commands'
+import { heldLine, topUpLine } from '../hooks/held'
+import { newPairing, ticketsIn, ticketsKey, TICKETS_EMPTY } from '../hooks/tickets'
 import { CHANGED, CHANGED_AS_RECEIVED, CHANGED_ELEMENT, foreman, HOME, MINUTE, SECOND, SECRET, SURFACES, T0, leftInState, mountBoth, record, SENT, start, statusFolder, world } from './world'
 
 // Two sub sessions: one working at the plan stage with three stages done and
@@ -45,12 +47,12 @@ for (const surface of SURFACES) {
     }
   })
 
-  test(`on the ${surface}, an empty folder says there are no sub sessions`, async ($, on) => {
+  test(`on the ${surface}, an empty folder says there are no sub sessions, after the mark that the queue is empty while slots are free`, async ($, on) => {
     const w = world(on)
     const ui = await mountBoth($, on, surface)
     await start($)
     await foreman($)
-    expect(await ui.bandText()).toBe('foreman: 0 of 2 slots busy · no sub sessions · next read in 2m')
+    expect(await ui.bandText()).toBe('foreman: 0 of 2 slots busy · queue empty · no sub sessions · next read in 2m')
   })
 }
 
@@ -1006,4 +1008,278 @@ test('a message consumed while foreman is off is counted and copied, and the pan
   expect(markersCopy(w)).toEqual({ version: 1, sessionId: 'session-1', since: T0, consumed: 1, first: T0 + MINUTE, last: T0 + MINUTE })
   expect(await linesOf(ui, MARKERS_HEAD)).toEqual([])
   expect(await ui.paneText()).toContain('This session is not a parent.')
+})
+
+// The top-up line and the start-foreman skill's text.
+
+type Submitted = { text?: string; context?: readonly string[] }
+const typed = ($: Engine, text: string, over: Record<string, unknown> = {}) => $.prompt.submit({ text, wait: false, origin: { kind: 'composer' }, ...over } as never) as Promise<Submitted>
+
+// A parent whose role is on with `slots` slots and `pairings` in its ledger,
+// and `held` keys held, started and mounted.
+// The desktop app lists the session of each pairing that has one, so no read
+// takes a waiting sub session for one the person deleted.
+async function parentFor($: Engine, on: On, slots: number, pairings: ReturnType<typeof newPairing>[] = [], held: string[] = []) {
+  const w = world(on, { store: { 'parent:session-1': { isOn: true, slots }, [ticketsKey('session-1')]: { ...TICKETS_EMPTY, pairings, held } } })
+  w.desktop.sessions = pairings.flatMap(p => (p.localId === null ? [] : [{ sessionId: p.localId, cwd: '/w', title: `${p.issueKey}: short`, isRunning: false }]))
+  await mountBoth($, on)
+  await start($)
+  await w.clock.settle()
+  return w
+}
+
+// A start that went ahead and has no status file yet, and a sub session that
+// waits at `place`.
+const wentAhead = (key: string) => newPairing(`ft-${key}`, null, T0, key)
+const waitsAt = (key: string, place: number) => newPairing(`ft-${key}`, `local_${key}`, T0, key, { place, claim: null })
+
+test('a prompt the person typed while foreman is on carries the top-up line with the gap to one waiting sub session per slot, after any context it came with', async ($, on) => {
+  const w = await parentFor($, on, 2, [wentAhead('ABC-1')])
+  for (const kind of ['sdk', 'composer', 'bridge']) {
+    const out = await typed($, 'go on', { origin: { kind } })
+    expect([kind, out.text, out.context]).toEqual([kind, 'go on', [topUpLine(3)]])
+  }
+  expect((await typed($, 'go on', { context: ['from another hook'] })).context).toEqual(['from another hook', topUpLine(3)])
+  expect(w.engine.contexts.at(-1)).toEqual(['from another hook', topUpLine(3)])
+})
+
+test('the top-up line asks for at most five starts', async ($, on) => {
+  await parentFor($, on, 4)
+  expect((await typed($, 'go on')).context).toEqual([topUpLine(5)])
+})
+
+test('the top-up line comes after the held line', async ($, on) => {
+  await parentFor($, on, 1, [], ['ABC-7'])
+  expect((await typed($, 'go on')).context).toEqual([heldLine(['ABC-7']), topUpLine(2)])
+})
+
+test('with one busy and one waiting sub session per slot, a typed prompt gets no top-up line', async ($, on) => {
+  const w = await parentFor($, on, 1, [wentAhead('ABC-1'), waitsAt('ABC-2', 1)])
+  expect(await typed($, 'go on')).toEqual({ text: 'go on' })
+  expect(w.engine.contexts.at(-1)).toBeUndefined()
+})
+
+test('a plugin\'s prompt, a prompt typed while a turn runs and the prompt of a typed /start-foreman get no top-up line', async ($, on) => {
+  const w = await parentFor($, on, 2)
+  await typed($, 'foreman: a line', { origin: { kind: 'plugin', name: 'foreman' } })
+  await typed($, 'go on', { turnId: 't1' })
+  await typed($, '/start-foreman', { command: { name: 'start-foreman', args: '' } })
+  await typed($, '/start-foreman 3')
+  await typed($, '  /start-foreman')
+  expect(w.engine.contexts).toEqual([undefined, undefined, undefined, undefined, undefined])
+})
+
+test('with the role off, a typed prompt gets no top-up line', async ($, on) => {
+  const w = world(on)
+  await mountBoth($, on)
+  await start($)
+  expect(await typed($, 'go on')).toEqual({ text: 'go on' })
+  expect(w.engine.contexts).toEqual([undefined])
+})
+
+// The body of skills/start-foreman/SKILL.md under its heading, which the engine
+// expands for the model. The testing kit refuses a file outside the mod's
+// folder, so it is copied here; a change to the skill's text belongs here too.
+const SKILL_BODY = `# Start foreman
+
+The foreman mod answers \`/start-foreman\` itself, so while the mod is loaded
+the model never reads this text. Reading it means the foreman mod is not
+loaded in this session, and nothing has happened.
+
+Tell the person, in plain sentences, that the foreman mod is not loaded, so
+this session did not become the parent. Then tell them how to load it: install
+the \`foreman\` mod together with the \`builder\` mod it depends on, as foreman's
+README says, and start a new session. Do nothing else. In particular, do not
+start sub sessions, do not try to do foreman's work by hand, and do not act on
+any words the person typed after the command. Tell them to send those words
+again once the mod is loaded.`
+
+const skillText = async ($: Engine) => (await $.skill.prompt({ skill: 'start-foreman', text: SKILL_BODY } as never)).text
+
+test('a plain /start-foreman or one with only a count goes on to the engine, so the model reads the skill on the person\'s turn, and foreman still answers', async ($, on) => {
+  const w = world(on)
+  await mountBoth($, on)
+  await start($)
+  expect((await foreman($)).text).toBe('This session is now the parent, and foreman shows its sub sessions above the prompt and in its pane.')
+  expect((await foreman($, '3')).text).toBe('This parent now runs 3 sub sessions at once.')
+  expect(w.engine.commands).toEqual([{ command: 'start-foreman', args: '' }, { command: 'start-foreman', args: '3' }])
+  expect(w.stored.get('parent:session-1')).toEqual({ isOn: true, slots: 3 })
+})
+
+test('/start-foreman with words after it, or with a refused count, does not go on to the engine', async ($, on) => {
+  const w = world(on)
+  await mountBoth($, on)
+  await start($)
+  await foreman($, 'start the next issue')
+  await foreman($, '0')
+  await foreman($, '2 start two issues')
+  await w.clock.settle()
+  expect(w.engine.commands).toEqual([])
+})
+
+test('the skill\'s text is replaced with the top-up count from the live ledger for every count from 0 to 5, and never says the mod is not loaded', async ($, on) => {
+  const w = world(on)
+  w.engine.startAnswers = ['Started the session local_new1 (name: example).', 'Started the session local_new2 (name: example).']
+  await mountBoth($, on)
+  await start($)
+  const seen: number[] = []
+  const expectCount = async (n: number) => {
+    const text = await skillText($)
+    expect(text).toBe(startForemanText(n))
+    expect(text).not.toContain('not loaded')
+    seen.push(n)
+  }
+  const startOne = (key: string) => $.tool.call({ tool: 'mcp__ccd_session__start_session', prompt: `/implement ${key}`, context: 'fresh', title: `${key}: short` } as never)
+  await foreman($, '3')
+  await expectCount(5)
+  await foreman($, '2')
+  await expectCount(4)
+  await foreman($, '1')
+  await expectCount(2)
+  await foreman($, '2')
+  await startOne('ABC-1')
+  await expectCount(3)
+  await foreman($, '1')
+  await expectCount(1)
+  await startOne('ABC-2')
+  await expectCount(0)
+  expect(seen.sort()).toEqual([0, 1, 2, 3, 4, 5])
+  // Foreman answered every expansion itself, so the skill's own text never
+  // reached the engine beneath it.
+  expect(w.engine.skills).toEqual([])
+})
+
+test('with foreman off, the skill\'s text is the fixed text that says foreman did not turn on', async ($, on) => {
+  world(on)
+  await mountBoth($, on)
+  await start($)
+  const text = await skillText($)
+  expect(text).toBe(START_FOREMAN_OFF)
+  expect(text).not.toContain('not loaded')
+})
+
+test('when the ledger read throws, the skill\'s text is the fixed fallback and never the skill\'s own', async ($, on) => {
+  const w = world(on)
+  let fails = false
+  on('state.get', ($, e, next) => (fails && e.plugin === 'foreman' && e.key === 'tickets' ? { deny: 'the state is gone' } as never : next(e)))
+  await mountBoth($, on)
+  await start($)
+  await foreman($)
+  fails = true
+  const text = await skillText($)
+  expect(text).toBe(START_FOREMAN_FALLBACK)
+  expect(text).not.toContain('not loaded')
+  expect(w.stored.get('parent:session-1')).toEqual({ isOn: true, slots: null })
+})
+
+// A parent with `slots` slots, `pairings` in its ledger, and the status files
+// `files`, each paired with it as builder's sub sessions would be. The desktop
+// app lists the session of each pairing and each file that has a desktop
+// session id, so no read takes one of them for a session the person deleted.
+async function queueParent($: Engine, on: On, slots: number, pairings: ReturnType<typeof newPairing>[], files: Record<string, string> = {}, surface: 'terminal' | 'desktop' = 'terminal') {
+  const w = world(on, { store: { 'parent:session-1': { isOn: true, slots }, [ticketsKey('session-1')]: { ...TICKETS_EMPTY, pairings } } })
+  for (const [name, text] of Object.entries(files)) w.folder.put(name, text)
+  w.desktop.sessions = pairings.flatMap(p => (p.localId === null ? [] : [{ sessionId: p.localId, cwd: '/w', title: `${p.issueKey}: short`, isRunning: false }]))
+  for (const text of Object.values(files)) {
+    const { desktopSessionId, issueKey } = JSON.parse(text) as { desktopSessionId?: string; issueKey: string }
+    if (desktopSessionId !== undefined) w.desktop.sessions.push({ sessionId: desktopSessionId, cwd: '/w', title: `${issueKey}: short`, isRunning: true })
+  }
+  const ui = await mountBoth($, on, surface)
+  await start($)
+  await foreman($)
+  await w.clock.settle()
+  return { w, ui }
+}
+
+// A sub session that waits at `place`, paired `ago` before T0.
+const waitsSince = (key: string, place: number, ago: number) => newPairing(`ft-${key}`, `local_${key}`, T0 - ago, key, { place, claim: null })
+const busyBuild = (key: string) => record(key, 'working', { stage: 'build', desktopSessionId: `local_${key}` })
+const EMPTY_QUEUE = 'Queued: none — your next message lines up more'
+
+test('the band counts the sub sessions that wait right after its head, before the chips', async ($, on) => {
+  const { ui } = await queueParent($, on, 1, [waitsAt('ABC-2', 1), waitsAt('ABC-3', 2)], { 'a.json': busyBuild('ABC-1') })
+  expect(await ui.bandText()).toStartWith('foreman: 1 of 1 slots busy · 2 queued · ABC-1 build · next read in ')
+  const queue = await ui.band.find({ type: 'Text', text: '2 queued' })
+  expect(queue).toBeDefined()
+  expect(queue?.props.color).toBeUndefined()
+})
+
+test('with no sub session shown, the band counts the ones that wait before the line that says there are none', async ($, on) => {
+  const { ui } = await queueParent($, on, 1, [wentAhead('ABC-1'), waitsAt('ABC-2', 1)])
+  expect(await ui.bandText()).toStartWith('foreman: 0 of 1 slots busy · 1 queued · no sub sessions · next read in ')
+})
+
+for (const surface of SURFACES) {
+  test(`on the ${surface}, a free slot with nobody waiting draws queue empty in the warning color right after the head`, async ($, on) => {
+    const { ui } = await queueParent($, on, 2, [], { 'a.json': busyBuild('ABC-1') }, surface)
+    expect(await ui.bandText()).toStartWith('foreman: 1 of 2 slots busy · queue empty · ABC-1 build · next read in ')
+    const queue = await ui.band.find({ type: 'Text', text: 'queue empty' })
+    expect(queue).toBeDefined()
+    expect(queue?.props.color).toBe('warning')
+  })
+}
+
+test('the free slots foreman counts, not the busy rows, decide the queue empty mark', async ($, on) => {
+  // A start that went ahead and has written no status file yet shows no row,
+  // so the head counts 0 of 1 slots busy, but it holds the slot, so no slot is
+  // free and the band draws nothing about the queue.
+  const { ui } = await queueParent($, on, 1, [wentAhead('ABC-1')])
+  const band = await ui.bandText()
+  expect(band).toStartWith('foreman: 0 of 1 slots busy · no sub sessions · next read in ')
+  expect(band).not.toContain('queue')
+})
+
+test('the queue count takes its columns from the room the chips get, so the band never runs past its width', async ($, on) => {
+  const files = Object.fromEntries([1, 2, 3, 4, 5].map(n => [`${n}.json`, record(`ABC-${n}`, 'idle')]))
+  await queueParent($, on, 5, [waitsAt('ABC-6', 1), waitsAt('ABC-7', 2)], files)
+  for (let columns = 70; columns <= 120; columns++) {
+    const band = await $.ui.mount({ plugin: 'foreman', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, bodyColumns: columns } as never })
+    const text = (await band.find({ key: 'foreman-band' }))?.text ?? ''
+    expect(text).toStartWith('foreman: 5 of 5 slots busy · 2 queued · ')
+    expect([columns, text.length <= columns]).toEqual([columns, true])
+  }
+})
+
+test('the pane lists the sub sessions that wait under the busy rows, in the order they begin, each with its place, its name and how long it has waited', async ($, on) => {
+  // The pairings are stored out of order. A start answered with a proposal
+  // card more than five minutes ago has no session and is not shown.
+  const card = newPairing('ft-card', null, T0 - 10 * MINUTE, 'ABC-9', { place: 4, claim: null })
+  const noKey = newPairing('ft-nokey', 'local_nokey', T0, null, { place: 3, claim: null })
+  const { ui } = await queueParent($, on, 1, [waitsSince('ABC-3', 2, 70 * MINUTE), card, noKey, waitsSince('ABC-2', 1, 5 * MINUTE)], { 'a.json': busyBuild('ABC-1') })
+  expect(await ui.bandText()).toStartWith('foreman: 1 of 1 slots busy · 3 queued · ')
+  expect((await ui.pane.find({ type: 'Text', text: /^Queued$/ }))?.props.bold).toBe(true)
+  expect((await ui.pane.find({ key: 'queued-ft-ABC-2' }))?.text).toBe('1. → ABC-2 · waiting for 5m')
+  expect((await ui.pane.find({ key: 'queued-ft-ABC-3' }))?.text).toBe('2. → ABC-3 · waiting for 1h 10m')
+  expect((await ui.pane.find({ key: 'queued-ft-nokey' }))?.text).toBe('3. → the sub session with ticket ft-nokey · waiting for 0m')
+  expect(await ui.pane.find({ key: 'queued-ft-card' })).toBeUndefined()
+  const pane = await ui.paneText()
+  const at = (part: string) => pane.indexOf(part)
+  for (const part of ['Release', 'Queued', '1. → ABC-2', '2. → ABC-3', '3. → the sub session', 'Sub sessions spent']) expect(at(part)).toBeGreaterThan(-1)
+  expect(at('Release')).toBeLessThan(at('Queued'))
+  expect(at('Queued')).toBeLessThan(at('1. → ABC-2'))
+  expect(at('1. → ABC-2')).toBeLessThan(at('2. → ABC-3'))
+  expect(at('2. → ABC-3')).toBeLessThan(at('3. → the sub session'))
+  expect(at('3. → the sub session')).toBeLessThan(at('Sub sessions spent'))
+  expect(pane).not.toContain(EMPTY_QUEUE)
+})
+
+test('with nobody waiting, the pane\'s Queued section is one line that says the next message lines up more', async ($, on) => {
+  const { ui } = await queueParent($, on, 2, [], { 'a.json': busyBuild('ABC-1') })
+  expect((await ui.pane.findAll({ type: 'Text', text: EMPTY_QUEUE }))).toHaveLength(1)
+  expect(await ui.pane.find({ type: 'Text', text: /^Queued$/ })).toBeUndefined()
+  const pane = await ui.paneText()
+  expect(pane.indexOf('Release')).toBeLessThan(pane.indexOf(EMPTY_QUEUE))
+  expect(pane.indexOf(EMPTY_QUEUE)).toBeLessThan(pane.indexOf('Sub sessions spent'))
+})
+
+test('while foreman is off, neither the band nor the pane says anything about the queue', async ($, on) => {
+  const w = world(on, { store: { [ticketsKey('session-1')]: { ...TICKETS_EMPTY, pairings: [waitsAt('ABC-2', 1)] } } })
+  w.desktop.sessions = [{ sessionId: 'local_ABC-2', cwd: '/w', title: 'ABC-2: short', isRunning: false }]
+  const ui = await mountBoth($, on)
+  await start($)
+  await w.clock.settle()
+  expect(await ui.bandText()).toBe('')
+  const pane = await ui.paneText()
+  expect(pane).not.toContain('Queued')
+  expect(await ui.pane.find({ key: 'queued-ft-ABC-2' })).toBeUndefined()
 })

@@ -277,6 +277,15 @@ test('the mark for a failed list read is set only when stored as exactly true, s
   expect(ticketsIn(JSON.parse(JSON.stringify({ ...TICKETS_EMPTY, listFailNotified: true }))).listFailNotified).toBe(true)
 })
 
+test('the dry-queue mark is set only when stored as exactly true, so an old ledger reads with it unset', () => {
+  expect(TICKETS_EMPTY.dryNotified).toBe(false)
+  expect(ticketsIn({ pairings: [], folderMissing: false }).dryNotified).toBe(false)
+  expect(ticketsIn({ dryNotified: 'true' }).dryNotified).toBe(false)
+  expect(ticketsIn({ dryNotified: 1 }).dryNotified).toBe(false)
+  expect(ticketsIn({ dryNotified: true }).dryNotified).toBe(true)
+  expect(ticketsIn(JSON.parse(JSON.stringify({ ...TICKETS_EMPTY, dryNotified: true }))).dryNotified).toBe(true)
+})
+
 test('the unwatched list keeps only whole local_ ids, each once, the newest 50', () => {
   expect(ticketsIn({ unwatched: 'local_a' }).unwatched).toEqual([])
   expect(ticketsIn({ unwatched: ['local_a', 'local_a', 'local_b', 'Local_c', 'local_', 'x local_d', 'local_e f', 'local_g!', 7, null, 'local_h-1_x'] }).unwatched)
@@ -391,9 +400,10 @@ test('the times and the queue time of an entry and the earlier time sums read ba
 
 // The wait line and the begin message are the whole of what a waiting sub
 // session is told, so both are pinned word for word.
-test('the begin message is a fixed text that names no issue and does not begin as foreman\'s wake lines do', () => {
-  expect(BEGIN_TEXT).toBe('foreman begins this session now: first bring your branch up to date with the base branch, with the desktop app\'s sync_with_base_branch tool, and then run the /implement command your brief gives. If you have already begun it, ignore this message.')
+test('the begin message is a fixed text that names no issue, does not begin as foreman\'s wake lines do, and holds no double quote, since the wait line quotes it', () => {
+  expect(BEGIN_TEXT).toBe('foreman begins this session now: first bring your branch up to date with the base branch, with the desktop app\'s sync_with_base_branch tool, and then run the /implement command your brief gives. If you have already begun it, ignore this message. If /implement stops because your issue is already done on the base branch or already has an open pull request, do not wait for an answer. If the issue is already done but the tracker still shows it not started, first comment on the issue with the evidence and move it to the tracker\'s in-progress state. In every such case, then run /cleanup.')
   expect(BEGIN_TEXT.startsWith('foreman: ')).toBe(false)
+  expect(BEGIN_TEXT).not.toContain('"')
 })
 
 test('the wait line says to run /implement only once the begin message arrives, quotes that message, and does not begin with a slash', () => {

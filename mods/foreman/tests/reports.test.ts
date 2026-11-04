@@ -158,13 +158,16 @@ test('a milestone and an idle sub session in one read wake the parent with exact
 })
 
 // A parent with ABC-1 and ABC-2 working, whose first read is over, and the
-// file that shows ABC-1's pull request open.
+// file that shows ABC-1's pull request open. The desktop app lists both
+// sessions as running, so neither slot frees while the clock moves on past
+// their files, which would add the dry-queue report as the newest one.
 async function twoWorking($: Parameters<typeof mountBoth>[0], on: Parameters<typeof world>[0]) {
   const w = world(on)
   const a = working('ABC-1')
   const b = working('ABC-2')
   w.folder.put('a.json', a)
   w.folder.put('b.json', b)
+  w.desktop.sessions = ['local_ABC-1', 'local_ABC-2'].map(sessionId => ({ sessionId, cwd: '/w', isArchived: false, isRunning: true }))
   const ui = await mountBoth($, on)
   await start($)
   await foreman($)
@@ -253,9 +256,12 @@ test('with no sub sessions left, the band shows the report after the no sub sess
   await minutesPass(w, 1, { 'a.json': working('ABC-1', { pr: pr(7, 'MERGED') }) })
   w.folder.files.clear()
   await minutesPass(w, 1)
-  const sentence = 'ABC-1\'s pull request #7 merged.'
+  // The read that finds the file gone reports the merge and then, since its
+  // slot freed with nobody waiting, the dry queue, which is the newest report.
+  expect(await wide.paneText()).toContain('ABC-1\'s pull request #7 merged.')
+  const sentence = 'foreman\'s queue ran dry: a slot is free and no sub session waits, so your next message lines up more.'
   const full = await wide.bandText()
-  expect(full).toMatch(/^foreman: 0 of 2 slots busy · no sub sessions · next read in \S+ · /)
+  expect(full).toMatch(/^foreman: 0 of 2 slots busy · queue empty · no sub sessions · next read in \S+ · /)
   expect(full.endsWith(` · ${sentence}`)).toBe(true)
   const withoutReport = full.slice(0, full.length - ` · ${sentence}`.length)
   for (const columns of [withoutReport.length + 20, withoutReport.length + 10, withoutReport.length]) {

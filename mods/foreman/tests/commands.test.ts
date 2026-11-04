@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import { PASTED_LINE, RANGE, becameParentAnswer, commandOf, pastedCommandIn, slotsAnswer } from '../hooks/commands'
+import { isCommandText, PASTED_LINE, RANGE, becameParentAnswer, commandOf, pastedCommandIn, slotsAnswer, START_FOREMAN_FALLBACK, START_FOREMAN_OFF, startForemanText } from '../hooks/commands'
+import { topUpLine } from '../hooks/held'
 
 test('/start-foreman turns the role on, and a whole number from 1 to 20 also sets the slot count', () => {
   expect(commandOf('')).toEqual({ kind: 'on', prompt: null })
@@ -74,4 +75,21 @@ test('the pasted line says the command did not run, that foreman is off, and wha
   for (const words of ['/start-foreman', 'did not run', 'foreman is off', 'one line', 'type /start-foreman themselves', 'start no sub session']) {
     expect(PASTED_LINE).toContain(words)
   }
+})
+
+test('a prompt is the command only when its text begins with /start-foreman, after optional white space, followed by white space or nothing', () => {
+  for (const text of ['/start-foreman', '/start-foreman 3', '  /start-foreman\nstart two issues']) expect([text, isCommandText(text)]).toEqual([text, true])
+  for (const text of ['/start-foremanx', 'please /start-foreman', 'start-foreman', '', 7 as never]) expect([text, isCommandText(text)]).toEqual([text, false])
+})
+
+test('the text that replaces the start-foreman skill carries the top-up count, says when the queue is full, and has a fixed text with foreman off and as a fallback', () => {
+  for (let n = 1; n <= 5; n += 1) {
+    const text = startForemanText(n)
+    expect(text.startsWith('foreman: foreman is on, and this session is its parent. ')).toBe(true)
+    expect(text).toContain(topUpLine(n).slice('foreman: '.length))
+  }
+  expect(startForemanText(0)).toBe('foreman: foreman is on, and this session is its parent. Its queue is full, with one waiting sub session for every slot, so start no sub session now; tell the person in one line that foreman is on and its queue is full.')
+  expect(START_FOREMAN_OFF).toBe('foreman: /start-foreman did not turn foreman on in this session, so start no sub session; tell the person in one line that foreman did not turn on and that the log in foreman\'s pane may say why.')
+  expect(START_FOREMAN_FALLBACK).toBe('foreman: foreman could not count its queue, so start no sub session on this turn; tell the person in one line that foreman could not count its queue and that their next message lines up more.')
+  for (const text of [startForemanText(0), startForemanText(3), START_FOREMAN_OFF, START_FOREMAN_FALLBACK]) expect(text).not.toContain('not loaded')
 })

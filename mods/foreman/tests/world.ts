@@ -240,6 +240,11 @@ export function engine(on: On, now: () => number = () => T0) {
     startThrows: false,
     // The session id the engine answers.
     sessionId: 'session-1',
+    // Each command that reached the engine beneath the mod, with its
+    // arguments, and the text the model read for each skill the engine
+    // expanded, as [skill, text].
+    commands: [] as { command: string; args: string }[],
+    skills: [] as [string, string][],
   }
   on('ui.notify', ($, e) => {
     if (answers.notify === 'throws') throw new Error('no channel')
@@ -273,7 +278,14 @@ export function engine(on: On, now: () => number = () => T0) {
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.receive', ($, e) => ({ text: e.text }))
   on('session.id', () => ({ value: answers.sessionId }))
-  on('command.run', () => ({ text: '' }))
+  on('command.run', ($, e) => {
+    answers.commands.push({ command: e.command, args: e.args })
+    return { text: '' }
+  })
+  on('skill.prompt', ($, e) => {
+    answers.skills.push([e.skill, e.text])
+    return { text: e.text }
+  })
   on('ui.open', ($, e) => {
     panes.push(e.id)
     if ('throws' in answers.open) return { deny: answers.open.throws }

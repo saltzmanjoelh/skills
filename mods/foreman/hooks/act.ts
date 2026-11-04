@@ -661,17 +661,54 @@ export function releasedIn(t: ForemanTickets, row: SubRow, now: number): { ticke
 // What a freed slot leads to, given how many slots are free now and, when
 // someone still waits unclaimed in the queue, the names of the waiting issues
 // a wake line may carry: nothing when no slot is free, the kept sentence when
-// someone waits, and otherwise a wake with the number free. A read and
+// someone waits, and otherwise a dry queue, which dryStep decides. A read and
 // Release both decide by it. Release calls it only when nobody waits
 // unclaimed, so it passes no names: while someone waits, Release carries the
 // freed slot's name in keptSlots instead, and the next read decides it like
 // any other freed slot.
-export type SlotOutcome = { kind: 'none' } | { kind: 'wake'; reason: Reason }
+export type SlotOutcome = { kind: 'none' } | { kind: 'wake'; reason: Reason } | { kind: 'dry' }
 
 export function slotOutcome(free: number, waiting: string[] | null = null): SlotOutcome {
   if (free <= 0) return { kind: 'none' }
   if (waiting !== null) return { kind: 'wake', reason: { kind: 'slot-kept', whos: waiting } }
-  return { kind: 'wake', reason: { kind: 'slot-free', free } }
+  return { kind: 'dry' }
+}
+
+// The log line for a slot that frees while the queue is still dry and
+// foreman already reported it.
+export const DRY_AGAIN_LOG = 'A slot is free and foreman\'s queue is still empty, which foreman already reported.'
+
+// What a dry queue leads to: the first time, the dry-queue report, which
+// foreman shows itself and which wakes nobody, with the ledger's mark set;
+// while the mark is set, only a log line, so one dry spell raises one
+// notification however many slots free in it. dryRearmed clears the mark.
+export function dryStep(t: ForemanTickets): { tickets: ForemanTickets; reasons: Reason[]; logs: string[] } {
+  if (t.dryNotified) return { tickets: t, reasons: [], logs: [DRY_AGAIN_LOG] }
+  return { tickets: { ...t, dryNotified: true }, reasons: [{ kind: 'queue-dry' }], logs: [] }
+}
+
+// The ledger with the dry-queue mark cleared when a sub session waits in the
+// queue unclaimed, as waitingUnclaimed says, so the queue's next dry spell is
+// reported again. A claimed sub session is left out: a read claimed it before
+// the dry spell began, so it is not new to the queue, and while its begin
+// message is not yet sent, or keeps failing, it would otherwise clear the
+// mark on every read and repeat the report for each slot that frees. A
+// proposal card nobody started is left out for the same reason. A start that
+// waits clears the mark in its own ledger write too, so one whose session is
+// claimed or archived before any read sees it still counts.
+export function dryRearmed(t: ForemanTickets, now: number): ForemanTickets {
+  return t.dryNotified && waitingUnclaimed(t, now, GONE_MS).length > 0 ? { ...t, dryNotified: false } : t
+}
+
+// What a slot freed outside a read leads to, as Release frees one while
+// nobody waits unclaimed: the mark checked as a read checks it, then the
+// outcome for the slots free now, with a dry queue decided by dryStep. It is
+// pure, so Release can run it inside its ledger update.
+export function freedSlotIn(t: ForemanTickets, rows: readonly SubRow[], now: number, slots: number): { tickets: ForemanTickets; reasons: Reason[]; logs: string[] } {
+  const armed = dryRearmed(t, now)
+  const outcome = slotOutcome(freeSlots(armed, rows, now, slots))
+  if (outcome.kind === 'dry') return dryStep(armed)
+  return { tickets: armed, reasons: outcome.kind === 'wake' ? [outcome.reason] : [], logs: [] }
 }
 
 // Whether this read needs the desktop app's list: a slot rule needs it, as
@@ -755,12 +792,19 @@ export function slotsNeedList(t: ForemanTickets, rows: readonly SubRow[], now: n
 // that slot. A reserved pairing has no claim and has a queue, so it is never
 // also counted as claimed or as a start with no status file.
 export function freeSlots(t: ForemanTickets, rows: readonly SubRow[], now: number, slots: number): number {
-  const shown = busyCount(shownRows(rows, t))
+  return freeSlotsOfShown(t, shownRows(rows, t), now, slots)
+}
+
+// The count freeSlots gives, from the rows the band shows, which shownRows
+// already picked from every row, so a caller that holds them does not pick
+// them a second time.
+export function freeSlotsOfShown(t: ForemanTickets, shown: readonly SubRow[], now: number, slots: number): number {
+  const busy = busyCount(shown)
   const active = t.pairings.filter(p => p.standing === 'active')
   const unseen = active.filter(p => p.queue === null && p.owner === null && now - p.pairedAt <= GONE_MS).length
   const claimed = active.filter(p => p.queue?.claim != null).length
   const reserved = active.filter(p => isReserved(p, now, GONE_MS)).length
-  return slots - shown - unseen - claimed - reserved
+  return slots - busy - unseen - claimed - reserved
 }
 
 // Whether a keyed start made now waits in the queue: no slot is free once
@@ -769,6 +813,22 @@ export function freeSlots(t: ForemanTickets, rows: readonly SubRow[], now: numbe
 export function startWaits(t: ForemanTickets, rows: readonly SubRow[], now: number, slots: number): boolean {
   const owed = waitingUnclaimed(t, now, GONE_MS).length
   return freeSlots(t, rows, now, slots) - owed <= 0
+}
+
+// The most issues the top-up line asks the parent to start on one typed turn.
+// The desktop app asks the person with a permission card from the eleventh
+// start on one turn, so five keeps a turn well below it, with room for issues
+// the person names in the same message.
+export const TOP_UP_MAX = 5
+
+// How many issues the parent should start now so that foreman keeps one
+// waiting sub session per slot: twice the slot count, less the busy slots and
+// the sub sessions that wait unclaimed, never below zero and never above
+// TOP_UP_MAX. A claimed or reserved waiting sub session is counted once,
+// because freeSlots counts it as busy and waitingUnclaimed leaves it out.
+export function topUpCount(t: ForemanTickets, rows: readonly SubRow[], now: number, slots: number): number {
+  const occupied = slots - freeSlots(t, rows, now, slots) + waitingUnclaimed(t, now, GONE_MS).length
+  return Math.min(TOP_UP_MAX, Math.max(0, 2 * slots - occupied))
 }
 
 // Whether a waiting sub session's record shows that /implement began in it:
@@ -889,10 +949,12 @@ function queueStep(
 // the gone rule, and only on a read whose listing succeeded, as frozenRule
 // says.
 // When this read freed a slot and a freed slot is left that no claim of
-// queueStep filled, the parent is woken with the number of slots free, unless
-// none is free once the claims are counted. Each claim counts against one
-// freed slot, whichever slot it actually takes. The number counts every free
-// slot, not only the freed ones, and leaves out each slot a claim took. While
+// queueStep filled, foreman reports that its queue ran dry, unless none is
+// free once the claims are counted, as dryStep decides: once for each dry
+// spell, with a log line for each later freed slot in it. Each claim counts
+// against one freed slot, whichever slot it actually takes. A sub session
+// waiting in the queue unclaimed clears the dry mark before the freed slots
+// are decided, as dryRearmed says. While
 // a sub session still waits unclaimed, the parent is woken with the kept
 // sentence instead, which names the waiting issues and says not to start a
 // new one, so foreman never asks for a new issue while one waits. The read
@@ -903,7 +965,7 @@ function queueStep(
 // sub session waits unclaimed it keeps its freed slots in `keptSlots` instead
 // of waking the parent for them. The slots kept count as freed by the next
 // read that reads the list, or by the next read on which nobody waits
-// unclaimed, ahead of that read's own, so the slot-free line can come on a
+// unclaimed, ahead of that read's own, so the dry-queue report can come on a
 // later read than the one that freed the slot.
 // The spending in each owner's file is taken into the ledger from the
 // pairings as the read found them, and the spent list is folded after the
@@ -947,7 +1009,7 @@ export function decide(input: DecideInput): Decision {
         freed += 1
         freedBy.push(whoOf(p.issueKey, p.ticket))
         logs.push(`The slot of ${p.issueKey ?? byTicket(p.ticket)} is free, because its file left the status folder.`)
-        // The merge comes before the slot-free sentence, which is added
+        // The merge comes before the dry-queue sentence, which is added
         // after every pairing.
         reasons.push(...mergedOnLeaving(p))
       }
@@ -957,7 +1019,7 @@ export function decide(input: DecideInput): Decision {
     const episode = episodeOf(p.acts.episode, row, now)
     const s: Step = { p: { ...p, acts: { ...p.acts, episode } }, episode, row, now, limits, look, effects, reasons, logs, due, freed: 0, freedBy }
     // The milestone sentences follow this pairing's other sentences, so that
-    // the slot-free sentence, added after every pairing, stays last.
+    // the dry-queue sentence, added after every pairing, stays last.
     const milestones = milestoneRule(s)
     // A read that asked for the list, whether or not it got one, starts a new
     // gone wait of checks once the last one has run out. Stamping only then
@@ -1005,21 +1067,28 @@ export function decide(input: DecideInput): Decision {
   // Each claim took the name of a slot this read freed, or of one an earlier
   // read kept, so a name left over is a freed slot that no waiting sub
   // session could take: one the list does not show surely unarchived, or a
-  // proposal card that has not started. The parent is woken for it, so a
-  // freed slot is never lost: with the kept sentence while someone still
-  // waits unclaimed, and with the slot-free sentence otherwise. The parent
+  // proposal card that has not started. It is never lost without a word: the
+  // parent is woken with the kept sentence while someone still waits
+  // unclaimed, and foreman reports the dry queue otherwise. The parent
   // begins each issue the kept sentence names, so it names at most as many
   // as there are free slots: the first waiting issues in the queue's order
   // are taken first, and only then are names a wake line may not carry and
   // repeated names dropped. A damaged or repeated entry among those first
   // ones therefore makes the sentence name fewer issues, never more than the
   // slots allow.
+  tickets = dryRearmed(tickets, now)
   if (freed > 0 && left.length > 0) {
     const free = freeSlots(tickets, rows, now, input.slots)
     const firstInQueue = unclaimed.slice(0, Math.max(free, 0))
     const names = [...new Set(firstInQueue.map(p => whoOf(p.issueKey, p.ticket)).filter(isWhoName))]
     const outcome = slotOutcome(free, unclaimed.length === 0 ? null : names)
     if (outcome.kind === 'wake') reasons.push(outcome.reason)
+    if (outcome.kind === 'dry') {
+      const dry = dryStep(tickets)
+      tickets = dry.tickets
+      reasons.push(...dry.reasons)
+      logs.push(...dry.logs)
+    }
     // The kept sentence stands for exactly the first waiting sub sessions,
     // even when it cannot name them safely and speaks of the issues waiting
     // in the queue, so each of them is stamped. The stamp goes by the

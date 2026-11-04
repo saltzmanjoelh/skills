@@ -27,10 +27,17 @@ const PAIRINGS = [
 
 const ledgerOf = (pairings: readonly ForemanPairing[]) => ({ ...ticketsIn(undefined), pairings })
 
+// The stored role of a parent: on with one slot, so that the two active sub
+// sessions of PAIRINGS already meet foreman's target of two, one busy and one
+// waiting per slot, and a typed prompt gets no top-up line, so these tests
+// see only the lines they are about; or off, as a session that never ran
+// /start-foreman stores it.
+const roleOf = (isOn: boolean) => ({ isOn, slots: isOn ? 1 : null })
+
 // A parent whose role is on, or off when `isOn` is false, with `pairings` in
 // its stored ledger, started and mounted, with its marker followed.
 async function parentWith($: Engine, on: Parameters<typeof world>[0], pairings: readonly ForemanPairing[] = PAIRINGS, isOn = true) {
-  const w = world(on, { store: { 'parent:session-1': { isOn, slots: null }, [ticketsKey('session-1')]: ledgerOf(pairings) } })
+  const w = world(on, { store: { 'parent:session-1': roleOf(isOn), [ticketsKey('session-1')]: ledgerOf(pairings) } })
   const marker = markerOf(on)
   const ui = await mountBoth($, on)
   await start($)
@@ -154,7 +161,7 @@ test('notes about two sub sessions give one sorted line, which a repeat counts',
 
 test('foreman\'s own wake line still reaches the model', async ($, on) => {
   const { w } = await parentWith($, on)
-  await passes($, w, 'foreman: one slot free; pick the next issue and start it.')
+  await passes($, w, 'foreman: ABC-1 is still idle after two nudges.')
 })
 
 test('with an empty ledger every note is kept under its id', async ($, on) => {
@@ -445,7 +452,7 @@ const HELD = 'foreman: ABC-7 did not start, and foreman holds it; start it first
 
 // A parent like parentWith's whose ledger holds `held`.
 async function holdingParent($: Engine, on: Parameters<typeof world>[0], held: readonly string[] = ['ABC-7'], isOn = true) {
-  const w = world(on, { store: { 'parent:session-1': { isOn, slots: null }, [ticketsKey('session-1')]: { ...ledgerOf(PAIRINGS), held } } })
+  const w = world(on, { store: { 'parent:session-1': roleOf(isOn), [ticketsKey('session-1')]: { ...ledgerOf(PAIRINGS), held } } })
   const marker = markerOf(on)
   await mountBoth($, on)
   await start($)
@@ -474,7 +481,7 @@ test('while a key is held, a plugin\'s prompt, foreman\'s wake among them, and a
     { kind: 'scheduled-trigger' },
   ]
   for (const origin of others) {
-    await passes($, w, 'foreman: one slot free; pick the next issue and start it.', { origin })
+    await passes($, w, 'foreman: ABC-1 is still idle after two nudges.', { origin })
     expect(w.engine.contexts.at(-1)).toBeUndefined()
   }
   await passes($, w, 'go on', { origin: { kind: 'composer' }, isMeta: true })

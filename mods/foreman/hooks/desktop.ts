@@ -42,10 +42,18 @@ export const BACKGROUND_NUDGE_TEXT: ForemanNudgeText = 'could you check that you
 // The message that tells a waiting sub session to begin. It is a constant, so
 // no text from an issue or a status file ever reaches a sub session through
 // it, and it does not begin with "foreman: ", which would read as a wake line
-// to a sub session that loads foreman's wake skill. Its last sentence makes a
-// begin that arrives twice harmless. The wait line in tickets.ts quotes it, so
-// the sub session knows it when it comes.
+// to a sub session that loads foreman's wake skill. Its second sentence makes
+// a begin that arrives twice harmless. The wait line in tickets.ts quotes it,
+// so the sub session knows it when it comes, and so it holds no double quote.
+// Its first two sentences are the whole of an older version, which a sub
+// session that waits under an older brief knows it by, so that text stays its
+// exact start. The three sentences after them cover an issue that went stale
+// while its sub session waited: the session does not wait for an answer,
+// first marks an issue that is done but shows as not started, so the next
+// top-up skips it, and in every stale case runs /cleanup, which archives it
+// and frees its slot.
 export const BEGIN_TEXT = 'foreman begins this session now: first bring your branch up to date with the base branch, with the desktop app\'s sync_with_base_branch tool, and then run the /implement command your brief gives. If you have already begun it, ignore this message.'
+  + ' If /implement stops because your issue is already done on the base branch or already has an open pull request, do not wait for an answer. If the issue is already done but the tracker still shows it not started, first comment on the issue with the evidence and move it to the tracker\'s in-progress state. In every such case, then run /cleanup.'
 // How many sessions to ask the list for. Every read asks for the parent's
 // linked family alone, which the list answers most recently active first,
 // twenty when not told otherwise, and a sub session that has been quiet a
@@ -60,6 +68,7 @@ const SAVED_LIMIT = 4 * 1024 * 1024
 // long or hold anything.
 export const REASONS = {
   noAddress: 'its record names neither a desktop session nor a folder',
+  noSessionId: 'foreman holds no usable desktop session id for it yet',
   noSessionInFolder: 'no desktop session works in its folder',
   notConnected: 'the desktop app\'s tools are not connected in this session',
   listRefused: 'the desktop app could not list its sessions',
