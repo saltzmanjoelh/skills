@@ -3334,11 +3334,11 @@ const STATE_LABEL_KEPT_MS = 90 * 24 * 60 * 60_000
 // while the job runs queues the next one.
 let isStateLabelQueued = false
 
-// The keys of state label records whose note a clear failed to remove. The
-// job reads such a record as holding no note until a later write replaces
-// it, so a stale note never decides a later change. The set lives in memory
-// only, so after a restart a note whose clear the store refused counts again,
-// and that is the risk that remains.
+// The keys of state label records whose note a clear failed to remove, or
+// whose new note the store refused. The job reads such a record as holding
+// no note until a later write replaces it, so a stale note never decides a
+// later change. The set lives in memory only, so after a restart a note
+// that it hid counts again, and that is the risk that remains.
 const staleNoteKeys = new Set<string>()
 
 function requestStateLabel($: $) {
@@ -3364,16 +3364,16 @@ function requestStateLabel($: $) {
 // that read saw `stuck`, unless the record already holds a note for that
 // label, so that after an edit that failed the next job can tell a `stuck`
 // that was on before the step's label changed from one the session set by
-// its own judgement afterwards. A note the store refuses is let go, because the next
-// job then sees no note for this label and writes it, which is the safe
-// side. A new label record, with no note, is saved only once every edit the
-// job needed succeeded: on a write, the edit and the removal that the read
-// after it may call for; when the label is only recorded, the removal of any
-// state label beside `stuck`. So a failed edit, read or removal is tried
-// again at the next look. One risk remains: when that final save fails
-// after a read that saw `stuck`, the note still says it saw `stuck`, so a
-// `stuck` the session puts on afterwards by its own judgement comes off at
-// the next look.
+// its own judgement afterwards. When the store refuses that note, the job
+// treats any older note still stored as gone too, so the next job sees no
+// note and writes the label, which is the safe side. A new label record,
+// with no note, is saved only once every edit the job needed succeeded: on a
+// write, the edit and the removal that the read after it may call for; when
+// the label is only recorded, the removal of any state label beside `stuck`.
+// So a failed edit, read or removal is tried again at the next look. One
+// risk remains: when that final save fails after a read that saw `stuck`,
+// the note still says it saw `stuck`, so a `stuck` the session puts on
+// afterwards by its own judgement comes off at the next look.
 async function settleStateLabel($: $) {
   const r = await read($, run)
   const s = snapshotIn(await read($, pr))
@@ -3399,11 +3399,13 @@ async function settleStateLabel($: $) {
   const note = noteAfterRead(record, derived, live)
   if (record !== null && note !== null) {
     try {
+      staleNoteKeys.add(key)
       await $.store.set(key, { label: record.label, at: record.at, note })
       staleNoteKeys.delete(key)
     } catch {
-      // A lost note only means the next job sees no note for this label
-      // and writes it, so the edits below still run.
+      // A refused note write leaves the key in the set, which hides any
+      // older note still stored, so the next job sees no note and writes
+      // the label, and the edits below still run.
     }
   }
   const action = labelActionOf(derived, record?.label ?? null, live, record?.note ?? null)
