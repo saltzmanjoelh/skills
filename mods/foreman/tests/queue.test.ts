@@ -181,6 +181,18 @@ test('a waiting sub session whose name a wake line may not carry is left out of 
   const sessions = list([listed('local_ft-a', { isArchived: true, isRunning: false, surelyUnarchived: false })], false)
   const d = read(t, [row('ft-a', { issueKey: 'ABC-1', state: 'done' }), row('bad ticket')], T0 + MINUTE, { sessions })
   expect(d.reasons).toEqual([{ kind: 'slot-kept', whos: [] }])
+  // The sentence cannot name the waiting sub session, but it still stands
+  // for it, so its slot is kept for it all the same.
+  expect(d.tickets.pairings.find(p => p.ticket === 'bad ticket')!.queue).toEqual({ place: 1, claim: null, keptAt: T0 + MINUTE })
+})
+
+test('the kept sentence stamps the pairing it stands for, not every pairing that shares its ticket', () => {
+  const t = ledger(ahead('ft-a', 'ABC-1'), waiting('ft-b', 'ABC-2', 1), waiting('ft-b', 'ABC-3', 2, null, 'local_other'))
+  const sessions = list([listed('local_ft-a', { isArchived: true, isRunning: false, surelyUnarchived: false })])
+  const d = read(t, [row('ft-a', { issueKey: 'ABC-1', state: 'done' })], T0 + MINUTE, { sessions })
+  expect(d.reasons).toEqual([{ kind: 'slot-kept', whos: ['ABC-2'] }])
+  const shared = d.tickets.pairings.filter(p => p.ticket === 'ft-b')
+  expect(shared.map(p => p.queue)).toEqual([{ place: 1, claim: null, keptAt: T0 + MINUTE }, { place: 2, claim: null }])
 })
 
 // The desktop app's entry for a session that is archived.
