@@ -15250,6 +15250,50 @@ test('the first poll that sees the pull request merged stamps the merge, and lat
   expect(timingOf(stored)?.prOpenedAt).toBe(T0)
 })
 
+test('a poll of the old pull request that finishes after a watch of another one leaves the timing record on the new one and its opening stamp', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const stored = memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  fakePanes(on)
+  // Once armed, the next save of #7's snapshot waits until it is released,
+  // which holds a look after its last check that #7 is still watched.
+  let isArmed = false
+  let release = () => {}
+  const held = new Promise<void>(resolve => { release = resolve })
+  let reached = () => {}
+  const isReached = new Promise<void>(resolve => { reached = resolve })
+  on('state.set', async ($, e, next) => {
+    if (isArmed && e.plugin === 'builder' && e.key === 'pr' && (e.value as { number?: number } | null)?.number === 7) {
+      isArmed = false
+      reached()
+      await held
+    }
+    return next(e)
+  })
+  await watch($)
+  await clock.settle()
+  expect(timingOf(stored)?.prOpenedAt).toBe(T0)
+
+  // The poll of #7 reads it and is held at the save of its snapshot.
+  isArmed = true
+  const poll = clock.advance(10 * MINUTE)
+  await isReached
+  // The session watches #8 meanwhile, which stamps #8's opening.
+  await clock.advance(MINUTE)
+  const switchedAt = T0 + 11 * MINUTE
+  world.pr = openPullRequest({ number: 8 })
+  world.otherNumber = 8
+  await loose($)({ tool: 'mcp__builder__watch', number: 8 })
+  expect(timingOf(stored)).toMatchObject({ pr: { repo: 'o/r', number: 8 }, prOpenedAt: switchedAt })
+
+  // The poll of #7 then finishes, and must not put #7 back.
+  release()
+  await poll
+  await clock.settle()
+  expect(timingOf(stored)).toMatchObject({ pr: { repo: 'o/r', number: 8 }, prOpenedAt: switchedAt, prMergedAt: null })
+})
+
 test('a review round runs from the package call to the post_review call at its head, and a second package call for the head starts nothing', async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
   const stored = memoryStore(on)

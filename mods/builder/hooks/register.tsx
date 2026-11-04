@@ -717,7 +717,11 @@ async function lookAt(
     newestStoredLook = seq
     if (leavesReadForHandover) newestRead = { r, s, seq }
     await update($, pr, () => s)
-    await stampPullRequest($, s)
+    // Watching may have moved on while the snapshot was saved. A watch of
+    // another pull request stamps the timing record itself, and a stamp from
+    // this look would put the old pull request back and clear the new one's
+    // stamps, so the stamp is skipped.
+    if (await stillWatching($, r)) await stampPullRequest($, r, s)
     // A pane snapshot an older build saved counts as different, rather than
     // throwing in the middle of the look, because isSameState checks both
     // sides with snapshotIn.
@@ -1818,11 +1822,15 @@ async function stampTiming($: $, change: (t: TimingLedger) => TimingLedger) {
   }
 }
 
-// Stamps the pull request a watch or a look just read.
-async function stampPullRequest($: $, s: Snapshot) {
+// Stamps the pull request a watch or a look just read under the watch `r`.
+// The stamp is skipped when a newer watch has replaced `r` by the time the
+// change runs, because that watch stamps its own pull request, and a stamp of
+// the old one would replace it and clear its stamps. The check sits inside
+// the change, with no await between it and the write.
+async function stampPullRequest($: $, r: BuilderRun, s: Snapshot) {
   const now = await $.clock.now()
   const seen: PullRequestSeen = { repo: s.repo, number: s.number, state: s.state }
-  await stampTiming($, t => afterPr(t, seen, now))
+  await stampTiming($, t => (isCurrentWatch(r) ? afterPr(t, seen, now) : t))
 }
 
 // Drops every stored record untouched for two weeks, whichever session wrote
@@ -2414,7 +2422,7 @@ async function watch($: $, target: Omit<BuilderRun, 'since'>): Promise<Snapshot 
   newestRead = null
   await update($, run, () => r)
   await update($, pr, () => s)
-  await stampPullRequest($, s)
+  await stampPullRequest($, r, s)
   requestStateLabel($)
   if (previous !== null && (previous.repo !== r.repo || previous.number !== r.number)) {
     // Through the told queue, so a write for the previous pull request that
