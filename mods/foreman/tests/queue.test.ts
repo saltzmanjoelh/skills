@@ -656,3 +656,20 @@ test('a waiting session whose slot is kept counts as busy, is not owed another s
   expect(waitingUnclaimed(stamped, over, GONE_MS).map(p => p.ticket)).toEqual(['ft-w'])
   expect(startWaits(stamped, rows, over, 2)).toBe(false)
 })
+
+test('every sub session the waiting count owes a slot is in the queue shown, and a stale proposal card is in neither', () => {
+  const now = T0 + GONE_MS + 1
+  const t = ledger(
+    waiting('ft-b', 'ABC-2', 1),
+    waiting('ft-c', 'ABC-3', 2, null, null),
+    waiting('ft-d', 'ABC-4', 3, { attemptAt: T0, notified: false }),
+    kept('ft-r', 'ABC-5', 4, now - MINUTE),
+    waiting('ft-e', 'ABC-6', 5),
+  )
+  const shown = queuedShown(t, now, GONE_MS).map(p => p.ticket)
+  const owed = waitingUnclaimed(t, now, GONE_MS).map(p => p.ticket)
+  expect(shown).toEqual(['ft-b', 'ft-d', 'ft-r', 'ft-e'])
+  expect(owed).toEqual(['ft-b', 'ft-e'])
+  expect(owed.filter(ticket => !shown.includes(ticket))).toEqual([])
+  expect(shown.includes('ft-c') || owed.includes('ft-c')).toBe(false)
+})

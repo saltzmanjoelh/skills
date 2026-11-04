@@ -336,27 +336,27 @@ export const isReserved = (p: ForemanPairing, now: number, goneMs: number) =>
   p.standing === 'active' && p.queue !== null && p.queue.claim === null
     && p.queue.keptAt !== undefined && now - p.queue.keptAt >= 0 && now - p.queue.keptAt <= goneMs
 
-// The sub sessions that wait in the queue and are not yet claimed for a
-// slot, in the queue's order. Each of them is owed a slot before any new
-// start goes ahead. One with no desktop session id is owed one only for
-// `goneMs` after it was paired, while its start call may still be out: a
-// start answered with a proposal card the person never starts would
-// otherwise hold back a slot, and the slot wake, until it is forgotten a day
-// later. Once its session starts, its status file gives it the id, and it is
-// owed its slot again at its place. One whose slot is kept for the parent's
-// begin by hand, as isReserved says, already counts as busy in that slot, so
-// it is not owed another and no later kept sentence names it again.
-export const waitingUnclaimed = (t: ForemanTickets, now: number, goneMs: number) =>
-  queueOf(t).filter(p => p.queue!.claim === null && !isReserved(p, now, goneMs) && (p.localId !== null || now - p.pairedAt <= goneMs))
-
 // The sub sessions that wait in the queue as foreman shows it, in the
 // queue's order, claimed or not: every one but a start answered with a
 // proposal card that has no desktop session id more than `goneMs` after it
-// was paired, which waitingUnclaimed leaves out for the same reason. Such a
-// card most likely never starts, so it neither shows as waiting nor arms the
-// dry-queue report again.
+// was paired. While its start call may still be out, such a start is shown.
+// After that it most likely never starts, and counting it would hold back a
+// slot, and the slot wake, until it is forgotten a day later. Once its
+// session starts, its status file gives it the id, and it shows again at its
+// place. This list feeds the band and the pane. Whether the dry-queue report
+// is armed again is decided by dryRearmed in act.ts through waitingUnclaimed,
+// which builds on this list and also leaves out claimed and reserved entries.
 export const queuedShown = (t: ForemanTickets, now: number, goneMs: number) =>
   queueOf(t).filter(p => p.localId !== null || now - p.pairedAt <= goneMs)
+
+// The sub sessions that wait in the queue and are not yet claimed for a
+// slot, in the queue's order. Each of them is owed a slot before any new
+// start goes ahead. It builds on queuedShown, so a stale proposal card is not
+// owed one, for the reason given there. One whose slot is kept for the
+// parent's begin by hand, as isReserved says, already counts as busy in that
+// slot, so it is not owed another and no later kept sentence names it again.
+export const waitingUnclaimed = (t: ForemanTickets, now: number, goneMs: number) =>
+  queuedShown(t, now, goneMs).filter(p => p.queue!.claim === null && !isReserved(p, now, goneMs))
 
 // The place a start that waits now takes: one after the last place in the
 // queue, or 1 when nobody waits.
