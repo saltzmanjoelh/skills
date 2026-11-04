@@ -230,6 +230,12 @@ export type ForemanTickets = {
   dryNotified: boolean
 }
 
+// What the pane shows unfolded: the Log row, the Token details row, and the
+// row of Nudge and Release under each card named by its status file. Every
+// row starts folded. Read through foldsIn in hooks/glance.ts, which reads a
+// value in any other shape as folded.
+export type ForemanFolds = { isLogOpen: boolean; isTokensOpen: boolean; openMenus: string[] }
+
 declare module 'claude-code' {
   interface PluginState {
     foreman: {
@@ -280,6 +286,10 @@ declare module 'claude-code' {
       // earlier notice failed after it. It is kept in $.state only, so it
       // outlives a hot reload but not a restart.
       report: { text: string; at: number; kept?: number; released?: true; newestOut?: true } | null
+      // Which of the pane's rows the person unfolded. It is kept in $.state
+      // only, so it outlives a hot reload but not a restart, after which every
+      // row is folded again.
+      folds: ForemanFolds
     }
   }
 }

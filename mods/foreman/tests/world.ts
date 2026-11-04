@@ -368,27 +368,73 @@ export function leftInState(on: On, seeded: Record<string, unknown>) {
   })
 }
 
+// The element a keyed Box holds. The engine keeps a key only on a Box or a
+// Button, so the pane holds each text, link and drawing that a test finds by
+// key in a Box of its own with that key.
+export type Held = { type?: string; props?: Record<string, unknown> }
+export const held = (found: { children: readonly unknown[] } | undefined): Held | undefined => found?.children[0] as Held | undefined
+
 // Mounts the band and the pane on a surface. The host draws its own line when
 // the mod passes the band on. Called after the test's other hooks, since it
 // is the first call on `$`. Each read draws again, so a relative time is read
 // as of now.
+//
+// The pane starts with its Log and Token details rows folded and each card's
+// Nudge and Release buttons hidden behind its `⋯` button. So a press of a
+// Nudge or Release button first presses the card's `⋯` button when the
+// button is not drawn yet, and the pane's text and its log lines are read
+// with both rows unfolded, as a person would unfold them to read them.
 export async function mountBoth($: Engine, on: On, surface: 'terminal' | 'desktop' = 'terminal', bodyColumns = 200) {
   on('ui.render', ($, e) => ($.ui.resolve(e) as unknown as { Text: (props: object) => never }).Text({ children: 'host line' }))
   const band = await $.ui.mount({ plugin: 'foreman', surface, component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, bodyColumns } as never })
-  const pane = await $.ui.mount({ plugin: 'foreman', surface, component: 'Pane', requestId: 'foreman', props: { bodyColumns } as never })
-  const logLines = async () => {
+  const mounted = await $.ui.mount({ plugin: 'foreman', surface, component: 'Pane', requestId: 'foreman', props: { bodyColumns } as never })
+  const press: typeof mounted.press = async query => {
+    const key = (query as { key?: unknown }).key
+    const hidden = typeof key === 'string' ? /^(?:nudge|release)-(.+)$/.exec(key) : null
+    if (hidden !== null) {
+      await mounted.redraw()
+      if ((await mounted.find({ key: hidden[0] })) === undefined && (await mounted.find({ key: `menu-${hidden[1]}` })) !== undefined) {
+        await mounted.press({ key: `menu-${hidden[1]}` })
+        await mounted.redraw()
+      }
+    }
+    return mounted.press(query)
+  }
+  // The mounted pane is frozen, so the pane the tests use is a copy of it
+  // with this press in place of its own.
+  const own = Object.fromEntries(Object.keys(mounted).map(name => {
+    const value = (mounted as unknown as Record<string, unknown>)[name]
+    return [name, typeof value === 'function' ? value.bind(mounted) : value]
+  }))
+  const pane = { ...own, press } as typeof mounted
+  // Unfolds the Log and Token details rows when they are folded.
+  const unfold = async () => {
     await pane.redraw()
+    for (const row of ['log', 'tokens']) {
+      const toggle = await pane.find({ key: `${row}-toggle` })
+      if (toggle !== undefined && toggle.text.startsWith('▸')) {
+        await pane.press({ key: `${row}-toggle` })
+        await pane.redraw()
+      }
+    }
+  }
+  const logLines = async () => {
+    await unfold()
     return (await pane.findAll({ type: 'Text', text: /^\d\d:\d\d:\d\d / })).map(line => line.text.slice(9))
   }
   return {
     band,
     pane,
+    // The mounted pane itself, whose press goes to the buttons of the last
+    // drawing as they are, without drawing the pane again or opening a card's
+    // `⋯` first.
+    drawnPane: mounted,
     bandText: async () => {
       await band.redraw()
       return (await band.find({ key: 'foreman-band' }))?.text ?? ''
     },
     paneText: async () => {
-      await pane.redraw()
+      await unfold()
       return (await pane.find({ key: 'foreman-pane' }))?.text ?? ''
     },
     // Every line of the log, oldest first, without its time.

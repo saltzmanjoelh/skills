@@ -91,15 +91,20 @@ export function nextReadDelay(rows: readonly SubRow[]): number {
   return rows.some(row => row.record.state === 'working' && !row.isStale) ? READ_SOON_MS : READ_LATER_MS
 }
 
-// How many slots are busy: every listed sub session that is not released and
-// whose state is not done, stale ones included.
-export const busyCount = (rows: readonly SubRow[]) => rows.filter(row => row.isReleased !== true && row.record.state !== 'done').length
+// Whether a sub session takes a slot: it is not released and its state is not
+// done. A stale one still takes its slot.
+export const isBusy = (row: SubRow) => row.isReleased !== true && row.record.state !== 'done'
+
+// How many slots are busy: every listed sub session that isBusy names.
+export const busyCount = (rows: readonly SubRow[]) => rows.filter(isBusy).length
 
 // How a state is shown: red, amber, or the plain text color.
 export type Tone = 'red' | 'amber' | 'plain'
 
 // Every state's words and tone. It is typed over every state, so a state
-// added to the record fails the type check until it has an entry here.
+// added to the record fails the type check until it has an entry here. A
+// state's light is in LIGHT_OF in hooks/glance.ts, and its icon is in
+// STATE_ICON in hooks/pane.tsx.
 export const STATE_LOOK: Record<BuildState, { words: string; tone: Tone }> = {
   'working': { words: 'working', tone: 'plain' },
   'waiting-on-builder': { words: 'waiting on builder', tone: 'plain' },

@@ -9,7 +9,7 @@
 import type { ForemanCounts, ForemanSpend, ForemanSpent, ForemanTickets, ForemanTimes } from '../types'
 import type { RecordTiming, RecordUsage } from './record'
 import { STATES } from './record'
-import { ageWords, type SubRow } from './subs'
+import type { SubRow } from './subs'
 import { ownsTicket } from './tickets'
 
 // The most entries the spent list keeps before the oldest ones whose pairing
@@ -29,7 +29,7 @@ const larger = (a: ForemanCounts, b: ForemanCounts): ForemanCounts => ({
 // The sum of two figures, such as dollars or times, either of which may be
 // unknown: the known one when only one is known, and unknown only when
 // neither is.
-const plusKnown = (a: number | null, b: number | null) => (a === null ? b : b === null ? a : a + b)
+export const plusKnown = (a: number | null, b: number | null): number | null => (a === null ? b : b === null ? a : a + b)
 
 // The larger of two dollar figures, a known one always winning over an
 // unknown one, so a known figure never turns unknown.
@@ -166,6 +166,20 @@ export function spentSum(t: ForemanTickets): ForemanSpend | null {
   return all.reduce<ForemanSpend>((sum, s) => ({ counts: plus(sum.counts, s.counts), usd: plusKnown(sum.usd, s.usd) }), { counts: COUNTS_NONE, usd: null })
 }
 
+// How many issues merged, and what each cost on average: the entries of the
+// spent list whose last timing reading has a merge time, and the summed
+// dollars of those of them that have a dollar figure divided by how many have
+// one, or null when none has. An entry whose cost is unknown is never counted
+// as zero. The entries folded into the earlier total count in neither,
+// because the earlier total keeps no merge times.
+export type Merged = { count: number; average: number | null }
+
+export function mergedOf(t: ForemanTickets): Merged {
+  const merged = t.spent.filter(e => typeof e.timing?.prMergedAt === 'number')
+  const known = merged.flatMap(e => (e.usd === null ? [] : [e.usd]))
+  return { count: merged.length, average: known.length === 0 ? null : known.reduce((sum, usd) => sum + usd, 0) / known.length }
+}
+
 // Four times that are all unknown.
 export const TIMES_UNKNOWN: ForemanTimes = { working: null, needsYou: null, otherWaiting: null, queued: null }
 
@@ -203,17 +217,6 @@ export function timeSum(t: ForemanTickets): ForemanTimes {
   return t.spent.reduce((sum, e) => plusTimes(sum, entryTimes(e)), t.earlier?.times ?? TIMES_UNKNOWN)
 }
 
-// The words for four times, such as `working 1h 5m · waiting on you 12m ·
-// other waiting 3m · queued 0m`, each in whole minutes, or hours and minutes
-// from an hour on. A missing time reads "unknown", never zero, and when all
-// four are missing the words are "unknown" alone.
-export function timesWords(times: ForemanTimes): string {
-  const { working, needsYou, otherWaiting, queued } = times
-  if (working === null && needsYou === null && otherWaiting === null && queued === null) return 'unknown'
-  const words = (ms: number | null) => (ms === null ? 'unknown' : ageWords(ms))
-  return `working ${words(working)} · waiting on you ${words(needsYou)} · other waiting ${words(otherWaiting)} · queued ${words(queued)}`
-}
-
 // A count as builder's pane shows it: in thousands below a million, and in
 // millions with one decimal from a million up. This is a copy of the
 // countWords in builder's hooks/usage.ts, written out again by hand because
@@ -234,6 +237,10 @@ export function spendWords(spend: ForemanSpend | null): string {
   const tokens = c.input + c.output + c.cacheRead + c.cacheWrite === 0
     ? 'nothing counted yet'
     : `${countWords(c.input)} in, ${countWords(c.output)} out, ${countWords(c.cacheRead)} cache read, ${countWords(c.cacheWrite)} cache write`
-  return `${tokens} · ${usd === null ? 'cost unknown' : `$${usd.toFixed(2)}`}`
+  return `${tokens} · ${usdWords(usd)}`
 }
+
+// The words for a figure in dollars, or `cost unknown`, never $0.00 for a
+// figure foreman does not know.
+export const usdWords = (usd: number | null) => (usd === null ? 'cost unknown' : `$${usd.toFixed(2)}`)
 

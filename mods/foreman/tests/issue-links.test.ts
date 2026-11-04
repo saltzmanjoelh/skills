@@ -3,7 +3,7 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
 import { newPairing, ticketsKey, TICKETS_EMPTY } from '../hooks/tickets'
-import { foreman, MINUTE, PARENT_DIR, SURFACES, T0, mountBoth, record, start, statusFolder, world } from './world'
+import { foreman, held, MINUTE, PARENT_DIR, SURFACES, T0, mountBoth, record, start, statusFolder, world } from './world'
 
 // An element of a drawn tree as a found element's children give it.
 type Drawn = { type: string; props?: Record<string, unknown>; children?: unknown[] }
@@ -38,35 +38,30 @@ async function bandParts(ui: Awaited<ReturnType<typeof mountBoth>>): Promise<Dra
 // Where the chip button of `file` sits among the band's parts.
 const chipAt = (parts: Drawn[], file: string) => parts.findIndex(part => part.type === 'Button' && part.props?.key === `chip-${file}`)
 
-// Checks that the pane row of `file` begins with the link to `key`, then a
-// space, then the button that opens the sub session, with `label` on it.
-async function expectLinkedRow(ui: Awaited<ReturnType<typeof mountBoth>>, file: string, key: string, label: string) {
+// Checks that the pane row of `file`, a card or a compact line, begins with
+// the link to `key`, after the `!` of a card that needs the person on the
+// terminal, and that the row's open button is still drawn.
+async function expectLinkedRow(ui: Awaited<ReturnType<typeof mountBoth>>, file: string, key: string) {
   await ui.pane.redraw()
-  const row = await ui.pane.find({ key: `issue-${file}` })
-  expect(row?.type).toBe('Box')
-  const parts = row!.children as Drawn[]
-  expect(parts.map(part => part.type)).toEqual(['Link', 'Text', 'Button'])
-  expect(parts[0]!.props?.href).toBe(linkTo(key))
-  expect(parts[0]!.children).toEqual([key])
-  expect(parts[1]!.children).toEqual([' '])
-  expect(parts[2]!.props?.key).toBe(`open-${file}`)
-  expect((await ui.pane.find({ key: `open-${file}` }))?.text).toBe(label)
+  const name = (await ui.pane.find({ key: `card-name-${file}` })) ?? (await ui.pane.find({ key: `compact-name-${file}` }))
+  expect(name?.type).toBe('Box')
+  const parts = name!.children as Drawn[]
+  const first = parts[0]?.props?.key === `alert-${file}` ? 1 : 0
+  expect(parts[first]!.props?.key).toBe(`key-${file}`)
+  const link = held(await ui.pane.find({ key: `key-${file}` })) as Drawn | undefined
+  expect(link?.type).toBe('Link')
+  expect(link?.props?.href).toBe(linkTo(key))
+  expect(link?.children).toEqual([key])
+  expect((await ui.pane.find({ key: `open-${file}` }))?.text).toBe('→ open')
 }
 
-// What the code before issue links drew for twoSubs with no Issue link fact,
-// copied from a run of that code on the base branch rather than from this
-// code, so that a change to how a chip or a row is drawn without a fact shows
-// as a failure here. Each Button's press handle is left out, since its number
-// changes from run to run, and so is each drawing's source, as `compared`
-// says. The band is the same on both surfaces. The lines that say what each
-// sub session, the sub sessions together and this session spent came later,
-// with the counting of what sessions spend, and were added here then, as were
-// the lines with each sub session's times and their sums later still. The
-// head became a button that opens foreman's pane later still, and the line
-// that counts builder's status messages came after that. The pane's Queued
-// section, which says that nothing waits when the queue is empty, came later
-// still; the band draws nothing about the queue here, because no slot is free
-// and nothing waits.
+// What the code before issue links drew in the band for twoSubs with no
+// Issue link fact, copied from a run of that code on the base branch rather
+// than from this code, so that a change to how a chip is drawn without a fact
+// shows as a failure here. Each Button's press handle is left out, since its
+// number changes from run to run. The band is the same on both surfaces. The
+// head became a button that opens foreman's pane later; the band draws
+// nothing about the queue here, because no slot is free and nothing waits.
 const BAND_BEFORE = {
   type: 'Box', props: { key: 'foreman-band', flexDirection: 'row' },
   children: [
@@ -79,83 +74,21 @@ const BAND_BEFORE = {
   ],
   part: { plugin: 'foreman' },
 }
-const PANE_BEFORE = {
-  terminal: {
-    type: 'Box', props: { key: 'foreman-pane', flexDirection: 'column' },
-    children: [
-      { type: 'Button', props: { key: 'open-a.json', label: '→ ABC-1 · #4 open · checks passed', variant: 'primary' } },
-      { type: 'Text', children: ['Title of ABC-1 · plan tournament · ███░░░░░░░ 3 of 9 · 33%'] },
-      { type: 'Text', children: ['working'] },
-      { type: 'Text', props: { dimColor: true }, children: ['Spent: unknown'] },
-      { type: 'Text', props: { dimColor: true }, children: ['Time: unknown'] },
-      { type: 'Box', props: { key: 'actions-a.json', flexDirection: 'row' }, children: [{ type: 'Button', props: { key: 'nudge-a.json', label: 'Nudge' } }, { type: 'Text', children: [' '] }, { type: 'Button', props: { key: 'release-a.json', label: 'Release' } }] },
-      { type: 'Text', children: [' '] },
-      { type: 'Button', props: { key: 'open-b.json', label: '→ ABC-2 · no pull request yet', variant: 'primary' } },
-      { type: 'Text', children: ['Title of ABC-2 · spec · ██░░░░░░░░ 2 of 9 · 22%'] },
-      { type: 'Text', props: { color: 'error' }, children: ['needs you'] },
-      { type: 'Text', props: { dimColor: true }, children: ['Spent: unknown'] },
-      { type: 'Text', props: { dimColor: true }, children: ['Time: unknown'] },
-      { type: 'Box', props: { key: 'actions-b.json', flexDirection: 'row' }, children: [{ type: 'Button', props: { key: 'nudge-b.json', label: 'Nudge' } }, { type: 'Text', children: [' '] }, { type: 'Button', props: { key: 'release-b.json', label: 'Release' } }] },
-      { type: 'Text', children: [' '] },
-      { type: 'Text', props: { dimColor: true }, children: ['Queued: none — your next message lines up more'] },
-      { type: 'Text', children: [' '] },
-      { type: 'Text', children: ['Sub sessions spent: unknown'] },
-      { type: 'Text', children: ['Sub sessions\' time, summed: unknown'] },
-      { type: 'Text', props: { dimColor: true }, children: ['Summed over sub sessions that run side by side, so a sum can be longer than the run.'] },
-      { type: 'Text', children: ['This session spent: unknown'] },
-      { type: 'Text', children: ['Status messages consumed since 12:00:00 UTC: none yet'] },
-      { type: 'Text', children: [' '] },
-      { type: 'Text', props: { bold: true }, children: ['Log'] },
-      { type: 'Text', props: { dimColor: true }, children: ['Nothing yet.'] },
-    ],
-    part: { plugin: 'foreman' },
-  },
-  desktop: {
-    type: 'Box', props: { key: 'foreman-pane', flexDirection: 'column' },
-    children: [
-      { type: 'Button', props: { key: 'open-a.json', label: '→ ABC-1 · #4 open · checks passed', variant: 'primary' } },
-      { type: 'Svg', props: { alt: 'Title of ABC-1 · plan tournament · ███░░░░░░░ 3 of 9 · 33%', width: 1600, height: 34 } },
-      { type: 'Text', children: ['working'] },
-      { type: 'Text', props: { dimColor: true }, children: ['Spent: unknown'] },
-      { type: 'Text', props: { dimColor: true }, children: ['Time: unknown'] },
-      { type: 'Box', props: { key: 'actions-a.json', flexDirection: 'row' }, children: [{ type: 'Button', props: { key: 'nudge-a.json', label: 'Nudge' } }, { type: 'Text', children: [' '] }, { type: 'Button', props: { key: 'release-a.json', label: 'Release' } }] },
-      { type: 'Text', children: [' '] },
-      { type: 'Button', props: { key: 'open-b.json', label: '→ ABC-2 · no pull request yet', variant: 'primary' } },
-      { type: 'Svg', props: { alt: 'Title of ABC-2 · spec · ██░░░░░░░░ 2 of 9 · 22%', width: 1600, height: 34 } },
-      { type: 'Text', props: { color: 'error' }, children: ['needs you'] },
-      { type: 'Text', props: { dimColor: true }, children: ['Spent: unknown'] },
-      { type: 'Text', props: { dimColor: true }, children: ['Time: unknown'] },
-      { type: 'Box', props: { key: 'actions-b.json', flexDirection: 'row' }, children: [{ type: 'Button', props: { key: 'nudge-b.json', label: 'Nudge' } }, { type: 'Text', children: [' '] }, { type: 'Button', props: { key: 'release-b.json', label: 'Release' } }] },
-      { type: 'Text', children: [' '] },
-      { type: 'Text', props: { dimColor: true }, children: ['Queued: none — your next message lines up more'] },
-      { type: 'Text', children: [' '] },
-      { type: 'Text', children: ['Sub sessions spent: unknown'] },
-      { type: 'Text', children: ['Sub sessions\' time, summed: unknown'] },
-      { type: 'Text', props: { dimColor: true }, children: ['Summed over sub sessions that run side by side, so a sum can be longer than the run.'] },
-      { type: 'Text', children: ['This session spent: unknown'] },
-      { type: 'Text', children: ['Status messages consumed since 12:00:00 UTC: none yet'] },
-      { type: 'Text', children: [' '] },
-      { type: 'Text', props: { bold: true, weight: 'semibold' }, children: ['Log'] },
-      { type: 'Text', props: { dimColor: true }, children: ['Nothing yet.'] },
-    ],
-    part: { plugin: 'foreman' },
-  },
-}
 
-// A drawn tree as these tests compare it: each Button's press handle and each
-// drawing's source taken out. The bar's drawing is held to builder's by the
-// art test, so its source here would only make a change of the bar's style
-// fail a test about links.
+// A drawn tree as these tests compare it: each Button's press handle taken
+// out.
 function compared(part: unknown): unknown {
   if (Array.isArray(part)) return part.map(compared)
   if (part === null || typeof part !== 'object') return part
-  return Object.fromEntries(Object.entries(part).filter(([name]) => name !== 'press' && name !== 'source').map(([name, value]) => [name, compared(value)]))
+  return Object.fromEntries(Object.entries(part).filter(([name]) => name !== 'press').map(([name, value]) => [name, compared(value)]))
 }
 
-// A copy of a pane tree whose last row, the log's only line, reads `line`.
-function withLogLine(pane: { children: readonly unknown[] }, line: string) {
-  const rows = pane.children.slice(0, -1)
-  return { ...pane, children: [...rows, { type: 'Text', props: { dimColor: true }, children: [line] }] }
+// Checks that the key of the pane row of `file` is drawn as plain text that
+// reads `words`, with no link.
+async function expectPlainKey(ui: Awaited<ReturnType<typeof mountBoth>>, file: string, words: string) {
+  const key = await ui.pane.find({ key: `key-${file}` })
+  expect(held(key)?.type).toBe('Text')
+  expect(key?.text).toBe(words)
 }
 
 for (const surface of SURFACES) {
@@ -180,8 +113,9 @@ for (const surface of SURFACES) {
     }
     expect(await ui.band.findAll({ type: 'Link' })).toHaveLength(2)
 
-    await expectLinkedRow(ui, 'a.json', 'ABC-1', '→ #4 open · checks passed')
-    await expectLinkedRow(ui, 'b.json', 'ABC-2', '→ no pull request yet')
+    await expectLinkedRow(ui, 'a.json', 'ABC-1')
+    await expectLinkedRow(ui, 'b.json', 'ABC-2')
+    expect(await ui.pane.findAll({ type: 'Link' })).toHaveLength(2)
 
     await ui.band.press({ key: 'chip-b.json' })
     await ui.pane.press({ key: 'open-a.json' })
@@ -198,7 +132,7 @@ for (const surface of SURFACES) {
     await foreman($)
     await ui.pane.press({ key: 'release-a.json' })
     expect(await ui.pane.find({ key: 'release-a.json' })).toBeUndefined()
-    await expectLinkedRow(ui, 'a.json', 'ABC-1', '→ #4 open · checks passed')
+    await expectLinkedRow(ui, 'a.json', 'ABC-1')
     expect(chipAt(await bandParts(ui), 'a.json')).toBe(-1)
   })
 
@@ -222,14 +156,11 @@ for (const surface of SURFACES) {
     expect(textOf(parts[chipAt(parts, 'e.json')])).toBe('ABC-9 idle')
     expect(textOf(parts[chipAt(parts, 'l.json')])).toBe(`${cut} idle`)
     expect(textOf(parts[chipAt(parts, 'n.json')])).toBe('no issue yet grounding')
-    for (const [file, label] of [['e.json', '→ ABC-9 · no pull request yet'], ['l.json', `→ ${cut} · no pull request yet`], ['n.json', '→ no issue yet · no pull request yet']] as const) {
-      expect(await ui.pane.find({ key: `issue-${file}` })).toBeUndefined()
-      expect((await ui.pane.find({ key: `open-${file}` }))?.text).toBe(label)
-    }
+    for (const [file, words] of [['e.json', 'ABC-9'], ['l.json', cut], ['n.json', 'no issue yet']] as const) await expectPlainKey(ui, file, words)
   })
 
   for (const [name, text] of [['no fact', null], ['an unusable fact', fact('http://tracker.example.com/issue/{key}')]] as const) {
-    test(`on the ${surface}, with ${name} no link is drawn and every chip and row is drawn as before`, async ($, on) => {
+    test(`on the ${surface}, with ${name} no link is drawn, every chip is drawn as before, and each card's key is plain text`, async ($, on) => {
       const w = world(on)
       if (text !== null) w.folder.project.set(`${PARENT_DIR}/CLAUDE.md`, text)
       twoSubs(w.folder)
@@ -239,10 +170,11 @@ for (const surface of SURFACES) {
       await ui.band.redraw()
       await ui.pane.redraw()
       expect(compared(await ui.band.drawn())).toEqual(BAND_BEFORE)
-      // An unusable fact also writes why it was ignored to the log, which
-      // is the only part of the pane that differs from before.
-      const pane = text === null ? PANE_BEFORE[surface] : withLogLine(PANE_BEFORE[surface], '12:00:00 foreman: the Issue link fact was ignored because it does not begin with https://')
-      expect(compared(await ui.pane.drawn())).toEqual(pane)
+      expect(await ui.pane.findAll({ type: 'Link' })).toEqual([])
+      await expectPlainKey(ui, 'a.json', 'ABC-1')
+      await expectPlainKey(ui, 'b.json', 'ABC-2')
+      // An unusable fact also writes why it was ignored to the log.
+      if (text !== null) expect(await ui.newestLog()).toBe('foreman: the Issue link fact was ignored because it does not begin with https://')
     })
   }
 }

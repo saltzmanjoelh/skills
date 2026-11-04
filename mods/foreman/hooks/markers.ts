@@ -31,7 +31,7 @@ export const MARKERS_KEPT_MS = 14 * 24 * 60 * 60_000
 
 // The one line the log gets, for the first message consumed since the hooks
 // loaded. Later messages only change the count.
-export const FIRST_MARKER_LOG = 'A builder status message arrived and was consumed, the first since foreman loaded; the line above the log counts the rest.'
+export const FIRST_MARKER_LOG = 'A builder status message arrived and was consumed, the first since foreman loaded; the Token details row in the pane counts the rest.'
 
 // The record of a load that has consumed nothing yet.
 export const emptyMarkers = (sessionId: string, since: number): MarkersRecord => ({ version: 1, sessionId, since, consumed: 0, first: null, last: null })
