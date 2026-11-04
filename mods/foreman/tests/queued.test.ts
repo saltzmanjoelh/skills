@@ -329,6 +329,32 @@ test('a slot that frees soon after a waiting start was answered with a proposal 
   w.desktop.sessions = [listed('local_new1', 'ABC-1', { isArchived: true, isRunning: false })]
   await minutesPass(w, 2, { 'a.json': done })
   expect(w.engine.prompts).toEqual(['foreman: a slot is free, but foreman keeps it for ABC-2, whose waiting session it could not find in the desktop app\'s list; send that session foreman\'s begin message by hand or release the issue, and do not start a new issue.'])
+  // The waiting pairing holds the time of the read that woke the parent, so
+  // its slot stays kept for the parent's begin by hand.
+  const keptAt = ledger(w).pairings.find(p => p.ticket === ticketOf(w, 1))!.queue?.keptAt
+  expect(typeof keptAt).toBe('number')
+  expect(keptAt!).toBeGreaterThan(w.clock.now() - 2 * MINUTE)
+  expect(keptAt!).toBeLessThanOrEqual(w.clock.now())
+})
+
+test('a restart keeps a fresh stamp for a kept slot, and begins no waiting session in that slot even when the list shows them open', async ($, on) => {
+  const stored = {
+    pairings: [
+      newPairing('ft-b', 'local_b', T0 - 10 * MINUTE, 'ABC-2', { place: 1, claim: null, keptAt: T0 - MINUTE }),
+      newPairing('ft-c', 'local_c', T0 - 10 * MINUTE, 'ABC-3', { place: 2, claim: null }),
+    ],
+  }
+  const w = world(on, { store: { 'parent:session-1': { isOn: true, slots: 1 }, [ticketsKey('session-1')]: stored } })
+  w.desktop.sessions = [listed('local_b', 'ABC-2'), listed('local_c', 'ABC-3')]
+  await mountBoth($, on)
+  await start($)
+  await w.clock.settle()
+  expect(begins(w)).toEqual([])
+  expect(w.engine.prompts).toEqual([])
+  expect(ledger(w).pairings.map(p => [p.ticket, p.queue])).toEqual([
+    ['ft-b', { place: 1, claim: null, keptAt: T0 - MINUTE }],
+    ['ft-c', { place: 2, claim: null }],
+  ])
 })
 
 test('an active sub session archived before its file said done frees its slot, and the next issue in the queue begins in it', async ($, on) => {

@@ -433,6 +433,24 @@ test('a sound stored queue reads back, a damaged claim reads as none, and a dama
   expect(stored.pairings.map(p => p.queue)).toEqual([{ place: 3, claim: null }, { place: 4, claim: null }, { place: 5, claim: null }])
 })
 
+test('a stamp for a kept slot survives a write and a read, and a missing or damaged one reads as no stamp while the pairing keeps the rest of its queue', () => {
+  const read = (raw: unknown) => ticketsIn(raw).pairings[0]!
+  const once = ticketsIn({ pairings: [{ ticket: 'ft-a', queue: { place: 2, claim: null, keptAt: T0 } }] })
+  expect(once.pairings[0]!.queue).toEqual({ place: 2, claim: null, keptAt: T0 })
+  expect(read(JSON.parse(JSON.stringify(once))).queue).toEqual({ place: 2, claim: null, keptAt: T0 })
+  const claim = { attemptAt: T0, notified: true }
+  for (const queue of [{ place: 2, claim: null }, { place: 2, claim }]) {
+    const p = read({ pairings: [{ ticket: 'ft-a', queue }] })
+    expect(p.queue).toEqual(queue)
+    expect('keptAt' in p.queue!).toBe(false)
+  }
+  for (const bad of ['then', true, { at: T0 }, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    const p = read({ pairings: [{ ticket: 'ft-a', queue: { place: 2, claim, keptAt: bad } }] })
+    expect([bad, p.ticket, p.queue]).toEqual([bad, 'ft-a', { place: 2, claim }])
+    expect('keptAt' in p.queue!).toBe(false)
+  }
+})
+
 test('the queue is the waiting pairings in the order of their places, and the next place is after the last', () => {
   const t = withPairings(waiting('ft-c', 3), newPairing('ft-x', 'local_x', T0), waiting('ft-a', 1), waiting('ft-b', 2, { attemptAt: T0, notified: false }))
   expect(queueOf(t).map(p => p.ticket)).toEqual(['ft-a', 'ft-b', 'ft-c'])

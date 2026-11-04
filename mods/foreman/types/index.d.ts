@@ -100,8 +100,11 @@ export type ForemanPairing = {
   // foreman begins it. `claim` is null until foreman claims it for a free
   // slot, and then says when foreman last tried to send it the begin message
   // and whether the person was told that a try failed. A begin that went
-  // clears the whole field.
-  queue: { place: number; claim: { attemptAt: number; notified: boolean } | null } | null
+  // clears the whole field. `keptAt`, when present, is the time of the read
+  // that woke the parent with the kept sentence for this pairing, so its
+  // slot stays kept for the parent's begin by hand for GONE_MS after it. It
+  // is absent when no kept sentence stands for the pairing.
+  queue: { place: number; claim: { attemptAt: number; notified: boolean } | null; keptAt?: number } | null
 }
 
 // Something to do outside the ledger: a nudge to a desktop session, naming
