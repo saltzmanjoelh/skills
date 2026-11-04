@@ -15,13 +15,17 @@
 import type { BaseFacts, Snapshot, Unpushed } from '../types'
 import { ciOf, countingRuns, failedCheckNames, failedRunsOf, headRunsIn, isChangesRequested, isUnfinished, roundInProgress, STATE_LABELS, type StateLabel } from './github'
 import { factIn, isFullSha } from './review'
+import { printable } from './text'
 
 export type Limit = { which: 'pushes' | 'rounds'; count: number; max: number }
 
 // The merge steps and the Merged step carry `unpushed`, the commits the head
-// branch's worktree holds that the head lacks, as the look listed them.
+// branch's worktree holds that the head lacks, as the look listed them. The
+// Merged step also carries `linked`, the outcome of the mod's update of the
+// linked checkout, or null when the snapshot holds none, as when GitHub had
+// not given the merge commit yet.
 export type Step =
-  | { kind: 'merged'; unpushed: Unpushed }
+  | { kind: 'merged'; unpushed: Unpushed; linked: string[] | null }
   | { kind: 'closed' }
   | { kind: 'question' }
   | { kind: 'over-limit'; limits: Limit[] }
@@ -115,7 +119,7 @@ function plainRepoOf(repo: unknown): string | null {
 // because that step comes first. A mergeability of unknown holds nothing,
 // because the merge command refuses a conflicting pull request anyway.
 export function chooseStep(s: Snapshot, isAsking: boolean): Step {
-  if (s.state === 'MERGED') return { kind: 'merged', unpushed: unpushedIn(s.unpushed) }
+  if (s.state === 'MERGED') return { kind: 'merged', unpushed: unpushedIn(s.unpushed), linked: linkedIn(s.linked) }
   if (s.state === 'CLOSED') return { kind: 'closed' }
   if (isAsking) return { kind: 'question' }
   const facts = factsOf(s)
@@ -172,6 +176,21 @@ export function unpushedIn(raw: unknown): Unpushed {
   if (commits.length === 0 || commits.length > UNPUSHED_KEPT || !commits.every(isHash)) return { kind: 'unlisted' }
   if (typeof u.total !== 'number' || !Number.isInteger(u.total) || u.total < commits.length) return { kind: 'unlisted' }
   return { kind: 'some', commits: [...commits], total: u.total, isAncestor: u.isAncestor }
+}
+
+// How many sentences of the update's outcome a step keeps, and how long each
+// one may be.
+export const LINKED_KEPT = 30
+const LINKED_LINE_MAX = 2000
+
+// The outcome of the update of the linked checkout that a snapshot holds, or
+// null when it holds none or one of another shape. The sentences were built
+// and cleaned by the mod, and each is made printable again here, because it
+// goes into a text.
+export function linkedIn(raw: unknown): string[] | null {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > LINKED_KEPT) return null
+  if (!raw.every(line => typeof line === 'string')) return null
+  return raw.map(line => printable(line, LINKED_LINE_MAX))
 }
 
 // The state label that follows from a step, or null when the step changes
@@ -365,9 +384,18 @@ function unpushedLine(u: Unpushed): string {
   return `The worktree of the head branch holds ${count} the pull request's head lacks: ${u.commits.join(', ')}${more}. The head is ${u.isAncestor ? '' : 'not '}an ancestor of the worktree's HEAD.`
 }
 
+// The sentence that states the mod's update of the linked checkout. With no
+// outcome, the merge commit could not be read yet, and one more look reads it.
+function linkedLine(linked: string[] | null): string {
+  if (linked === null) {
+    return 'GitHub had not given the merge commit yet at the mod\'s last look, so the mod has not updated the linked checkout. First call `mcp__builder__watch` once more and follow the step it names. If it names this step with this sentence again, say in the report that the linked checkout was not updated, and go on with the rest of this step.'
+  }
+  return `The mod has run the update of the linked checkout for this merge, and its outcome is: ${linked.join(' ')} Report it as ${see('Updating the linked checkout')} says, quoting what it quotes.`
+}
+
 function mergedText(step: Extract<Step, { kind: 'merged' }>): string[] {
   return [
-    `First update the linked checkout, as ${see('Updating the linked checkout')} says. Then move the issue to done. ${unpushedLine(step.unpushed)}`,
+    `${linkedLine(step.linked)} Then move the issue to done. ${unpushedLine(step.unpushed)}`,
     `Then file at most one issue for the follow-ups. The list to file is the \`To file:\` list of the last verdict review, together with the \`To file:\` items of any cheap-fix commit that no verdict review lists, whether it is on the pull request or only in the worktree. That list holds what the counsel decided to file, together with the fix decisions and the visible problems that the limit rule of ${seePoint('point 4 of the second half of "A review round" in /implement')} moved there, what the person decided when the counsel could not sit, and items carried over from reviews posted before the counsel decided follow-ups. So nothing new reaches the issue tracker on the session's judgement alone, except a visible problem it meant to fix in this pull request and could not. Take the first of these that applies:`,
     '- The last verdict review has no **Follow-ups** section, because a session that predates it posted the review: file nothing, and say in the report which review holds the follow-ups.',
     '- The list to file is empty: file nothing.',

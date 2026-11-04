@@ -135,6 +135,10 @@ function fakeGitHub(on: On) {
   // the next reads of the labels in turn before either, and a null in it
   // makes that read exit with an error. A label edit that succeeds changes
   // the labels the pull request carries, as it does on GitHub.
+  // `linked` answers the commands of the update of the linked checkout,
+  // keyed by the whole command, before anything else answers.
+  // `fastForwardHold`, when set, keeps the next fast-forward waiting until it
+  // resolves, and `onFastForward`, when set, runs as a fast-forward answers.
   const world = {
     pr: openPullRequest(), calls: [] as string[], removalsToFail: 0, labelMissing: false, head: C,
     hold: null as Promise<void> | null, cutDiff: false, otherNumber: 0, readsToFail: 0,
@@ -155,6 +159,8 @@ function fakeGitHub(on: On) {
     ancestorExit: 0, ancestorFail: null as null | 'throw' | 'cut', merges: '', mergesFail: null as null | 'exit' | 'throw' | 'cut', baseClaude: null as string | null, grep: '', grepFail: false, objectFormat: 'sha1', links: '', linksFail: false, marketplace: null as string | null, nameStatus: '', nameStatusFail: false, sinceDiffFail: false,
     missing: [] as string[], pullFetchFails: false, unpushed: '', unpushedFail: null as null | 'exit' | 'throw', editsToFail: 0,
     labelsHold: null as Promise<void> | null, labelsAnswer: null as string | null, labelAnswers: [] as (string | null)[],
+    linked: {} as Record<string, { exitCode?: number; stdout?: string; stderr?: string }>, fastForwardHold: null as Promise<void> | null,
+    onFastForward: null as (() => void) | null,
   }
   on('process.run', async ($, e) => {
     const argv = e.argv.join(' ')
@@ -162,6 +168,16 @@ function fakeGitHub(on: On) {
     world.calls.push(argv)
     world.ran.push({ argv, cwd })
     if (cwd !== undefined && world.throwsIn.includes(cwd)) throw new Error('the process could not be started')
+    const scripted = world.linked[argv]
+    if (scripted !== undefined) {
+      if (argv.includes(' merge --ff-only ')) {
+        const hold = world.fastForwardHold
+        world.fastForwardHold = null
+        if (hold !== null) await hold
+        world.onFastForward?.()
+      }
+      return { value: { exitCode: scripted.exitCode ?? 0, stdout: scripted.stdout ?? '', stderr: scripted.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     const out = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
     const exit = (exitCode: number) => ({ value: { exitCode, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
     if (argv.startsWith('git ') && cwd !== undefined && world.notCheckouts.includes(cwd)) return exit(128)
@@ -15160,4 +15176,180 @@ test('with no progress record, or one newer than the watch, the mod reports no s
   await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
   await loose($)({ tool: 'Bash', command: 'gh pr merge 7 --merge' })
   expect(shownStage(state)).toMatchObject({ stage: 'verify' })
+})
+
+// The update of the linked checkout after a merge, through the real look: the
+// merge commit of #7, and the commands of an update that fast-forwards the
+// main checkout /main, which ~/.claude/skills links into, from its remote
+// origin. The checkout lacks the merge commit until the fast-forward runs.
+const MERGE_COMMIT = 'f'.repeat(40)
+const LINKED_KEY = 'linked-checkout:o/r#7'
+
+function linkedScript(world: ReturnType<typeof fakeGitHub>) {
+  const git = (...args: string[]) => ['git', '-C', '/main', ...args].join(' ')
+  const ancestry = git('merge-base', '--is-ancestor', MERGE_COMMIT, 'HEAD')
+  world.linked = {
+    'test -L /h/.claude/skills': { exitCode: 1 },
+    'test -d /h/.claude/skills': {},
+    'find /h/.claude/skills/ -mindepth 1 -maxdepth 1 -type l -print0': { stdout: '/h/.claude/skills/implement\0' },
+    'test -L /h/.claude/agents': { exitCode: 1 },
+    'test -d /h/.claude/agents': { exitCode: 1 },
+    'test -L /h/.claude/commands': { exitCode: 1 },
+    'test -d /h/.claude/commands': { exitCode: 1 },
+    'test -e /h/.claude/skills/implement': {},
+    'realpath /h/.claude/skills/implement': { stdout: '/main/skills/implement\n' },
+    'test -d /main/skills/implement': {},
+    'git -C /main/skills/implement rev-parse --path-format=absolute --git-common-dir --show-toplevel': { stdout: '/main/.git\n/main\n' },
+    'gh repo view o/r --json url,defaultBranchRef': { stdout: '{"url":"https://github.com/o/r","defaultBranchRef":{"name":"main"}}' },
+    [git('branch', '--show-current')]: { stdout: 'main\n' },
+    [ancestry]: { exitCode: 1 },
+    [git('remote')]: { stdout: 'origin\n' },
+    [git('remote', 'get-url', 'origin')]: { stdout: 'git@github.com:o/r.git\n' },
+    [git('fetch', '--no-write-fetch-head', 'origin', MERGE_COMMIT, '+refs/heads/main:refs/remotes/origin/main')]: {},
+    [git('cat-file', '-e', `${MERGE_COMMIT}^{commit}`)]: {},
+    [git('log', '-1', '--format=%T', MERGE_COMMIT)]: { stdout: `${'1'.repeat(40)}\n` },
+    [git('log', '-1', '--format=%T', 'HEAD')]: { stdout: `${'0'.repeat(40)}\n` },
+    [git('rev-list', '--objects', '--quiet', '--missing=print', '1'.repeat(40), '--not', '0'.repeat(40))]: {},
+    [git('status', '--porcelain', '--untracked-files=no')]: {},
+    [git('merge', '--ff-only', '--no-overwrite-ignore', MERGE_COMMIT)]: { stdout: 'Fast-forward\n' },
+    [git('rev-parse', 'HEAD')]: { stdout: `${MERGE_COMMIT}\n` },
+  }
+  world.onFastForward = () => { world.linked[ancestry] = {} }
+}
+
+// The commands only the update of the linked checkout runs.
+const linkedCalls = (world: ReturnType<typeof fakeGitHub>) => world.calls.filter(argv =>
+  argv.startsWith('git -C ') || argv.startsWith('test ') || argv.startsWith('realpath ') || argv.startsWith('find ') || argv.startsWith('gh repo view o/r '))
+const fastForwards = (world: ReturnType<typeof fakeGitHub>) => world.calls.filter(argv => argv.includes(' merge --ff-only ')).length
+const UPDATED_LINE = `Updated: the linked checkout /main now holds the merge commit ${MERGE_COMMIT}`
+
+test('the look that first chooses Merged updates the linked checkout once, records the outcome, and the step text states it', async ($, on) => {
+  const clock = mock.clock(on)
+  const stored = memoryStore(on)
+  mock.env(on, { HOME: '/h' })
+  engine(on)
+  const world = fakeGitHub(on)
+  linkedScript(world)
+  await watch($)
+  await clock.settle()
+
+  world.pr = openPullRequest({ state: 'MERGED', mergeCommit: { oid: MERGE_COMMIT } })
+  const answer = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  expect(answer).toContain('The step that applies: Merged.')
+  expect(answer).toContain(UPDATED_LINE)
+  expect(answer).toContain('The fetch came from the remote origin.')
+  expect(answer).toContain('Report it as "Updating the linked checkout" in /implement says')
+  expect(answer).not.toContain('First update the linked checkout')
+  expect(fastForwards(world)).toBe(1)
+  expect((stored.get(LINKED_KEY) as { lines?: string[] }).lines?.join(' ')).toContain(UPDATED_LINE)
+  // The merge commit was read by the look's own read of the pull request.
+  expect(world.calls.filter(argv => argv.startsWith('gh pr view 7 ') && argv.includes('--json number,')).every(argv => argv.includes('mergeCommit'))).toBe(true)
+})
+
+test('two looks held at once run the fast-forward once, and both get its outcome', async ($, on) => {
+  const clock = mock.clock(on)
+  const stored = memoryStore(on)
+  mock.env(on, { HOME: '/h' })
+  engine(on)
+  const world = fakeGitHub(on)
+  linkedScript(world)
+  on('command.run', () => ({ text: '' }))
+  await watch($)
+  await clock.settle()
+
+  world.pr = openPullRequest({ state: 'MERGED', mergeCommit: { oid: MERGE_COMMIT } })
+  let release = () => {}
+  world.fastForwardHold = new Promise<void>(resolve => { release = resolve })
+  // The first look is held in the fast-forward; the second starts meanwhile.
+  const first = $.command.run({ command: 'builder', args: 'poll' } as never)
+  await clock.settle()
+  const second = loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await clock.settle()
+  expect(fastForwards(world)).toBe(1)
+  release()
+  await first
+  const answer = String((await second).result)
+  await clock.settle()
+
+  expect(fastForwards(world)).toBe(1)
+  expect(answer).toContain(UPDATED_LINE)
+  expect((stored.get(LINKED_KEY) as { lines?: string[] }).lines?.length).toBe(1)
+})
+
+test('later looks, by the watch tool and by /builder poll, run no git for a recorded merge commit', async ($, on) => {
+  const clock = mock.clock(on)
+  memoryStore(on)
+  mock.env(on, { HOME: '/h' })
+  engine(on)
+  const world = fakeGitHub(on)
+  linkedScript(world)
+  on('command.run', () => ({ text: '' }))
+  await watch($)
+  await clock.settle()
+  world.pr = openPullRequest({ state: 'MERGED', mergeCommit: { oid: MERGE_COMMIT } })
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await clock.settle()
+  const ran = linkedCalls(world).length
+  expect(ran).toBeGreaterThan(0)
+
+  const later = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  await $.command.run({ command: 'builder', args: 'poll' } as never)
+  await clock.settle()
+  expect(later).toContain(UPDATED_LINE)
+  expect(linkedCalls(world).length).toBe(ran)
+  expect(fastForwards(world)).toBe(1)
+})
+
+test('a record of an update that started and did not finish reads as left alone, and nothing runs again', async ($, on) => {
+  const clock = mock.clock(on)
+  memoryStore(on, [[LINKED_KEY, { merge: MERGE_COMMIT, at: 1 }]])
+  mock.env(on, { HOME: '/h' })
+  engine(on)
+  const world = fakeGitHub(on)
+  linkedScript(world)
+  await watch($)
+  await clock.settle()
+
+  world.pr = openPullRequest({ state: 'MERGED', mergeCommit: { oid: MERGE_COMMIT } })
+  const answer = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  expect(answer).toContain('Left alone: the update of the linked checkout for this merge started and did not finish')
+  expect(answer).toContain('New sessions will run the old code until someone updates it.')
+  expect(linkedCalls(world)).toEqual([])
+})
+
+test('a pull request merged with no merge commit yet records nothing and runs nothing, and a later look runs the update', async ($, on) => {
+  const clock = mock.clock(on)
+  const stored = memoryStore(on)
+  mock.env(on, { HOME: '/h' })
+  engine(on)
+  const world = fakeGitHub(on)
+  linkedScript(world)
+  await watch($)
+  await clock.settle()
+
+  world.pr = openPullRequest({ state: 'MERGED', mergeCommit: null })
+  const answer = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  expect(answer).toContain('GitHub had not given the merge commit yet')
+  expect(answer).toContain('call `mcp__builder__watch` once more')
+  expect(stored.has(LINKED_KEY)).toBe(false)
+  expect(linkedCalls(world)).toEqual([])
+
+  world.pr = openPullRequest({ state: 'MERGED', mergeCommit: { oid: MERGE_COMMIT } })
+  const later = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  expect(later).toContain(UPDATED_LINE)
+  expect(fastForwards(world)).toBe(1)
+})
+
+test('a session start prunes records of the linked checkout ninety days after their update started, and records of another shape', async ($, on) => {
+  const clock = mock.clock(on, { now: 200 * 24 * 60 * 60_000 })
+  const stored = memoryStore(on, [
+    ['linked-checkout:o/r#1', { merge: MERGE_COMMIT, at: 0, lines: ['old'] }],
+    ['linked-checkout:o/r#2', { merge: MERGE_COMMIT, at: clock.now() - 60_000 }],
+    ['linked-checkout:o/r#3', 'damaged'],
+  ])
+  engine(on)
+  fakeGitHub(on)
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await clock.settle()
+  expect([...stored.keys()].filter(key => key.startsWith('linked-checkout:'))).toEqual(['linked-checkout:o/r#2'])
 })

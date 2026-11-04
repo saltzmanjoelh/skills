@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { countingRuns, failedRunsOf, hasFailed, isReplaced, isUnfinished, needsJobs, snapshotOf, type GhPullRequest } from '../hooks/github'
-import { baseFactsOf, chooseStep, CLEANUP_SECTIONS, DEFAULT_MERGE_COMMAND, labelActionOf, labelFor, labelRecordIn, labelsToRemoveAfterEdit, needsListing, SKILL_POINTS, SKILL_SECTIONS, stepFor, stepLines, unpushedIn, type Step } from '../hooks/step'
+import { baseFactsOf, chooseStep, CLEANUP_SECTIONS, DEFAULT_MERGE_COMMAND, labelActionOf, LINKED_KEPT, linkedIn, labelFor, labelRecordIn, labelsToRemoveAfterEdit, needsListing, SKILL_POINTS, SKILL_SECTIONS, stepFor, stepLines, unpushedIn, type Step } from '../hooks/step'
 import type { BaseFacts, HeadRun, Snapshot, Unpushed } from '../types'
 
 const ME = 'owner'
@@ -306,9 +306,12 @@ test('the base facts are read from the base branch CLAUDE.md, with defaults for 
   expect(baseFactsOf('Checks: maybe\n', false).checks).toBe('expected')
 })
 
+// An outcome of the update of the linked checkout, as a look stores it.
+const UPDATED = [`Updated: the linked checkout /repo now holds the merge commit ${D}, and its HEAD is ${D}. The fetch came from the remote origin.`]
+
 // Every step, as the chooser can return it, for the text tests.
 const EVERY_STEP: Step[] = [
-  { kind: 'merged', unpushed: NONE },
+  { kind: 'merged', unpushed: NONE, linked: UPDATED },
   { kind: 'closed' },
   { kind: 'question' },
   { kind: 'over-limit', limits: [{ which: 'pushes', count: 9, max: 8 }, { which: 'rounds', count: 6, max: 5 }] },
@@ -325,8 +328,8 @@ const EVERY_STEP: Step[] = [
   { kind: 'merge', number: 7, head: C, repo: null, command: 'unread', checks: 'none', runs: [], unpushed: { kind: 'some', commits: ['abcdef012345'], total: 1, isAncestor: true } },
   { kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'default', runs: [{ id: 5, attempt: 1 }, { id: 6, attempt: 2 }], isClaudeRead: true, unpushed: NONE },
   { kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'unread', runs: [], isClaudeRead: false, unpushed: UNLISTED },
-  { kind: 'merged', unpushed: UNLISTED },
-  { kind: 'merged', unpushed: { kind: 'some', commits: ['abcdef012345', '0123456789ab'], total: 2, isAncestor: false } },
+  { kind: 'merged', unpushed: UNLISTED, linked: null },
+  { kind: 'merged', unpushed: { kind: 'some', commits: ['abcdef012345', '0123456789ab'], total: 2, isAncestor: false }, linked: UPDATED },
 ]
 
 const textOf = (step: Step) => stepLines(step).join('\n')
@@ -479,9 +482,12 @@ test('the waiting and unread texts end the turn and never merge', () => {
   expect(unread).toContain('end the turn')
 })
 
-test('the merged text keeps updating the linked checkout, the follow-ups and the cleanup', () => {
-  const text = textOf({ kind: 'merged', unpushed: NONE })
-  expect(text).toContain('Updating the linked checkout')
+test('the merged text states the outcome of the mod\'s update of the linked checkout and never tells the session to run it, and keeps the follow-ups and the cleanup', () => {
+  const text = textOf({ kind: 'merged', unpushed: NONE, linked: UPDATED })
+  expect(text).toContain(UPDATED[0]!)
+  expect(text).toContain('Report it as "Updating the linked checkout" in /implement says')
+  expect(text).not.toContain('First update the linked checkout')
+  expect(text).not.toContain('mcp__builder__watch')
   expect(text).toContain('Follow-ups from <owner>/<name>#<n>')
   expect(text).toContain('/cleanup')
   expect(text).toContain('Commits the pull request lacks')
@@ -630,15 +636,15 @@ test('a listing a snapshot holds reaches its step, and a missing or malformed on
     expect(unpushedIn(raw)).toEqual(UNLISTED)
   }
   expect(chooseStep({ ...snapshot({ reviews: approved }, [headRun()]), unpushed: some }, false)).toMatchObject({ kind: 'merge', unpushed: some })
-  expect(chooseStep({ ...snapshot({ state: 'MERGED' }), unpushed: NONE }, false)).toEqual({ kind: 'merged', unpushed: NONE })
-  expect(chooseStep(snapshot({ state: 'MERGED' }), false)).toEqual({ kind: 'merged', unpushed: UNLISTED })
+  expect(chooseStep({ ...snapshot({ state: 'MERGED' }), unpushed: NONE }, false)).toEqual({ kind: 'merged', unpushed: NONE, linked: null })
+  expect(chooseStep(snapshot({ state: 'MERGED' }), false)).toEqual({ kind: 'merged', unpushed: UNLISTED, linked: null })
   expect(chooseStep({ ...snapshot({ state: 'CLOSED' }), unpushed: some }, false)).toEqual({ kind: 'closed' })
 })
 
 test('the merge, ask-merge and Merged texts carry none, the short hashes with the ancestor answer, or could not be listed', () => {
   const merge = { kind: 'merge' as const, number: 7, head: C, repo: 'o/r', command: 'default' as const, checks: 'passed' as const, runs: [] }
   const ask = { kind: 'ask-merge' as const, number: 7, head: C, repo: 'o/r', command: 'default' as const, runs: [], isClaudeRead: true }
-  for (const base of [merge, ask, { kind: 'merged' as const }]) {
+  for (const base of [merge, ask, { kind: 'merged' as const, linked: UPDATED }]) {
     expect(textOf({ ...base, unpushed: NONE } as Step)).toContain('found none')
     const unlisted = textOf({ ...base, unpushed: UNLISTED } as Step)
     expect(unlisted).toContain('could not list the commits')
@@ -668,4 +674,36 @@ test('no step text tells the session to set a label the mod sets, to report a st
     expect(text).not.toContain('list the commits the worktree holds')
     if (step.kind === 'closed' || step.kind === 'over-limit') expect(text).not.toContain('stuck')
   }
+})
+
+test('each outcome of the update of the linked checkout reaches the Merged step\'s text as the snapshot holds it', () => {
+  const outcomes = [
+    UPDATED,
+    ['Updated: the linked checkout /repo already held the merge commit x, so nothing needed to move, and its HEAD is x. No remote of the checkout names o/r, so nothing was fetched because the checkout already held the merge, and the checkout may show ahead of its remote until its next fetch.'],
+    ['Not linked: o/r merged, and the links under /h/.claude point into x/y, none of which is o/r, so no checkout was moved.'],
+    ['No links found: none of a, b and c is a link or holds one, so no checkout was updated.', 'If the skills or the mod load some other way, this update moved nothing.'],
+    ['Only worktrees linked: every link into o/r lies in a worktree (/w), so no link leads into the main checkout and it was not moved.'],
+    ['Nothing to update: the pull request merged into release, which is not the default branch of o/r.'],
+    ['Left alone: the linked checkout /repo was not updated, because it has changes to tracked files. New sessions will run the old code until someone updates it.'],
+  ]
+  for (const linked of outcomes) {
+    const step = chooseStep({ ...snapshot({ state: 'MERGED' }), unpushed: NONE, linked }, false)
+    expect(step).toEqual({ kind: 'merged', unpushed: NONE, linked })
+    const text = textOf(step)
+    for (const line of linked) expect(text).toContain(line)
+    expect(text).not.toContain('First update the linked checkout')
+  }
+})
+
+test('a Merged snapshot with no outcome of the update says the merge commit could not be read yet and asks for one more look', () => {
+  const text = textOf(chooseStep(snapshot({ state: 'MERGED' }), false))
+  expect(text).toContain('had not given the merge commit yet')
+  expect(text).toContain('call `mcp__builder__watch` once more')
+  expect(text).toContain('Follow-ups from <owner>/<name>#<n>')
+})
+
+test('an outcome a snapshot holds is kept only in its own shape, and made printable', () => {
+  expect(linkedIn(['a', 'b'])).toEqual(['a', 'b'])
+  expect(linkedIn(['a\nb\u001b[31m'])).toEqual(['a b'])
+  for (const raw of [undefined, null, 'a', [], [1], Array.from({ length: LINKED_KEPT + 1 }, () => 'a')]) expect(linkedIn(raw)).toBe(null)
 })

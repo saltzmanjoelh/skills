@@ -11,6 +11,7 @@ import { checkoutSentence, otherRepositorySentence, worktreeWithBranch, type Che
 import { afterCompaction, afterFailure, checkoutIn, compactionFacts, compactionsIn, isDue, measureIn, measureOf, owing, told as afterReloadTold, withFacts, type UsageRead } from './context'
 import { afterAskAgain, afterTally, askAgainAnswer, briefAnswer, briefFactsOf, briefRefusal, briefText, counselAnswer, decisionLine, destinationOf, endedDecisionLines, FOLLOW_UP_OPTIONS, followUpAnswer, followUpAskAgainAnswer, followUpsInput, followUpsRefusal, followUpStepOf, followUpVotesOf, keepCounsel, MAX_BRIEF_OPTIONS, MAX_FOLLOW_UPS, MIN_OPTIONS, neverStartedCandidatesOf, neverStartedOf, type PullRequestRef, reviewParagraph, stepOf, type UnreadableVote, votesOf } from './counsel'
 import { carriedHeadRuns, carriedRuns, changesBetween, DECISION_LABEL, headRunsOf, isCiMonitorEvent, isSameState, JOBS_JQ, needsJobs, PR_FIELDS, pullRequestStateIn, realWorkOf, roundInProgress, RUNS_JQ, snapshotIn, snapshotOf, unfinishedOf, verdictsOf, type BaseFacts, type GhPullRequest, type HeadRun, type Snapshot, type SnapshotExtras, type StateLabel, type Unpushed, type Verdict } from './github'
+import { isLinkedStale, LINKED_PREFIX, linkedCheckout, linkedKey, recordedLinked } from './linked'
 import { ignoredLine, readIssueLink } from './links'
 import { afterComparison, afterLoad, dueComparisons, isStale, LOADED_PATHS, loadBegunAs, loadBegunIn, loadedIn, type Found } from './loaded'
 import { AGENT_PANE, agentPaneTree, bandTree, isDrawable, messagesReadOf, NAMED_AFTER_MS, PANE, paneTree, secondRow, type Elements, type MessagesRead, type View } from './pane'
@@ -334,6 +335,12 @@ async function gh($: $, dir: string | null, args: string[]): Promise<string | nu
 // step text built later from the stored snapshot can list them again (see
 // relisted). The step is chosen with no question open, which is safe: Merged
 // comes before the question, and a question step renders no listing.
+//
+// At a look that chooses the Merged step, the look also runs the update of
+// the linked checkout for the pull request's merge commit, read by the same
+// `gh pr view`, and stores its outcome on the snapshot beside the listing (see
+// linkedFor). It runs once for each pull request: a look that finds its
+// record, or one that runs while another look runs it, runs no git.
 type SnapshotTarget = Pick<BuilderRun, 'repo' | 'number' | 'cwd' | 'login' | 'checkout' | 'repoFromCwd'>
 
 async function fetchSnapshot($: $, r: SnapshotTarget): Promise<Snapshot | null> {
@@ -350,7 +357,28 @@ async function fetchSnapshot($: $, r: SnapshotTarget): Promise<Snapshot | null> 
   // The fingerprint is a fixed list of fields that leaves the listing and the
   // branch out, so the one snapshotOf made still holds.
   const branch = typeof live.headRefName === 'string' ? { headBranch: live.headRefName } : {}
-  return { ...s, unpushed: await listUnpushed($, r, live), ...branch }
+  const isMerged = chooseStep(s, false).kind === 'merged'
+  const [unpushed, linked] = await Promise.all([listUnpushed($, r, live), isMerged ? linkedFor($, r, live) : Promise.resolve(null)])
+  return { ...s, unpushed, ...branch, ...(linked === null ? {} : { linked }) }
+}
+
+// The outcome of the update of the linked checkout for a merged pull request.
+// The store is read first, inside linkedCheckout, and a record there means no
+// git runs. A pull request GitHub reports merged with no merge commit yet
+// claims nothing and records nothing, so a later look runs the update once
+// the commit can be read; the step then says it could not be read yet. It
+// never throws, because the mod's own errors must never stop the Merged step
+// from being handed over.
+async function linkedFor($: $, r: SnapshotTarget, live: GhPullRequest): Promise<string[] | null> {
+  try {
+    const key = linkedKey(r.repo, r.number)
+    const merge = live.mergeCommit?.oid
+    if (typeof merge !== 'string' || !isFullSha(merge)) return await recordedLinked($, key)
+    const home = await $.env.get('HOME')
+    return await linkedCheckout($, key, { home, repo: r.repo, base: live.baseRefName ?? '', merge, now: await $.clock.now() })
+  } catch {
+    return null
+  }
 }
 
 // The snapshot with its listing made again now, for a step text built from
@@ -360,10 +388,18 @@ async function fetchSnapshot($: $, r: SnapshotTarget): Promise<Snapshot | null> 
 // listing is never shown. It is made from the number, the head and the branch
 // the snapshot holds, so it needs no read of the pull request, and a snapshot
 // an older build stored holds no branch and reads as could not be listed. A
-// step that renders no listing keeps the snapshot as it is.
+// step that renders no listing keeps the snapshot as it is. For the Merged
+// step, the outcome of the update of the linked checkout is read from its
+// record only: this runs from the stuck prompt and the resume path, which are
+// not looks, so it never starts the update.
 async function relisted($: $, r: SnapshotTarget, s: Snapshot): Promise<Snapshot> {
   if (!needsListing(chooseStep(s, false))) return s
-  return { ...s, unpushed: await listUnpushed($, r, { number: s.number, headRefOid: s.head, headRefName: s.headBranch }) }
+  const isMerged = chooseStep(s, false).kind === 'merged'
+  const [unpushed, linked] = await Promise.all([
+    listUnpushed($, r, { number: s.number, headRefOid: s.head, headRefName: s.headBranch }),
+    isMerged ? recordedLinked($, linkedKey(s.repo, s.number)).catch(() => null) : Promise.resolve(null),
+  ])
+  return { ...s, unpushed, ...(linked === null ? {} : { linked }) }
 }
 
 // A snapshot whose runs read failed, keeping the runs the stored snapshot had.
@@ -3238,10 +3274,15 @@ function labelNamesIn(out: string | null): string[] | null {
 }
 
 // Drops each state label record set more than ninety days ago, and one stored
-// in another shape at once.
+// in another shape at once. The records of the update of the linked checkout
+// go the same way, ninety days after their update started.
 async function pruneStateLabels($: $) {
   const now = await $.clock.now()
   for (const key of await $.store.keys()) {
+    if (key.startsWith(LINKED_PREFIX)) {
+      if (isLinkedStale(await $.store.get(key), now)) await $.store.delete(key)
+      continue
+    }
     if (!key.startsWith(STATE_LABEL_PREFIX)) continue
     const record = labelRecordIn(await $.store.get(key))
     if (record === null || now - record.at > STATE_LABEL_KEPT_MS) await $.store.delete(key)
