@@ -276,6 +276,49 @@ test('a slot freed while the desktop app\'s list fails is kept for the queue, an
   expect(ledger(w).keptSlots).toEqual([])
 })
 
+// A session the app lists without saying whether it is archived: foreman can
+// neither begin it nor drop it from the queue.
+const doubtful = (id: string, key: string) => ({ sessionId: id, cwd: '/w', title: `${key}: short`, isRunning: true })
+
+test('a Release while an issue waits, followed by a read whose list does not show the waiting session surely open, wakes the parent with the kept sentence', async ($, on) => {
+  const { w, ui, live } = await queueOfTwo($, on)
+  w.desktop.sessions = [listed('local_new1', 'ABC-1'), doubtful('local_new2', 'ABC-2'), doubtful('local_new3', 'ABC-3')]
+  await minutesPass(w, 1, live)
+  expect(w.engine.prompts).toEqual([])
+  await ui.pane.press({ key: 'release-a.json' })
+  await w.clock.settle()
+  expect(begins(w)).toEqual([])
+  const kept = 'foreman: a slot is free, but foreman keeps it for ABC-2, whose waiting session it could not find in the desktop app\'s list; send that session foreman\'s begin message by hand or release the issue, and do not start a new issue.'
+  expect(w.engine.prompts).toEqual([kept])
+  expect(ledger(w).keptSlots).toEqual([])
+  // The read that woke the parent holds the slot for its begin by hand, so
+  // the next reads wake nobody again.
+  await minutesPass(w, 3, live)
+  expect(w.engine.prompts).toEqual([kept])
+})
+
+test('a Release while an issue waits and the list fails keeps the released slot for the queue, and the first read that lists begins the waiting session in it', async ($, on) => {
+  const { w, ui, live } = await queueOfTwo($, on)
+  await minutesPass(w, 1, live)
+  w.desktop.list = 'error'
+  await ui.pane.press({ key: 'release-a.json' })
+  // The name is stored in the same write as the release itself.
+  expect(ledger(w).keptSlots).toEqual(['ABC-1'])
+  expect(ledger(w).pairings.find(p => p.issueKey === 'ABC-1')!.standing).toBe('released')
+  await w.clock.settle()
+  await minutesPass(w, 2, live)
+  expect(w.engine.prompts).toEqual([])
+  expect(begins(w)).toEqual([])
+  expect(ledger(w).keptSlots).toEqual(['ABC-1'])
+  expect(await ui.paneText()).toContain('Released ABC-1; its session and its status file are left as they are.')
+  w.desktop.list = 'ok'
+  await minutesPass(w, 1, live)
+  expect(begins(w)).toEqual(['local_new2'])
+  expect(w.engine.prompts).toEqual([])
+  expect(w.engine.notices).toEqual([listFailedNotice(REASONS.listRefused), 'foreman began ABC-2, the next issue in the queue, in the slot ABC-1 freed.'])
+  expect(ledger(w).keptSlots).toEqual([])
+})
+
 test('a restart keeps a kept slot, and the first read that lists begins the waiting session in it', async ($, on) => {
   const stored = { pairings: [newPairing('ft-b', 'local_b', T0 - 10 * MINUTE, 'ABC-2', { place: 1, claim: null })], keptSlots: ['ABC-1'] }
   const w = world(on, { store: { 'parent:session-1': { isOn: true, slots: 1 }, [ticketsKey('session-1')]: stored } })

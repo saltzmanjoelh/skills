@@ -549,8 +549,10 @@ function mergedOnLeaving(p: ForemanPairing): Reason[] {
 // someone still waits unclaimed in the queue, the names of the waiting issues
 // a wake line may carry: nothing when no slot is free, the kept sentence when
 // someone waits, and otherwise a wake with the number free. A read and
-// Release both decide by it. Release passes no names, because it defers to a
-// read whenever someone waits unclaimed.
+// Release both decide by it. Release calls it only when nobody waits
+// unclaimed, so it passes no names: while someone waits, Release carries the
+// freed slot's name in keptSlots instead, and the next read decides it like
+// any other freed slot.
 export type SlotOutcome = { kind: 'none' } | { kind: 'wake'; reason: Reason }
 
 export function slotOutcome(free: number, waiting: string[] | null = null): SlotOutcome {
