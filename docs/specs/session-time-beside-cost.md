@@ -187,6 +187,10 @@ times whenever it reads a sub session's status file.
   match the session's own transcript timestamps for the stages, the pull
   request and one round.
 
+## Decided by the person
+
+- Does the owner ever reset a pull request's branch by hand to a commit it already had and force push it, so that an old head comes back while the review is running? No, never. Builder therefore checks only the newest round entry when the package tool packages a head again.
+
 ## Decided by the counsel
 
 - Where should builder take the times it records for an issue (session start, entering each /implement stage, pull request opened, merged, each review round's start and end), and how should a duration be computed from them? The counsel chose: Builder stamps each event with the engine's clock in the hook or tool that sees it (the progress tool for stages, the watch for the pull request opening and merging, the package and post_review tools for rounds), keeps the stamps in its store and copies them into the status file; durations are differences of those stamps. 7 of 7 members voted for it.
