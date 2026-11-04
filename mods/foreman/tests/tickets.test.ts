@@ -12,6 +12,9 @@ import type { ForemanTickets } from '../types'
 
 const T0 = Date.UTC(2026, 9, 20, 12, 0, 0)
 
+// Four times that are all unknown.
+const UNKNOWN = { working: null, needsYou: null, otherWaiting: null, queued: null }
+
 // A row for a record with `over` changing its fields.
 function row(file: string, over: Record<string, unknown> = {}): SubRow {
   const record = recordIn(JSON.stringify({
@@ -341,17 +344,17 @@ test('the start_session fallback logs a call that went on without a ticket, and 
 
 test('the spent list and the earlier total read back when sound, and a damaged list reads as empty with no earlier total', () => {
   const counts = { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 }
-  const spent = [{ ticket: 'ft-a', counts, usd: 1.5 }, { ticket: 'ft-b', counts, usd: null }]
-  const sound = ticketsIn({ spent, earlier: { counts, usd: 2 } })
+  const spent = [{ ticket: 'ft-a', counts, usd: 1.5, timing: null, queuedMs: null }, { ticket: 'ft-b', counts, usd: null, timing: null, queuedMs: null }]
+  const sound = ticketsIn({ spent, earlier: { counts, usd: 2, times: UNKNOWN } })
   expect(sound.spent).toEqual(spent)
-  expect(sound.earlier).toEqual({ counts, usd: 2 })
+  expect(sound.earlier).toEqual({ counts, usd: 2, times: UNKNOWN })
   for (const damaged of [undefined, null, 'lots', 7, { ft: 'a' }]) {
     const t = ticketsIn({ spent: damaged, earlier: damaged })
     expect(t.spent).toEqual([])
     expect(t.earlier).toBeNull()
   }
   // An entry that does not parse is dropped, and the rest are kept.
-  const mixed = ticketsIn({ spent: [spent[0], null, { ticket: '', counts, usd: 1 }, { ticket: 'ft-c', counts: { ...counts, input: -1 }, usd: 1 }, { ticket: 'ft-d', counts, usd: 'one' }, { ticket: 'ft-e' }, spent[1]] })
+  const mixed = ticketsIn({ spent: [spent[0], null, { ticket: '', counts, usd: 1 }, { ticket: 'ft-c', counts: { ...counts, input: -1 }, usd: 1 }, { ticket: 'ft-d', counts, usd: 'one' }, { ticket: 'ft-e', queuedMs: 0 }, spent[1]] })
   expect(mixed.spent).toEqual(spent)
   for (const bad of [{ counts }, { counts, usd: -1 }, { counts: { ...counts, output: 2.5 }, usd: 1 }, { usd: 1 }]) expect(ticketsIn({ earlier: bad }).earlier).toBeNull()
   // A ledger from before foreman kept spending reads with none.
@@ -360,6 +363,30 @@ test('the spent list and the earlier total read back when sound, and a damaged l
   expect(old.earlier).toBeNull()
   expect(TICKETS_EMPTY.spent).toEqual([])
   expect(TICKETS_EMPTY.earlier).toBeNull()
+})
+
+test('the times and the queue time of an entry and the earlier time sums read back, and a ledger from before foreman kept times reads them as unknown', () => {
+  const counts = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+  const timing = {
+    startedAt: T0, stages: [{ stage: 'spec', at: T0 + 1 }], prOpenedAt: null, prMergedAt: T0 + 9,
+    states: { 'working': 5, 'waiting-on-builder': 0, 'idle': 1, 'needs-you': 2, 'in-cleanup': 0, 'done': 0 },
+    rounds: [{ head: 'abcdef0', startedAt: T0 + 2, endedAt: T0 + 3, ended: 'reviewed' }], olderRounds: 0,
+  }
+  const times = { working: 5, needsYou: null, otherWaiting: 1, queued: 0 }
+  const sound = ticketsIn({ spent: [{ ticket: 'ft-a', counts, usd: null, timing, queuedMs: 0 }, { ticket: 'ft-b', counts, usd: null, timing: null, queuedMs: 7 }], earlier: { counts, usd: null, times } })
+  expect(sound.spent).toEqual([{ ticket: 'ft-a', counts, usd: null, timing, queuedMs: 0 }, { ticket: 'ft-b', counts, usd: null, timing: null, queuedMs: 7 }])
+  expect(sound.earlier).toEqual({ counts, usd: null, times })
+  // Entries and an earlier total stored before foreman kept times.
+  const old = ticketsIn({ spent: [{ ticket: 'ft-a', counts, usd: 1 }], earlier: { counts, usd: 2 } })
+  expect(old.spent).toEqual([{ ticket: 'ft-a', counts, usd: 1, timing: null, queuedMs: null }])
+  expect(old.earlier).toEqual({ counts, usd: 2, times: UNKNOWN })
+  // A damaged time or queue time reads as unknown, and the spending is kept.
+  for (const bad of [-1, 'soon', 1.5e400, {}, []]) {
+    const damaged = ticketsIn({ spent: [{ ticket: 'ft-a', counts, usd: 1, timing: bad, queuedMs: bad }], earlier: { counts, usd: 2, times: { working: bad, needsYou: 3, otherWaiting: bad, queued: bad } } })
+    expect(damaged.spent).toEqual([{ ticket: 'ft-a', counts, usd: 1, timing: null, queuedMs: null }])
+    expect(damaged.earlier).toEqual({ counts, usd: 2, times: { ...UNKNOWN, needsYou: 3 } })
+  }
+  expect(ticketsIn({ earlier: { counts, usd: 2, times: 'lots' } }).earlier).toEqual({ counts, usd: 2, times: UNKNOWN })
 })
 
 // The wait line and the begin message are the whole of what a waiting sub

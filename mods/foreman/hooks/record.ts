@@ -7,10 +7,11 @@
 // loosened. SubRecord is derived from BuildStatus, so a field builder adds or
 // renames reaches foreman's type check.
 
-import type { BuildStage, BuildState, BuildStatus, BuildUsage, LastTurn, TokenCounts } from 'builder'
+import type { BuildStage, BuildState, BuildStatus, BuildTiming, BuildUsage, LastTurn, TokenCounts } from 'builder'
 
-import type { ForemanCounts } from '../types'
+import type { ForemanCounts, ForemanTiming } from '../types'
 import { isStage, STAGES } from './stages'
+import { objectOf } from './text'
 
 export type { BuildStage, BuildState }
 
@@ -47,7 +48,7 @@ export type RecordOldestBackground = Omit<NonNullable<BuildStatus['oldestBackgro
 // A record as foreman reads it. The ticket, the folder and the two times may
 // be null where builder always writes them, the oldest background task's hung
 // time may be null too, and `version` is not read.
-export type SubRecord = Omit<BuildStatus, 'version' | 'ticket' | 'cwd' | 'stateSince' | 'writtenAt' | 'pr' | 'oldestBackground' | 'usage'> & {
+export type SubRecord = Omit<BuildStatus, 'version' | 'ticket' | 'cwd' | 'stateSince' | 'writtenAt' | 'pr' | 'oldestBackground' | 'usage' | 'timing'> & {
   // The ticket the parent gave the sub session, or null when it has none.
   ticket: string | null
   // The folder the sub session works in, or null when the record has none.
@@ -63,6 +64,9 @@ export type SubRecord = Omit<BuildStatus, 'version' | 'ticket' | 'cwd' | 'stateS
   // What the sub session spent up to the write, or absent when the record
   // carries no spending that foreman can read.
   usage?: RecordUsage
+  // How long the sub session's issue has taken up to the write, or absent
+  // when the record carries no times that foreman can read.
+  timing?: RecordTiming
 }
 
 const isState = (raw: unknown): raw is BuildState => typeof raw === 'string' && (STATES as readonly string[]).includes(raw)
@@ -243,6 +247,103 @@ export function usageIn(raw: unknown): RecordUsage | undefined {
   return { models, usd }
 }
 
+// The times a record carries, as foreman reads them. Foreman declares the
+// shape itself in its own contract, so the ledger's type stands alone.
+export type RecordTiming = ForemanTiming
+
+// This line stops the type check when the times foreman reads differ from
+// builder's in either direction, so a stamp, a state or a way a round ends
+// that builder adds or renames cannot be dropped without a sound.
+const TIMING_MATCHES_BUILDER: [RecordTiming, BuildTiming] extends [BuildTiming, RecordTiming] ? true : never = true
+void TIMING_MATCHES_BUILDER
+
+// The most review rounds a reading keeps, as many as builder writes.
+export const MAX_ROUNDS = 20
+
+// The ways a review round can end, which the reader checks against.
+const ROUND_ENDS = ['reviewed', 'superseded', 'carried-over'] as const
+
+// This line stops the type check when foreman's list of the ways a round ends
+// and builder's differ in either direction.
+const ROUND_ENDS_MATCH_BUILDER: [(typeof ROUND_ENDS)[number], NonNullable<BuildTiming['rounds'][number]['ended']>] extends [NonNullable<BuildTiming['rounds'][number]['ended']>, (typeof ROUND_ENDS)[number]] ? true : never = true
+void ROUND_ENDS_MATCH_BUILDER
+
+const isRoundEnd = (raw: unknown): raw is (typeof ROUND_ENDS)[number] => typeof raw === 'string' && (ROUND_ENDS as readonly string[]).includes(raw)
+
+// Whether a value can be a stamp, a finite number, and whether it can be a
+// duration, a finite number of zero or more. The ledger's reader checks the
+// queue times and the time sums it keeps by the second too.
+const isStamp = (raw: unknown): raw is number => typeof raw === 'number' && Number.isFinite(raw)
+export const isDuration = (raw: unknown): raw is number => isStamp(raw) && raw >= 0
+
+const stampOrNull = (raw: unknown): number | null | undefined => (raw === null ? null : isStamp(raw) ? raw : undefined)
+
+// A stage stamp, or null unless it names one of the nine stages and has a
+// stamp.
+function stageStampIn(raw: unknown): RecordTiming['stages'][number] | null {
+  const s = objectOf(raw)
+  return s !== null && isStage(s.stage) && isStamp(s.at) ? { stage: s.stage, at: s.at } : null
+}
+
+// A review round, or null unless its head is a string, its start a stamp,
+// and its end and the way it ended each a stamp or one of the three ways, or
+// null.
+function roundIn(raw: unknown): RecordTiming['rounds'][number] | null {
+  const r = objectOf(raw)
+  if (r === null || typeof r.head !== 'string' || !isStamp(r.startedAt)) return null
+  const endedAt = stampOrNull(r.endedAt)
+  if (endedAt === undefined || (r.ended !== null && !isRoundEnd(r.ended))) return null
+  return { head: r.head, startedAt: r.startedAt, endedAt, ended: r.ended }
+}
+
+// The milliseconds in each of the six states, or null unless every one is a
+// duration. They are built in the order of STATES, so two readings of the
+// same totals are equal field for field and in their text.
+function statesIn(raw: unknown): RecordTiming['states'] | null {
+  const s = objectOf(raw)
+  if (s === null) return null
+  const states = {} as RecordTiming['states']
+  for (const state of STATES) {
+    const ms = s[state]
+    if (!isDuration(ms)) return null
+    states[state] = ms
+  }
+  return states
+}
+
+// The times, or undefined unless every part is sound: a stamp for the start,
+// a list of stage stamps, a stamp or null for the pull request's opening and
+// merge, a duration for each of the six states, a list of rounds, and a whole
+// count of older rounds. A record with one bad part reads as carrying no
+// times at all, so foreman shows them as unknown rather than wrong. Only the
+// newest MAX_ROUNDS rounds are kept, the rest added to the count of older
+// ones, so a file that holds more than builder writes cannot grow the
+// ledger. Only the fields builder writes are kept, in a fixed order. The
+// ledger's reader reads the times it keeps through it too.
+export function timingIn(raw: unknown): RecordTiming | undefined {
+  const t = objectOf(raw)
+  if (t === null || !isStamp(t.startedAt) || !Array.isArray(t.stages) || !Array.isArray(t.rounds)) return undefined
+  const prOpenedAt = stampOrNull(t.prOpenedAt)
+  const prMergedAt = stampOrNull(t.prMergedAt)
+  const states = statesIn(t.states)
+  const { olderRounds } = t
+  if (prOpenedAt === undefined || prMergedAt === undefined || states === null) return undefined
+  if (typeof olderRounds !== 'number' || !Number.isInteger(olderRounds) || olderRounds < 0) return undefined
+  const stages = t.stages.map(stageStampIn)
+  const rounds = t.rounds.map(roundIn)
+  if (stages.includes(null) || rounds.includes(null)) return undefined
+  const dropped = Math.max(rounds.length - MAX_ROUNDS, 0)
+  return {
+    startedAt: t.startedAt,
+    stages: stages as RecordTiming['stages'],
+    prOpenedAt,
+    prMergedAt,
+    states,
+    rounds: (rounds as RecordTiming['rounds']).slice(dropped),
+    olderRounds: olderRounds + dropped,
+  }
+}
+
 // The record a file's text holds, or null when it does not parse. It parses
 // only as a JSON object with a non-empty string `sessionId`, an `issueKey`
 // that is null or a non-empty string, and one of the six states, because
@@ -268,6 +369,7 @@ export function recordIn(text: string): SubRecord | null {
   const oldestBackground = oldestBackgroundIn(r.oldestBackground)
   const lastTurn = lastTurnIn(r.lastTurn)
   const usage = usageIn(r.usage)
+  const timing = timingIn(r.timing)
   return {
     sessionId: r.sessionId,
     ticket: textOr(r.ticket, null),
@@ -287,5 +389,6 @@ export function recordIn(text: string): SubRecord | null {
     ...(oldestBackground === undefined ? {} : { oldestBackground }),
     ...(lastTurn === undefined ? {} : { lastTurn }),
     ...(usage === undefined ? {} : { usage }),
+    ...(timing === undefined ? {} : { timing }),
   }
 }

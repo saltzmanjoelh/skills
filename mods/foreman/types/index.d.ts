@@ -147,9 +147,42 @@ export type ForemanCounts = { input: number; output: number; cacheRead: number; 
 // dollar total, or null when no dollar figure is known.
 export type ForemanSpend = { counts: ForemanCounts; usd: number | null }
 
-// The last spending foreman read from the status file of the sub session that
-// owns `ticket`.
-export type ForemanSpent = ForemanSpend & { ticket: string }
+// How long a sub session's issue has taken, as builder writes it in the
+// status file's `timing` field, every time a stamp of builder's clock in
+// milliseconds since the epoch: when builder first loaded in the session, the
+// first time each stage was reached, the pull request's opening and merge as
+// first seen, the milliseconds spent in each status state up to the write or
+// the merge, and the newest 20 review rounds with a count of the older ones.
+// A round's end and the way it ended are null while it is open.
+// hooks/record.ts stops the type check when it differs from builder's
+// BuildTiming.
+export type ForemanTiming = {
+  startedAt: number
+  stages: { stage: 'grounding' | 'issue' | 'spec' | 'plan' | 'build' | 'verify' | 'pr' | 'review' | 'merge'; at: number }[]
+  prOpenedAt: number | null
+  prMergedAt: number | null
+  states: Record<'working' | 'waiting-on-builder' | 'idle' | 'needs-you' | 'in-cleanup' | 'done', number>
+  rounds: { head: string; startedAt: number; endedAt: number | null; ended: 'reviewed' | 'superseded' | 'carried-over' | null }[]
+  olderRounds: number
+}
+
+// Four times in milliseconds, each null when it is unknown: time working,
+// time waiting on the person, other waiting, and time spent in foreman's
+// queue before the begin message.
+export type ForemanTimes = { working: number | null; needsYou: number | null; otherWaiting: number | null; queued: number | null }
+
+// What foreman keeps for the sub session that owns `ticket`: the last
+// spending it read from the owner's status file, the last times it read
+// there, or null before any, and how long the ticket waited in foreman's
+// queue before the begin message, which is 0 for a ticket begun without
+// waiting and null while it is unknown. An entry made before any spending
+// was read, as one that holds only its queue time is, has counts of zero and
+// an unknown dollar figure.
+export type ForemanSpent = ForemanSpend & { ticket: string; timing: ForemanTiming | null; queuedMs: number | null }
+
+// The total of the entries folded out of the spent list: their spending, and
+// the four sums of their times.
+export type ForemanEarlier = ForemanSpend & { times: ForemanTimes }
 
 // Every pairing of this parent, and what is still to be carried out. `folderMissing` says the last read found no status folder, so
 // the log says so once. `held` lists the issue keys whose start the desktop
@@ -161,10 +194,12 @@ export type ForemanSpent = ForemanSpend & { ticket: string }
 // only in the conversation that saw it. `unwatched` lists the `local_…` ids
 // of sub sessions started while the role was off, which foreman does not
 // watch, oldest first. `spent` holds, for each ticket whose owner's file
-// foreman has read spending from, the last spending it read, oldest ticket
-// first. It outlives the pairing, so a sub session whose file is gone still
+// foreman has read spending or times from, or whose queue time it knows, the
+// last spending and times it read and the queue time, oldest ticket first.
+// It outlives the pairing, so a sub session whose file is gone still
 // counts in the sum. `earlier` is the total of the entries folded out of
-// `spent` once it grew past its bound, or null while none was folded.
+// `spent` once it grew past its bound, with the four sums of their times, or
+// null while none was folded.
 // `keptSlots` names, oldest first, each slot that freed on a read which could
 // not read the desktop app's list while a sub session waited unclaimed, kept
 // for the queue until a later read decides it as if it had freed then.
@@ -180,7 +215,7 @@ export type ForemanTickets = {
   offRefusedFor: string | null
   unwatched: string[]
   spent: ForemanSpent[]
-  earlier: ForemanSpend | null
+  earlier: ForemanEarlier | null
   keptSlots: string[]
   checks: ForemanCheck[]
   listFailNotified: boolean

@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { oldestBackgroundIn, prStateOf, recordIn, STATES, usageIn, verdictsIn, type SubRecord } from '../hooks/record'
+import { MAX_ROUNDS, oldestBackgroundIn, prStateOf, recordIn, STATES, timingIn, usageIn, verdictsIn, type SubRecord } from '../hooks/record'
 
 // A whole record as builder writes it, which each test changes.
 const WHOLE = {
@@ -211,4 +211,48 @@ test('a record without spending, and one whose spending is malformed in any part
   for (const bad of [{ models: [good], usd: Number.NaN }, { models: [good], usd: Number.POSITIVE_INFINITY }, { models: [{ ...good, input: Number.POSITIVE_INFINITY }], usd: 1 }]) {
     expect(usageIn(bad)).toBeUndefined()
   }
+})
+
+// The times a record carries, as builder writes them.
+const TIMING = {
+  startedAt: 1000,
+  stages: [{ stage: 'grounding', at: 1000 }, { stage: 'spec', at: 1500 }],
+  prOpenedAt: 1800,
+  prMergedAt: null,
+  states: { 'working': 400, 'waiting-on-builder': 10, 'idle': 20, 'needs-you': 300, 'in-cleanup': 0, 'done': 0 },
+  rounds: [{ head: 'a'.repeat(40), startedAt: 1700, endedAt: 1750, ended: 'superseded' }, { head: 'b'.repeat(40), startedAt: 1750, endedAt: null, ended: null }],
+  olderRounds: 0,
+}
+
+test('the times a record carries read back field for field, and a record without them parses with the field left out', () => {
+  expect(recordIn(text({ timing: TIMING }))?.timing).toEqual(TIMING)
+  expect(recordIn(text())).not.toHaveProperty('timing')
+  // Only the fields builder writes are kept.
+  expect(timingIn({ ...TIMING, extra: 'x', rounds: [{ ...TIMING.rounds[0], extra: 1 }] })).toEqual({ ...TIMING, rounds: [TIMING.rounds[0]] })
+})
+
+test('times that are malformed in any part read as none, and the record still parses', () => {
+  const states = TIMING.states
+  for (const bad of [
+    null, 'long', 3, [], {}, { ...TIMING, startedAt: 'then' }, { ...TIMING, startedAt: undefined }, { ...TIMING, stages: 'x' },
+    { ...TIMING, stages: [{ stage: 'lunch', at: 1 }] }, { ...TIMING, stages: [{ stage: 'spec', at: null }] }, { ...TIMING, prOpenedAt: '1' },
+    { ...TIMING, prMergedAt: undefined }, { ...TIMING, states: null }, { ...TIMING, states: { ...states, 'needs-you': -1 } },
+    { ...TIMING, states: { ...states, idle: undefined } }, { ...TIMING, states: { ...states, done: '0' } }, { ...TIMING, rounds: null },
+    { ...TIMING, rounds: [{ head: 7, startedAt: 1, endedAt: null, ended: null }] }, { ...TIMING, rounds: [{ head: 'a', startedAt: 1, endedAt: null, ended: 'lost' }] },
+    { ...TIMING, rounds: [{ head: 'a', startedAt: 1, endedAt: 'now', ended: null }] }, { ...TIMING, olderRounds: -1 }, { ...TIMING, olderRounds: 1.5 },
+    { ...TIMING, startedAt: Number.POSITIVE_INFINITY }, { ...TIMING, states: { ...states, working: Number.NaN } },
+  ]) {
+    expect(timingIn(bad)).toBeUndefined()
+    const r = recordIn(text({ timing: bad }))
+    expect(r).not.toBeNull()
+    expect(r).not.toHaveProperty('timing')
+  }
+})
+
+test('times with more rounds than builder keeps keep the newest and count the rest as older', () => {
+  const round = (i: number) => ({ head: `${i}`.padStart(7, '0'), startedAt: i, endedAt: i + 1, ended: 'reviewed' })
+  const many = { ...TIMING, rounds: Array.from({ length: MAX_ROUNDS + 3 }, (_, i) => round(i)), olderRounds: 4 }
+  const read = timingIn(many)!
+  expect(read.rounds).toEqual(many.rounds.slice(3))
+  expect(read.olderRounds).toBe(7)
 })
