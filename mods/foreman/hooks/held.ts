@@ -14,6 +14,7 @@ import type { PromptSubmitInput, ToolCallResult } from 'claude-code'
 import { LOCAL_ID, type Listed } from './desktop'
 import { listOf } from './text'
 import { KEYED_TITLE } from './tickets'
+import { inWords } from './wake'
 
 // The words foreman recognises the two refusals by, in the app's own wording.
 // The desktop app refuses start_session with: "The user is working over
@@ -61,6 +62,23 @@ export function heldLine(keys: readonly string[]): string {
   const them = keys.length === 1 ? 'it' : 'them'
   return `foreman: ${listOf(keys)} did not start, and foreman holds ${them}; start ${them} first, before anything else, as "Starting a session" says.`
 }
+
+// What the top-up line asks for, without its "foreman: " head, so that the
+// text that replaces the start-foreman skill can say the same: `n` more
+// issues, in words, started on this turn, where every start the parent makes
+// on the turn counts, the issues the person names first and then the ones
+// the project's Next issue: fact picks. The wake skill heads its top-up
+// section with the line for one issue, so this is pinned by
+// tests/held.test.ts.
+export function topUpSentence(n: number): string {
+  const w = inWords(n)
+  return `the queue needs ${w} more ${n === 1 ? 'issue' : 'issues'}; start ${w} on this turn, counting every start you make on it, the issues the person names first and then the next ones the project's Next issue: fact picks.`
+}
+
+// The context line added after the held line to each of the person's prompts
+// while foreman is on and its queue is short of one waiting sub session per
+// slot, as topUpCount in act.ts counts.
+export const topUpLine = (n: number) => `foreman: ${topUpSentence(n)}`
 
 // The notification raised once when a key is newly held.
 export const heldNotice = (key: string) => `${key} waits to start: the desktop app refused to start it, and it starts on your next message.`

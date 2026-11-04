@@ -2,11 +2,11 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PromptSubmitInput, Register, ResolveInput, ToolCallResult } from 'claude-code'
 
 import { checkOutcome, clampedDue, endsOf, isClaimed, soonestDue, withNote, withoutPaired, type CheckDone } from './checks'
-import { CALL_TIMEOUT_MS, decide, desktopOf, freeSlots, GONE_MS, keptByUnreadList, needsList, NO_ANSWER, releasedIn, slotOutcome, startWaits, watchingFrom, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
+import { CALL_TIMEOUT_MS, decide, desktopOf, freeSlots, GONE_MS, keptByUnreadList, needsList, NO_ANSWER, releasedIn, slotOutcome, startWaits, topUpCount, watchingFrom, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
 import { isSvgSurface } from './art'
-import { becameParentAnswer, COMMAND, commandOf, PASSED_ON, PASTED_LINE, pastedCommandIn, slotsAnswer, type Command } from './commands'
+import { becameParentAnswer, COMMAND, commandOf, isCommandText, PASSED_ON, PASTED_LINE, pastedCommandIn, slotsAnswer, START_FOREMAN_FALLBACK, START_FOREMAN_OFF, startForemanText, type Command } from './commands'
 import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, everySession, failureLine, linkedFamily, listSessions, NUDGE_TEXT, openSession, readHeader, REASONS, sendMessage, type DesktopCall, type Listed, type SavedCopies, type SendResult } from './desktop'
-import { acceptedLog, beginFailedNotice, heldLine, heldLog, heldNotice, heldSentence, isHeldRefusal, isPersonPrompt, keyOfTitle } from './held'
+import { acceptedLog, beginFailedNotice, heldLine, heldLog, heldNotice, heldSentence, isHeldRefusal, isPersonPrompt, keyOfTitle, topUpLine } from './held'
 import { ignoredLine, readIssueLink } from './links'
 import { afterConsumed, emptyMarkers, FIRST_MARKER_LOG, MARKERS_KEPT_MS, MARKERS_PREFIX, markersIn, markersKey, markersNewest, type MarkersRecord } from './markers'
 import { checkedLine, isAppParts, isNotedReply, isStatusChanged, keptLine, keptNames, NOTED, NOTED_REPLY, notesIn } from './notes'
@@ -1159,14 +1159,36 @@ async function withPasted($: $, e: PromptSubmitInput): Promise<PromptSubmitInput
   return { ...e, context: [...(e.context ?? []), PASTED_LINE] }
 }
 
-// The prompt with the held line added to its context, when it is the
-// person's own, the role is on and some key is held, or else as it came.
-// Whose prompt it is is checked first, so a plugin's prompt, foreman's own
-// wake among them, reads no state here.
+// How many issues the parent should start now to keep one waiting sub
+// session per slot, as topUpCount in act.ts counts, from the live ledger, the
+// rows of the last read and the slot count.
+async function topUpNow($: $): Promise<number> {
+  const slots = slotsOf(parentIn(await read($, parent)), currentOptions.slots)
+  return topUpCount(ticketsIn(await read($, tickets)), await rowsNow($), await $.clock.now(), slots)
+}
+
+// Whether a prompt is a typed /start-foreman, by the command the engine set on
+// it or by its own text.
+const isStartForeman = (e: PromptSubmitInput) => e.command?.name === COMMAND || isCommandText(e.text)
+
+// The prompt with foreman's lines added to its context, when it is the
+// person's own and the role is on, or else as it came: the held line while
+// some key is held, and after it the top-up line while the queue is short of
+// one waiting sub session per slot. The top-up line is left out of a prompt
+// typed while a turn runs, which has the running turn's id, because that turn
+// may already have had the line, and two lines on one turn could ask for more
+// starts than the app allows without a permission card. It is left out of a
+// typed /start-foreman too, because the text that replaces the skill gives
+// the count on that turn. A failed count leaves the line out and keeps the
+// held line. Whose prompt it is is checked first, so a plugin's prompt,
+// foreman's own wake among them, reads no state here.
 async function withHeld($: $, e: PromptSubmitInput): Promise<PromptSubmitInput> {
   if (!isPersonPrompt(e) || !(await isOn($))) return e
   const held = ticketsIn(await read($, tickets)).held
-  return held.length === 0 ? e : { ...e, context: [...(e.context ?? []), heldLine(held)] }
+  const lines = held.length === 0 ? [] : [heldLine(held)]
+  const count = e.turnId !== undefined || isStartForeman(e) ? 0 : await topUpNow($).catch(() => 0)
+  if (count > 0) lines.push(topUpLine(count))
+  return lines.length === 0 ? e : { ...e, context: [...(e.context ?? []), ...lines] }
 }
 
 // Whether foreman answers the first step of a turn of the session's own loop
@@ -1479,19 +1501,45 @@ export const register: Register = (on, options) => {
   })
 
   // /start-foreman is a skill in the person's skills folder, so that the
-  // desktop app lists it before a session starts. This hook answers it
-  // without calling next, so the skill's own text, which says that the mod is
-  // not loaded, never reaches the model while the mod runs.
+  // desktop app lists it before a session starts. A plain command, or one
+  // with only a count, is applied here first and then goes on to the engine
+  // with next, so that the parent's model reads the skill on the person's own
+  // typed turn and can top the queue up there. The skill.prompt hook below
+  // replaces the skill's own text, which says that the mod is not loaded, and
+  // this hook gives the command's output as foreman's answer. A command with
+  // words after it, or with a refused count, is answered here without next,
+  // as runCommand says, so the skill never runs for it.
   // The host already puts the mod's name in front of a command's output.
   // Every /start-foreman also arms the timers again when a hot reload has
   // dropped them, as the hooks below do. Arming does nothing while the role
   // is off or the timers are already armed, so a plain /start-foreman, which
-  // armed them in runCommand before opening the pane, changes nothing here.
-  on('command.run', { command: COMMAND }, async ($, e) => {
-    const text = await runCommand($, typeof e.args === 'string' ? e.args : '')
+  // armed them before opening the pane, changes nothing here.
+  on('command.run', { command: COMMAND }, async ($, e, next) => {
+    const args = typeof e.args === 'string' ? e.args : ''
+    const command = commandOf(args)
+    if (command.kind !== 'refused' && command.prompt === null) {
+      const text = await applyCommand($, command)
+      await ensureArmed($).catch(() => undefined)
+      return { ...(await next(e)), text }
+    }
+    const text = await runCommand($, args)
     await ensureArmed($).catch(() => undefined)
     return { text }
   })
+
+  // The text the parent's model reads for the start-foreman skill: the
+  // top-up count from the live ledger while foreman is on, or a fixed text
+  // when it is off or the count cannot be worked out. A hook that fails would
+  // pass the skill's own text through, which says that the mod is not loaded,
+  // so the body catches every failure and the hook has a catch of its own.
+  on('skill.prompt', { skill: COMMAND }, async $ => {
+    try {
+      if (!(await isOn($))) return { text: START_FOREMAN_OFF }
+      return { text: startForemanText(await topUpNow($)) }
+    } catch {
+      return { text: START_FOREMAN_FALLBACK }
+    }
+  }).catch(() => ({ text: START_FOREMAN_FALLBACK }))
 
   // After a hot reload, whichever of these hooks comes first arms the timers
   // again. Neither waits for the arming, as builder's do not, because arming
@@ -1506,7 +1554,8 @@ export const register: Register = (on, options) => {
   // prompt made only of the app's notes and messages goes on with a Noted line
   // as context, as choiceFor says, its text unchanged, and every other prompt
   // goes on as it came, except that the person's own prompt carries the held
-  // line as context while a key whose start the app refused is held. A note
+  // line as context while a key whose start the app refused is held, and the
+  // top-up line while foreman's queue is short, as withHeld says. A note
   // about a sub session foreman checks is recorded in the ledger before the
   // prompt goes on, so its check falls due an idle period after the note. The
   // marker is set before the line is written, and a hook that throws, a failed

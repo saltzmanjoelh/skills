@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { decide, FROZEN_MS, GONE_MS, keptByUnreadList, listFailedNotice, needsList, NO_ANSWER, slotOutcome, READ_GAP_MS, SETTLE_MS, stallsNeedList, watchingFrom, type DecideInput, type Decision, type SessionsLook } from '../hooks/act'
+import { decide, FROZEN_MS, GONE_MS, keptByUnreadList, listFailedNotice, needsList, NO_ANSWER, slotOutcome, READ_GAP_MS, SETTLE_MS, stallsNeedList, TOP_UP_MAX, topUpCount, watchingFrom, type DecideInput, type Decision, type SessionsLook } from '../hooks/act'
 import { REASONS } from '../hooks/desktop'
 import { recordIn, STATES } from '../hooks/record'
 import { spentSum, TIMES_UNKNOWN } from '../hooks/spend'
@@ -1307,4 +1307,40 @@ test('the frozen wake\'s mark survives the ledger\'s round trip through the stor
   const restored = ticketsIn(JSON.parse(JSON.stringify(woke.tickets)))
   expect(restored.pairings[0]!.acts.goneWokeFor).toBe(T0)
   expect(read(restored, rows(), T0 + 12 * MINUTE).reasons).toEqual([])
+})
+
+// A sub session with `ticket` that went ahead and works on its issue, and a
+// pairing for it, and one for a sub session that waits at `place`, with `claim`.
+const busy = (ticket: string) => row({ sessionId: `s-${ticket}`, ticket, desktopSessionId: `local_${ticket}`, state: 'working' }, `${ticket}.json`)
+const went = (ticket: string) => newPairing(ticket, `local_${ticket}`, T0, 'ABC-1')
+const queued = (ticket: string, place: number, over: Partial<NonNullable<ReturnType<typeof newPairing>['queue']>> = {}) =>
+  newPairing(ticket, `local_${ticket}`, T0, 'ABC-2', { place, claim: null, ...over })
+const topUp = (pairings: ReturnType<typeof newPairing>[], rows: SubRow[], slots: number, now = T0) =>
+  topUpCount(joinOwners({ ...TICKETS_EMPTY, pairings }, rows).tickets, rows, now, slots)
+
+test('the top-up count is the gap to one waiting sub session per slot, counting busy and waiting sub sessions', () => {
+  expect(topUp([], [], 2)).toBe(4)
+  expect(topUp([went('ft-a')], [busy('ft-a')], 2)).toBe(3)
+  expect(topUp([went('ft-a'), queued('ft-b', 1)], [busy('ft-a')], 2)).toBe(2)
+  expect(topUp([went('ft-a'), queued('ft-b', 1)], [busy('ft-a')], 1)).toBe(0)
+})
+
+test('the top-up count is never below zero, even with more busy sub sessions than the target', () => {
+  const ids = ['ft-a', 'ft-b', 'ft-c']
+  expect(topUp(ids.map(went), ids.map(busy), 1)).toBe(0)
+})
+
+test('the top-up count never asks for more than five starts on one turn', () => {
+  expect(TOP_UP_MAX).toBe(5)
+  expect(topUp([], [], 3)).toBe(5)
+  expect(topUp([], [], 20)).toBe(5)
+  expect(topUp([went('ft-a')], [busy('ft-a')], 3)).toBe(5)
+})
+
+test('the top-up count counts a claimed or a reserved waiting sub session once, as busy, and never also as waiting', () => {
+  const claimed = queued('ft-c', 1, { claim: { attemptAt: T0, notified: false } })
+  expect(topUp([claimed], [], 2)).toBe(3)
+  const reserved = queued('ft-r', 1, { keptAt: T0 })
+  expect(topUp([reserved], [], 2, T0 + MINUTE)).toBe(3)
+  expect(topUp([went('ft-a'), claimed, queued('ft-b', 2)], [busy('ft-a')], 2)).toBe(1)
 })

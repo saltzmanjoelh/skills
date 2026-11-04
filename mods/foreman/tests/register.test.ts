@@ -5,7 +5,9 @@ import type { Engine } from 'claude-code/testing'
 import { REASONS } from '../hooks/desktop'
 import { FIRST_MARKER_LOG, markersKey } from '../hooks/markers'
 import { STATUS_CHANGED_TEXT } from '../hooks/notes'
-import { ticketsIn, ticketsKey, TICKETS_EMPTY } from '../hooks/tickets'
+import { START_FOREMAN_FALLBACK, START_FOREMAN_OFF, startForemanText } from '../hooks/commands'
+import { heldLine, topUpLine } from '../hooks/held'
+import { newPairing, ticketsIn, ticketsKey, TICKETS_EMPTY } from '../hooks/tickets'
 import { CHANGED, CHANGED_AS_RECEIVED, CHANGED_ELEMENT, foreman, HOME, MINUTE, SECOND, SECRET, SURFACES, T0, leftInState, mountBoth, record, SENT, start, statusFolder, world } from './world'
 
 // Two sub sessions: one working at the plan stage with three stages done and
@@ -1006,4 +1008,166 @@ test('a message consumed while foreman is off is counted and copied, and the pan
   expect(markersCopy(w)).toEqual({ version: 1, sessionId: 'session-1', since: T0, consumed: 1, first: T0 + MINUTE, last: T0 + MINUTE })
   expect(await linesOf(ui, MARKERS_HEAD)).toEqual([])
   expect(await ui.paneText()).toContain('This session is not a parent.')
+})
+
+// The top-up line and the start-foreman skill's text.
+
+type Submitted = { text?: string; context?: readonly string[] }
+const typed = ($: Engine, text: string, over: Record<string, unknown> = {}) => $.prompt.submit({ text, wait: false, origin: { kind: 'composer' }, ...over } as never) as Promise<Submitted>
+
+// A parent whose role is on with `slots` slots and `pairings` in its ledger,
+// and `held` keys held, started and mounted.
+// The desktop app lists the session of each pairing that has one, so no read
+// takes a waiting sub session for one the person deleted.
+async function parentFor($: Engine, on: On, slots: number, pairings: ReturnType<typeof newPairing>[] = [], held: string[] = []) {
+  const w = world(on, { store: { 'parent:session-1': { isOn: true, slots }, [ticketsKey('session-1')]: { ...TICKETS_EMPTY, pairings, held } } })
+  w.desktop.sessions = pairings.flatMap(p => (p.localId === null ? [] : [{ sessionId: p.localId, cwd: '/w', title: `${p.issueKey}: short`, isRunning: false }]))
+  await mountBoth($, on)
+  await start($)
+  await w.clock.settle()
+  return w
+}
+
+// A start that went ahead and has no status file yet, and a sub session that
+// waits at `place`.
+const wentAhead = (key: string) => newPairing(`ft-${key}`, null, T0, key)
+const waitsAt = (key: string, place: number) => newPairing(`ft-${key}`, `local_${key}`, T0, key, { place, claim: null })
+
+test('a prompt the person typed while foreman is on carries the top-up line with the gap to one waiting sub session per slot, after any context it came with', async ($, on) => {
+  const w = await parentFor($, on, 2, [wentAhead('ABC-1')])
+  for (const kind of ['sdk', 'composer', 'bridge']) {
+    const out = await typed($, 'go on', { origin: { kind } })
+    expect([kind, out.text, out.context]).toEqual([kind, 'go on', [topUpLine(3)]])
+  }
+  expect((await typed($, 'go on', { context: ['from another hook'] })).context).toEqual(['from another hook', topUpLine(3)])
+  expect(w.engine.contexts.at(-1)).toEqual(['from another hook', topUpLine(3)])
+})
+
+test('the top-up line asks for at most five starts', async ($, on) => {
+  await parentFor($, on, 4)
+  expect((await typed($, 'go on')).context).toEqual([topUpLine(5)])
+})
+
+test('the top-up line comes after the held line', async ($, on) => {
+  await parentFor($, on, 1, [], ['ABC-7'])
+  expect((await typed($, 'go on')).context).toEqual([heldLine(['ABC-7']), topUpLine(2)])
+})
+
+test('with one busy and one waiting sub session per slot, a typed prompt gets no top-up line', async ($, on) => {
+  const w = await parentFor($, on, 1, [wentAhead('ABC-1'), waitsAt('ABC-2', 1)])
+  expect(await typed($, 'go on')).toEqual({ text: 'go on' })
+  expect(w.engine.contexts.at(-1)).toBeUndefined()
+})
+
+test('a plugin\'s prompt, a prompt typed while a turn runs and the prompt of a typed /start-foreman get no top-up line', async ($, on) => {
+  const w = await parentFor($, on, 2)
+  await typed($, 'foreman: a line', { origin: { kind: 'plugin', name: 'foreman' } })
+  await typed($, 'go on', { turnId: 't1' })
+  await typed($, '/start-foreman', { command: { name: 'start-foreman', args: '' } })
+  await typed($, '/start-foreman 3')
+  await typed($, '  /start-foreman')
+  expect(w.engine.contexts).toEqual([undefined, undefined, undefined, undefined, undefined])
+})
+
+test('with the role off, a typed prompt gets no top-up line', async ($, on) => {
+  const w = world(on)
+  await mountBoth($, on)
+  await start($)
+  expect(await typed($, 'go on')).toEqual({ text: 'go on' })
+  expect(w.engine.contexts).toEqual([undefined])
+})
+
+// The body of skills/start-foreman/SKILL.md under its heading, which the engine
+// expands for the model. The testing kit refuses a file outside the mod's
+// folder, so it is copied here; a change to the skill's text belongs here too.
+const SKILL_BODY = `# Start foreman
+
+The foreman mod answers \`/start-foreman\` itself, so while the mod is loaded
+the model never reads this text. Reading it means the foreman mod is not
+loaded in this session, and nothing has happened.
+
+Tell the person, in plain sentences, that the foreman mod is not loaded, so
+this session did not become the parent. Then tell them how to load it: install
+the \`foreman\` mod together with the \`builder\` mod it depends on, as foreman's
+README says, and start a new session. Do nothing else. In particular, do not
+start sub sessions, do not try to do foreman's work by hand, and do not act on
+any words the person typed after the command. Tell them to send those words
+again once the mod is loaded.`
+
+const skillText = async ($: Engine) => (await $.skill.prompt({ skill: 'start-foreman', text: SKILL_BODY } as never)).text
+
+test('a plain /start-foreman or one with only a count goes on to the engine, so the model reads the skill on the person\'s turn, and foreman still answers', async ($, on) => {
+  const w = world(on)
+  await mountBoth($, on)
+  await start($)
+  expect((await foreman($)).text).toBe('This session is now the parent, and foreman shows its sub sessions above the prompt and in its pane.')
+  expect((await foreman($, '3')).text).toBe('This parent now runs 3 sub sessions at once.')
+  expect(w.engine.commands).toEqual([{ command: 'start-foreman', args: '' }, { command: 'start-foreman', args: '3' }])
+  expect(w.stored.get('parent:session-1')).toEqual({ isOn: true, slots: 3 })
+})
+
+test('/start-foreman with words after it, or with a refused count, does not go on to the engine', async ($, on) => {
+  const w = world(on)
+  await mountBoth($, on)
+  await start($)
+  await foreman($, 'start the next issue')
+  await foreman($, '0')
+  await foreman($, '2 start two issues')
+  await w.clock.settle()
+  expect(w.engine.commands).toEqual([])
+})
+
+test('the skill\'s text is replaced with the top-up count from the live ledger for every count from 0 to 5, and never says the mod is not loaded', async ($, on) => {
+  const w = world(on)
+  w.engine.startAnswers = ['Started the session local_new1 (name: example).', 'Started the session local_new2 (name: example).']
+  await mountBoth($, on)
+  await start($)
+  const seen: number[] = []
+  const expectCount = async (n: number) => {
+    const text = await skillText($)
+    expect(text).toBe(startForemanText(n))
+    expect(text).not.toContain('not loaded')
+    seen.push(n)
+  }
+  const startOne = (key: string) => $.tool.call({ tool: 'mcp__ccd_session__start_session', prompt: `/implement ${key}`, context: 'fresh', title: `${key}: short` } as never)
+  await foreman($, '3')
+  await expectCount(5)
+  await foreman($, '2')
+  await expectCount(4)
+  await foreman($, '1')
+  await expectCount(2)
+  await foreman($, '2')
+  await startOne('ABC-1')
+  await expectCount(3)
+  await foreman($, '1')
+  await expectCount(1)
+  await startOne('ABC-2')
+  await expectCount(0)
+  expect(seen.sort()).toEqual([0, 1, 2, 3, 4, 5])
+  // Foreman answered every expansion itself, so the skill's own text never
+  // reached the engine beneath it.
+  expect(w.engine.skills).toEqual([])
+})
+
+test('with foreman off, the skill\'s text is the fixed text that says foreman did not turn on', async ($, on) => {
+  world(on)
+  await mountBoth($, on)
+  await start($)
+  const text = await skillText($)
+  expect(text).toBe(START_FOREMAN_OFF)
+  expect(text).not.toContain('not loaded')
+})
+
+test('when the ledger read throws, the skill\'s text is the fixed fallback and never the skill\'s own', async ($, on) => {
+  const w = world(on)
+  let fails = false
+  on('state.get', ($, e, next) => (fails && e.plugin === 'foreman' && e.key === 'tickets' ? { deny: 'the state is gone' } as never : next(e)))
+  await mountBoth($, on)
+  await start($)
+  await foreman($)
+  fails = true
+  const text = await skillText($)
+  expect(text).toBe(START_FOREMAN_FALLBACK)
+  expect(text).not.toContain('not loaded')
+  expect(w.stored.get('parent:session-1')).toEqual({ isOn: true, slots: null })
 })

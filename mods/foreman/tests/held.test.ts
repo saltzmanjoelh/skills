@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import type { PromptOrigin, ToolCallResult } from 'claude-code'
 
 import type { Listed } from '../hooks/desktop'
-import { AUTOMATED_REFUSAL, beginFailedNotice, beginHeldLog, beginHeldNotice, heldLine, heldLog, heldNotice, heldSentence, isHeldRefusal, isPersonPrompt, keyOfTitle, releasedBy, REMOTE_REFUSAL } from '../hooks/held'
+import { AUTOMATED_REFUSAL, beginFailedNotice, beginHeldLog, beginHeldNotice, heldLine, heldLog, heldNotice, heldSentence, isHeldRefusal, isPersonPrompt, keyOfTitle, releasedBy, REMOTE_REFUSAL, topUpLine } from '../hooks/held'
 
 // The desktop app's two refusals of start_session that foreman holds a key
 // for: the one it gives while its Remote Control setting is on, word for word,
@@ -107,4 +107,13 @@ test('no hold text says where the person is', () => {
   const texts = [heldSentence('ABC-1'), heldLine(['ABC-1']), heldLine(['ABC-1', 'ABC-2']), heldNotice('ABC-1'), heldLog('ABC-1'),
     beginHeldNotice('ABC-1'), beginHeldLog('ABC-1'), beginFailedNotice('ABC-1')]
   for (const text of texts) expect([text, /remote|away|typed/i.test(text)]).toEqual([text, false])
+})
+
+// The wake skill heads its top-up section with the line for one issue, so the
+// line is pinned word for word, with the count in words for every count the
+// line can carry.
+test('the top-up line says how many issues to start on this turn, in words, and that every start on it counts', () => {
+  expect(topUpLine(1)).toBe('foreman: the queue needs one more issue; start one on this turn, counting every start you make on it, the issues the person names first and then the next ones the project\'s Next issue: fact picks.')
+  expect(topUpLine(3)).toBe('foreman: the queue needs three more issues; start three on this turn, counting every start you make on it, the issues the person names first and then the next ones the project\'s Next issue: fact picks.')
+  for (const [n, word] of [[2, 'two'], [4, 'four'], [5, 'five']] as const) expect(topUpLine(n)).toContain(`needs ${word} more issues; start ${word} on this turn`)
 })

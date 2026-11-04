@@ -1,9 +1,20 @@
 // What the arguments of /start-foreman ask for, read without the engine.
 
+import { topUpSentence } from './held'
+
 // The command the person types. It is a skill in the person's skills folder
 // rather than a command the mod registers, so that the desktop app knows it
 // before a session starts. The mod answers it in place of the skill.
 export const COMMAND = 'start-foreman'
+
+// A prompt whose text is the command: after optional white space comes the
+// command followed by white space or the end of the text. The prompt.submit
+// hook checks it beside the prompt's own command field, so that the prompt of
+// a typed /start-foreman never gets the top-up line, whose count the text
+// that replaces the skill already gives.
+const TYPED = new RegExp(`^\\s*/${COMMAND}(?=\\s|$)`)
+
+export const isCommandText = (text: unknown) => typeof text === 'string' && TYPED.test(text)
 
 // A line that begins with the command as text, as when the person pasted it
 // rather than typed it, so it never ran: after optional spaces or tabs and an
@@ -73,3 +84,22 @@ export function commandOf(args: string): Command {
   const rest = text.slice(raw.length).trim()
   return { kind: 'slots', count, prompt: rest === '' ? null : rest }
 }
+
+// The text the model reads in place of the start-foreman skill's own text,
+// which says the mod is not loaded, once a plain /start-foreman or one with
+// only a count has turned foreman on. It gives the top-up count, as topUpCount
+// in act.ts works it out from the live ledger, with the same rule as the
+// top-up line, or says that the queue is full when the count is 0.
+const ON_TEXT = 'foreman: foreman is on, and this session is its parent.'
+
+export const startForemanText = (n: number) => (n > 0
+  ? `${ON_TEXT} Top up its queue now, as the foreman:wake skill says: ${topUpSentence(n)}`
+  : `${ON_TEXT} Its queue is full, with one waiting sub session for every slot, so start no sub session now; tell the person in one line that foreman is on and its queue is full.`)
+
+// The text in its place when foreman is still off as the skill is read, as
+// when the command's hook failed and the engine ran the skill by itself.
+export const START_FOREMAN_OFF = 'foreman: /start-foreman did not turn foreman on in this session, so start no sub session; tell the person in one line that foreman did not turn on and that the log in foreman\'s pane may say why.'
+
+// The text in its place when working out the count failed, so that the
+// skill's own text never reaches the model while the mod runs.
+export const START_FOREMAN_FALLBACK = 'foreman: foreman could not count its queue, so start no sub session on this turn; tell the person in one line that foreman could not count its queue and that their next message lines up more.'

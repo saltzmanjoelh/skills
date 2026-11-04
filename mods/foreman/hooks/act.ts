@@ -771,6 +771,22 @@ export function startWaits(t: ForemanTickets, rows: readonly SubRow[], now: numb
   return freeSlots(t, rows, now, slots) - owed <= 0
 }
 
+// The most issues the top-up line asks the parent to start on one typed turn.
+// The desktop app asks the person with a permission card from the eleventh
+// start on one turn, so five keeps a turn well below it, with room for issues
+// the person names in the same message.
+export const TOP_UP_MAX = 5
+
+// How many issues the parent should start now so that foreman keeps one
+// waiting sub session per slot: twice the slot count, less the busy slots and
+// the sub sessions that wait unclaimed, never below zero and never above
+// TOP_UP_MAX. A claimed or reserved waiting sub session is counted once,
+// because freeSlots counts it as busy and waitingUnclaimed leaves it out.
+export function topUpCount(t: ForemanTickets, rows: readonly SubRow[], now: number, slots: number): number {
+  const occupied = slots - freeSlots(t, rows, now, slots) + waitingUnclaimed(t, now, GONE_MS).length
+  return Math.min(TOP_UP_MAX, Math.max(0, 2 * slots - occupied))
+}
+
 // Whether a waiting sub session's record shows that /implement began in it:
 // an issue key, a stage or a pull request. Builder writes a file for a sub
 // session that waits too, which shows none of them.
