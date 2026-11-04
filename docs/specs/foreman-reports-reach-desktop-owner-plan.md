@@ -91,8 +91,11 @@ It adds no new files and no dependencies.
 - `noticeFailed(raw, band, at)` runs after a failed call that was not
   counted. It returns `{ text: newest, at, kept: keptOf(raw) + count }`,
   except that when the band already holds a notice that arrived later, that
-  one stays the newest and both are counted, so a call that answers last
-  never puts an older sentence above a newer one.
+  one stays the newest and this one joins the count, so a call that answers
+  last never puts an older sentence above a newer one. When that later notice
+  is not counted yet, because nothing was kept when it arrived, it stays out
+  of the count and the value is marked `newestOut`, so that its own failure,
+  if it comes, adds it once with all its sentences.
 - `afterTyped(raw, now)` turns a kept value into
   `{ text, at: now, kept: 0, released: true }`, marks any other notice the
   band holds as released without moving its time, and returns null or a
@@ -101,7 +104,9 @@ It adds no new files and no dependencies.
   and fails after, keeps its own notice alone rather than counting one the
   person saw before typing.
 - `shownReport(raw, now)` shows a kept value whatever its age, followed by
-  " (<kept − 1> more since your last message.)" when `kept` is above 1. Any
+  " (<n> more since your last message.)", where n is `kept − 1`, or all of
+  `kept` when the newest is marked `newestOut`, and the count is left out
+  when n is 0. Any
   other value keeps today's ten-minute rule. The band's `printable` already
   cuts the end of the line, so a narrow band cuts the count first.
 

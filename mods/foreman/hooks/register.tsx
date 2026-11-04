@@ -646,10 +646,10 @@ async function showReports($: $, sentences: readonly string[]) {
 // Lets a notice the band keeps go once the person types: it shows for ten
 // more minutes from now, as afterTyped in pane.tsx says, and any notice the
 // band holds is marked as seen. Only the first typed message after a new
-// notice reaches the band writes it; the others find nothing to change. It runs whatever the role, because the
-// person's next typed message ends the wait whether or not foreman is on
-// then, so a notice kept while foreman is off does not stay up for good once
-// foreman turns on.
+// notice reaches the band writes it; the others find nothing to change. It
+// runs whatever the role, because the person's next typed message ends the
+// wait whether or not foreman is on then, so a notice kept while foreman is
+// off does not stay up for good once foreman turns on.
 async function releaseKept($: $) {
   const now = await $.clock.now()
   await changeBand($, raw => afterTyped(raw, now))

@@ -110,15 +110,20 @@ export function noticeArrived(raw: StoredReport, notice: BandNotice, at: number)
 // The band's value once the notification of a notice that arrived at `at`
 // and was not counted yet has failed: the notice is kept. When a later notice
 // is in the band already, as when this call answered last, that one stays the
-// newest and this one joins the count, and the later one counts too, so
-// neither is lost. A value the person's typing released is not a later
+// newest and this one joins the count. A later notice that is not counted
+// yet, because nothing was kept when it arrived, stays out of the count and
+// is marked `newestOut`, so that its own failure, if it comes, adds it once
+// with all its sentences. A value the person's typing released is not a later
 // notice, even when typing moved its `at` to the moment they typed: they saw
 // it before they typed, so it keeps its ten minutes and this notice is kept
 // alone.
 export function noticeFailed(raw: StoredReport, notice: BandNotice, at: number): StoredReport {
   const kept = keptOf(raw)
   if (raw !== null && raw.released !== true && typeof raw.text === 'string' && typeof raw.at === 'number' && raw.at > at) {
-    return { text: raw.text, at: raw.at, kept: Math.max(kept, 1) + notice.count }
+    const newestOut = kept === 0 || raw.newestOut === true
+    return newestOut
+      ? { text: raw.text, at: raw.at, kept: kept + notice.count, newestOut: true }
+      : { text: raw.text, at: raw.at, kept: kept + notice.count }
   }
   return { text: notice.newest, at, kept: kept + notice.count }
 }
@@ -136,7 +141,8 @@ export function afterTyped(raw: StoredReport, now: number): StoredReport {
 
 // The report the band shows, from the value foreman keeps in $.state. A kept
 // notice shows whatever its age, followed by the count of the others kept
-// since the person last typed. Any other shows while it is less than
+// since the person last typed, which is all of `kept` when the newest is
+// marked `newestOut` and is not in it. Any other shows while it is less than
 // REPORT_SHOWN_MS old at `now`, else nothing. A value of any other shape
 // shows nothing.
 export function shownReport(raw: unknown, now: number): string | null {
@@ -144,8 +150,8 @@ export function shownReport(raw: unknown, now: number): string | null {
   const { text, at } = raw as { text?: unknown; at?: unknown }
   if (typeof text !== 'string' || typeof at !== 'number' || !Number.isFinite(at)) return null
   const kept = keptOf(raw)
-  if (kept > 1) return `${text} (${kept - 1} more since your last message.)`
-  if (kept === 1) return text
+  const more = (raw as { newestOut?: unknown }).newestOut === true ? kept : kept - 1
+  if (kept > 0) return more > 0 ? `${text} (${more} more since your last message.)` : text
   return now - at < REPORT_SHOWN_MS ? text : null
 }
 

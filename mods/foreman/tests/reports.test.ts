@@ -495,9 +495,13 @@ test('a report reaches the band while its notification has not answered, and sta
   await w.clock.advance(31 * SECOND)
   await w.clock.settle()
   expect(await ui.bandText()).toContain(OPENED)
-  await w.clock.advance(11 * MINUTE)
-  await w.clock.settle()
-  expect(await ui.bandText()).toContain('(1 more since you')
+  // The sub session keeps writing its file, so no other notice arrives, and
+  // the opened report is still the one the band keeps, alone, past its ten
+  // minutes.
+  await minutesPass(w, 11, { 'a.json': opened })
+  const band = await ui.bandText()
+  expect(band).toContain(OPENED)
+  expect(band).not.toContain('more since')
 })
 
 test('a surfaces read that never answers holds up only the reason line, which names the surfaces as unknown', async ($, on) => {
@@ -567,9 +571,23 @@ test('the band\'s value: a failure or a kept value adds to the count, typing rel
   expect(noticeArrived(shown, needs, at + 1)).toEqual({ value: shown, counted: false })
   expect(noticeFailed(shown, needs, at + 1)).toEqual({ text: 'ABC-1 needs you.', at: at + 1, kept: 1 })
   // A call that answers after a later notice reached the band leaves the
-  // later one as the newest, and counts both.
-  expect(noticeFailed({ text: MERGED, at: at + 5, kept: 0 }, report, at)).toEqual({ text: MERGED, at: at + 5, kept: 2 })
+  // later one as the newest. When the later one is counted already, this
+  // one joins the count. When it is not, it stays out of the count until its
+  // own notification fails, which then adds it once, with all its sentences.
   expect(noticeFailed({ text: MERGED, at: at + 5, kept: 2 }, report, at)).toEqual({ text: MERGED, at: at + 5, kept: 3 })
+  const earlierFailed = noticeFailed({ text: MERGED, at: at + 5, kept: 0 }, report, at)
+  expect(earlierFailed).toEqual({ text: MERGED, at: at + 5, kept: 1, newestOut: true })
+  expect(shownReport(earlierFailed, at + 100 * REPORT_SHOWN_MS)).toBe(`${MERGED} (1 more since your last message.)`)
+  const bothFailed = noticeFailed(earlierFailed, { newest: MERGED, count: 1, isReport: true }, at + 5)
+  expect(bothFailed).toEqual({ text: MERGED, at: at + 5, kept: 2 })
+  expect(shownReport(bothFailed, at + 100 * REPORT_SHOWN_MS)).toBe(`${MERGED} (1 more since your last message.)`)
+  const threeSentences = noticeFailed(earlierFailed, { newest: MERGED, count: 3, isReport: true }, at + 5)
+  expect(shownReport(threeSentences, at)).toBe(`${MERGED} (3 more since your last message.)`)
+  // A notice that arrives after one marked newestOut is counted, and the one
+  // it replaces leaves the band, so its own failure later still adds it once.
+  const third = noticeArrived(earlierFailed, { newest: VERDICTS, count: 1, isReport: true }, at + 6)
+  expect(third).toEqual({ value: { text: VERDICTS, at: at + 6, kept: 2 }, counted: true })
+  expect(noticeFailed(third.value, { newest: MERGED, count: 1, isReport: true }, at + 5)).toEqual({ text: VERDICTS, at: at + 6, kept: 3 })
   expect(afterTyped({ text: OPENED, at, kept: 3 }, at + 5)).toEqual({ text: OPENED, at: at + 5, kept: 0, released: true })
   // A notice whose call was still waiting when the person typed, and failed
   // after, is kept alone: the released one is not a later notice, so it is
