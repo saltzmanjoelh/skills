@@ -15353,3 +15353,150 @@ test('a session start prunes records of the linked checkout ninety days after th
   await clock.settle()
   expect([...stored.keys()].filter(key => key.startsWith('linked-checkout:'))).toEqual(['linked-checkout:o/r#2'])
 })
+
+// The records of the update are pruned by a function of their own, so a
+// state label record that cannot be read stops neither pruning.
+test('a session start prunes old records of the linked checkout even when the state label records cannot be read', async ($, on) => {
+  const clock = mock.clock(on, { now: 200 * 24 * 60 * 60_000 })
+  const stored = memoryStore(on, [
+    ['state-label:o/r#1', { label: 'stuck', at: 0 }],
+    ['linked-checkout:o/r#1', { merge: MERGE_COMMIT, at: 0, lines: ['old'] }],
+  ])
+  stored.hold.refused = 'state-label:'
+  engine(on)
+  fakeGitHub(on)
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await clock.settle()
+  expect(stored.has('linked-checkout:o/r#1')).toBe(false)
+})
+
+// The resume path after a usage limit renders the Merged step from the
+// stored snapshot when its own look fails, and reads the outcome of the
+// update from its record without starting it. The work is ongoing because
+// its progress record began after the watch, so the merge counts as an
+// earlier piece of work's and the hold still resumes. The look that stored
+// the merged snapshot read the record `before`, and the record is `after`
+// by the time the session resumes, so a prompt that states `after` read the
+// record again rather than the stored snapshot.
+// An `after` of null deletes the record, and takes the outcome off the
+// stored snapshot as the mod reads it, as a snapshot an older build stored
+// holds none.
+async function resumeOnMergedSnapshot($: Engine, on: On, before: object, after: object | null) {
+  const clock = mock.clock(on, { now: T0 })
+  let isOutcomeHidden = false
+  on('state.get', async ($, e, next) => {
+    const got = await next(e) as { value?: { value?: unknown; version: number } }
+    const snapshot = got.value?.value
+    if (!isOutcomeHidden || e.plugin !== 'builder' || e.key !== 'pr' || typeof snapshot !== 'object' || snapshot === null) return got as never
+    const { linked: _linked, ...rest } = snapshot as Record<string, unknown>
+    return { value: { ...got.value, value: rest } } as never
+  })
+  const stored = memoryStore(on, [[LINKED_KEY, before]])
+  mock.env(on, { HOME: '/h' })
+  engine(on)
+  const world = fakeGitHub(on)
+  linkedScript(world)
+  sessionTurns(on)
+  on('command.run', () => ({ text: '' }))
+  const usage = usageAnswers(on)
+  usage.rateLimits = [fiveHourAt('2026-10-12T02:00:00Z')]
+  const prompts = recordPrompts(on)
+  await watch($)
+  await clock.settle()
+  world.pr = openPullRequest({ state: 'MERGED', mergeCommit: { oid: MERGE_COMMIT } })
+  await $.command.run({ command: 'builder', args: 'poll' } as never)
+  await clock.advance(MINUTE)
+  await report($, 'spec', { title: 'Later work' })
+  await ownTurn($, 't1')
+  await ownTurn($, 't2', 'error')
+  await clock.settle()
+  if (after !== null) {
+    stored.set(LINKED_KEY, after)
+  } else {
+    stored.delete(LINKED_KEY)
+    isOutcomeHidden = true
+  }
+  const readsBefore = world.calls.filter(argv => argv.startsWith('gh pr view 7')).length
+  world.readsToFail = 100
+  await clock.advance(2 * HOUR + MINUTE)
+  // The resume path's own look ran and failed.
+  expect(world.calls.filter(argv => argv.startsWith('gh pr view 7')).length).toBeGreaterThan(readsBefore)
+  return { world, resumes: resumesOf(prompts) }
+}
+
+// A recorded outcome that the scripted update would never produce, so only
+// the record can have put it into the prompt.
+const RECORDED_LINE = `Updated: the linked checkout /recorded now holds the merge commit ${MERGE_COMMIT}, and its HEAD is ${MERGE_COMMIT}. The fetch came from the remote origin.`
+
+test('the resume prompt after a failed look states the recorded outcome of the update and runs none of its commands', async ($, on) => {
+  const { world, resumes } = await resumeOnMergedSnapshot($, on, { merge: MERGE_COMMIT, at: T0 }, { merge: MERGE_COMMIT, at: T0, lines: [RECORDED_LINE] })
+  expect(resumes.length).toBe(1)
+  expect(resumes[0]).toContain('The step that applies: Merged.')
+  expect(resumes[0]).toContain(`The mod has run the update of the linked checkout for this merge, and its outcome is: ${RECORDED_LINE}`)
+  expect(linkedCalls(world)).toEqual([])
+})
+
+test('the resume prompt after a failed look states a record with no outcome as left alone, and runs none of the update\'s commands', async ($, on) => {
+  const { world, resumes } = await resumeOnMergedSnapshot($, on, { merge: MERGE_COMMIT, at: T0, lines: [RECORDED_LINE] }, { merge: MERGE_COMMIT, at: T0 })
+  expect(resumes.length).toBe(1)
+  expect(resumes[0]).toContain('The step that applies: Merged.')
+  expect(resumes[0]).toContain('Left alone: the update of the linked checkout for this merge started and did not finish')
+  expect(resumes[0]).not.toContain(RECORDED_LINE)
+  expect(linkedCalls(world)).toEqual([])
+})
+
+// The sentence for a Merged step with no outcome for a reason other than an
+// unread merge commit.
+const NO_OUTCOME = 'The mod has no outcome of the update of the linked checkout to state'
+
+test('the resume prompt for a stored snapshot with no outcome and no record says the mod has none to state, and blames no unread merge commit', async ($, on) => {
+  const { world, resumes } = await resumeOnMergedSnapshot($, on, { merge: MERGE_COMMIT, at: T0, lines: [RECORDED_LINE] }, null)
+  expect(resumes.length).toBe(1)
+  expect(resumes[0]).toContain('The step that applies: Merged.')
+  expect(resumes[0]).toContain(NO_OUTCOME)
+  expect(resumes[0]).not.toContain('had not given the merge commit yet')
+  expect(resumes[0]).not.toContain(RECORDED_LINE)
+  expect(linkedCalls(world)).toEqual([])
+})
+
+test('an error of the mod\'s own around the update gives the Merged step that says it has no outcome to state, not that GitHub gave no merge commit', async ($, on) => {
+  const clock = mock.clock(on)
+  memoryStore(on)
+  on('env.get', () => { throw new Error('the environment could not be read') })
+  engine(on)
+  const world = fakeGitHub(on)
+  linkedScript(world)
+  await watch($)
+  await clock.settle()
+
+  world.pr = openPullRequest({ state: 'MERGED', mergeCommit: { oid: MERGE_COMMIT } })
+  const answer = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  expect(answer).toContain('The step that applies: Merged.')
+  expect(answer).toContain(NO_OUTCOME)
+  expect(answer).not.toContain('had not given the merge commit yet')
+  expect(answer).not.toContain('call `mcp__builder__watch` once more')
+})
+
+test('an update with forty broken links beside a checkout it updated still states the update, with the broken links cut to a few and a count', async ($, on) => {
+  const clock = mock.clock(on)
+  const stored = memoryStore(on)
+  mock.env(on, { HOME: '/h' })
+  engine(on)
+  const world = fakeGitHub(on)
+  linkedScript(world)
+  const broken = Array.from({ length: 40 }, (_, i) => `/h/.claude/skills/broken-${i}`)
+  world.linked['find /h/.claude/skills/ -mindepth 1 -maxdepth 1 -type l -print0'] = { stdout: ['/h/.claude/skills/implement', ...broken].map(link => `${link}\0`).join('') }
+  for (const link of broken) world.linked[`test -e ${link}`] = { exitCode: 1 }
+  await watch($)
+  await clock.settle()
+
+  world.pr = openPullRequest({ state: 'MERGED', mergeCommit: { oid: MERGE_COMMIT } })
+  const answer = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  expect(answer).toContain(UPDATED_LINE)
+  expect(answer).not.toContain(NO_OUTCOME)
+  expect(answer).toContain('The link /h/.claude/skills/broken-0 is broken')
+  expect(answer).not.toContain('The link /h/.claude/skills/broken-39 is broken')
+  expect(answer).toContain('30 more links')
+  const lines = (stored.get(LINKED_KEY) as { lines: string[] }).lines
+  expect(lines.length).toBeLessThanOrEqual(30)
+})

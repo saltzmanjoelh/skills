@@ -14,6 +14,7 @@
 
 import type { BaseFacts, Snapshot, Unpushed } from '../types'
 import { ciOf, countingRuns, failedCheckNames, failedRunsOf, headRunsIn, isChangesRequested, isUnfinished, roundInProgress, STATE_LABELS, type StateLabel } from './github'
+import { LINKED_KEPT } from './linked'
 import { factIn, isFullSha } from './review'
 import { printable } from './text'
 
@@ -22,10 +23,11 @@ export type Limit = { which: 'pushes' | 'rounds'; count: number; max: number }
 // The merge steps and the Merged step carry `unpushed`, the commits the head
 // branch's worktree holds that the head lacks, as the look listed them. The
 // Merged step also carries `linked`, the outcome of the mod's update of the
-// linked checkout, or null when the snapshot holds none, as when GitHub had
-// not given the merge commit yet.
+// linked checkout: its sentences, `unread` when GitHub had not given the
+// merge commit yet, so the update has not run, or null when the snapshot
+// holds no outcome for any other reason.
 export type Step =
-  | { kind: 'merged'; unpushed: Unpushed; linked: string[] | null }
+  | { kind: 'merged'; unpushed: Unpushed; linked: Linked }
   | { kind: 'closed' }
   | { kind: 'question' }
   | { kind: 'over-limit'; limits: Limit[] }
@@ -178,16 +180,21 @@ export function unpushedIn(raw: unknown): Unpushed {
   return { kind: 'some', commits: [...commits], total: u.total, isAncestor: u.isAncestor }
 }
 
-// How many sentences of the update's outcome a step keeps, and how long each
-// one may be.
-export const LINKED_KEPT = 30
+// How many sentences of the update's outcome a step keeps, which the update
+// itself never exceeds, and how long each one may be.
+export { LINKED_KEPT }
 const LINKED_LINE_MAX = 2000
 
-// The outcome of the update of the linked checkout that a snapshot holds, or
-// null when it holds none or one of another shape. The sentences were built
-// and cleaned by the mod, and each is made printable again here, because it
-// goes into a text.
-export function linkedIn(raw: unknown): string[] | null {
+// The outcome of the update of the linked checkout as a step carries it.
+export type Linked = string[] | 'unread' | null
+
+// The outcome of the update of the linked checkout that a snapshot holds:
+// its sentences, `unread` when the look found no merge commit and no record,
+// or null when it holds none or one of another shape. The sentences were
+// built and cleaned by the mod, and each is made printable again here,
+// because it goes into a text.
+export function linkedIn(raw: unknown): Linked {
+  if (raw === 'unread') return 'unread'
   if (!Array.isArray(raw) || raw.length === 0 || raw.length > LINKED_KEPT) return null
   if (!raw.every(line => typeof line === 'string')) return null
   return raw.map(line => printable(line, LINKED_LINE_MAX))
@@ -384,11 +391,16 @@ function unpushedLine(u: Unpushed): string {
   return `The worktree of the head branch holds ${count} the pull request's head lacks: ${u.commits.join(', ')}${more}. The head is ${u.isAncestor ? '' : 'not '}an ancestor of the worktree's HEAD.`
 }
 
-// The sentence that states the mod's update of the linked checkout. With no
-// outcome, the merge commit could not be read yet, and one more look reads it.
-function linkedLine(linked: string[] | null): string {
-  if (linked === null) {
+// The sentence that states the mod's update of the linked checkout. When the
+// merge commit could not be read yet, one more look reads it. With no outcome
+// for any other reason, such as an error of the mod's own or a snapshot an
+// older build stored, another look would not help, so the session reports it.
+function linkedLine(linked: Linked): string {
+  if (linked === 'unread') {
     return 'GitHub had not given the merge commit yet at the mod\'s last look, so the mod has not updated the linked checkout. First call `mcp__builder__watch` once more and follow the step it names. If it names this step with this sentence again, say in the report that the linked checkout was not updated, and go on with the rest of this step.'
+  }
+  if (linked === null) {
+    return 'The mod has no outcome of the update of the linked checkout to state for this merge, so the linked checkout may not have been updated. Say so in the report, and go on with the rest of this step.'
   }
   return `The mod has run the update of the linked checkout for this merge, and its outcome is: ${linked.join(' ')} Report it as ${see('Updating the linked checkout')} says, quoting what it quotes.`
 }

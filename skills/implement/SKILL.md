@@ -771,7 +771,8 @@ begins with one of these:
   stopped in the middle of it.
 
 The outcome can add sentences of its own: links of the merged repository
-that lie in worktrees, a broken link or a failed lookup elsewhere, a fetch
+that lie in worktrees, a broken link or a failed lookup elsewhere, with
+only the first few named and the rest counted, a fetch
 that exited with an error after the merge commit arrived, and a branch
 found checked out at the confirmation, with the command that shows whether
 the fast-forward moved it. The mod has already removed anything shaped like
@@ -782,7 +783,9 @@ and carry on with the issue, the follow-up issue and `/cleanup` whatever it
 is. When the step says instead that GitHub had not given the merge commit
 yet, call `mcp__builder__watch` once more and follow the step it names, as
 the step says; that is the only case in which the session asks for another
-look.
+look. When the step says that the mod has no outcome of the update to state,
+as after an error of the mod's own, say in the report that the linked
+checkout may not have been updated, and carry on without another look.
 
 ## Questions
 

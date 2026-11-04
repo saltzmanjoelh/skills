@@ -102,7 +102,8 @@ real repositories.
 - **The store record**, `linked-checkout:<owner>/<name>#<number>`, holds
   `{ merge, at, lines? }`. The record without `lines` is written before the
   first git command; `lines` is added when the update ends. Records older
-  than 90 days are pruned with the state labels.
+  than 90 days are pruned by their own function at session start, like the
+  mod's other records.
 - **A module map** from that key to the running promise is the claim. It is
   read and set in one synchronous block, with no await between, because
   `$.store` has no compare-and-set. The entry is removed once the record with

@@ -329,6 +329,7 @@ const EVERY_STEP: Step[] = [
   { kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'default', runs: [{ id: 5, attempt: 1 }, { id: 6, attempt: 2 }], isClaudeRead: true, unpushed: NONE },
   { kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'unread', runs: [], isClaudeRead: false, unpushed: UNLISTED },
   { kind: 'merged', unpushed: UNLISTED, linked: null },
+  { kind: 'merged', unpushed: NONE, linked: 'unread' },
   { kind: 'merged', unpushed: { kind: 'some', commits: ['abcdef012345', '0123456789ab'], total: 2, isAncestor: false }, linked: UPDATED },
 ]
 
@@ -695,15 +696,38 @@ test('each outcome of the update of the linked checkout reaches the Merged step\
   }
 })
 
-test('a Merged snapshot with no outcome of the update says the merge commit could not be read yet and asks for one more look', () => {
-  const text = textOf(chooseStep(snapshot({ state: 'MERGED' }), false))
+test('a Merged snapshot whose merge commit was not read yet says so and asks for one more look', () => {
+  const step = chooseStep({ ...snapshot({ state: 'MERGED' }), linked: 'unread' }, false)
+  expect(step).toMatchObject({ kind: 'merged', linked: 'unread' })
+  const text = textOf(step)
   expect(text).toContain('had not given the merge commit yet')
   expect(text).toContain('call `mcp__builder__watch` once more')
   expect(text).toContain('Follow-ups from <owner>/<name>#<n>')
 })
 
+// A snapshot with no outcome for any other reason: an older build stored
+// it, or it holds an outcome the step does not accept, such as one with more
+// sentences than it keeps.
+test('a Merged snapshot with no outcome for another reason says the mod has none to state, without blaming GitHub or asking for another look', () => {
+  for (const linked of [undefined, Array.from({ length: LINKED_KEPT + 1 }, () => 'a'), [1], 'other']) {
+    const step = chooseStep({ ...snapshot({ state: 'MERGED' }), ...(linked === undefined ? {} : { linked }) } as Snapshot, false)
+    expect(step).toMatchObject({ kind: 'merged', linked: null })
+    const text = textOf(step)
+    // The line after the step's name states the update; the follow-ups
+    // further on name GitHub for another reason.
+    const line = stepLines(step)[1]
+    expect(line).toContain('The mod has no outcome of the update of the linked checkout to state')
+    expect(line).toContain('may not have been updated')
+    expect(line).not.toContain('GitHub')
+    expect(text).not.toContain('merge commit yet')
+    expect(text).not.toContain('mcp__builder__watch')
+    expect(text).toContain('Follow-ups from <owner>/<name>#<n>')
+  }
+})
+
 test('an outcome a snapshot holds is kept only in its own shape, and made printable', () => {
   expect(linkedIn(['a', 'b'])).toEqual(['a', 'b'])
   expect(linkedIn(['a\nb\u001b[31m'])).toEqual(['a b'])
+  expect(linkedIn('unread')).toBe('unread')
   for (const raw of [undefined, null, 'a', [], [1], Array.from({ length: LINKED_KEPT + 1 }, () => 'a')]) expect(linkedIn(raw)).toBe(null)
 })

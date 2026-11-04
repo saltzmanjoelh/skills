@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { linkedCheckout, linkedKey, linkedRecordIn, namesRepository, quoted, recordedLinked, sourceOf, STARTED_NOT_FINISHED, updateLinkedCheckout, type LinkedIo } from '../hooks/linked'
+import { LINKED_KEPT, linkedCheckout, linkedKey, linkedRecordIn, namesRepository, quoted, recordedLinked, sourceOf, STARTED_NOT_FINISHED, updateLinkedCheckout, withinKept, type LinkedIo } from '../hooks/linked'
 
 // The update of the linked checkout after a merge, run against a hand-built
 // io: `process.run` answers from a script keyed on the argument vector, joined
@@ -550,4 +550,14 @@ test('a store that fails gives a left-alone outcome rather than an error', async
   const lines = await linkedCheckout(t.io, linkedKey('o/r', 7), { ...INPUT, now: 1 })
   expect(lines.join('\n')).toContain('Left alone')
   expect(t.calls).toEqual([])
+})
+
+test('an outcome longer than the step accepts is cut to that length, its last sentence counting what was left out', () => {
+  const short = Array.from({ length: LINKED_KEPT }, (_, i) => `line ${i}`)
+  expect(withinKept(short)).toEqual(short)
+  const long = Array.from({ length: LINKED_KEPT + 5 }, (_, i) => `line ${i}`)
+  const cut = withinKept(long)
+  expect(cut.length).toBe(LINKED_KEPT)
+  expect(cut.slice(0, -1)).toEqual(long.slice(0, LINKED_KEPT - 1))
+  expect(cut.at(-1)).toBe('The outcome went on for 6 more sentences, which are left out here.')
 })

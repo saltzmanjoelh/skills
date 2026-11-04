@@ -45,6 +45,11 @@ const QUOTE_MAX = 300
 // The batched fetch of what a partial clone lacks runs this many rounds at
 // most.
 const BATCH_ROUNDS = 3
+// How many sentences an outcome may hold, which is also how many the Merged
+// step accepts, and how many of the broken links and failed lookups it names
+// one by one before it counts the rest.
+export const LINKED_KEPT = 30
+const PROBLEMS_SHOWN = 10
 
 const OLD_CODE = 'New sessions will run the old code until someone updates it.'
 const MAY_SHOW_AHEAD = 'the checkout may show ahead of its remote until its next fetch'
@@ -264,10 +269,32 @@ async function findLinks($: LinkedIo, folders: string[]): Promise<{ found: Found
 // never throws: an error of its own becomes a left-alone sentence.
 export async function updateLinkedCheckout($: LinkedIo, input: LinkedInput): Promise<string[]> {
   try {
-    return await updateAll($, input)
+    return withinKept(await updateAll($, input))
   } catch {
     return [leftAloneAll('the mod met an error of its own while it ran the update')]
   }
+}
+
+// An outcome cut to the sentences the Merged step accepts, the last of them
+// saying how many were left out. The broken links and failed lookups are
+// already counted rather than listed past the first few (see shownProblems),
+// so only an outcome for many checkouts of one repository reaches the cut.
+export function withinKept(lines: string[]): string[] {
+  if (lines.length <= LINKED_KEPT) return lines
+  const kept = lines.slice(0, LINKED_KEPT - 1)
+  return [...kept, `The outcome went on for ${lines.length - kept.length} more sentences, which are left out here.`]
+}
+
+type Problem = { short: string; sentence: string }
+
+// The broken links and failed lookups as the outcome names them: the first
+// few one by one, and the rest counted in one more, so that a folder of many
+// broken links never pushes the rest of the outcome out of the step.
+function shownProblems(problems: Problem[]): Problem[] {
+  if (problems.length <= PROBLEMS_SHOWN) return problems
+  const more = problems.length - PROBLEMS_SHOWN
+  const what = `${more} more links were broken or could not be looked up`
+  return [...problems.slice(0, PROBLEMS_SHOWN), { short: what, sentence: `Also, ${what}, and they are not listed here.` }]
 }
 
 async function updateAll($: LinkedIo, input: LinkedInput): Promise<string[]> {
@@ -283,7 +310,7 @@ async function updateAll($: LinkedIo, input: LinkedInput): Promise<string[]> {
   // Step 2: look at each main checkout once, however many links lead into it.
   const linked = found.filter((f): f is Extract<Found, { kind: 'linked' }> => f.kind === 'linked')
   const names = new Map<string, string>()
-  const problems = found.filter(f => f.kind !== 'linked').map(f => f.kind === 'broken'
+  const problems: Problem[] = found.filter(f => f.kind !== 'linked').map(f => f.kind === 'broken'
     ? { short: `the link ${shown(f.link)} is broken`, sentence: `The link ${shown(f.link)} is broken, so whatever it pointed into was not looked at.` }
     : { short: `${f.what}${quote(f.message)}`, sentence: `Also, ${f.what}${quote(f.message)}.` })
   for (const main of unique(linked.map(f => f.main))) {
@@ -296,9 +323,10 @@ async function updateAll($: LinkedIo, input: LinkedInput): Promise<string[]> {
     }
     names.set(main, isPlainRepo(name) ? name : 'a repository whose name is not plain')
   }
+  const named = shownProblems(problems)
   const matched = [...names].filter(([, name]) => name.toLowerCase() === repo.toLowerCase()).map(([main]) => main)
   if (matched.length === 0) {
-    if (problems.length > 0) return [leftAloneAll(`no linked checkout is ${repo}, and ${problems.map(p => p.short).join('; ')}, which might have been it`)]
+    if (named.length > 0) return [leftAloneAll(`no linked checkout is ${repo}, and ${named.map(p => p.short).join('; ')}, which might have been it`)]
     return [notLinkedLine(repo, home, unique([...names.values()]))]
   }
 
@@ -307,7 +335,7 @@ async function updateAll($: LinkedIo, input: LinkedInput): Promise<string[]> {
   const isMatched = (f: { main: string }) => matched.includes(f.main)
   const worktrees = unique(linked.filter(f => isMatched(f) && f.tree !== f.main).map(f => f.tree))
   const toUpdate = matched.filter(main => linked.some(f => f.main === main && f.tree === main))
-  const extras = [...(worktrees.length > 0 && toUpdate.length > 0 ? [worktreesLine(repo, worktrees)] : []), ...problems.map(p => p.sentence)]
+  const extras = [...(worktrees.length > 0 && toUpdate.length > 0 ? [worktreesLine(repo, worktrees)] : []), ...named.map(p => p.sentence)]
   if (toUpdate.length === 0) return [onlyWorktreesLine(repo, worktrees), ...extras]
 
   // Step 3: the repository's address and default branch, named so that gh

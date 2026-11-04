@@ -366,14 +366,15 @@ async function fetchSnapshot($: $, r: SnapshotTarget): Promise<Snapshot | null> 
 // The store is read first, inside linkedCheckout, and a record there means no
 // git runs. A pull request GitHub reports merged with no merge commit yet
 // claims nothing and records nothing, so a later look runs the update once
-// the commit can be read; the step then says it could not be read yet. It
-// never throws, because the mod's own errors must never stop the Merged step
-// from being handed over.
-async function linkedFor($: $, r: SnapshotTarget, live: GhPullRequest): Promise<string[] | null> {
+// the commit can be read; with no record either, it answers `unread`, and the
+// step says the commit could not be read yet. It never throws, because the
+// mod's own errors must never stop the Merged step from being handed over;
+// one answers null, which the step states as no outcome.
+async function linkedFor($: $, r: SnapshotTarget, live: GhPullRequest): Promise<string[] | 'unread' | null> {
   try {
     const key = linkedKey(r.repo, r.number)
     const merge = live.mergeCommit?.oid
-    if (typeof merge !== 'string' || !isFullSha(merge)) return await recordedLinked($, key)
+    if (typeof merge !== 'string' || !isFullSha(merge)) return (await recordedLinked($, key)) ?? 'unread'
     const home = await $.env.get('HOME')
     return await linkedCheckout($, key, { home, repo: r.repo, base: live.baseRefName ?? '', merge, now: await $.clock.now() })
   } catch {
@@ -391,7 +392,9 @@ async function linkedFor($: $, r: SnapshotTarget, live: GhPullRequest): Promise<
 // step that renders no listing keeps the snapshot as it is. For the Merged
 // step, the outcome of the update of the linked checkout is read from its
 // record only: this runs from the stuck prompt and the resume path, which are
-// not looks, so it never starts the update.
+// not looks, so it never starts the update. With no record, the stored
+// snapshot's own outcome stands, and with none there either the step states
+// that the mod has no outcome.
 async function relisted($: $, r: SnapshotTarget, s: Snapshot): Promise<Snapshot> {
   if (!needsListing(chooseStep(s, false))) return s
   const isMerged = chooseStep(s, false).kind === 'merged'
@@ -3274,18 +3277,22 @@ function labelNamesIn(out: string | null): string[] | null {
 }
 
 // Drops each state label record set more than ninety days ago, and one stored
-// in another shape at once. The records of the update of the linked checkout
-// go the same way, ninety days after their update started.
+// in another shape at once.
 async function pruneStateLabels($: $) {
   const now = await $.clock.now()
   for (const key of await $.store.keys()) {
-    if (key.startsWith(LINKED_PREFIX)) {
-      if (isLinkedStale(await $.store.get(key), now)) await $.store.delete(key)
-      continue
-    }
     if (!key.startsWith(STATE_LABEL_PREFIX)) continue
     const record = labelRecordIn(await $.store.get(key))
     if (record === null || now - record.at > STATE_LABEL_KEPT_MS) await $.store.delete(key)
+  }
+}
+
+// Drops each record of the update of the linked checkout whose update started
+// more than ninety days ago, and one stored in another shape at once.
+async function pruneLinked($: $) {
+  const now = await $.clock.now()
+  for (const key of await $.store.keys()) {
+    if (key.startsWith(LINKED_PREFIX) && isLinkedStale(await $.store.get(key), now)) await $.store.delete(key)
   }
 }
 
@@ -4920,6 +4927,7 @@ export const register: Register = on => {
     void pruneTold($).catch(() => undefined)
     void pruneOwed($).catch(() => undefined)
     void pruneStateLabels($).catch(() => undefined)
+    void pruneLinked($).catch(() => undefined)
     void startUsage($).catch(() => undefined)
     void pruneSends($).catch(() => undefined)
     // Watching starts only when asked (the watch tool or /builder watch), so a
