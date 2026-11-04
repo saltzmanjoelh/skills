@@ -279,7 +279,7 @@ test('a notification that cannot go is logged', async ($, on) => {
   await start($)
   await foreman($)
   await w.clock.settle()
-  expect(await ui.newestLog()).toBe('Could not raise a notification (disabled): ABC-1 needs you.')
+  expect(await ui.newestLog()).toBe('ABC-1 needs you. (notification not raised: disabled)')
 })
 
 test('a needs-you notice whose notification fails stays in the band until the person types, with one line of its own in the log', async ($, on) => {
@@ -293,7 +293,11 @@ test('a needs-you notice whose notification fails stays in the band until the pe
   await foreman($)
   await w.clock.settle()
   const lines = await ui.logLines()
-  expect(lines.filter(line => line.includes('ABC-1 needs you'))).toEqual(['Could not raise a notification (no-surface): ABC-1 needs you: a question is open'])
+  expect(lines.filter(line => line.includes('ABC-1 needs you'))).toEqual(['ABC-1 needs you: a question is open (notification not raised: no-surface)'])
+  // The line that says once why notifications fail comes before the notice's
+  // own line, so the notice is the newest line.
+  expect(lines.at(-2)).toBe('Could not raise notifications (no-surface; surfaces attached: none), so the band keeps each report until your next message.')
+  expect(lines.at(-1)).toBe('ABC-1 needs you: a question is open (notification not raised: no-surface)')
   await minutesPass(w, 15, { 'a.json': needs })
   expect(await ui.bandText()).toContain('ABC-1 needs you: a question is open')
 })
@@ -662,7 +666,7 @@ test('a notification that throws, and a nudge the desktop app refuses, are logge
   await start($)
   await foreman($)
   await w.clock.settle()
-  expect(await ui.paneText()).toContain('Could not raise a notification: ABC-1 needs you.')
+  expect(await ui.paneText()).toContain('ABC-1 needs you. (notification not raised: the call failed)')
   await ui.pane.press({ key: 'nudge-b.json' })
   await w.clock.settle()
   expect(await ui.newestLog()).toBe(`Could not nudge ABC-2: ${REASONS.sendRefused}.`)
@@ -677,7 +681,7 @@ test('a notification that never answers is given up on after 30 seconds', async 
   await foreman($)
   await w.clock.advance(31 * SECOND)
   await w.clock.settle()
-  expect(await ui.paneText()).toContain('Could not raise a notification, because it did not go within 30 seconds: ABC-1 needs you.')
+  expect(await ui.paneText()).toContain('ABC-1 needs you. (notification not raised: no answer within 30 seconds)')
 })
 
 test('work a read decided before a reload dropped its timer is carried out once the timers are armed again', async ($, on) => {

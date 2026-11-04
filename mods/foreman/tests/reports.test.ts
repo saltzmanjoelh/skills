@@ -132,6 +132,23 @@ test('two milestones in one read give one notification holding both, both in the
   expect(band).not.toContain('ABC-1 opened pull request #7.')
 })
 
+test('two milestones in one read whose notification fails leave one marked line holding both', async ($, on) => {
+  const w = world(on)
+  w.engine.notify = 'off'
+  const a = working('ABC-1')
+  const b = working('ABC-2')
+  w.folder.put('a.json', a)
+  w.folder.put('b.json', b)
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await minutesPass(w, 1, { 'a.json': a, 'b.json': b })
+  await minutesPass(w, 1, { 'a.json': working('ABC-1', { pr: pr(7, 'OPEN') }), 'b.json': working('ABC-2', { pr: pr(8, 'OPEN') }) })
+  const lines = await ui.logLines()
+  expect(lines.filter(line => line.includes('opened pull request'))).toEqual(['ABC-1 opened pull request #7. ABC-2 opened pull request #8. (notification not raised: disabled)'])
+  expect(lines.at(-1)).toBe('ABC-1 opened pull request #7. ABC-2 opened pull request #8. (notification not raised: disabled)')
+})
+
 test('a milestone and an idle sub session in one read wake the parent with exactly the idle line, and report the milestone', async ($, on) => {
   const w = world(on)
   const a = working('ABC-1')
@@ -241,8 +258,13 @@ test('a report whose notification is not raised is in the log once and in the ba
   await minutesPass(w, 1, { 'a.json': a })
   await minutesPass(w, 1, { 'a.json': working('ABC-1', { pr: pr(7, 'OPEN') }) })
   const lines = await ui.logLines()
-  expect(lines.filter(line => line.includes('ABC-1 opened pull request #7.'))).toEqual(['ABC-1 opened pull request #7.'])
-  expect(lines).toContain('Could not raise notifications (disabled; surfaces attached: none), so the band keeps each report until your next message.')
+  // The report leaves one line, marked, after the line that says once why
+  // notifications fail, so the newest line is the report's.
+  expect(lines.filter(line => line.includes('ABC-1 opened pull request #7.'))).toEqual(['ABC-1 opened pull request #7. (notification not raised: disabled)'])
+  expect(lines.slice(-2)).toEqual([
+    'Could not raise notifications (disabled; surfaces attached: none), so the band keeps each report until your next message.',
+    'ABC-1 opened pull request #7. (notification not raised: disabled)',
+  ])
   expect(await ui.bandText()).toContain('ABC-1 opened pull request #7.')
   expect(w.engine.prompts).toEqual([])
 })
@@ -377,13 +399,15 @@ test('a report delivered while another is kept adds to the count, so the kept on
   expect(await ui.bandText()).toContain(`${VERDICTS} (1 more since your last message.)`)
 })
 
-test('a failed report adds one log line, its sentence, and the first failure of a load adds one line naming the reason and the surfaces', async ($, on) => {
+test('a failed report adds one marked log line, and the first failure of a load adds one line naming the reason and the surfaces before it', async ($, on) => {
   const { w, ui } = await openedUnseen($, on)
   const first = await ui.logLines()
   expect(first.filter(line => line.startsWith('Could not raise'))).toEqual([reasonLine('no-surface', 'desktop')])
+  expect(first.slice(-2)).toEqual([reasonLine('no-surface', 'desktop'), `${OPENED} (notification not raised: no-surface)`])
+  expect(first).not.toContain(OPENED)
   const verdicts = working('ABC-1', { pr: pr(7, 'OPEN', PAIR) })
   await minutesPass(w, 1, { 'a.json': verdicts })
-  expect((await ui.logLines()).slice(first.length)).toEqual([VERDICTS])
+  expect((await ui.logLines()).slice(first.length)).toEqual([`${VERDICTS} (notification not raised: no-surface)`])
 })
 
 test('a notification that does not answer in time, and one that throws, each log a reason line of their own once', async ($, on) => {
@@ -526,7 +550,7 @@ test('a surfaces read that never answers holds up only the reason line, which na
   expect(await ui.bandText()).toContain(OPENED)
 })
 
-test('a band write that is refused loses the report from the band only, and the log still holds its sentence and the reason line', async ($, on) => {
+test('a band write that is refused loses the report from the band only, and the log still holds its sentence, marked as not raised, and the reason line', async ($, on) => {
   const w = world(on)
   on('state.set', ($, e, next) => (e.plugin === 'foreman' && e.key === 'report' ? { deny: 'refused' } as never : next(e)))
   w.engine.notify = 'off'
@@ -540,7 +564,7 @@ test('a band write that is refused loses the report from the band only, and the 
   await minutesPass(w, 1, { 'a.json': working('ABC-1', { pr: pr(7, 'OPEN') }) })
   expect(await ui.bandText()).not.toContain(OPENED)
   const lines = await ui.logLines()
-  expect(lines).toContain(OPENED)
+  expect(lines).toContain(`${OPENED} (notification not raised: no-surface)`)
   expect(lines).toContain(reasonLine('no-surface', 'none'))
 })
 

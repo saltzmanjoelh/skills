@@ -6,16 +6,17 @@ import { CALL_TIMEOUT_MS, decide, desktopOf, freedSlotIn, freeSlotsOfShown, GONE
 import { isSvgSurface } from './art'
 import { becameParentAnswer, COMMAND, commandOf, isCommandText, PASSED_ON, PASTED_LINE, pastedCommandIn, slotsAnswer, START_FOREMAN_FALLBACK, START_FOREMAN_OFF, startForemanText, type Command } from './commands'
 import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, everySession, failureLine, linkedFamily, listSessions, NUDGE_TEXT, openSession, readHeader, REASONS, sendMessage, WHOLE_LOCAL_ID, type DesktopCall, type Listed, type OpenResult, type SavedCopies, type SendResult } from './desktop'
+import { FOLDS_CLOSED, foldsIn, menuPressed, prunedMenus } from './glance'
 import { acceptedLog, beginFailedNotice, heldLine, heldLog, heldNotice, heldSentence, isHeldRefusal, isPersonPrompt, keyOfTitle, topUpLine } from './held'
 import { ignoredLine, readIssueLink } from './links'
 import { afterConsumed, emptyMarkers, FIRST_MARKER_LOG, MARKERS_KEPT_MS, MARKERS_PREFIX, markersIn, markersKey, markersNewest, type MarkersRecord } from './markers'
 import { checkedLine, isAppParts, isNotedReply, isStatusChanged, keptLine, keptNames, NOTED, NOTED_REPLY, notesIn } from './notes'
 import { afterTyped, bandTree, noticeArrived, noticeFailed, PANE, paneTree, shownReport, type BandNotice, type Elements, type StoredReport, type View } from './pane'
-import type { ForemanCheck, ForemanEffect, ForemanParent, ForemanTickets } from '../types'
+import type { ForemanCheck, ForemanEffect, ForemanFolds, ForemanLogLine, ForemanParent, ForemanTickets } from '../types'
 import { PARENT_OFF, parentIn, slotsOf, storeKey } from './parent'
 import { usageIn } from './record'
-import { spendOf, spentSum, ticketTimes, timeSum, withQueued } from './spend'
-import { afterRead, nameOf, nextReadDelay, READ_LATER_MS, rowsOf, type FileRead, type SubRow } from './subs'
+import { mergedOf, spendOf, spentSum, ticketTimes, timeSum, withQueued } from './spend'
+import { afterRead, isBusy, nameOf, nextReadDelay, READ_LATER_MS, rowsOf, type FileRead, type SubRow } from './subs'
 import { printable } from './text'
 import {
   addWork, briefFor, carriesTicket, fallbackOf, hasWork, isOffRefused, joinOwners, localIdIn, newPairing, nextPlace, NO_TICKET_SENTENCE, OFF_LOG, OFF_REFUSAL, OUTBOX_EMPTY, ownsTicket, queuedShown,
@@ -45,6 +46,10 @@ const quietReply = atom({ plugin: 'foreman', key: 'quietReply' } as const, false
 // the count of notices kept since the person last typed (see noticeArrived
 // in pane.tsx). It is never stored in the ledger, so a restart drops it.
 const report = atom({ plugin: 'foreman', key: 'report' } as const, null)
+// Which of the pane's rows the person unfolded: the Log row, the Token
+// details row and the menu row of each card. It lives in $.state only, so a
+// restart folds every row again. It is read through foldsIn in glance.ts.
+const folds = atom({ plugin: 'foreman', key: 'folds' } as const, FOLDS_CLOSED)
 
 // The spending builder publishes for the session it runs in, which ownSpend
 // reads. Builder writes it; foreman only reads it.
@@ -146,20 +151,45 @@ async function addLog($: $, text: string) {
   await addLogs($, [text])
 }
 
-// Adds several lines to the log in one update, each as addLog would.
-async function addLogs($: $, texts: readonly string[]) {
-  if (texts.length === 0) return
+// Adds several lines to the log in one update, each as addLog would, and
+// answers the time it wrote them at.
+async function addLogs($: $, texts: readonly string[]): Promise<number> {
   const at = await $.clock.now()
-  await update($, log, lines => {
-    let kept = Array.isArray(lines) ? lines : []
-    for (const text of texts) {
-      const last = kept.at(-1)
-      kept = last !== undefined && last.text === text
-        ? [...kept.slice(0, -1), { at, text, times: (last.times ?? 1) + 1 }]
-        : [...kept, { at, text }].slice(-LOG_KEPT)
-    }
-    return kept
-  })
+  if (texts.length === 0) return at
+  await update($, log, lines => withLines(Array.isArray(lines) ? lines : [], texts, at))
+  return at
+}
+
+// The log with `texts` added at `at`: a line the same as the newest one is
+// counted on that one rather than added, and only the newest LOG_KEPT lines
+// are kept.
+function withLines(lines: readonly ForemanLogLine[], texts: readonly string[], at: number): ForemanLogLine[] {
+  let kept = [...lines]
+  for (const text of texts) {
+    const last = kept.at(-1)
+    kept = last !== undefined && last.text === text
+      ? [...kept.slice(0, -1), { at, text, times: (last.times ?? 1) + 1 }]
+      : [...kept, { at, text }].slice(-LOG_KEPT)
+  }
+  return kept
+}
+
+// The log without the lines that `texts` wrote at `at`, as showReports wrote
+// a report's sentences before its notification failed. The newest line with
+// each text and that time is taken out, or has its count lowered when the
+// same text came more than once in a row. A line already pushed out of the
+// kept lines is skipped.
+function withoutLines(lines: readonly ForemanLogLine[], texts: readonly string[], at: number): ForemanLogLine[] {
+  const kept = [...lines]
+  for (const text of [...texts].reverse()) {
+    let i = kept.length - 1
+    while (i >= 0 && !(kept[i]!.text === text && kept[i]!.at === at)) i--
+    if (i < 0) continue
+    const times = kept[i]!.times ?? 1
+    if (times > 1) kept[i] = times === 2 ? { at, text } : { at, text, times: times - 1 }
+    else kept.splice(i, 1)
+  }
+  return kept
 }
 
 // Reads the Issue link fact from the session's working folder, keeps what it
@@ -346,6 +376,7 @@ async function readAndSchedule($: $) {
       await update($, watchingSince, () => since)
     }
     const { decision, rows, written } = await decideNow($, listing.exists, listing.found !== null, since, now)
+    await pruneMenus($).catch(() => undefined)
     const usual = nextReadDelay(shownRows(rows, decision.tickets))
     const checkDue = soonestDue(written.checks)
     const dues = [decision.nextDueAt, checkDue].filter((at): at is number => at !== null)
@@ -474,9 +505,13 @@ async function nudge($: $, to: string, name: string, why: string, text = NUDGE_T
 }
 
 // Why a notification did not go: the key that says whether this load logged
-// the reason already, the reason's words for that line, and the notice's own
-// line for a notice that is not quiet.
-type NotifyFailure = { key: string; words: string; line: string }
+// the reason already, and the reason's words for that line and for the
+// notice's own line.
+type NotifyFailure = { key: string; words: string }
+
+// The lines a report wrote to the log before its notification was tried:
+// their texts and the time addLogs wrote them at.
+type LoggedReport = { texts: readonly string[]; at: number }
 
 // Raises one native notification and records how it went. The engine raises
 // one only by writing a terminal's own notification sequence, so it can never
@@ -485,11 +520,20 @@ type NotifyFailure = { key: string; words: string; line: string }
 // noticeArrived in pane.tsx), so it never waits on the call, and again when
 // the call fails (see noticeFailed), so a notice whose notification failed
 // stays in the band until the person next types; a failed write of the band
-// loses only that. The first failure for each reason in this load then logs
-// one line naming the reason and the surfaces attached. Last, a notice that
-// is not `quiet`, whose text no other log line holds, logs its own line, so
-// every notice gives one line in the log.
-async function notify($: $, text: string, { quiet = false, band }: { quiet?: boolean; band?: BandNotice } = {}) {
+// loses only that.
+//
+// A notice that went and is not `quiet` logs `Raised a notification: ` and
+// its text. A notice that failed and is not `quiet`, or that carries the
+// report lines it `logged`, ends in one marked line, its text followed by
+// `(notification not raised: <reason>)`, so the newest line of the log says
+// that the notice was not raised. One update of the log writes that line, so
+// nothing can land between its parts: it first takes out the report's own
+// unmarked lines, then adds the line naming the reason and the surfaces
+// attached when it is the first failure for that reason in this load, and
+// then the marked line. A quiet notice that logged nothing of its own, such
+// as a held issue's notice, whose own log line says it in other words, logs
+// only the reason line.
+async function notify($: $, text: string, { quiet = false, band, logged }: { quiet?: boolean; band?: BandNotice; logged?: LoggedReport } = {}) {
   const at = await $.clock.now()
   let counted = false
   if (band !== undefined) {
@@ -503,26 +547,32 @@ async function notify($: $, text: string, { quiet = false, band }: { quiet?: boo
   try {
     const sent = await within($, $.ui.notify(text, { title: 'foreman' }))
     if (sent === TIMED_OUT) {
-      failure = {
-        key: 'timed-out',
-        words: `no answer within ${CALL_TIMEOUT_MS / 1000} seconds`,
-        line: `Could not raise a notification, because it did not go within ${CALL_TIMEOUT_MS / 1000} seconds: ${text}`,
-      }
+      failure = { key: 'timed-out', words: `no answer within ${CALL_TIMEOUT_MS / 1000} seconds` }
     } else if (sent.isSent === true) {
       failure = null
     } else {
       const reason = typeof sent.reason === 'string' ? printable(sent.reason, 40) : 'unknown'
-      failure = { key: `reason:${reason}`, words: reason, line: `Could not raise a notification (${reason}): ${text}` }
+      failure = { key: `reason:${reason}`, words: reason }
     }
   } catch {
-    failure = { key: 'threw', words: 'the call failed', line: `Could not raise a notification: ${text}` }
+    failure = { key: 'threw', words: 'the call failed' }
   }
   if (band !== undefined && failure !== null && !counted) await update($, report, raw => noticeFailed(raw, band, at)).catch(() => undefined)
-  if (failure !== null && !reasonsLogged.has(failure.key)) {
-    reasonsLogged.add(failure.key)
-    await addLog($, `Could not raise notifications (${failure.words}; surfaces attached: ${await surfacesWords($)}), so the band keeps each report until your next message.`)
+  if (failure === null) {
+    if (!quiet) await addLog($, `Raised a notification: ${text}`)
+    return
   }
-  if (!quiet) await addLog($, failure === null ? `Raised a notification: ${text}` : failure.line)
+  const isFirst = !reasonsLogged.has(failure.key)
+  reasonsLogged.add(failure.key)
+  const reasonLine = isFirst ? [`Could not raise notifications (${failure.words}; surfaces attached: ${await surfacesWords($)}), so the band keeps each report until your next message.`] : []
+  const marked = quiet && logged === undefined ? [] : [`${text} (notification not raised: ${failure.words})`]
+  if (reasonLine.length + marked.length === 0) return
+  const now = await $.clock.now()
+  await update($, log, lines => {
+    const kept = Array.isArray(lines) ? lines : []
+    const without = logged === undefined ? kept : withoutLines(kept, logged.texts, logged.at)
+    return withLines(without, [...reasonLine, ...marked], now)
+  })
 }
 
 // The surfaces the session draws on, for the line that says why
@@ -633,14 +683,16 @@ async function carryOut($: $) {
 const OLD_SLOT_LINE = / (?:one slot free; pick the next issue and start it\.|(?:[a-z]+|[0-9]+) slots free; pick the next issues and start them\.)$/
 
 // Shows report sentences without waking the parent's model: each as a line
-// in the log, and all of them joined in one quiet notification, since the log
-// already holds the sentences. The newest goes in the band, for ten minutes
-// when the notification went and until the person next types when it did
-// not, as notify says.
+// in the log, and all of them joined in one quiet notification. The lines are
+// written before the notification is tried, so a reload or a restart while
+// the call waits loses none of them. When the notification fails, notify
+// puts one marked line in their place, as it says. The newest sentence goes
+// in the band, for ten minutes when the notification went and until the
+// person next types when it did not.
 async function showReports($: $, sentences: readonly string[]) {
   if (sentences.length === 0) return
-  await addLogs($, sentences)
-  await notify($, sentences.join(' '), { quiet: true, band: { newest: sentences.at(-1)!, count: sentences.length, isReport: true } })
+  const at = await addLogs($, sentences)
+  await notify($, sentences.join(' '), { quiet: true, band: { newest: sentences.at(-1)!, count: sentences.length, isReport: true }, logged: { texts: sentences, at } })
 }
 
 // Lets a notice the band keeps go once the person types: it shows for ten
@@ -864,13 +916,19 @@ async function ownSpend($: $) {
 // the drawing to. They are also worked out only in a parent, because only the
 // parent's pane shows them. The count of status messages is given only in a
 // parent too, and reads no state. The sub sessions that wait and whether a
-// slot is free come from the same ledger read, and only in a parent.
+// slot is free come from the same ledger read, and only in a parent. A
+// ledger that cannot be read draws no rows and no queue, and leaves the sums
+// and the merged count unknown, rather than failing the pane. The fold
+// states are read only for the pane, which alone draws them.
 async function view($: $, isPane: boolean): Promise<View> {
   const settings = parentIn(await read($, parent))
   const due = await read($, nextReadAt)
   const lines = await read($, log)
-  const ledger = settings.isOn ? ticketsIn(await read($, tickets)) : null
+  const got = settings.isOn ? await ledgerRead($) : null
+  const isKnown = got !== null && got.isRead
+  const ledger = got === null ? null : got.ledger
   const isPaneInParent = isPane && ledger !== null
+  const isSummed = isPaneInParent && isKnown
   const rows = ledger === null ? [] : shownRows(await rowsNow($), ledger)
   const now = await $.clock.now()
   const slots = slotsOf(settings, currentOptions.slots)
@@ -882,9 +940,9 @@ async function view($: $, isPane: boolean): Promise<View> {
     nextReadAt: typeof due === 'number' && Number.isFinite(due) ? due : null,
     log: Array.isArray(lines) ? lines : [],
     issueLink: settings.isOn ? issueAddress : null,
-    subsSpent: isPaneInParent ? spentSum(ledger) : null,
-    rowTimes: isPaneInParent ? new Map(rows.map(row => [row.file, ticketTimes(ledger, row.record.ticket)])) : new Map(),
-    subsTime: isPaneInParent ? timeSum(ledger) : null,
+    subsSpent: isSummed ? spentSum(ledger) : null,
+    rowTimes: isSummed ? new Map(rows.map(row => [row.file, ticketTimes(ledger, row.record.ticket)])) : new Map(),
+    subsTime: isSummed ? timeSum(ledger) : null,
     ownSpent: isPaneInParent ? await ownSpend($) : null,
     report: settings.isOn ? shownReport(await read($, report), now) : null,
     markers: settings.isOn ? markers : null,
@@ -895,7 +953,47 @@ async function view($: $, isPane: boolean): Promise<View> {
       place: i + 1,
     })),
     isSlotFree: ledger !== null && freeSlotsOfShown(ledger, rows, now, slots) > 0,
+    folds: isPane ? foldsIn(await read($, folds)) : FOLDS_CLOSED,
+    merged: isSummed ? mergedOf(ledger) : null,
   }
+}
+
+// The ledger for a draw, and whether it could be read. One that cannot be
+// read stands in as the empty ledger.
+async function ledgerRead($: $): Promise<{ ledger: ForemanTickets; isRead: boolean }> {
+  try {
+    return { ledger: ticketsIn(await read($, tickets)), isRead: true }
+  } catch {
+    return { ledger: TICKETS_EMPTY, isRead: false }
+  }
+}
+
+// The status files of the busy cards the pane draws now, which are the only
+// cards whose menu row can be open.
+async function busyFilesNow($: $): Promise<string[]> {
+  return (await shownNow($)).filter(isBusy).map(row => row.file)
+}
+
+// Closes the menu row of every card that is no longer busy, so a card that
+// comes back starts folded. It writes nothing when every open menu still has
+// its card.
+async function pruneMenus($: $) {
+  const busyFiles = await busyFilesNow($)
+  await update($, folds, raw => {
+    const f = foldsIn(raw)
+    const pruned = prunedMenus(f, busyFiles)
+    return pruned === f ? raw : pruned
+  })
+}
+
+// Sets one of the pane's fold states, as `change` gives it from the folds
+// read now, and writes nothing when `change` leaves them as they were.
+async function setFolds($: $, change: (f: ForemanFolds) => ForemanFolds) {
+  await update($, folds, raw => {
+    const f = foldsIn(raw)
+    const changed = change(f)
+    return changed === f ? raw : changed
+  })
 }
 
 // The elements the band and the pane draw with on the surface `e` names:
@@ -960,7 +1058,7 @@ async function openQueued($: $, ticket: string) {
 // The Nudge button: the same message the idle rule sends, at once, to the
 // row's desktop session. It does not count toward the idle rule's nudges.
 async function nudgeRow($: $, file: string) {
-  const row = (await shownNow($)).find(r => r.file === file && r.isReleased !== true)
+  const row = (await shownNow($)).find(r => r.file === file && isBusy(r))
   if (row === undefined) return
   const p = ticketsIn(await read($, tickets)).pairings.find(q => ownsTicket(q, row))
   const to = p === undefined ? null : desktopOf(p, row)
@@ -1016,7 +1114,7 @@ async function slotFreed($: $, waits: boolean) {
 // waits unclaimed in the queue, the same ledger update keeps the freed slot
 // for it, as slotFreed says.
 async function releaseRow($: $, file: string) {
-  const row = (await shownNow($)).find(r => r.file === file && r.isReleased !== true)
+  const row = (await shownNow($)).find(r => r.file === file && isBusy(r))
   if (row === undefined) return
   const now = await $.clock.now()
   let released = false
@@ -1030,6 +1128,7 @@ async function releaseRow($: $, file: string) {
     return out.tickets
   })
   if (!released) return
+  await pruneMenus($).catch(() => undefined)
   await addLog($, `Released ${nameOf(row)}; its session and its status file are left as they are.`)
   await slotFreed($, waits)
 }
@@ -1823,6 +1922,18 @@ export const register: Register = (on, options) => {
       },
       openQueued: (ticket: string) => {
         void openQueued($, ticket).catch(() => undefined)
+      },
+      // A heading or a card's menu button sends the state opposite to the
+      // one it was drawn in, so a press handled twice, or one from an older
+      // drawing on another surface, cannot undo a newer press.
+      log: (isOpen: boolean) => {
+        void setFolds($, f => (f.isLogOpen === isOpen ? f : { ...f, isLogOpen: isOpen })).catch(() => undefined)
+      },
+      tokens: (isOpen: boolean) => {
+        void setFolds($, f => (f.isTokensOpen === isOpen ? f : { ...f, isTokensOpen: isOpen })).catch(() => undefined)
+      },
+      menu: (file: string, isOpen: boolean) => {
+        void busyFilesNow($).then(busyFiles => setFolds($, f => menuPressed(f, file, isOpen, busyFiles))).catch(() => undefined)
       },
     }
     return paneTree(elementsOf($, e), await view($, true), presses, columnsOf(e.props.bodyColumns))

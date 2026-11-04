@@ -8,7 +8,7 @@ import { STATUS_CHANGED_TEXT } from '../hooks/notes'
 import { START_FOREMAN_FALLBACK, START_FOREMAN_OFF, startForemanText } from '../hooks/commands'
 import { heldLine, topUpLine } from '../hooks/held'
 import { newPairing, ticketsIn, ticketsKey, TICKETS_EMPTY } from '../hooks/tickets'
-import { CHANGED, CHANGED_AS_RECEIVED, CHANGED_ELEMENT, foreman, HOME, MINUTE, SECOND, SECRET, SURFACES, T0, leftInState, mountBoth, record, SENT, start, statusFolder, world } from './world'
+import { CHANGED, CHANGED_AS_RECEIVED, CHANGED_ELEMENT, foreman, held, HOME, MINUTE, SECOND, SECRET, SURFACES, T0, leftInState, mountBoth, record, SENT, start, statusFolder, world } from './world'
 
 // Two sub sessions: one working at the plan stage with three stages done and
 // a pull request, and one that needs the person.
@@ -33,14 +33,24 @@ for (const surface of SURFACES) {
     for (const part of ['ABC-1 plan tournament', 'ABC-2 needs you', 'next read in 30s']) expect(band).toContain(part)
 
     const pane = await ui.paneText()
-    expect((await ui.pane.find({ key: 'open-a.json' }))?.text).toBe('→ ABC-1 · #4 open · checks passed')
-    expect((await ui.pane.find({ key: 'open-b.json' }))?.text).toBe('→ ABC-2 · no pull request yet')
-    expect(pane).toContain('needs you · the counsel could not decide')
+    const first = (await ui.pane.find({ key: 'card-a.json' }))?.text ?? ''
+    for (const part of ['ABC-1', '#4 open · checks passed']) expect(first).toContain(part)
+    const second = (await ui.pane.find({ key: 'card-b.json' }))?.text ?? ''
+    for (const part of ['ABC-2', 'needs you', 'the counsel could not decide']) expect(second).toContain(part)
+    expect(second).not.toContain('#')
+    expect((await ui.pane.find({ key: 'open-a.json' }))?.text).toBe('→ open')
+    // Nudge and Release are drawn only once a card's menu button is pressed.
+    for (const key of ['nudge-a.json', 'release-a.json', 'nudge-b.json', 'release-b.json']) expect(await ui.pane.find({ key })).toBeUndefined()
+    await ui.pane.press({ key: 'menu-a.json' })
+    await ui.pane.press({ key: 'menu-b.json' })
+    await ui.pane.redraw()
     for (const key of ['nudge-a.json', 'release-a.json', 'nudge-b.json', 'release-b.json']) expect(await ui.pane.find({ key })).toBeDefined()
     const drawings = await ui.pane.findAll({ type: 'Svg' })
     if (surface === 'desktop') {
-      expect(drawings).toHaveLength(2)
-      expect(String(drawings[0]!.props.source)).toContain('3 of 9')
+      // The slot lights and one stage bar for each card. A drawing holds no
+      // text, so the count of stages is its text alternative.
+      expect(drawings).toHaveLength(3)
+      expect(drawings.map(d => String(d.props.alt))).toContain('███▓░░░░░ 3 of 9')
     } else {
       expect(drawings).toHaveLength(0)
       expect(pane).toContain('3 of 9')
@@ -388,7 +398,9 @@ test('a file more than three minutes old is dimmed with its age and still busy, 
   expect(band).toContain('ABC-2 build')
   expect((await ui.band.find({ key: 'chip-a.json' }))?.props.dimColor).toBe(true)
   expect((await ui.band.find({ key: 'chip-b.json' }))?.props.dimColor).not.toBe(true)
-  expect(await ui.paneText()).toContain('working · building · no update for 3m')
+  expect(await ui.paneText()).toContain('build · building · no update for 3m')
+  expect(held(await ui.pane.find({ key: 'state-a.json' }))?.props?.dimColor).toBe(true)
+  expect(held(await ui.pane.find({ key: 'state-b.json' }))?.props?.dimColor).not.toBe(true)
 })
 
 // The oldest background task as builder writes it, started `ago` before T0,
@@ -401,28 +413,26 @@ test('a row waiting on background work names its oldest task with a rising time,
   const ui = await mountBoth($, on)
   await start($)
   await foreman($)
-  // The surface keeps no key on a Text, so the state line is found by its
-  // words, drawn again as of now.
-  const stateLine = async () => {
+  // The card's dim line names the task, and its state word takes the
+  // colour, both drawn again as of now.
+  const cardLine = async () => {
     await ui.pane.redraw()
-    return await ui.pane.find({ type: 'Text', text: /^working · / })
+    return (await ui.pane.find({ key: 'line-words-a.json' }))?.text
   }
+  const stateColor = async () => held(await ui.pane.find({ key: 'state-a.json' }))?.props?.color
 
-  const fresh = await stateLine()
-  expect(fresh?.text).toBe('working · 1 background task running. · waiting on: full UI test run (14m 0s)')
-  expect(fresh?.props.color).toBeUndefined()
-  expect(fresh?.props.dimColor).not.toBe(true)
+  expect(await cardLine()).toBe('no stage yet · 1 background task running. · waiting on: full UI test run (14m 0s)')
+  expect(await stateColor()).toBe('success')
+  expect(held(await ui.pane.find({ key: 'state-a.json' }))?.props?.dimColor).not.toBe(true)
 
   // One millisecond before the hung time, the time has risen and there is no mark.
   await w.clock.advance(MINUTE - 1)
-  const before = await stateLine()
-  expect(before?.text).toBe('working · 1 background task running. · waiting on: full UI test run (14m 59s)')
-  expect(before?.props.color).toBeUndefined()
+  expect(await cardLine()).toBe('no stage yet · 1 background task running. · waiting on: full UI test run (14m 59s)')
+  expect(await stateColor()).toBe('success')
 
   await w.clock.advance(1)
-  const hung = await stateLine()
-  expect(hung?.text).toBe('working · 1 background task running. · waiting on: full UI test run (15m 0s), it may be hung')
-  expect(hung?.props.color).toBe('warning')
+  expect(await cardLine()).toBe('no stage yet · 1 background task running. · waiting on: full UI test run (15m 0s), it may be hung')
+  expect(await stateColor()).toBe('warning')
   // The band's chip does not change: it keeps its words and takes no colour.
   expect(await ui.bandText()).toContain('ABC-1 working')
   const chip = await ui.band.find({ type: 'Text', text: /^ABC-1 working$/ })
@@ -441,27 +451,23 @@ test('a probably hung row that is stale stays dimmed, one that needs you stays r
   await start($)
   await foreman($)
   await ui.pane.redraw()
-  // The surface keeps no key on a Text, so each state line is found by its
-  // words.
-  const line = (words: RegExp) => ui.pane.find({ type: 'Text', text: words })
+  // Each card's dim line and the colour of its state word.
+  const line = async (file: string) => (await ui.pane.find({ key: `line-words-${file}` }))?.text
+  const state = async (file: string) => held(await ui.pane.find({ key: `state-${file}` }))?.props
 
-  const stale = await line(/^working · building · waiting on/)
-  expect(stale?.text).toBe('working · building · waiting on: full UI test run (20m 0s), it may be hung · no update for 4m')
-  expect(stale?.props.dimColor).toBe(true)
-  expect(stale?.props.color).toBeUndefined()
+  expect(await line('a.json')).toBe('no stage yet · building · waiting on: full UI test run (20m 0s), it may be hung · no update for 4m')
+  expect((await state('a.json'))?.dimColor).toBe(true)
+  expect((await state('a.json'))?.color).toBeUndefined()
 
-  const needsYou = await line(/^needs you · /)
-  expect(needsYou?.text).toBe('needs you · the counsel could not decide · waiting on: a background task (20m 0s), it may be hung')
-  expect(needsYou?.props.color).toBe('error')
+  expect(await line('b.json')).toBe('no stage yet · the counsel could not decide · waiting on: a background task (20m 0s), it may be hung')
+  expect((await state('b.json'))?.color).toBe('error')
 
-  const working = await line(/^working · building$/)
-  expect(working?.text).toBe('working · building')
-  expect(working?.props.color).toBeUndefined()
-  expect(working?.props.dimColor).not.toBe(true)
+  expect(await line('c.json')).toBe('no stage yet · building')
+  expect((await state('c.json'))?.color).toBe('success')
+  expect((await state('c.json'))?.dimColor).not.toBe(true)
 
-  const idle = await line(/^idle · /)
-  expect(idle?.text).toBe('idle · nothing to hand over')
-  expect(idle?.props.color).toBe('warning')
+  expect(await line('d.json')).toBe('no stage yet · nothing to hand over')
+  expect((await state('d.json'))?.color).toBe('warning')
 })
 
 test('the next read comes 30 seconds after a read with a fresh working file, and not at 29', async ($, on) => {
@@ -500,7 +506,9 @@ test('a sub session with no issue yet is drawn with those words, after the keyed
   await foreman($)
   const band = await ui.bandText()
   expect(band.indexOf('ABC-2 idle')).toBeLessThan(band.indexOf('no issue yet grounding'))
-  expect((await ui.pane.find({ key: 'open-a.json' }))?.text).toBe('→ no issue yet · no pull request yet')
+  const card = (await ui.pane.find({ key: 'card-a.json' }))?.text ?? ''
+  expect(card).toStartWith('no issue yet')
+  expect(card).not.toContain('#')
   await ui.band.press({ key: 'chip-a.json' })
   expect(w.desktop.calls.at(-1)?.args).toEqual({ session_id: 'local_n', target: 'split' })
 })
@@ -518,15 +526,12 @@ for (const surface of SURFACES) {
     expect(all).not.toContain('\u001b')
     expect(all).not.toContain('evil')
     expect(all).toContain('ABC-9 needs you')
-    expect(all).toContain('needs you · stuck here')
-    const drawings = await ui.pane.findAll({ type: 'Svg' })
-    if (surface === 'desktop') {
-      const source = String(drawings[0]!.props.source)
-      expect(source).toContain('Fix the &lt;b&gt;&amp;&quot;title&quot;')
-      expect(source).not.toContain('<b>')
-      expect(source).not.toContain('\u001b')
-    } else {
-      expect(all).toContain('Fix the <b>&"title"')
+    expect(all).toContain('build · stuck here')
+    // The title is drawn as text, never inside a drawing.
+    expect((await ui.pane.find({ key: 'title-a.json' }))?.text).toBe(' Fix the <b>&"title"')
+    for (const drawing of await ui.pane.findAll({ type: 'Svg' })) {
+      const source = String(drawing.props.source)
+      for (const part of ['Fix', 'title', '<b>', '\u001b']) expect(source).not.toContain(part)
     }
   })
 }
@@ -537,8 +542,10 @@ const USAGE_WORDS = '4K in, 1K out, 90K cache read, 2K cache write · $1.75'
 
 // The text of every line of the pane that begins with `head`, in the order
 // the pane draws them.
+// The pane's lines that begin with `head`, read with the Log and Token
+// details rows unfolded.
 async function linesOf(ui: Awaited<ReturnType<typeof mountBoth>>, head: string): Promise<string[]> {
-  await ui.pane.redraw()
+  await ui.paneText()
   return (await ui.pane.findAll({ type: 'Text', text: new RegExp(`^${head}`) })).map(t => t.text)
 }
 
@@ -559,7 +566,7 @@ test('each row shows its sub session\'s spending, and a row whose file carries n
   await start($)
   await foreman($)
   await w.clock.settle()
-  expect(await linesOf(ui, 'Spent: ')).toEqual([`Spent: ${USAGE_WORDS}`, 'Spent: unknown'])
+  expect(await linesOf(ui, 'ABC-\\d spent: ')).toEqual([`ABC-1 spent: ${USAGE_WORDS}`, 'ABC-2 spent: unknown'])
   expect(await ui.paneText()).not.toContain('$0')
 })
 
@@ -576,7 +583,7 @@ test('the pane sums every sub session this parent started, and keeps a sub sessi
   w.folder.files.delete('b.json')
   await w.clock.advance(30 * SECOND)
   expect(await ui.pane.find({ key: 'open-b.json' })).toBeUndefined()
-  expect(await linesOf(ui, 'Spent: ')).toEqual([`Spent: ${USAGE_WORDS}`])
+  expect(await linesOf(ui, 'ABC-\\d spent: ')).toEqual([`ABC-1 spent: ${USAGE_WORDS}`])
   expect(await linesOf(ui, 'Sub sessions spent: ')).toEqual([sum])
   expect((ticketsIn(w.stored.get(ticketsKey('session-1')))).spent.map(e => e.ticket)).toEqual(['ft-ABC-1', 'ft-ABC-2'])
 })
@@ -599,7 +606,7 @@ const TIMING = {
   rounds: [], olderRounds: 0,
 }
 
-test('each row shows its sub session\'s times under its spending, unknown when its file carries none, and the pane sums them over sub sessions', async ($, on) => {
+test('each card shows its sub session\'s working time, unknown when its file carries none, and the Working tile sums the times over sub sessions', async ($, on) => {
   const w = world(on)
   w.folder.put('a.json', record('ABC-1', 'working', { usage: USAGE, timing: TIMING }))
   w.folder.put('b.json', record('ABC-2', 'working', { timing: { ...TIMING, states: { ...TIMING.states, 'working': 5 * MINUTE, 'needs-you': 0 } } }))
@@ -608,24 +615,21 @@ test('each row shows its sub session\'s times under its spending, unknown when i
   await start($)
   await foreman($)
   await w.clock.settle()
-  // These sub sessions were paired without foreman's queue, so their queue
-  // time is unknown.
-  expect(await linesOf(ui, 'Time: ')).toEqual([
-    'Time: working 10m · waiting on you 1h 5m · other waiting 3m · queued unknown',
-    'Time: working 5m · waiting on you 0m · other waiting 3m · queued unknown',
-    'Time: unknown',
-  ])
-  const lines = await linesOf(ui, 'Sub sessions')
-  expect(lines).toEqual([
-    'Sub sessions spent: 4K in, 1K out, 90K cache read, 2K cache write · $1.75',
-    'Sub sessions\' time, summed: working 15m · waiting on you 1h 5m · other waiting 6m · queued unknown',
-  ])
-  expect(await linesOf(ui, 'Summed over')).toEqual(['Summed over sub sessions that run side by side, so a sum can be longer than the run.'])
+  const worked = async (file: string) => {
+    await ui.pane.redraw()
+    return (await ui.pane.find({ key: `line-worked-${file}` }))?.text.trim()
+  }
+  expect(await worked('a.json')).toBe('10m · $1.75')
+  expect(await worked('b.json')).toBe('5m · cost unknown')
+  expect(await worked('c.json')).toBe('time unknown · cost unknown')
+  const tile = 'Working 15m · waiting on you 1h 5m'
+  expect(await linesOf(ui, 'Working ')).toEqual([tile])
+  expect(await linesOf(ui, 'Sub sessions spent: ')).toEqual(['Sub sessions spent: 4K in, 1K out, 90K cache read, 2K cache write · $1.75'])
   // A sub session whose file is gone stays in the sums.
   w.folder.files.delete('b.json')
   await w.clock.advance(30 * SECOND)
-  expect(await linesOf(ui, 'Time: ')).toHaveLength(2)
-  expect(await linesOf(ui, 'Sub sessions\' time')).toEqual([lines[1]])
+  expect(await ui.pane.find({ key: 'card-b.json' })).toBeUndefined()
+  expect(await linesOf(ui, 'Working ')).toEqual([tile])
 })
 
 test('with no times read yet, the sums say unknown, never zero', async ($, on) => {
@@ -634,7 +638,7 @@ test('with no times read yet, the sums say unknown, never zero', async ($, on) =
   await start($)
   await foreman($)
   await w.clock.settle()
-  expect(await linesOf(ui, 'Sub sessions\' time')).toEqual(['Sub sessions\' time, summed: unknown'])
+  expect(await linesOf(ui, 'Working ')).toEqual(['Working time unknown · waiting on you time unknown'])
 })
 
 // Builder's usage value for this session, which foreman shows as this
@@ -1194,7 +1198,7 @@ async function queueParent($: Engine, on: On, slots: number, pairings: ReturnTyp
 // A sub session that waits at `place`, paired `ago` before T0.
 const waitsSince = (key: string, place: number, ago: number) => newPairing(`ft-${key}`, `local_${key}`, T0 - ago, key, { place, claim: null })
 const busyBuild = (key: string) => record(key, 'working', { stage: 'build', desktopSessionId: `local_${key}` })
-const EMPTY_QUEUE = 'Queued: none — your next message lines up more'
+const EMPTY_QUEUE = 'Up next: nothing queued'
 
 test('the band counts the sub sessions that wait right after its head, before the chips', async ($, on) => {
   const { ui } = await queueParent($, on, 1, [waitsAt('ABC-2', 1), waitsAt('ABC-3', 2)], { 'a.json': busyBuild('ABC-1') })
@@ -1240,36 +1244,36 @@ test('the queue count takes its columns from the room the chips get, so the band
   }
 })
 
-test('the pane lists the sub sessions that wait under the busy rows, in the order they begin, each with its place, its name and how long it has waited', async ($, on) => {
+test('the pane\'s up-next row lists the sub sessions that wait under the cards, in the order they begin, each with its place, its name and how long it has waited', async ($, on) => {
   // The pairings are stored out of order. A start answered with a proposal
   // card more than five minutes ago has no session and is not shown.
   const card = newPairing('ft-card', null, T0 - 10 * MINUTE, 'ABC-9', { place: 4, claim: null })
   const noKey = newPairing('ft-nokey', 'local_nokey', T0, null, { place: 3, claim: null })
   const { ui } = await queueParent($, on, 1, [waitsSince('ABC-3', 2, 70 * MINUTE), card, noKey, waitsSince('ABC-2', 1, 5 * MINUTE)], { 'a.json': busyBuild('ABC-1') })
   expect(await ui.bandText()).toStartWith('foreman: 1 of 1 slots busy · 3 queued · ')
-  expect((await ui.pane.find({ type: 'Text', text: /^Queued$/ }))?.props.bold).toBe(true)
+  expect((await ui.pane.find({ key: 'up-next' }))?.text).toStartWith('Up next: ')
   expect((await ui.pane.find({ key: 'queued-ft-ABC-2' }))?.text).toBe('1. → ABC-2 · waiting for 5m')
   expect((await ui.pane.find({ key: 'queued-ft-ABC-3' }))?.text).toBe('2. → ABC-3 · waiting for 1h 10m')
   expect((await ui.pane.find({ key: 'queued-ft-nokey' }))?.text).toBe('3. → the sub session with ticket ft-nokey · waiting for 0m')
   expect(await ui.pane.find({ key: 'queued-ft-card' })).toBeUndefined()
   const pane = await ui.paneText()
   const at = (part: string) => pane.indexOf(part)
-  for (const part of ['Release', 'Queued', '1. → ABC-2', '2. → ABC-3', '3. → the sub session', 'Sub sessions spent']) expect(at(part)).toBeGreaterThan(-1)
-  expect(at('Release')).toBeLessThan(at('Queued'))
-  expect(at('Queued')).toBeLessThan(at('1. → ABC-2'))
+  for (const part of ['→ open', 'Up next: ', '1. → ABC-2', '2. → ABC-3', '3. → the sub session', 'Spent ']) expect(at(part)).toBeGreaterThan(-1)
+  expect(at('→ open')).toBeLessThan(at('Up next: '))
+  expect(at('Up next: ')).toBeLessThan(at('1. → ABC-2'))
   expect(at('1. → ABC-2')).toBeLessThan(at('2. → ABC-3'))
   expect(at('2. → ABC-3')).toBeLessThan(at('3. → the sub session'))
-  expect(at('3. → the sub session')).toBeLessThan(at('Sub sessions spent'))
+  expect(at('3. → the sub session')).toBeLessThan(at('Spent '))
   expect(pane).not.toContain(EMPTY_QUEUE)
 })
 
-test('with nobody waiting, the pane\'s Queued section is one line that says the next message lines up more', async ($, on) => {
+test('with nobody waiting, the pane\'s up-next row is one line that says nothing is queued', async ($, on) => {
   const { ui } = await queueParent($, on, 2, [], { 'a.json': busyBuild('ABC-1') })
   expect((await ui.pane.findAll({ type: 'Text', text: EMPTY_QUEUE }))).toHaveLength(1)
-  expect(await ui.pane.find({ type: 'Text', text: /^Queued$/ })).toBeUndefined()
+  expect((await ui.pane.find({ key: 'up-next' }))?.text).toBe(EMPTY_QUEUE)
   const pane = await ui.paneText()
-  expect(pane.indexOf('Release')).toBeLessThan(pane.indexOf(EMPTY_QUEUE))
-  expect(pane.indexOf(EMPTY_QUEUE)).toBeLessThan(pane.indexOf('Sub sessions spent'))
+  expect(pane.indexOf('→ open')).toBeLessThan(pane.indexOf(EMPTY_QUEUE))
+  expect(pane.indexOf(EMPTY_QUEUE)).toBeLessThan(pane.indexOf('Spent '))
 })
 
 test('while foreman is off, neither the band nor the pane says anything about the queue', async ($, on) => {
@@ -1280,6 +1284,7 @@ test('while foreman is off, neither the band nor the pane says anything about th
   await w.clock.settle()
   expect(await ui.bandText()).toBe('')
   const pane = await ui.paneText()
-  expect(pane).not.toContain('Queued')
+  expect(pane).not.toContain('Up next')
+  expect(pane).not.toContain('queue')
   expect(await ui.pane.find({ key: 'queued-ft-ABC-2' })).toBeUndefined()
 })
