@@ -68,15 +68,19 @@ const isMember = (raw: unknown): raw is BatchMember => {
 }
 
 const isTime = (raw: unknown): raw is number | null => raw === null || (typeof raw === 'number' && Number.isFinite(raw))
+// A wait, stored or saved beside a deadline, is absent or a finite number of
+// milliseconds above zero.
+const isWait = (raw: unknown): raw is number | undefined =>
+  raw === undefined || (typeof raw === 'number' && Number.isFinite(raw) && raw > 0)
 
 const isBatch = (raw: unknown): raw is Batch => {
   const b = raw as Batch | null
   return typeof b === 'object' && b !== null && typeof b.step === 'string' && Array.isArray(b.members) && b.members.every(isMember) &&
     Number.isInteger(b.heldReports) && b.heldReports >= 0 && isTime(b.deadline) && isTime(b.releasedAt) &&
     (b.fired === undefined || b.fired === true) &&
-    (b.retryMs === undefined || (typeof b.retryMs === 'number' && Number.isFinite(b.retryMs) && b.retryMs > 0)) &&
+    isWait(b.retryMs) &&
     (b.deadlineBeforeSettle === undefined || isTime(b.deadlineBeforeSettle)) &&
-    (b.retryBeforeSettle === undefined || (typeof b.retryBeforeSettle === 'number' && Number.isFinite(b.retryBeforeSettle) && b.retryBeforeSettle > 0)) &&
+    isWait(b.retryBeforeSettle) &&
     (b.wokenAfterClaim === undefined || b.wokenAfterClaim === true) &&
     (b.completionClaimed === undefined || b.completionClaimed === true)
 }
