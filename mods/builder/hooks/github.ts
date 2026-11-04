@@ -7,8 +7,11 @@ import type { BaseFacts, BuildStatus, Check, CheckState, HeadRun, Snapshot, Unpu
 
 export type { BaseFacts, Check, CheckState, HeadRun, Snapshot, Unpushed, Verdict, Verdicts, WorkflowRun }
 
-// The JSON fields the snapshot reads, in the order gh is asked for them.
-export const PR_FIELDS = 'number,url,state,headRefOid,labels,reviews,statusCheckRollup,mergeable,commits,baseRefName,headRefName,createdAt'
+// The JSON fields the snapshot reads, in the order gh is asked for them. The
+// merge commit is read by the same request that reports the pull request
+// merged, for the update of the linked checkout, and is never part of the
+// snapshot or its fingerprint.
+export const PR_FIELDS = 'number,url,state,headRefOid,labels,reviews,statusCheckRollup,mergeable,commits,baseRefName,headRefName,createdAt,mergeCommit'
 
 type GhCheck = {
   __typename?: string
@@ -43,6 +46,8 @@ export type GhPullRequest = {
   baseRefName?: string
   headRefName?: string
   createdAt?: string
+  // Null until GitHub has merged the pull request.
+  mergeCommit?: { oid?: string } | null
 }
 
 const PASSING = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED'])

@@ -79,6 +79,11 @@ export type Snapshot = {
   // step text built later from this stored snapshot can list the commits
   // again without reading the pull request. The fingerprint never reads it.
   headBranch?: string
+  // The outcome of the update of the linked checkout, as finished sentences,
+  // set only at a look that chose the Merged step and had the outcome, or
+  // `unread` when that look found no merge commit and no record of the
+  // update. Every other snapshot has none, and the fingerprint never reads it.
+  linked?: string[] | 'unread'
   fingerprint: string
 }
 
