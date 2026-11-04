@@ -46,10 +46,12 @@ new slot.
    keys in the queue's order but never more than there are free slots, and
    stamps the named waiting sessions with `keptAt`, so their slots are held
    for five minutes, as `docs/specs/foreman-kept-slot-reservation.md` says.
-3. **The mark is cleared by that read alone.** The read clears it in the
-   ledger it already writes, whatever it decides, so a later read never
-   decides the raised slots again. A read whose list fails leaves the mark in
-   place, and wakes nobody, as
+3. **Every read but a failed one clears the mark.** The read clears it in
+   the ledger it already writes, whatever it decides, so a later read never
+   decides the raised slots again. A read that did not ask for the list
+   clears it too, because the list is asked for whenever anyone waits in the
+   queue, but only a read that got the list can wake the parent for it. A
+   read whose list fails leaves the mark in place, and wakes nobody, as
    `docs/specs/foreman-raised-slots-while-list-fails.md` says.
 4. **Nothing waits, nothing is said.** When that read finds slots still free
    but nobody waiting unclaimed, because the queue is empty, every waiting
@@ -69,7 +71,7 @@ new slot.
   free, nobody is woken, and the mark is cleared.
 - The read that the raise schedules fails to get the list, and several reads
   after it fail too: the mark is kept across them, and only the first read
-  that gets the list decides and clears it.
+  that does not fail decides and clears it.
 - A sub session frees a slot on the same read that decides the mark: the
   read runs the wake block once, and the kept sentence names no more keys
   than there are free slots.
@@ -118,7 +120,10 @@ fail against today's code where it describes new behaviour:
   holds no mark afterwards.
 - A raise with an empty queue: no prompt, no dry-queue report, and the
   ledger holds no mark afterwards.
-- A count given to a session that is not yet a parent leaves no mark.
+- A count given to a session that is not yet a parent leaves no mark. The
+  mark is written only when the parent was already on before the command,
+  so that check, rather than the comparison of counts, is what this test
+  guards.
 - A ledger that holds only the mark survives a `session.start` reload.
 - Every gate in the project's `CLAUDE.md` passes for builder and foreman.
 
