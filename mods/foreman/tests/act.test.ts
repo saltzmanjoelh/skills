@@ -1132,6 +1132,30 @@ test('an idle record whose file froze after its nudges gets the frozen wake and 
   ])
 })
 
+test('a background wait whose file froze gets the frozen wake and still gets its own background wake', () => {
+  // A record that waits only on background work is not a stall, so the frozen
+  // wake leaves its stretch as it was: the background nudges at five and ten
+  // minutes and its wake at fifteen all come, with the frozen wake at eleven
+  // between them.
+  const run = readEach(paired(), () => waiting(T0), T0 + 20 * MINUTE, () => running)
+  expect(run.seen).toEqual([
+    { at: 5, nudges: 1, reasons: [] },
+    { at: 10, nudges: 1, reasons: [] },
+    { at: 11, nudges: 0, reasons: ['frozen'] },
+    { at: 15, nudges: 0, reasons: ['background'] },
+  ])
+  // A background wake that went first does not silence the frozen wake either,
+  // even when its last nudge came more than five minutes after the file last
+  // changed, as a stall's would.
+  const limits = { ...LIMITS, idleMs: 3 * MINUTE }
+  expect(readEach(paired(), () => waiting(T0), T0 + 20 * MINUTE, () => running, { limits }).seen).toEqual([
+    { at: 3, nudges: 1, reasons: [] },
+    { at: 6, nudges: 1, reasons: [] },
+    { at: 9, nudges: 0, reasons: ['background'] },
+    { at: 11, nudges: 0, reasons: ['frozen'] },
+  ])
+})
+
 test('a stall that was only nudged before the list stopped reading gets the frozen wake, which counts as its stall\'s wake', () => {
   // The list shows the session stopped up to six minutes, fails from seven to
   // fourteen, and shows it stopped again from fifteen.
