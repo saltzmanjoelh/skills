@@ -531,7 +531,14 @@ test('the band\'s value: a failure or a kept value adds to the count, typing rel
   // neither counted again nor kept past its ten minutes.
   const released = afterTyped({ text: MERGED, at: at + 1, kept: 1 }, at + 9)
   expect(noticeFailed(released, report, at)).toEqual({ text: OPENED, at, kept: 1 })
-  expect(afterTyped(shown, at + 5)).toBe(shown)
+  // Typing marks a notice that is not kept as seen too, without moving its
+  // time, so a call that was still waiting and fails after it does not count
+  // the seen one again. A value already released is left as it was.
+  const seen = afterTyped({ text: MERGED, at: at + 1, kept: 0 }, at + 9)
+  expect(seen).toEqual({ text: MERGED, at: at + 1, released: true })
+  expect(noticeFailed(seen, report, at)).toEqual({ text: OPENED, at, kept: 1 })
+  expect(afterTyped(seen, at + 20)).toBe(seen)
+  expect(afterTyped(null, at + 5)).toBeNull()
   expect(shownReport({ text: OPENED, at, kept: 1 }, at + 100 * REPORT_SHOWN_MS)).toBe(OPENED)
   expect(shownReport({ text: OPENED, at, kept: 3 }, at + 100 * REPORT_SHOWN_MS)).toBe(`${OPENED} (2 more since your last message.)`)
   expect(shownReport({ text: OPENED, at, kept: 0 }, at + REPORT_SHOWN_MS)).toBeNull()

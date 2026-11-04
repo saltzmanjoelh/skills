@@ -51,8 +51,9 @@ export type View = {
   // the sums are null.
   rowTimes: ReadonlyMap<string, ForemanTimes>
   subsTime: ForemanTimes | null
-  // The newest report sentence foreman showed, as shownReport gives it, else
-  // null. The band shows it after the chips.
+  // The newest notice the band shows, as shownReport gives it, else null: a
+  // report sentence, or a kept needs-you, held or begin-held notice. The band
+  // shows it after the chips.
   report: string | null
   // The count of builder's status messages consumed since foreman's hooks
   // loaded, while the session is a parent, else null.
@@ -111,8 +112,9 @@ export function noticeArrived(raw: StoredReport, notice: BandNotice, at: number)
 // is in the band already, as when this call answered last, that one stays the
 // newest and this one joins the count, and the later one counts too, so
 // neither is lost. A value the person's typing released is not a later
-// notice, even though typing moved its `at` to the moment they typed: they
-// have seen it, so it keeps its ten minutes and this notice is kept alone.
+// notice, even when typing moved its `at` to the moment they typed: they saw
+// it before they typed, so it keeps its ten minutes and this notice is kept
+// alone.
 export function noticeFailed(raw: StoredReport, notice: BandNotice, at: number): StoredReport {
   const kept = keptOf(raw)
   if (raw !== null && raw.released !== true && typeof raw.text === 'string' && typeof raw.at === 'number' && raw.at > at) {
@@ -121,12 +123,15 @@ export function noticeFailed(raw: StoredReport, notice: BandNotice, at: number):
   return { text: notice.newest, at, kept: kept + notice.count }
 }
 
-// The band's value once the person types: a kept notice shows for
+// The band's value once the person types. A kept notice shows for
 // REPORT_SHOWN_MS more from `now`, alone, since the count said "since your
-// last message", and is marked `released` so that noticeFailed does not take
-// it for a notice that arrived at `now`. Any other value is left as it was.
+// last message". Any notice the band holds is marked `released`, kept or not,
+// so that noticeFailed never takes a notice the person saw before typing for
+// one that arrived after. A value that is released already, or null, is left
+// as it was, so only the first message after a new notice writes the band.
 export function afterTyped(raw: StoredReport, now: number): StoredReport {
-  return raw === null || keptOf(raw) === 0 ? raw : { text: raw.text, at: now, kept: 0, released: true }
+  if (raw === null || raw.released === true) return raw
+  return keptOf(raw) > 0 ? { text: raw.text, at: now, kept: 0, released: true } : { text: raw.text, at: raw.at, released: true }
 }
 
 // The report the band shows, from the value foreman keeps in $.state. A kept

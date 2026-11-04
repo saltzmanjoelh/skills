@@ -255,6 +255,22 @@ test('a sub session that needs the person raises one notification and never wake
   expect(w.engine.prompts).toEqual([])
 })
 
+test('a needs-you notice whose notification goes never writes the band', async ($, on) => {
+  const w = world(on)
+  const bandWrites: unknown[] = []
+  on('state.set', ($, e, next) => {
+    if (e.plugin === 'foreman' && e.key === 'report') bandWrites.push(e.value)
+    return next(e)
+  })
+  w.folder.put('a.json', record('ABC-1', 'needs-you', { desktopSessionId: 'local_a', reason: 'a question is open' }))
+  await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await w.clock.settle()
+  expect(w.engine.notices).toEqual(['ABC-1 needs you: a question is open'])
+  expect(bandWrites).toEqual([])
+})
+
 test('a notification that cannot go is logged', async ($, on) => {
   const w = world(on)
   w.folder.put('a.json', record('ABC-1', 'needs-you', { desktopSessionId: 'local_a' }))

@@ -40,9 +40,10 @@ const tickets = atom({ plugin: 'foreman', key: 'tickets' } as const, TICKETS_EMP
 const turnRuns = atom({ plugin: 'foreman', key: 'turnRuns' } as const, false)
 const quietLine = atom({ plugin: 'foreman', key: 'quietLine' } as const, null)
 const quietReply = atom({ plugin: 'foreman', key: 'quietReply' } as const, false)
-// The newest report sentence foreman showed and when, for the band, with the
-// count of notices kept since the person last typed (see noticeArrived in
-// pane.tsx). It is never stored in the ledger, so a restart drops it.
+// The newest notice the band shows and when it arrived: a report sentence,
+// or a needs-you, held or begin-held notice whose notification failed, with
+// the count of notices kept since the person last typed (see noticeArrived
+// in pane.tsx). It is never stored in the ledger, so a restart drops it.
 const report = atom({ plugin: 'foreman', key: 'report' } as const, null)
 
 // The spending builder publishes for the session it runs in, which ownSpend
@@ -491,7 +492,11 @@ type NotifyFailure = { key: string; words: string; line: string }
 async function notify($: $, text: string, { quiet = false, band }: { quiet?: boolean; band?: BandNotice } = {}) {
   const at = await $.clock.now()
   let counted = false
-  if (band !== undefined) {
+  // A notice that leaves the band as it was, such as a needs-you notice while
+  // nothing is kept, writes nothing, because a write always lands and draws
+  // the band again even when the value is the same.
+  const changes = band !== undefined && await read($, report).then(raw => noticeArrived(raw, band, at).value !== raw, () => true)
+  if (band !== undefined && changes) {
     await update($, report, raw => {
       const arrived = noticeArrived(raw, band, at)
       counted = arrived.counted
@@ -643,15 +648,17 @@ async function showReports($: $, sentences: readonly string[]) {
 }
 
 // Lets a notice the band keeps go once the person types: it shows for ten
-// more minutes from now, as afterTyped in pane.tsx says. Most prompts find
-// nothing kept and write nothing. It runs whatever the role, because the
+// more minutes from now, as afterTyped in pane.tsx says, and any notice the
+// band holds is marked as seen. Only the first typed message after a new
+// notice reaches the band writes it; the others find nothing to change. It runs whatever the role, because the
 // person's next typed message ends the wait whether or not foreman is on
 // then, so a notice kept while foreman is off does not stay up for good once
 // foreman turns on.
 async function releaseKept($: $) {
-  if (keptOf(await read($, report)) === 0) return
   const now = await $.clock.now()
-  await update($, report, raw => afterTyped(raw, now))
+  const raw = await read($, report)
+  if (afterTyped(raw, now) === raw) return
+  await update($, report, value => afterTyped(value, now))
 }
 
 // Wakes the parent's model with one line: appended to the turn that runs, or

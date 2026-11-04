@@ -38,6 +38,8 @@ It adds no new files and no dependencies.
      that the notice arrived, with
      `update($, report, raw => noticeArrived(raw, band, at).value)`, inside a
      catch of its own, before the call, so the band never waits on the call.
+     It reads the band first and skips the write when the value would not
+     change, because a write always lands and draws the band again.
   2. It calls `within($, $.ui.notify(...))` inside a try block. Only
      `isSent === true` counts as sent. Any other answer is a failure with
      the key `reason:<reason>`, where a reason that is not a string reads
@@ -92,11 +94,12 @@ It adds no new files and no dependencies.
   one stays the newest and both are counted, so a call that answers last
   never puts an older sentence above a newer one.
 - `afterTyped(raw, now)` turns a kept value into
-  `{ text, at: now, kept: 0, released: true }`, and returns any other value
-  unchanged. `noticeFailed` does not take a released value for a later
-  notice, so a call that was still waiting when the person typed, and fails
-  after, keeps its own notice alone rather than keeping the released one
-  again.
+  `{ text, at: now, kept: 0, released: true }`, marks any other notice the
+  band holds as released without moving its time, and returns null or a
+  released value unchanged. `noticeFailed` does not take a released value
+  for a later notice, so a call that was still waiting when the person typed,
+  and fails after, keeps its own notice alone rather than counting one the
+  person saw before typing.
 - `shownReport(raw, now)` shows a kept value whatever its age, followed by
   " (<kept − 1> more since your last message.)" when `kept` is above 1. Any
   other value keeps today's ten-minute rule. The band's `printable` already
