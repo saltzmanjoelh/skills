@@ -165,7 +165,7 @@ export const ticketsKey = (sessionId: string) => `tickets:${sessionId}`
 
 export const OUTBOX_EMPTY: ForemanOutbox = { logs: [], effects: [], lines: [], reports: [] }
 
-export const TICKETS_EMPTY: ForemanTickets = { pairings: [], folderMissing: false, outbox: OUTBOX_EMPTY, held: [], offRefusedFor: null, unwatched: [], spent: [], earlier: null, keptSlots: [], checks: [], listFailNotified: false, dryNotified: false }
+export const TICKETS_EMPTY: ForemanTickets = { pairings: [], folderMissing: false, outbox: OUTBOX_EMPTY, held: [], offRefusedFor: null, unwatched: [], spent: [], earlier: null, keptSlots: [], checks: [], listFailNotified: false, dryNotified: false, slotsRaised: false }
 
 // Whether the outbox holds anything to carry out.
 export const hasWork = (o: ForemanOutbox) => o.logs.length > 0 || o.effects.length > 0 || o.lines.length > 0 || o.reports.length > 0
@@ -442,7 +442,7 @@ function earlierIn(raw: unknown): ForemanEarlier | null {
 // outbox from before reports were kept holds none. The mark for a failed list
 // read is set only when it was stored as exactly true, so a ledger from
 // before the mark existed reads with it unset, and so is the mark for a
-// reported dry queue.
+// reported dry queue and the mark for a raised slot count.
 export function ticketsIn(raw: unknown): ForemanTickets {
   const t = objectOf(raw)
   if (t === null) return TICKETS_EMPTY
@@ -460,11 +460,16 @@ export function ticketsIn(raw: unknown): ForemanTickets {
     checks: checksIn(t.checks),
     listFailNotified: t.listFailNotified === true,
     dryNotified: t.dryNotified === true,
+    slotsRaised: t.slotsRaised === true,
   }
 }
 
 // The ledger with the off refusal recorded as given in session `sessionId`.
 export const withOffRefusal = (t: ForemanTickets, sessionId: string): ForemanTickets => ({ ...t, offRefusedFor: sessionId })
+
+// The ledger with the mark for a raised slot count set. A ledger that holds
+// the mark already is given back as it is, so writing it changes nothing.
+export const withSlotsRaised = (t: ForemanTickets): ForemanTickets => (t.slotsRaised ? t : { ...t, slotsRaised: true })
 
 // Whether the off refusal was already given in session `sessionId`. One
 // given before a /clear, under another session id, does not count.

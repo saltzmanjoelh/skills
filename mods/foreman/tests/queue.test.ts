@@ -674,3 +674,25 @@ test('every sub session the waiting count owes a slot is in the queue shown, and
   expect(owed.filter(ticket => !shown.includes(ticket))).toEqual([])
   expect(shown.includes('ft-c') || owed.includes('ft-c')).toBe(false)
 })
+
+// A read checks whether it needs the desktop app's list against the ledger as
+// it was before its update, and decides on the ledger inside it, so a
+// raised-slot mark can meet a read that never asked for the list while a
+// session waits unclaimed. Only a read that got the list wakes the parent for
+// the mark, because the kept sentence says the session was not found in that
+// list. Every read but a failed one clears the mark.
+test('a raised-slot mark wakes the parent only on a read that got the desktop app\'s list, and only a failed read keeps it', () => {
+  const t = { ...ledger(ahead('ft-a', 'ABC-1'), waiting('ft-b', 'ABC-2', 1)), slotsRaised: true }
+  const rows = [busyRow('ft-a', 'ABC-1'), row('ft-b')]
+  const now = T0 + MINUTE
+  const got = read(t, rows, now, { slots: 2, sessions: list([listed('local_ft-a')]) })
+  expect(got.reasons).toEqual([{ kind: 'slot-kept', whos: ['ABC-2'] }])
+  expect(got.tickets.slotsRaised).toBe(false)
+  const unread = read(t, rows, now, { slots: 2 })
+  expect(unread.reasons).toEqual([])
+  expect(unread.tickets.slotsRaised).toBe(false)
+  expect(unread.tickets.pairings.find(p => p.ticket === 'ft-b')!.queue).toEqual({ place: 1, claim: null })
+  const failed = read(t, rows, now, { slots: 2, sessions: { kind: 'failed', reason: 'the list was refused' } })
+  expect(failed.reasons).toEqual([])
+  expect(failed.tickets.slotsRaised).toBe(true)
+})

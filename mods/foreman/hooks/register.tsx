@@ -21,7 +21,7 @@ import { afterRead, isBusy, nameOf, nextReadDelay, READ_LATER_MS, rowsOf, type F
 import { printable } from './text'
 import {
   addWork, briefFor, carriesTicket, fallbackOf, hasWork, isOffRefused, joinOwners, localIdIn, newPairing, nextPlace, NO_TICKET_SENTENCE, OFF_LOG, OFF_REFUSAL, OUTBOX_EMPTY, ownsTicket, queuedShown,
-  runsImplement, shownRows, ticketsIn, ticketsKey, TICKETS_EMPTY, waitingBrief, WAITING_SENTENCE, withOffRefusal, withUnwatched,
+  runsImplement, shownRows, ticketsIn, ticketsKey, TICKETS_EMPTY, waitingBrief, WAITING_SENTENCE, withOffRefusal, withSlotsRaised, withUnwatched,
 } from './tickets'
 import { isWholeKey, REASON_WORDS, splitReasons, wakeLine, whoOf } from './wake'
 
@@ -434,6 +434,11 @@ async function decideNow($: $, folderExists: boolean, listed: boolean, watching:
     const checks = clampedDue(withoutPaired(decision.tickets.checks, decision.tickets.pairings), now, input.limits.idleMs)
     return { ...decision.tickets, checks, outbox: addWork(decision.tickets.outbox, work) }
   })
+  // The slot count was read before the ledger update, so a raise that
+  // landed in between was decided with the old count, which may have
+  // cleared its mark with no slot free. The mark is then set again, so the
+  // next read decides the raise with the new count.
+  if (slotsOf(parentIn(await read($, parent)), currentOptions.slots) > input.slots) await writeTickets($, withSlotsRaised).catch(() => undefined)
   return { decision, rows, written }
 }
 
@@ -1507,9 +1512,22 @@ async function applyCommand($: $, command: Exclude<Command, { kind: 'refused' }>
   // count given to a session that is not one is never what the person meant.
   if (command.kind === 'slots') {
     const wasOn = await isOn($)
-    await writeParent($, p => ({ ...p, slots: command.count }))
+    // Whether the count is higher than the one in force is decided from the
+    // settings the change sees, and the change may run more than once, so
+    // the last run counts. A stored count that is unset stands for the
+    // option's count or the default, as on every read.
+    let raised = false
+    await writeParent($, p => {
+      raised = p.isOn && command.count > slotsOf(p, currentOptions.slots)
+      return { ...p, slots: command.count }
+    })
     // A read begins waiting sub sessions in any slots the new count frees.
+    // A raise also leaves a mark for the first read that gets the desktop
+    // app's list, so that a new slot no waiting session can take wakes the
+    // parent with the kept sentence, as a freed slot does. A failed store
+    // write is logged where it fails, and the raise then gets no wake.
     if (wasOn) {
+      if (raised) await writeTickets($, withSlotsRaised).catch(() => undefined)
       later($, () => readNow($))
       return slotsAnswer(command.count)
     }
@@ -1682,7 +1700,7 @@ export const register: Register = (on, options) => {
         const held = ticketsIn(heldRaw)
         const isEmpty = held.pairings.length === 0 && !hasWork(held.outbox) && held.held.length === 0 && held.offRefusedFor === null && held.unwatched.length === 0
           && held.spent.length === 0 && held.earlier === null && held.keptSlots.length === 0 && held.checks.length === 0
-          && !held.listFailNotified && !held.dryNotified
+          && !held.listFailNotified && !held.dryNotified && !held.slotsRaised
         return isEmpty ? storedTickets : held
       })
     }
