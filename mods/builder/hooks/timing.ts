@@ -18,9 +18,16 @@ export const ROUNDS_KEPT = 20
 // What a watch saw of a pull request, as afterPr takes it.
 export type PullRequestSeen = { repo: string; number: number; state: 'OPEN' | 'MERGED' | 'CLOSED' }
 
-// The status states, in the order the record's totals list them.
-const STATES: readonly BuildState[] = ['working', 'waiting-on-builder', 'idle', 'needs-you', 'in-cleanup', 'done']
-const ENDS: readonly BuildRoundEnd[] = ['reviewed', 'superseded', 'carried-over']
+// The status states, in the order the record's totals list them, and the
+// ways a round can end. The contract in types/index.d.ts spells both out
+// again, so the two lines after them stop the type check when a list and the
+// contract differ in either direction.
+const STATES = ['working', 'waiting-on-builder', 'idle', 'needs-you', 'in-cleanup', 'done'] as const
+const ENDS = ['reviewed', 'superseded', 'carried-over'] as const
+const STATES_MATCH_THE_CONTRACT: [(typeof STATES)[number], BuildState] extends [BuildState, (typeof STATES)[number]] ? true : never = true
+const ENDS_MATCH_THE_CONTRACT: [(typeof ENDS)[number], BuildRoundEnd] extends [BuildRoundEnd, (typeof ENDS)[number]] ? true : never = true
+void STATES_MATCH_THE_CONTRACT
+void ENDS_MATCH_THE_CONTRACT
 const STAGE_IDS: readonly string[] = STAGES.map(stage => stage.id)
 
 const isTime = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n)
@@ -43,8 +50,11 @@ function stageIn(raw: unknown): BuildStageStamp | null {
 function roundIn(raw: unknown): BuildRound | null {
   if (!isRecord(raw) || typeof raw.head !== 'string' || !isTime(raw.startedAt) || !isTimeOrNull(raw.endedAt)) return null
   const ended = raw.ended
-  if (ended === null ? raw.endedAt !== null : !ENDS.includes(ended as BuildRoundEnd) || raw.endedAt === null) return null
-  return { head: raw.head, startedAt: raw.startedAt, endedAt: raw.endedAt, ended: ended as BuildRoundEnd | null }
+  // An open round has neither an end stamp nor a manner of ending.
+  if (ended === null) return raw.endedAt === null ? { head: raw.head, startedAt: raw.startedAt, endedAt: null, ended: null } : null
+  // A closed round has both.
+  if (!ENDS.includes(ended as BuildRoundEnd) || raw.endedAt === null) return null
+  return { head: raw.head, startedAt: raw.startedAt, endedAt: raw.endedAt, ended: ended as BuildRoundEnd }
 }
 
 function listIn<T>(raw: unknown, entryIn: (entry: unknown) => T | null): T[] | null {

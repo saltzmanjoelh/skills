@@ -239,7 +239,8 @@ test('times that are malformed in any part read as none, and the record still pa
     { ...TIMING, prMergedAt: undefined }, { ...TIMING, states: null }, { ...TIMING, states: { ...states, 'needs-you': -1 } },
     { ...TIMING, states: { ...states, idle: undefined } }, { ...TIMING, states: { ...states, done: '0' } }, { ...TIMING, rounds: null },
     { ...TIMING, rounds: [{ head: 7, startedAt: 1, endedAt: null, ended: null }] }, { ...TIMING, rounds: [{ head: 'a', startedAt: 1, endedAt: null, ended: 'lost' }] },
-    { ...TIMING, rounds: [{ head: 'a', startedAt: 1, endedAt: 'now', ended: null }] }, { ...TIMING, olderRounds: -1 }, { ...TIMING, olderRounds: 1.5 },
+    { ...TIMING, rounds: [{ head: 'a', startedAt: 1, endedAt: 'now', ended: null }] },
+    { ...TIMING, rounds: [{ head: 'a', startedAt: 1, endedAt: 2, ended: null }] }, { ...TIMING, rounds: [{ head: 'a', startedAt: 1, endedAt: null, ended: 'reviewed' }] }, { ...TIMING, olderRounds: -1 }, { ...TIMING, olderRounds: 1.5 },
     { ...TIMING, startedAt: Number.POSITIVE_INFINITY }, { ...TIMING, states: { ...states, working: Number.NaN } },
   ]) {
     expect(timingIn(bad)).toBeUndefined()

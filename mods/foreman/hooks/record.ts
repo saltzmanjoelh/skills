@@ -293,6 +293,9 @@ function roundIn(raw: unknown): RecordTiming['rounds'][number] | null {
   if (r === null || typeof r.head !== 'string' || !isStamp(r.startedAt)) return null
   const endedAt = stampOrNull(r.endedAt)
   if (endedAt === undefined || (r.ended !== null && !isRoundEnd(r.ended))) return null
+  // An open round has neither an end stamp nor a manner of ending, and a
+  // closed one has both, as builder's own reader requires.
+  if ((r.ended === null) !== (endedAt === null)) return null
   return { head: r.head, startedAt: r.startedAt, endedAt, ended: r.ended }
 }
 

@@ -168,6 +168,7 @@ test('a sound record reads back as itself, and one damaged in any part or kept f
   expect(damaged({ state: 'asleep' })).toBe(null)
   expect(damaged({ rounds: [{ head: A, startedAt: 1, endedAt: null, ended: 'reviewed' }] })).toBe(null)
   expect(damaged({ rounds: [{ head: A, startedAt: 1, endedAt: 2, ended: 'lost' }] })).toBe(null)
+  expect(damaged({ rounds: [{ head: A, startedAt: 1, endedAt: 2, ended: null }] })).toBe(null)
   expect(damaged({ olderRounds: 1.5 })).toBe(null)
   expect(damaged({ pr: { repo: 'o/r' } })).toBe(null)
   expect(damaged({ title: 7 })).toBe(null)

@@ -199,6 +199,28 @@ test('a ticket that waited gets the time from its reservation to its begin messa
   expect(ledger(w).spent.map(e => e.ticket)).toEqual([first, second])
 })
 
+for (const [name, damaged] of [['zero', 0], ['later than the clock', T0 + 365 * 24 * 60 * MINUTE]] as const) {
+  test(`a waiting ticket whose reservation time is ${name} gets an unknown queue time at its begin message, never a wrong one`, async ($, on) => {
+    // Every write of the ledger gives ABC-2's pairing the damaged reservation
+    // time, so the begin message finds it there.
+    on('state.set', ($, e, next) => {
+      if (e.plugin !== 'foreman' || e.key !== 'tickets') return next(e)
+      const t = e.value as ForemanTickets
+      return next({ ...e, value: { ...t, pairings: t.pairings.map(p => (p.issueKey === 'ABC-2' ? { ...p, pairedAt: damaged } : p)) } } as never)
+    })
+    const { w, live } = await queueOfTwo($, on)
+    const [first, second] = [ticketOf(w, 0), ticketOf(w, 1)]
+    const merged = busyFile('ABC-1', first, 'local_new1', { state: 'done', pr: { number: 7, url: 'https://example.com/pull/7', state: 'MERGED', verdicts: null } })
+    w.desktop.sessions[0] = listed('local_new1', 'ABC-1', { isArchived: true, isRunning: false })
+    await minutesPass(w, 2, { ...live, 'a.json': merged })
+    expect(begins(w)).toEqual(['local_new2'])
+    expect(ticketTimes(ledger(w), second).queued).toBeNull()
+    // The stored ledger holds no queue time for it either.
+    const stored = w.stored.get(ticketsKey('session-1')) as ForemanTickets
+    expect(stored.spent.find(e => e.ticket === second)?.queuedMs ?? null).toBeNull()
+  })
+}
+
 test('a start that is refused, held, answers an error or throws leaves no ledger entry', async ($, on) => {
   const { w } = await parent($, on, 1)
   w.engine.startAnswers = [AUTOMATED_REFUSAL]

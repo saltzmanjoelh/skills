@@ -548,7 +548,9 @@ export function recordOf(f: StatusFacts, writtenAt: number): BuildStatus {
 // change of state is still seen in the `state` field, and the minute's write
 // carries the grown totals.
 export function comparedTextOf(record: BuildStatus): string {
-  return JSON.stringify({ ...record, writtenAt: 0, ...(record.timing === undefined ? {} : { timing: { ...record.timing, states: null } }) })
+  const timeless: Record<string, unknown> = { ...record, writtenAt: 0 }
+  if (record.timing !== undefined) timeless.timing = { ...record.timing, states: null }
+  return JSON.stringify(timeless)
 }
 
 const STATES: readonly BuildState[] = STATE_RULES.map(rule => rule.state)
