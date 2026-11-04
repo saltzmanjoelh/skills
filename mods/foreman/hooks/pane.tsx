@@ -13,7 +13,7 @@ import {
 import { linkOf } from './links'
 import { markersLine, type MarkersRecord } from './markers'
 import type { BuildState } from './record'
-import { plusKnown, spendOf, spendWords, TIMES_UNKNOWN, type Merged } from './spend'
+import { plusKnown, spendOf, spendWords, TIMES_UNKNOWN, usdWords, type Merged } from './spend'
 import { stageLabel } from './stages'
 import {
   ageWords, busyCount, chipParts, chipText, fitChips, isBusy, isProbablyHung, keyOf, moreWords, SEPARATOR, STATE_LOOK, staleWords, untilWords, waitWords, type SubRow,
@@ -310,10 +310,6 @@ const STATE_ICON: Record<BuildState, string> = {
   'in-cleanup': '↺',
   'done': '✓',
 }
-
-// The words for a figure in dollars, or `cost unknown`, never $0.00 for a
-// figure foreman does not know.
-const usdWords = (usd: number | null) => (usd === null ? 'cost unknown' : `$${usd.toFixed(2)}`)
 
 // The words for a time, or `time unknown`, never zero for a time foreman
 // does not know.

@@ -237,6 +237,10 @@ export function spendWords(spend: ForemanSpend | null): string {
   const tokens = c.input + c.output + c.cacheRead + c.cacheWrite === 0
     ? 'nothing counted yet'
     : `${countWords(c.input)} in, ${countWords(c.output)} out, ${countWords(c.cacheRead)} cache read, ${countWords(c.cacheWrite)} cache write`
-  return `${tokens} · ${usd === null ? 'cost unknown' : `$${usd.toFixed(2)}`}`
+  return `${tokens} · ${usdWords(usd)}`
 }
+
+// The words for a figure in dollars, or `cost unknown`, never $0.00 for a
+// figure foreman does not know.
+export const usdWords = (usd: number | null) => (usd === null ? 'cost unknown' : `$${usd.toFixed(2)}`)
 
