@@ -28,7 +28,9 @@ waiting sub sessions to empty. That is the only case the backstop was for.
 Nothing changes. Foreman keeps rewriting the app's wake to its log line and
 answering it with "Noted." itself (see `foreman-quiet-parent.md`), and keeps
 waking the parent with its slot-free line when a slot frees with an empty
-queue, or with the dry-queue report that the waiting-queue change adds.
+queue. A separate change that keeps foreman's queue of waiting sub sessions
+topped up is to add a report that the queue ran dry. Until that change merges,
+the slot-free line is the only signal the parent gets.
 
 What was found, question by question:
 
@@ -92,8 +94,9 @@ minutes, not the hours the backstop was meant to cover.
   would slip around the app's rule that a person stands behind each chain of
   starts.
 - Telling the owner that the queue ran dry and that their next message starts
-  more. The change that keeps foreman's queue of waiting sub sessions topped
-  up already adds that report.
+  more. A separate change that keeps foreman's queue of waiting sub sessions
+  topped up is to add that report, and until it merges the owner is told
+  nothing beyond foreman's slot-free line.
 - A live test of the second answer.
 
 ## Failure modes
