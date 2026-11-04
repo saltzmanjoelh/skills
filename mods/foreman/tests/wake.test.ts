@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
+import { STATES } from '../hooks/record'
 import { DATA_NOTE, quoted, REASON_WORDS, REPORT_KINDS, slotWords, splitReasons, wakeLine, whoOf, type Reason } from '../hooks/wake'
 
 const TICKET = 'ft-1234'
@@ -41,12 +42,30 @@ test('every wake sentence is pinned', () => {
     .toBe('ABC-1 has been in cleanup for 2 minutes with 3 failed calls; its record\'s last error, quoted: "gh: \'not found\'".')
   expect(REASON_WORDS.gone({ kind: 'gone', who: 'ABC-1', minutes: 6 }))
     .toBe('ABC-1 has not updated its status file for 6 minutes and its session is not running, so restart it or release the issue.')
+  expect(REASON_WORDS.frozen({ kind: 'frozen', who: 'ABC-1', minutes: 10, state: 'working' }))
+    .toBe('ABC-1\'s status file has not changed for 10 minutes and still shows the state working.')
   expect(REASON_WORDS['slot-free']({ kind: 'slot-free', free: 1 })).toBe('one slot free; pick the next issue and start it.')
   expect(REASON_WORDS.opened({ kind: 'opened', who: 'ABC-1', number: 7 })).toBe('ABC-1 opened pull request #7.')
   expect(REASON_WORDS.verdicts({ kind: 'verdicts', who: 'ABC-1', number: 7, sha: 'abcdef0123456789', spec: 'APPROVE', adversarial: 'REQUEST_CHANGES' }))
     .toBe('ABC-1\'s pull request #7 has verdicts at abcdef0: spec approves, adversarial requests changes.')
   expect(REASON_WORDS.merged({ kind: 'merged', who: 'ABC-1', number: 7 })).toBe('ABC-1\'s pull request #7 merged.')
   expect(REASON_WORDS.closed({ kind: 'closed', who: 'ABC-1', number: 7 })).toBe('ABC-1\'s pull request #7 was closed without merging.')
+})
+
+// The frozen sentence names the state in the words the band and the pane use
+// for it. The state is one of builder's checked names, not text a sub session
+// wrote, so the line gets no data sentence.
+test('the frozen sentence names each state in the band\'s words, and its line has no data sentence', () => {
+  const words = STATES.map(state => REASON_WORDS.frozen({ kind: 'frozen', who: 'ABC-1', minutes: 12, state }))
+  expect(words).toEqual([
+    'ABC-1\'s status file has not changed for 12 minutes and still shows the state working.',
+    'ABC-1\'s status file has not changed for 12 minutes and still shows the state waiting on builder.',
+    'ABC-1\'s status file has not changed for 12 minutes and still shows the state idle.',
+    'ABC-1\'s status file has not changed for 12 minutes and still shows the state needs you.',
+    'ABC-1\'s status file has not changed for 12 minutes and still shows the state in cleanup.',
+    'ABC-1\'s status file has not changed for 12 minutes and still shows the state done.',
+  ])
+  expect(wakeLine([{ kind: 'frozen', who: 'ABC-1', minutes: 12, state: 'needs-you' }])).not.toContain(DATA_NOTE)
 })
 
 test('the verdict sentence gives each verdict in words and only the first seven characters of the sha', () => {
@@ -145,9 +164,10 @@ test('reasons split into the ones that wake, in order, and the report sentences,
     { kind: 'merged', who: 'ABC-1', number: 7 },
     { kind: 'slot-free', free: 1 },
     { kind: 'still-waits', id: 'local_abc' },
+    { kind: 'frozen', who: 'ABC-3', minutes: 10, state: 'done' },
   ]
   const { wakes, reports } = splitReasons(reasons)
-  expect(wakes.map(r => r.kind)).toEqual(['idle', 'slot-free', 'still-waits'])
+  expect(wakes.map(r => r.kind)).toEqual(['idle', 'slot-free', 'still-waits', 'frozen'])
   expect(reports).toEqual(['ABC-1 opened pull request #7.', 'ABC-1\'s pull request #7 merged.'])
   expect(splitReasons([])).toEqual({ wakes: [], reports: [] })
 })

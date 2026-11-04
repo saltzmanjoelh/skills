@@ -49,8 +49,9 @@ export type ForemanActs = {
   // the cleanup wake were last given for, or null.
   notifiedFor: string | null
   cleanupWokeFor: string | null
-  // The file modification time that the gone wake was last given for, or
-  // null.
+  // The file modification time that the parent was last woken for by the
+  // gone wake or the frozen wake, which both set it, or null. Either wake
+  // stays quiet while it equals the file's modification time.
   goneWokeFor: number | null
   // When the current gone wait of list checks began: the time of a read that
   // asked for the desktop app's list, whether or not it got one, after the

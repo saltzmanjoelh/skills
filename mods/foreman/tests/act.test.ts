@@ -1,11 +1,11 @@
 import { expect, test } from 'claude-code/testing'
 
-import { decide, GONE_MS, keptByUnreadList, listFailedNotice, needsList, NO_ANSWER, slotOutcome, stallsNeedList, type DecideInput, type Decision, type SessionsLook } from '../hooks/act'
+import { decide, FROZEN_MS, GONE_MS, keptByUnreadList, listFailedNotice, needsList, NO_ANSWER, slotOutcome, stallsNeedList, type DecideInput, type Decision, type SessionsLook } from '../hooks/act'
 import { REASONS } from '../hooks/desktop'
-import { recordIn } from '../hooks/record'
+import { recordIn, STATES } from '../hooks/record'
 import { spentSum, TIMES_UNKNOWN } from '../hooks/spend'
 import type { SubRow } from '../hooks/subs'
-import { joinOwners, newPairing, TICKETS_EMPTY } from '../hooks/tickets'
+import { joinOwners, newPairing, TICKETS_EMPTY, ticketsIn } from '../hooks/tickets'
 import { DATA_NOTE, wakeLine } from '../hooks/wake'
 import type { ForemanStanding, ForemanTickets } from '../types'
 
@@ -54,8 +54,20 @@ function readEvery(tickets: ForemanTickets, rowAt: (now: number) => SubRow[], un
   return readEach(tickets, rowAt, until, () => ({ kind: 'unread' }), over).seen
 }
 
+// The rows with every file rewritten at `now`, as builder rewrites the file of
+// a live session once a minute in every state. A test of a sub session that
+// is still running reads through it, so that the frozen rule, which wakes the
+// parent for a file that has not changed for ten minutes, does not stand in
+// for the rule the test is about.
+const live = (rows: SubRow[], now: number) => rows.map(r => ({ ...r, mtimeMs: now }))
+
+// The same reads as readEvery, with every row's file rewritten at each read.
+function readLive(tickets: ForemanTickets, rowAt: (now: number) => SubRow[], until: number, over: Partial<DecideInput> = {}) {
+  return readEvery(tickets, now => live(rowAt(now), now), until, over)
+}
+
 test('an idle sub session that never answers is nudged at one and two thresholds, the parent is woken at three, and no third nudge comes', () => {
-  expect(readEvery(paired(), () => [row()], T0 + 30 * MINUTE)).toEqual([
+  expect(readLive(paired(), () => [row()], T0 + 30 * MINUTE)).toEqual([
     { at: 5, nudges: 1, reasons: [] },
     { at: 10, nudges: 1, reasons: [] },
     { at: 15, nudges: 0, reasons: ['idle'] },
@@ -78,7 +90,7 @@ test('a sub session that answers each nudge with a short turn and goes idle agai
     if (m >= 7) return [row({ stateSince: T0 + 7 * MINUTE })]
     return [row()]
   }
-  expect(readEvery(paired(), rowAt, T0 + 40 * MINUTE)).toEqual([
+  expect(readLive(paired(), rowAt, T0 + 40 * MINUTE)).toEqual([
     { at: 5, nudges: 1, reasons: [] },
     { at: 12, nudges: 1, reasons: [] },
     { at: 19, nudges: 0, reasons: ['idle'] },
@@ -87,7 +99,7 @@ test('a sub session that answers each nudge with a short turn and goes idle agai
 
 test('progress inside an unchanged idle episode still counts from the episode, as before background waits', () => {
   const progressed = (now: number) => ((now - T0) / MINUTE < 3 ? [row()] : [row({ stageDone: 5 })])
-  expect(readEvery(paired(), progressed, T0 + 11 * MINUTE)).toEqual([
+  expect(readLive(paired(), progressed, T0 + 11 * MINUTE)).toEqual([
     { at: 5, nudges: 1, reasons: [] },
     { at: 10, nudges: 1, reasons: [] },
   ])
@@ -95,7 +107,7 @@ test('progress inside an unchanged idle episode still counts from the episode, a
 
 test('progress, or a working stretch as long as the threshold, starts the count again', () => {
   const progressed = (now: number) => ((now - T0) / MINUTE < 7 ? [row()] : [row({ stage: 'verify', stateSince: T0 + 7 * MINUTE })])
-  expect(readEvery(paired(), progressed, T0 + 13 * MINUTE)).toEqual([
+  expect(readLive(paired(), progressed, T0 + 13 * MINUTE)).toEqual([
     { at: 5, nudges: 1, reasons: [] },
     { at: 12, nudges: 1, reasons: [] },
   ])
@@ -104,31 +116,32 @@ test('progress, or a working stretch as long as the threshold, starts the count 
     if (m >= 6 && m < 12) return [row({ state: 'working', stateSince: T0 + 6 * MINUTE })]
     return m >= 12 ? [row({ stateSince: T0 + 12 * MINUTE })] : [row()]
   }
-  expect(readEvery(paired(), worked, T0 + 18 * MINUTE)).toEqual([
+  expect(readLive(paired(), worked, T0 + 18 * MINUTE)).toEqual([
     { at: 5, nudges: 1, reasons: [] },
     { at: 17, nudges: 1, reasons: [] },
   ])
 })
 
 test('a record with no desktop session to nudge wakes the parent at two thresholds', () => {
-  expect(readEvery(paired(null), () => [row({ desktopSessionId: undefined })], T0 + 20 * MINUTE)).toEqual([{ at: 10, nudges: 0, reasons: ['idle'] }])
+  expect(readLive(paired(null), () => [row({ desktopSessionId: undefined })], T0 + 20 * MINUTE)).toEqual([{ at: 10, nudges: 0, reasons: ['idle'] }])
 })
 
 test('a record that needs the person is notified once per episode and never wakes the parent', () => {
-  const needs = (since: number) => [row({ state: 'needs-you', stateSince: since, reason: 'a question is open' })]
-  let d = read(paired(), needs(T0), T0)
+  // The session still runs, so its file is rewritten at each read.
+  const needs = (since: number, now: number) => live([row({ state: 'needs-you', stateSince: since, reason: 'a question is open' })], now)
+  let d = read(paired(), needs(T0, T0), T0)
   expect(d.effects).toEqual([{ kind: 'notify', text: 'ABC-1 needs you: a question is open' }])
-  d = read(d.tickets, needs(T0), T0 + 30 * MINUTE)
+  d = read(d.tickets, needs(T0, T0 + 30 * MINUTE), T0 + 30 * MINUTE)
   expect(d.effects).toEqual([])
   expect(d.reasons).toEqual([])
-  d = read(d.tickets, needs(T0 + 31 * MINUTE), T0 + 31 * MINUTE)
+  d = read(d.tickets, needs(T0 + 31 * MINUTE, T0 + 31 * MINUTE), T0 + 31 * MINUTE)
   expect(d.effects).toHaveLength(1)
 })
 
 test('cleanup wakes the parent once after its threshold, or at once after three failed calls', () => {
   const cleaning = (failedCalls: number) => [row({ state: 'in-cleanup', cleanup: { failedCalls, lastError: 'gh failed' } })]
-  expect(readEvery(paired(), () => cleaning(0), T0 + 40 * MINUTE)).toEqual([{ at: 15, nudges: 0, reasons: ['cleanup'] }])
-  expect(readEvery(paired(), () => cleaning(3), T0 + 40 * MINUTE)).toEqual([{ at: 0, nudges: 0, reasons: ['cleanup'] }])
+  expect(readLive(paired(), () => cleaning(0), T0 + 40 * MINUTE)).toEqual([{ at: 15, nudges: 0, reasons: ['cleanup'] }])
+  expect(readLive(paired(), () => cleaning(3), T0 + 40 * MINUTE)).toEqual([{ at: 0, nudges: 0, reasons: ['cleanup'] }])
 })
 
 test('a done session frees its slot once it is archived, not running or not listed, and not while it runs', () => {
@@ -456,8 +469,8 @@ test('a released or freed pairing, or a record that does not own the ticket, wak
 })
 
 test('an idle record whose pull request is closed gets no nudge and no idle wake past three thresholds, and the same record with it open still does', () => {
-  expect(readEvery(paired(), () => [row({ pr: pr(7, 'CLOSED') })], T0 + 30 * MINUTE)).toEqual([{ at: 0, nudges: 0, reasons: ['opened', 'closed'] }])
-  expect(readEvery(paired(), () => [row({ pr: pr(7, 'OPEN') })], T0 + 30 * MINUTE)).toEqual([
+  expect(readLive(paired(), () => [row({ pr: pr(7, 'CLOSED') })], T0 + 30 * MINUTE)).toEqual([{ at: 0, nudges: 0, reasons: ['opened', 'closed'] }])
+  expect(readLive(paired(), () => [row({ pr: pr(7, 'OPEN') })], T0 + 30 * MINUTE)).toEqual([
     { at: 0, nudges: 0, reasons: ['opened'] },
     { at: 5, nudges: 1, reasons: [] },
     { at: 10, nudges: 1, reasons: [] },
@@ -473,7 +486,7 @@ test('a close ends the idle stretch being counted, and a reopened pull request i
     return [row({ pr: pr(7, 'OPEN'), stateSince: T0 + 20 * MINUTE })]
   }
   const t = paired()
-  const seen = readEvery(t, rowAt, T0 + 40 * MINUTE)
+  const seen = readLive(t, rowAt, T0 + 40 * MINUTE)
   expect(seen).toEqual([
     { at: 0, nudges: 0, reasons: ['opened'] },
     { at: 5, nudges: 1, reasons: [] },
@@ -535,7 +548,8 @@ test('a status folder that is missing, then empty, then holds the sub session\'s
   expect(d.reasons).toEqual([])
   d = read(d.tickets, [], T0 + 8 * MINUTE)
   expect(d.reasons).toEqual([])
-  d = read(d.tickets, [row({ state: 'working' })], T0 + 12 * MINUTE)
+  // The sub session has just written its file, so it is fresh.
+  d = read(d.tickets, [row({ state: 'working' }, 'a.json', T0 + 12 * MINUTE)], T0 + 12 * MINUTE)
   expect(d.reasons).toEqual([])
   expect(d.tickets.pairings[0]!.owner).toBe('s-a')
 })
@@ -545,16 +559,16 @@ test('a status folder that is missing, then empty, then holds the sub session\'s
 const waiting = (since: number, tasks: unknown = ['run the tests'], over: Record<string, unknown> = {}) => [row({ state: 'working', backgroundOnly: { since, tasks }, ...over })]
 
 test('a working record that waits only on background work is nudged at one and two thresholds and wakes the parent at three, with its task quoted', () => {
-  expect(readEvery(paired(), () => waiting(T0), T0 + 30 * MINUTE)).toEqual([
+  expect(readLive(paired(), () => waiting(T0), T0 + 30 * MINUTE)).toEqual([
     { at: 5, nudges: 1, reasons: [] },
     { at: 10, nudges: 1, reasons: [] },
     { at: 15, nudges: 0, reasons: ['background'] },
   ])
-  const first = read(paired(), waiting(T0), T0 + T)
+  const first = read(paired(), live(waiting(T0), T0 + T), T0 + T)
   expect(first.effects).toEqual([{ kind: 'nudge', to: 'local_a', name: 'ABC-1', about: 'background' }])
   expect(first.nextDueAt).toBe(T0 + 2 * T)
-  const second = read(first.tickets, waiting(T0), T0 + 2 * T)
-  const woke = read(second.tickets, waiting(T0), T0 + 3 * T)
+  const second = read(first.tickets, live(waiting(T0), T0 + 2 * T), T0 + 2 * T)
+  const woke = read(second.tickets, live(waiting(T0), T0 + 3 * T), T0 + 3 * T)
   expect(wakeLine(woke.reasons)).toBe(`foreman: ABC-1 has waited only on background work for 15 minutes, through two nudges; its first task, quoted: "run the tests". ${DATA_NOTE}`)
 })
 
@@ -562,7 +576,7 @@ test('a background wait with no task wakes with the background sentence and no q
   let t = paired()
   let last: Decision | null = null
   for (const at of [T, 2 * T, 3 * T]) {
-    last = read(t, waiting(T0, []), T0 + at)
+    last = read(t, live(waiting(T0, []), T0 + at), T0 + at)
     t = last.tickets
   }
   expect(last!.reasons).toEqual([{ kind: 'background', who: 'ABC-1', nudged: true, minutes: 15, task: null }])
@@ -576,7 +590,7 @@ test('a sub session that answers each nudge with a short turn and keeps waiting 
     const m = (now - T0) / MINUTE
     return m === 6 || m === 11 ? [row({ state: 'working' })] : waiting(T0)
   }
-  expect(readEvery(paired(), rowAt, T0 + 30 * MINUTE)).toEqual([
+  expect(readLive(paired(), rowAt, T0 + 30 * MINUTE)).toEqual([
     { at: 5, nudges: 1, reasons: [] },
     { at: 10, nudges: 1, reasons: [] },
     { at: 15, nudges: 0, reasons: ['background'] },
@@ -585,7 +599,7 @@ test('a sub session that answers each nudge with a short turn and keeps waiting 
 
 test('an idle stretch that already woke the parent does not silence a later background wait', () => {
   const rowAt = (now: number) => ((now - T0) / MINUTE < 20 ? [row()] : waiting(T0 + 20 * MINUTE, ['run the tests'], { stateSince: T0 + 20 * MINUTE }))
-  expect(readEvery(paired(), rowAt, T0 + 40 * MINUTE)).toEqual([
+  expect(readLive(paired(), rowAt, T0 + 40 * MINUTE)).toEqual([
     { at: 5, nudges: 1, reasons: [] },
     { at: 10, nudges: 1, reasons: [] },
     { at: 15, nudges: 0, reasons: ['idle'] },
@@ -597,7 +611,7 @@ test('an idle stretch that already woke the parent does not silence a later back
 
 test('progress during a background wait ends the stretch, and the count starts again from that read', () => {
   const progressed = (now: number) => ((now - T0) / MINUTE < 7 ? waiting(T0) : waiting(T0, ['run the tests'], { stage: 'verify' }))
-  expect(readEvery(paired(), progressed, T0 + 30 * MINUTE)).toEqual([
+  expect(readLive(paired(), progressed, T0 + 30 * MINUTE)).toEqual([
     { at: 5, nudges: 1, reasons: [] },
     { at: 12, nudges: 1, reasons: [] },
     { at: 17, nudges: 1, reasons: [] },
@@ -622,7 +636,7 @@ test('progress in a turn of its own during a background wait counts the next nud
     if (m === 9) return [row({ state: 'working', stage: 'verify' })]
     return waiting(T0, ['run the tests'], { stage: 'verify' })
   }
-  expect(readEvery(paired(), rowAt, T0 + 30 * MINUTE)).toEqual([
+  expect(readLive(paired(), rowAt, T0 + 30 * MINUTE)).toEqual([
     { at: 5, nudges: 1, reasons: [] },
     { at: 14, nudges: 1, reasons: [] },
     { at: 19, nudges: 1, reasons: [] },
@@ -650,7 +664,7 @@ test('progress in a turn of its own after the stretch woke the parent starts the
     if (m === 17) return [row({ state: 'working', stage: 'verify' })]
     return waiting(T0, ['run the tests'], { stage: 'verify' })
   }
-  expect(readEvery(paired(), rowAt, T0 + 40 * MINUTE)).toEqual([
+  expect(readLive(paired(), rowAt, T0 + 40 * MINUTE)).toEqual([
     { at: 5, nudges: 1, reasons: [] },
     { at: 10, nudges: 1, reasons: [] },
     { at: 15, nudges: 0, reasons: ['background'] },
@@ -667,7 +681,7 @@ test('a background wait with a new since after a turn of its own with progress s
     if (m < 12) return [row({ state: 'working', stage: 'verify' })]
     return waiting(T0 + 12 * MINUTE, ['run the linter'], { stage: 'verify' })
   }
-  expect(readEvery(paired(), rowAt, T0 + 40 * MINUTE)).toEqual([
+  expect(readLive(paired(), rowAt, T0 + 40 * MINUTE)).toEqual([
     { at: 5, nudges: 1, reasons: [] },
     { at: 17, nudges: 1, reasons: [] },
     { at: 22, nudges: 1, reasons: [] },
@@ -702,7 +716,7 @@ function longTurn(answeredNudge: boolean, progress: boolean) {
 test('a long turn of its own with progress restarts the background count from the end of the turn', () => {
   // The follow-up's timeline: before this change the nudges came at 5, 20 and
   // 25 and the wake at 30.
-  expect(readEvery(paired(), longTurn(false, true), T0 + 40 * MINUTE)).toEqual([
+  expect(readLive(paired(), longTurn(false, true), T0 + 40 * MINUTE)).toEqual([
     { at: 5, nudges: 1, reasons: [] },
     { at: 25, nudges: 1, reasons: [] },
     { at: 30, nudges: 1, reasons: [] },
@@ -711,7 +725,7 @@ test('a long turn of its own with progress restarts the background count from th
 })
 
 test('a long turn of its own that foreman sees no progress in still restarts the count from its end', () => {
-  expect(readEvery(paired(), longTurn(false, false), T0 + 40 * MINUTE)).toEqual([
+  expect(readLive(paired(), longTurn(false, false), T0 + 40 * MINUTE)).toEqual([
     { at: 5, nudges: 1, reasons: [] },
     { at: 25, nudges: 1, reasons: [] },
     { at: 30, nudges: 1, reasons: [] },
@@ -720,7 +734,7 @@ test('a long turn of its own that foreman sees no progress in still restarts the
 })
 
 test('a long answer to a nudge restarts the count from its end only when foreman saw progress during it', () => {
-  expect(readEvery(paired(), longTurn(true, true), T0 + 40 * MINUTE)).toEqual([
+  expect(readLive(paired(), longTurn(true, true), T0 + 40 * MINUTE)).toEqual([
     { at: 5, nudges: 1, reasons: [] },
     { at: 25, nudges: 1, reasons: [] },
     { at: 30, nudges: 1, reasons: [] },
@@ -728,7 +742,7 @@ test('a long answer to a nudge restarts the count from its end only when foreman
   ])
   // Without progress, the answer is counted through: the second nudge is
   // overdue when it ends, and the wake comes one threshold later.
-  expect(readEvery(paired(), longTurn(true, false), T0 + 40 * MINUTE)).toEqual([
+  expect(readLive(paired(), longTurn(true, false), T0 + 40 * MINUTE)).toEqual([
     { at: 5, nudges: 1, reasons: [] },
     { at: 20, nudges: 1, reasons: [] },
     { at: 25, nudges: 0, reasons: ['background'] },
@@ -740,7 +754,7 @@ test('a sub session that only answers nudges with short turns still reaches the 
     const m = (now - T0) / MINUTE
     return waiting(T0, ['run the tests'], m < 6 ? ended(0, false) : m < 11 ? ended(6, true) : ended(11, true))
   }
-  expect(readEvery(paired(), rowAt, T0 + 30 * MINUTE)).toEqual([
+  expect(readLive(paired(), rowAt, T0 + 30 * MINUTE)).toEqual([
     { at: 5, nudges: 1, reasons: [] },
     { at: 10, nudges: 1, reasons: [] },
     { at: 15, nudges: 0, reasons: ['background'] },
@@ -759,7 +773,7 @@ test('a turn end restarts a background stretch once, never moves it back, and is
   expect(earlier.pairings[0]!.acts.stretch).toEqual(restarted.pairings[0]!.acts.stretch)
   // An end after the read, as a damaged file could hold, restarts nothing, so
   // it cannot put the nudges off.
-  expect(readEvery(paired(), () => waiting(T0, ['run the tests'], ended(60, false)), T0 + 30 * MINUTE)).toEqual([
+  expect(readLive(paired(), () => waiting(T0, ['run the tests'], ended(60, false)), T0 + 30 * MINUTE)).toEqual([
     { at: 5, nudges: 1, reasons: [] },
     { at: 10, nudges: 1, reasons: [] },
     { at: 15, nudges: 0, reasons: ['background'] },
@@ -776,7 +790,7 @@ test('progress in a turn of its own marks the stretch, and a damaged turn end re
 })
 
 test('a turn end on an idle record changes nothing', () => {
-  expect(readEvery(paired(), () => [row(ended(7, false))], T0 + 30 * MINUTE)).toEqual([
+  expect(readLive(paired(), () => [row(ended(7, false))], T0 + 30 * MINUTE)).toEqual([
     { at: 5, nudges: 1, reasons: [] },
     { at: 10, nudges: 1, reasons: [] },
     { at: 15, nudges: 0, reasons: ['idle'] },
@@ -790,7 +804,7 @@ test('progress in a working turn still ends an idle stretch, and the next idle e
     if (m < 8) return [row({ state: 'working', stage: 'verify', stateSince: T0 + 6 * MINUTE })]
     return [row({ stage: 'verify', stateSince: T0 + 8 * MINUTE })]
   }
-  expect(readEvery(paired(), rowAt, T0 + 30 * MINUTE)).toEqual([
+  expect(readLive(paired(), rowAt, T0 + 30 * MINUTE)).toEqual([
     { at: 5, nudges: 1, reasons: [] },
     { at: 13, nudges: 1, reasons: [] },
     { at: 18, nudges: 1, reasons: [] },
@@ -802,7 +816,7 @@ test('progress in a working turn still ends an idle stretch, and the next idle e
 
 test('a background wait with a new since starts a fresh stretch', () => {
   const renewed = (now: number) => ((now - T0) / MINUTE < 7 ? waiting(T0) : waiting(T0 + 7 * MINUTE))
-  expect(readEvery(paired(), renewed, T0 + 30 * MINUTE)).toEqual([
+  expect(readLive(paired(), renewed, T0 + 30 * MINUTE)).toEqual([
     { at: 5, nudges: 1, reasons: [] },
     { at: 12, nudges: 1, reasons: [] },
     { at: 17, nudges: 1, reasons: [] },
@@ -812,7 +826,7 @@ test('a background wait with a new since starts a fresh stretch', () => {
 
 test('a background wait with no desktop session to nudge wakes the parent at two thresholds', () => {
   const rows = () => waiting(T0, ['run the tests'], { desktopSessionId: undefined })
-  expect(readEvery(paired(null), rows, T0 + 30 * MINUTE)).toEqual([{ at: 10, nudges: 0, reasons: ['background'] }])
+  expect(readLive(paired(null), rows, T0 + 30 * MINUTE)).toEqual([{ at: 10, nudges: 0, reasons: ['background'] }])
   expect(wakeLine(read(paired(null), rows(), T0 + 2 * T).reasons)).toBe(
     'foreman: ABC-1 has waited only on background work for 10 minutes and cannot be nudged, because foreman knows no desktop session for it;'
     + ` its first task, quoted: "run the tests". ${DATA_NOTE}`,
@@ -820,9 +834,9 @@ test('a background wait with no desktop session to nudge wakes the parent at two
 })
 
 test('a working record without the field, or with a malformed one, is never nudged', () => {
-  expect(readEvery(paired(), () => [row({ state: 'working' })], T0 + 30 * MINUTE)).toEqual([])
+  expect(readLive(paired(), () => [row({ state: 'working' })], T0 + 30 * MINUTE)).toEqual([])
   for (const backgroundOnly of ['yes', { since: 'then', tasks: ['x'] }, { tasks: ['x'] }, null]) {
-    expect(readEvery(paired(), () => [row({ state: 'working', backgroundOnly })], T0 + 30 * MINUTE)).toEqual([])
+    expect(readLive(paired(), () => [row({ state: 'working', backgroundOnly })], T0 + 30 * MINUTE)).toEqual([])
   }
 })
 
@@ -870,47 +884,62 @@ const listing = (entry: Partial<{ isArchived: boolean; isRunning: boolean }>): S
   ({ kind: 'read', sessions: [{ sessionId: 'local_a', isArchived: false, isRunning: false, title: null, surelyUnarchived: true, ...entry }] })
 const stoppedListing = listing({})
 
-test('a working record whose file stopped and whose session the list shows not running is nudged as idle, counted from the file\'s last change, with no gone wake', () => {
+test('a working record whose file stopped and whose session the list shows not running is nudged as idle, counted from the file\'s last change, with no gone wake, and the frozen wake stands as its wake', () => {
+  // The frozen wake comes at eleven minutes, on the same read as the second
+  // nudge, and counts as the stall's wake, so the idle wake at sixteen does
+  // not come.
   expect(readEach(paired(), () => [stalledRow()], T0 + 40 * MINUTE, () => stoppedListing).seen).toEqual([
     { at: 6, nudges: 1, reasons: [] },
-    { at: 11, nudges: 1, reasons: [] },
-    { at: 16, nudges: 0, reasons: ['idle'] },
+    { at: 11, nudges: 1, reasons: ['frozen'] },
   ])
   // With a ten-minute threshold the first nudge waits for ten minutes after
-  // the file's last change, not for the stall to begin at six.
+  // the file's last change, not for the stall to begin at six. The frozen
+  // wake a minute later marks the stretch as woken, because it has already
+  // nudged for this stall, so no second nudge and no idle wake follow.
   expect(readEach(paired(), () => [stalledRow()], T0 + 50 * MINUTE, () => stoppedListing, { limits: { ...LIMITS, idleMs: 10 * MINUTE } }).seen).toEqual([
     { at: 10, nudges: 1, reasons: [] },
-    { at: 20, nudges: 1, reasons: [] },
-    { at: 30, nudges: 0, reasons: ['idle'] },
+    { at: 11, nudges: 0, reasons: ['frozen'] },
   ])
   const d = read(paired(), [stalledRow()], T0 + GONE_MS + MINUTE, { sessions: stoppedListing })
   expect(d.effects).toEqual([{ kind: 'nudge', to: 'local_a', name: 'ABC-1' }])
 })
 
-test('a working record whose file stopped gets no nudge and no wake while the list shows it running, fails or is not read', () => {
+test('a working record whose file stopped gets no nudge, and only the frozen wake at eleven minutes, while the list shows it running, fails or is not read', () => {
+  // No stall rule applies without a list that shows the session stopped, so
+  // the frozen wake is the first word the parent gets.
   for (const look of [running, { kind: 'failed' } as const, { kind: 'unread' } as const]) {
-    expect(readEach(paired(), () => [stalledRow()], T0 + 40 * MINUTE, () => look).seen).toEqual([])
+    expect(readEach(paired(), () => [stalledRow()], T0 + 40 * MINUTE, () => look).seen).toEqual([{ at: 11, nudges: 0, reasons: ['frozen'] }])
   }
 })
 
 test('a failed read of the list in the middle of a stall neither nudges nor moves the next nudge', () => {
+  // The second nudge still comes at eleven minutes, and the frozen wake on
+  // the same read stands as the stall's wake.
   const at8 = (now: number): SessionsLook => (now === T0 + 8 * MINUTE ? { kind: 'failed' } : stoppedListing)
   expect(readEach(paired(), () => [stalledRow()], T0 + 20 * MINUTE, at8).seen).toEqual([
     { at: 6, nudges: 1, reasons: [] },
-    { at: 11, nudges: 1, reasons: [] },
-    { at: 16, nudges: 0, reasons: ['idle'] },
+    { at: 11, nudges: 1, reasons: ['frozen'] },
   ])
 })
 
 test('a nudged turn that shows the session running but changes nothing keeps the stall\'s count, so the second nudge and the wake come on time', () => {
   // Each nudge starts a turn, which the list shows running for two minutes,
-  // and the turn ends without changing the file.
+  // and the turn ends without changing the file. Under the default limit the
+  // frozen wake comes on the same read as the second nudge and stands as the
+  // stall's wake.
   const turns = (now: number): SessionsLook => ([7, 8, 12, 13].includes((now - T0) / MINUTE) ? running : stoppedListing)
   const run = readEach(paired(), () => [stalledRow()], T0 + 30 * MINUTE, turns)
   expect(run.seen).toEqual([
     { at: 6, nudges: 1, reasons: [] },
-    { at: 11, nudges: 1, reasons: [] },
-    { at: 16, nudges: 0, reasons: ['idle'] },
+    { at: 11, nudges: 1, reasons: ['frozen'] },
+  ])
+  // With a two-minute limit the stall's own idle wake comes before the file
+  // is ten minutes old, and the turns in between still do not move it.
+  const short = (now: number): SessionsLook => ([7, 9].includes((now - T0) / MINUTE) ? running : stoppedListing)
+  expect(readEach(paired(), () => [stalledRow()], T0 + 30 * MINUTE, short, { limits: { ...LIMITS, idleMs: 2 * MINUTE } }).seen).toEqual([
+    { at: 6, nudges: 1, reasons: [] },
+    { at: 8, nudges: 1, reasons: [] },
+    { at: 10, nudges: 0, reasons: ['idle'] },
   ])
   // A read whose list shows the session running neither nudges nor wakes,
   // and keeps the stall's stretch as it was.
@@ -957,10 +986,11 @@ test('a file that changes again after a stall\'s nudge stops the nudges', () => 
   expect(readEach(paired(), rowAt, T0 + 30 * MINUTE, () => stoppedListing).seen).toEqual([{ at: 6, nudges: 1, reasons: [] }])
 })
 
-test('a stalled record whose pull request is closed gets no nudge and no gone wake, and needs the list only once every gone wait', () => {
+test('a stalled record whose pull request is closed gets no nudge and no gone wake, only the frozen wake once, and needs the list only once every gone wait', () => {
+  // A closed pull request still holds its slot, so the frozen wake comes once.
   const closed = () => [stalledRow({ pr: pr(7, 'CLOSED') })]
   const run = readEach(paired(), closed, T0 + 30 * MINUTE, () => stoppedListing)
-  expect(run.seen).toEqual([{ at: 0, nudges: 0, reasons: ['opened', 'closed'] }])
+  expect(run.seen).toEqual([{ at: 0, nudges: 0, reasons: ['opened', 'closed'] }, { at: 11, nudges: 0, reasons: ['frozen'] }])
   const checked = read(run.tickets, closed(), T0 + 31 * MINUTE, { sessions: stoppedListing }).tickets
   const at = checked.pairings[0]!.acts.listCheckedAt!
   expect(needsList(checked, closed(), at + MINUTE)).toBe(false)
@@ -1036,4 +1066,139 @@ test('a stall-shaped record that never stalls asks for the list as often as on t
   const running = read(paired(), merged, first, { sessions: listing({ isRunning: true }) })
   expect(needsList(running.tickets, merged, first + MINUTE)).toBe(false)
   expect(needsList(running.tickets, merged, first + GONE_MS)).toBe(true)
+})
+
+// The frozen kinds of reason in a decision.
+const frozenIn = (d: Decision) => d.reasons.filter(r => r.kind === 'frozen')
+
+test('a status file that has not changed for ten minutes wakes the parent in every state, done included, naming the state, and not at ten minutes exactly', () => {
+  for (const state of STATES) {
+    const rows = [row({ state }, 'a.json', T0)]
+    // A done record keeps its slot while the list shows its session running.
+    const sessions = state === 'done' ? running : { kind: 'unread' } as const
+    expect(frozenIn(read(paired(), rows, T0 + FROZEN_MS, { sessions }))).toEqual([])
+    expect(frozenIn(read(paired(), rows, T0 + FROZEN_MS + 1, { sessions }))).toEqual([{ kind: 'frozen', who: 'ABC-1', minutes: 10, state }])
+  }
+  expect(FROZEN_MS).toBe(2 * GONE_MS)
+})
+
+test('the frozen wake comes once for each frozen stretch, and again once the file changes and freezes anew', () => {
+  const rowAt = (now: number) => [row({ state: 'waiting-on-builder' }, 'a.json', now < T0 + 15 * MINUTE ? T0 : T0 + 15 * MINUTE)]
+  expect(readEvery(paired(), rowAt, T0 + 40 * MINUTE)).toEqual([
+    { at: 11, nudges: 0, reasons: ['frozen'] },
+    { at: 26, nudges: 0, reasons: ['frozen'] },
+  ])
+})
+
+test('a frozen file whose pull request merged gets no frozen wake, and one whose pull request was closed without merging gets it once', () => {
+  expect(readEvery(paired(), () => [row({ state: 'waiting-on-builder', pr: pr(7, 'MERGED') })], T0 + 40 * MINUTE)).toEqual([
+    { at: 0, nudges: 0, reasons: ['opened', 'merged'] },
+  ])
+  expect(readEvery(paired(), () => [row({ state: 'waiting-on-builder', pr: pr(7, 'CLOSED') })], T0 + 40 * MINUTE)).toEqual([
+    { at: 0, nudges: 0, reasons: ['opened', 'closed'] },
+    { at: 11, nudges: 0, reasons: ['frozen'] },
+  ])
+})
+
+test('a gone wake for the stretch silences the frozen wake, whether it went on an earlier read or goes on the same one', () => {
+  const stopped = () => [row({ state: 'waiting-on-builder' }, 'a.json', T0)]
+  const notRunning = listing({})
+  expect(readEach(paired(), stopped, T0 + 40 * MINUTE, () => notRunning).seen).toEqual([{ at: 6, nudges: 0, reasons: ['gone'] }])
+  const same = read(paired(), stopped(), T0 + 11 * MINUTE, { sessions: notRunning })
+  expect(same.reasons).toEqual([{ kind: 'gone', who: 'ABC-1', minutes: 11 }])
+  expect(same.tickets.pairings[0]!.acts.goneWokeFor).toBe(T0)
+})
+
+test('a stall whose idle wake already went gets no frozen wake for the same stretch', () => {
+  const limits = { ...LIMITS, idleMs: 2 * MINUTE }
+  expect(readEach(paired(), () => [stalledRow()], T0 + 40 * MINUTE, () => stoppedListing, { limits }).seen).toEqual([
+    { at: 6, nudges: 1, reasons: [] },
+    { at: 8, nudges: 1, reasons: [] },
+    { at: 10, nudges: 0, reasons: ['idle'] },
+  ])
+})
+
+test('a stall that was only nudged before the list stopped reading gets the frozen wake, which counts as its stall\'s wake', () => {
+  // The list shows the session stopped up to six minutes, fails from seven to
+  // fourteen, and shows it stopped again from fifteen.
+  const sessionsAt = (now: number): SessionsLook => {
+    const m = (now - T0) / MINUTE
+    return m <= 6 || m >= 15 ? stoppedListing : { kind: 'failed' }
+  }
+  const rows = () => [stalledRow()]
+  const atWake = readEach(paired(), rows, T0 + 11 * MINUTE, sessionsAt)
+  expect(atWake.seen).toEqual([
+    { at: 6, nudges: 1, reasons: [] },
+    { at: 11, nudges: 0, reasons: ['frozen'] },
+  ])
+  expect(atWake.tickets.pairings[0]!.acts.stretch?.woke).toBe(true)
+  expect(stallsNeedList(atWake.tickets, rows(), T0 + 12 * MINUTE)).toBe(false)
+  // Later reads that show the session stopped bring no nudge and no wake.
+  expect(readEach(paired(), rows, T0 + 40 * MINUTE, sessionsAt).seen).toEqual(atWake.seen)
+})
+
+test('after the frozen wake the gone rule does not wake for the same stretch', () => {
+  const sessionsAt = (now: number): SessionsLook => (now <= T0 + 11 * MINUTE ? running : listing({}))
+  expect(readEach(paired(), () => [row({ state: 'waiting-on-builder' }, 'a.json', T0)], T0 + 40 * MINUTE, sessionsAt).seen).toEqual([
+    { at: 11, nudges: 0, reasons: ['frozen'] },
+  ])
+})
+
+test('a record with no desktop session, which the stall rule never nudges, gets the frozen wake', () => {
+  expect(readEvery(paired(null), () => [row({ state: 'working', desktopSessionId: undefined })], T0 + 40 * MINUTE)).toEqual([
+    { at: 11, nudges: 0, reasons: ['frozen'] },
+  ])
+})
+
+test('a frozen wake that went before any stall nudge stands as the stall\'s wake: both nudges still go, and no second wake comes', () => {
+  // The list fails up to eleven minutes and shows the session stopped after.
+  const sessionsAt = (now: number): SessionsLook => (now <= T0 + 11 * MINUTE ? { kind: 'failed' } : stoppedListing)
+  const run = readEach(paired(), () => [stalledRow()], T0 + 40 * MINUTE, sessionsAt)
+  expect(run.seen).toEqual([
+    { at: 11, nudges: 0, reasons: ['frozen'] },
+    { at: 12, nudges: 1, reasons: [] },
+    { at: 17, nudges: 1, reasons: [] },
+  ])
+  expect(run.tickets.pairings[0]!.acts.stretch?.woke).toBe(true)
+  expect(stallsNeedList(run.tickets, [stalledRow()], T0 + 41 * MINUTE)).toBe(false)
+})
+
+test('a gone wake that went before any stall nudge stands as the stall\'s wake: both nudges still go, and no second wake comes', () => {
+  // The session is missing from a list that is not complete up to eleven
+  // minutes, and the list shows it stopped after.
+  const sessionsAt = (now: number): SessionsLook => (now <= T0 + 11 * MINUTE ? { kind: 'read', sessions: [] } : stoppedListing)
+  const run = readEach(paired(), () => [stalledRow()], T0 + 40 * MINUTE, sessionsAt)
+  expect(run.seen).toEqual([
+    { at: 6, nudges: 0, reasons: ['gone'] },
+    { at: 12, nudges: 1, reasons: [] },
+    { at: 17, nudges: 1, reasons: [] },
+  ])
+  expect(run.tickets.pairings[0]!.acts.stretch?.woke).toBe(true)
+})
+
+test('a read whose folder listing failed brings no frozen wake, because every kept file only seems older', () => {
+  expect(readEvery(paired(), () => [row({ state: 'waiting-on-builder' }, 'a.json', T0)], T0 + 40 * MINUTE, { listed: false })).toEqual([])
+})
+
+test('a modification time later than the clock wakes nothing', () => {
+  expect(readEvery(paired(), () => [row({ state: 'waiting-on-builder' }, 'a.json', T0 + 60 * MINUTE)], T0 + 40 * MINUTE)).toEqual([])
+})
+
+test('a pairing that the done rule or the over rule frees on a read gets no frozen wake on it', () => {
+  const later = T0 + 11 * MINUTE
+  const done = read(paired(), [row({ state: 'done' }, 'a.json', T0)], later, { sessions: listing({}) })
+  expect(done.tickets.pairings[0]!.standing).toBe('freed')
+  expect(done.reasons.map(r => r.kind)).toEqual(['slot-free'])
+  const over = read(paired(), [row({ state: 'waiting-on-builder' }, 'a.json', T0)], later, { sessions: listing({ isArchived: true }) })
+  expect(over.tickets.pairings[0]!.standing).toBe('freed')
+  expect(over.reasons.map(r => r.kind)).toEqual(['slot-free'])
+})
+
+test('the frozen wake\'s mark survives the ledger\'s round trip through the store, so a restart does not repeat the wake', () => {
+  const rows = () => [row({ state: 'waiting-on-builder' }, 'a.json', T0)]
+  const woke = read(paired(), rows(), T0 + 11 * MINUTE)
+  expect(frozenIn(woke)).toHaveLength(1)
+  const restored = ticketsIn(JSON.parse(JSON.stringify(woke.tickets)))
+  expect(restored.pairings[0]!.acts.goneWokeFor).toBe(T0)
+  expect(read(restored, rows(), T0 + 12 * MINUTE).reasons).toEqual([])
 })
