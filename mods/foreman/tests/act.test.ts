@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { decide, FROZEN_MS, GONE_MS, keptByUnreadList, listFailedNotice, needsList, NO_ANSWER, slotOutcome, stallsNeedList, type DecideInput, type Decision, type SessionsLook } from '../hooks/act'
+import { decide, FROZEN_MS, GONE_MS, keptByUnreadList, listFailedNotice, needsList, NO_ANSWER, slotOutcome, stallsNeedList, watchingFrom, type DecideInput, type Decision, type SessionsLook } from '../hooks/act'
 import { REASONS } from '../hooks/desktop'
 import { recordIn, STATES } from '../hooks/record'
 import { spentSum, TIMES_UNKNOWN } from '../hooks/spend'
@@ -30,7 +30,7 @@ const paired = (localId: string | null = 'local_a'): ForemanTickets => ({ ...TIC
 // One read: the rows joined to the ledger, then the decision.
 function read(tickets: ForemanTickets, rows: SubRow[], now: number, over: Partial<DecideInput> = {}): Decision {
   const joined = joinOwners(tickets, rows).tickets
-  return decide({ tickets: joined, rows, now, limits: LIMITS, sessions: { kind: 'unread' }, folderExists: true, listed: true, slots: 2, ...over })
+  return decide({ tickets: joined, rows, now, limits: LIMITS, sessions: { kind: 'unread' }, folderExists: true, listed: true, watchingSince: 0, slots: 2, ...over })
 }
 
 // Reads every minute from T0 to `until`, with `rowAt` giving the rows and
@@ -1216,6 +1216,35 @@ test('a gone wake that went before any stall nudge stands as the stall\'s wake: 
 
 test('a read whose folder listing failed brings no frozen wake, because every kept file only seems older', () => {
   expect(readEvery(paired(), () => [row({ state: 'waiting-on-builder' }, 'a.json', T0)], T0 + 40 * MINUTE, { listed: false })).toEqual([])
+})
+
+test('a read just after the machine wakes from sleep brings no frozen wake for a live file, and a file still frozen two minutes later does', () => {
+  // The last read before the sleep came at one minute, and the machine woke
+  // at thirty. The first read after it starts a new watch, so the file, which
+  // its builder last rewrote at one minute, does not wake the parent.
+  const slept = T0 + MINUTE
+  const woke = T0 + 30 * MINUTE
+  const since = watchingFrom(slept, T0, woke)
+  expect(since).toBe(woke)
+  const before = [row({ state: 'working' }, 'a.json', slept)]
+  const first = read(paired(), before, woke, { sessions: running, watchingSince: since })
+  expect(first.reasons).toEqual([])
+  // The builder rewrites its file on waking, so a read a minute later finds
+  // it fresh and still wakes nothing.
+  const rewritten = [row({ state: 'working' }, 'a.json', woke + 30_000)]
+  expect(read(first.tickets, rewritten, woke + MINUTE, { sessions: running, watchingSince: watchingFrom(woke, since, woke + MINUTE) }).reasons).toEqual([])
+  // A file whose builder really stopped is still frozen once foreman has
+  // watched for two minutes, and then the wake goes.
+  const stillOld = read(first.tickets, before, woke + 2 * MINUTE, { sessions: running, watchingSince: since })
+  expect(stillOld.reasons).toEqual([{ kind: 'frozen', who: 'ABC-1', minutes: 31, state: 'working' }])
+  expect(read(first.tickets, before, woke + 2 * MINUTE - 1, { sessions: running, watchingSince: since }).reasons).toEqual([])
+})
+
+test('a watch goes on across reads that come at most five minutes apart, and starts again after a longer gap or with no earlier read', () => {
+  expect(watchingFrom(T0, T0 - 20 * MINUTE, T0 + GONE_MS)).toBe(T0 - 20 * MINUTE)
+  expect(watchingFrom(T0, T0 - 20 * MINUTE, T0 + GONE_MS + 1)).toBe(T0 + GONE_MS + 1)
+  expect(watchingFrom(null, T0 - 20 * MINUTE, T0)).toBe(T0)
+  expect(watchingFrom(T0 - MINUTE, null, T0)).toBe(T0)
 })
 
 test('a modification time later than the clock wakes nothing', () => {

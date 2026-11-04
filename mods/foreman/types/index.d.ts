@@ -237,6 +237,10 @@ declare module 'claude-code' {
       // When the last read that could list the folder ran, or null before
       // the first. Whether a file is stale is judged against it.
       readAt: number | null
+      // When foreman began watching the folder without a break between
+      // listings, or null before the first listing. The frozen rule waits
+      // until two minutes have passed since then.
+      watchingSince: number | null
       // When the next read is due, or null when none is scheduled because the
       // role is off.
       nextReadAt: number | null

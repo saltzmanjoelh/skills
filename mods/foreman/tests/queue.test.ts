@@ -44,7 +44,7 @@ const list = (sessions: Listed[], complete = false, known?: string[]): SessionsL
 // One read: the rows joined to the ledger, then the decision, with one slot.
 function read(tickets: ForemanTickets, rows: SubRow[], now: number, over: Partial<DecideInput> = {}): Decision {
   const joined = joinOwners(tickets, rows).tickets
-  return decide({ tickets: joined, rows, now, limits: LIMITS, sessions: { kind: 'unread' }, folderExists: true, listed: true, slots: 1, ...over })
+  return decide({ tickets: joined, rows, now, limits: LIMITS, sessions: { kind: 'unread' }, folderExists: true, listed: true, watchingSince: 0, slots: 1, ...over })
 }
 
 const begins = (d: Decision) => d.effects.flatMap(e => (e.kind === 'begin' ? [[e.to, e.key, e.by]] : []))

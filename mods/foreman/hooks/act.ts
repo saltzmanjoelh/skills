@@ -29,6 +29,28 @@ export const GONE_MS = 5 * 60_000
 // has had its chance to wake first.
 export const FROZEN_MS = 2 * GONE_MS
 
+// How long foreman must have been reading the folder without a long gap
+// before a file's age may wake the parent through the frozen rule. It is
+// twice builder's one-minute rewrite interval, so every live builder has
+// rewritten its file at least once since foreman began watching again. After
+// the machine sleeps, foreman's first read can come before the builders'
+// rewrites, and every live file then looks as old as the sleep.
+export const SETTLE_MS = 2 * 60_000
+
+// The longest gap between two successful folder listings that still counts
+// as watching without a break. Reads come at most two minutes apart, so a
+// longer gap means the machine slept or foreman was not running.
+export const READ_GAP_MS = GONE_MS
+
+// When foreman began watching the folder without a break, given the previous
+// successful listing's time and the start it kept then: this listing starts
+// a new watch after a gap longer than READ_GAP_MS, or when there was no
+// earlier listing, and otherwise the watch goes on from where it began.
+export function watchingFrom(lastReadAt: number | null, since: number | null, now: number): number {
+  if (lastReadAt === null || since === null || now - lastReadAt > READ_GAP_MS) return now
+  return since
+}
+
 // How many failed calls in cleanup wake the parent before the threshold.
 export const CLEANUP_FAILED_CALLS = 3
 
@@ -104,6 +126,9 @@ export type DecideInput = {
   // is freed or forgotten for a file that seems to have left.
   folderExists: boolean
   listed: boolean
+  // When foreman began watching the folder without a break, as watchingFrom
+  // gives it. The frozen rule waits until SETTLE_MS has passed since then.
+  watchingSince: number
   slots: number
 }
 
@@ -475,15 +500,18 @@ function goneRule(s: Step) {
 // the gone rule checks it, it marks such a nudged stretch as woken, so
 // neither the gone rule nor the stall wakes the parent again until the file
 // changes. A record that is not a stall, such as an idle one, keeps its
-// stretch as it was, so the idle rule's own nudges and wake still come. The
-// idle wake that such a record has already had still silences this rule,
-// so one wake line does not carry two sentences about one session. The
-// caller runs it last, after the state rule and the gone rule, so a gone wake
+// stretch as it was, so the idle rule's own nudges and wake still come. Its
+// idle wake silences this rule only when the stretch's last nudge came more
+// than GONE_MS after the file last changed, as stallsOwn judges, so with a
+// short idle limit both the idle wake and this one can come. The caller runs
+// it last, after the state rule and the gone rule, so a gone wake
 // on the same read goes instead of this one, and a pairing that the done rule
-// freed on this read is no longer active. It runs only on
-// a read whose folder listing succeeded: after a failed listing the kept rows
-// still carry their old modification times, so every file would seem to age
-// and the rule would wake for each active sub session. A file rewritten with
+// freed on this read is no longer active. It runs only on a read whose
+// folder listing succeeded: after a failed listing the kept rows still carry
+// their old modification times, so every file would seem to age and the rule
+// would wake for each active sub session. It also runs only once foreman has
+// watched the folder without a break for SETTLE_MS, so a read just after the
+// machine wakes from sleep does not find every live file old. A file rewritten with
 // text that does not parse keeps its last good record and that record's old
 // modification time, so it gets this wake once, which is fair, since foreman
 // cannot read it.
@@ -856,7 +884,7 @@ function queueStep(
 // A read that asked for the list, whether or not it got one, records its time
 // in each active pairing it looked at, which slotsNeedList reads.
 export function decide(input: DecideInput): Decision {
-  const { rows, now, limits, sessions, folderExists, listed } = input
+  const { rows, now, limits, sessions, folderExists, listed, watchingSince } = input
   const look: ListLook | null = sessions.kind === 'read'
     ? { byId: new Map(sessions.sessions.map(x => [x.sessionId, x])), complete: sessions.complete === true, known: sessions.known === undefined ? null : new Set(sessions.known) }
     : null
@@ -908,7 +936,7 @@ export function decide(input: DecideInput): Decision {
     if (!overRule(s)) {
       STATE_RULES[row.record.state](s)
       goneRule(s)
-      if (listed) frozenRule(s)
+      if (listed && now - watchingSince >= SETTLE_MS) frozenRule(s)
     }
     reasons.push(...milestones)
     freed += s.freed

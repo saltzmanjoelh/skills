@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PromptSubmitInput, Register, ResolveInput, ToolCallResult } from 'claude-code'
 
 import { checkOutcome, clampedDue, endsOf, isClaimed, soonestDue, withNote, withoutPaired, type CheckDone } from './checks'
-import { CALL_TIMEOUT_MS, decide, desktopOf, freeSlots, GONE_MS, keptByUnreadList, needsList, NO_ANSWER, slotOutcome, startWaits, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
+import { CALL_TIMEOUT_MS, decide, desktopOf, freeSlots, GONE_MS, keptByUnreadList, needsList, NO_ANSWER, slotOutcome, startWaits, watchingFrom, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
 import { isSvgSurface } from './art'
 import { becameParentAnswer, COMMAND, commandOf, PASSED_ON, PASTED_LINE, pastedCommandIn, slotsAnswer, type Command } from './commands'
 import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, failureLine, linkedFamily, listSessions, NUDGE_TEXT, openSession, readHeader, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
@@ -31,6 +31,9 @@ type $ = EngineInterface
 const parent = atom({ plugin: 'foreman', key: 'parent' } as const, PARENT_OFF)
 const files = atom({ plugin: 'foreman', key: 'files' } as const, [])
 const readAt = atom({ plugin: 'foreman', key: 'readAt' } as const, null)
+// When foreman began watching the folder without a break, as watchingFrom in
+// act.ts gives it, which the frozen rule waits on.
+const watchingSince = atom({ plugin: 'foreman', key: 'watchingSince' } as const, null)
 const nextReadAt = atom({ plugin: 'foreman', key: 'nextReadAt' } as const, null)
 const log = atom({ plugin: 'foreman', key: 'log' } as const, [])
 const tickets = atom({ plugin: 'foreman', key: 'tickets' } as const, TICKETS_EMPTY)
@@ -44,6 +47,9 @@ const report = atom({ plugin: 'foreman', key: 'report' } as const, null)
 // The spending builder publishes for the session it runs in, which ownSpend
 // reads. Builder writes it; foreman only reads it.
 const builderUsage = atom({ plugin: 'builder', key: 'usage' } as const, null)
+
+// A stored time, or null when the store holds none or holds something else.
+const numberOrNull = (raw: unknown): number | null => (typeof raw === 'number' && Number.isFinite(raw) ? raw : null)
 
 // How many lines the log keeps.
 export const LOG_KEPT = 20
@@ -319,12 +325,16 @@ async function readAndSchedule($: $) {
     if (!(await isOn($))) return
     const listing = await readFolder($)
     const now = await $.clock.now()
+    const lastSince = numberOrNull(await read($, watchingSince))
+    let since = lastSince ?? now
     if (listing.found !== null) {
       const found = listing.found
+      since = watchingFrom(numberOrNull(await read($, readAt)), lastSince, now)
       await update($, files, kept => afterRead(Array.isArray(kept) ? kept : [], found))
       await update($, readAt, () => now)
+      await update($, watchingSince, () => since)
     }
-    const { decision, rows, written } = await decideNow($, listing.exists, listing.found !== null, now)
+    const { decision, rows, written } = await decideNow($, listing.exists, listing.found !== null, since, now)
     const usual = nextReadDelay(shownRows(rows, decision.tickets))
     const checkDue = soonestDue(written.checks)
     const dues = [decision.nextDueAt, checkDue].filter((at): at is number => at !== null)
@@ -372,7 +382,7 @@ function later($: $, work: () => Promise<unknown>) {
 // freed slot when a slot rule needed it, else a released hold when a key is
 // held, and otherwise a queued issue begun or dropped. Its fixed reason goes
 // to decide too, which raises the notification for it.
-async function decideNow($: $, folderExists: boolean, listed: boolean, now: number): Promise<{ decision: Decision; rows: SubRow[]; written: ForemanTickets }> {
+async function decideNow($: $, folderExists: boolean, listed: boolean, watching: number, now: number): Promise<{ decision: Decision; rows: SubRow[]; written: ForemanTickets }> {
   const rows = await rowsNow($)
   const before = joinOwners(ticketsIn(await read($, tickets)), rows).tickets
   let sessions: SessionsLook = { kind: 'unread' }
@@ -388,7 +398,7 @@ async function decideNow($: $, folderExists: boolean, listed: boolean, now: numb
     }
   }
   const settings = parentIn(await read($, parent))
-  const input = { rows, now, limits: limitsOf(currentOptions), sessions, folderExists, listed, slots: slotsOf(settings, currentOptions.slots) }
+  const input = { rows, now, limits: limitsOf(currentOptions), sessions, folderExists, listed, watchingSince: watching, slots: slotsOf(settings, currentOptions.slots) }
   let decision: Decision = { tickets: TICKETS_EMPTY, effects: [], reasons: [], logs: [], nextDueAt: null }
   const written = await writeTickets($, t => {
     const joined = joinOwners(t, rows)
