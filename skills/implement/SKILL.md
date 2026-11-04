@@ -192,7 +192,10 @@ personal details, is the only check of what the screenshot shows. Then push. Rep
 the body file with the full sha of the screenshot commit, so that each link
 reads `https://github.com/<owner>/<repo>/blob/<full sha>/<path>?raw=true`, and
 open the pull request with
-`gh pr create --base <base> --title "<title>" --body-file <the body file>`.
+`gh pr create --base <base> --title '<title>' --body-file <the body file>`.
+The title comes from the issue, and the shell runs `$(...)` and backticks
+inside double quotes, so pass it in single quotes, with each single quote in it
+written as `'\''`.
 Check that every image link resolves, with the full sha as the ref. For a
 public repository, `curl -sL -o /dev/null -w "%{http_code}" "<link>"` prints
 200; the `-L` matters, because GitHub answers such a link with a redirect. For
@@ -469,8 +472,11 @@ is written as step 7 says a published reason is written. Tell the person the
 same in one sentence, and carry on.
 
 After every push to a frontend pull request, bring its screenshot section up
-to date. It is up to date when each image link names the newest commit on the
-pull request that changed its file, which
+to date. Bring it up to date as well on resuming, after a compaction, and
+before running the merge command, because a session that stopped between a
+push and the rewrite leaves no later push to do it. It is up to date when each
+image link names the newest commit on the pull request that changed its file,
+which
 `git log -1 --format=%H <head> -- <path>` prints, and when every commit that
 `git log --format=%H --grep='^Screenshots not retaken:' origin/<base>..<head>`
 lists and that is not settled is named in the section, and no settled one is.
@@ -1009,7 +1015,9 @@ that began after the title's first report, so a resumed session that
 watched first would never see its bar reach `merged`. Then find the pull
 request's branch and its worktree (make one from the branch if there is
 none), call `mcp__builder__watch`, and read the spec and plan paths from the
-spec directory on the branch (never from the pull request body). Then follow
+spec directory on the branch (never from the pull request body). On a frontend
+pull request, bring the screenshot section up to date, as **Screenshots on a
+frontend pull request** says. Then follow
 the step that the watch tool's answer names, doing what "Commits the pull
 request lacks" says with the listing that a merge step's or the **Merged**
 step's text gives. A verdict review at the head means
@@ -1032,7 +1040,9 @@ skill again only in part after a compaction, so load the `implement` skill
 again with the Skill tool before anything else. Do not repeat step 1: the
 pane, Remote Control and the watch are still there. Read the pull request's
 state with `mcp__builder__watch`, and when the summary does not name the
-spec and plan paths, read them from the spec directory on the branch. Then
+spec and plan paths, read them from the spec directory on the branch. On a
+frontend pull request, bring the screenshot section up to date, as
+**Screenshots on a frontend pull request** says. Then
 follow the step that the watch tool's answer names, as "Resuming" says,
 counting a round's
 first half as run at a head only when a verdict review at that head names

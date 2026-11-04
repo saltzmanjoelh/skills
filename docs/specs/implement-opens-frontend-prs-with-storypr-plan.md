@@ -78,11 +78,14 @@ The edits are:
 - **Reading the fact from the base branch** (the robust plan). It is a
   product decision the spec does not make, and it would stop a pull request
   that first adds the fact from taking screenshots of itself.
-- **A fixed marker sentence, a refusing placeholder, out-of-date lines keyed
-  by commit, a read-back of each body edit, a check before the merge, and
-  edits to "Resuming" and "After a compaction"** (the robust plan). The
-  `## Screenshots` heading, the link shas and `git log` already rebuild the
-  state, and the extra machinery has failure cases of its own.
+- **A fixed marker sentence, a refusing placeholder, and a read-back of each
+  body edit** (the robust plan). The `## Screenshots` heading, the link shas
+  and `git log` already rebuild the state, and the extra machinery has
+  failure cases of its own. The robust plan's other idea here, running the
+  up-to-date check on resuming, after a compaction and before the merge, was
+  rejected at first and then adopted in review: the state can be rebuilt, but
+  without those runs nothing rebuilds it when a session stops between a push
+  and the rewrite.
 - **Replacing a link that keeps failing with a sentence** (the robust plan).
   The spec's failure mode says to fix the path or the sha.
 - **A `strings` pass over each PNG, a pixel check for personal data, a
