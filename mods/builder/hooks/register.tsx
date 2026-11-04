@@ -21,7 +21,7 @@ import { changedKinds, commitRecordsOf, decidedItems, factIn, INSTRUCTION_PATHSP
 import { AGENTS_KEPT, backgroundOf, backgroundTaskIdOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isMerge, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
 import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isForemanNudge, keptTicketIn, keptTicketOf, memoOfKeptTicket, newMemo, parentIn, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, STATUS_CHANGED_TEXT, stateOf, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type KeptTicket, type Starts, type StatusFacts } from './status'
 import { afterSend, emptySends, sendOutcomeOf, sendsIn, sendsKey, sendsNewest, SENDS_KEPT_MS, SENDS_PREFIX, type SendOutcome, type SendSettled, type SendsRecord } from './sends'
-import { baseFactsOf, chooseStep, labelActionOf, labelFor, labelRecordIn, labelsToRemoveAfterEdit, needsListing, SHORT_HASH, stepFor, UNPUSHED_KEPT, UNREAD_FACTS } from './step'
+import { baseFactsOf, chooseStep, labelActionOf, labelFor, labelRecordIn, labelsToRemoveAfterEdit, needsListing, noteAfterRead, SHORT_HASH, stepFor, UNPUSHED_KEPT, UNREAD_FACTS } from './step'
 import { timeOfDay } from './text'
 import { afterPackage, afterPr, afterReview, afterStage, afterState, emptyTiming, timingIn, type PullRequestSeen } from './timing'
 import { afterCost, afterStep, emptyUsage, usageIn } from './usage'
@@ -3318,9 +3318,10 @@ async function addLabel($: $, r: BuilderRun, name: string, remove: readonly stri
 }
 
 // The state label the mod last set on each pull request, kept in the store
-// under `state-label:<repo>#<number>` as `{ label, at, derived }`, so that it
-// survives a restart. It has no session id, because the label is on the pull
-// request, whichever session set it.
+// under `state-label:<repo>#<number>` as `{ label, at }`, with a `note` of
+// what a successful read of the labels saw while a job for a changed step's
+// label has not finished, so that it survives a restart. It has no session
+// id, because the label is on the pull request, whichever session set it.
 const STATE_LABEL_PREFIX = 'state-label:'
 const stateLabelKey = (target: Pick<BuilderRun, 'repo' | 'number'>) => `${STATE_LABEL_PREFIX}${target.repo}#${target.number}`
 // A record is kept far longer than a told record, because a pull request can
@@ -3332,6 +3333,14 @@ const STATE_LABEL_KEPT_MS = 90 * 24 * 60 * 60_000
 // queues one job. The job clears it before it starts, so a look that lands
 // while the job runs queues the next one.
 let isStateLabelQueued = false
+
+// The keys of state label records whose note a clear failed to remove, or
+// whose new note the store refused. The job reads such a record as holding
+// no note until a later write replaces it, so a stale note never decides a
+// later change. The set lives in memory only, so after a restart a note
+// that it hid counts again, which is one of the two risks that the comment
+// on settleStateLabel names.
+const staleNoteKeys = new Set<string>()
 
 function requestStateLabel($: $) {
   if (isStateLabelQueued) return
@@ -3347,13 +3356,27 @@ function requestStateLabel($: $) {
 // an older label: the watch, the stored snapshot, whether a question is open,
 // the record, and the labels the pull request carries now, read fresh as for
 // a question's label because the snapshot can be minutes old. It stops when
-// the snapshot is of another pull request or the watch moved on. Before it
-// reads the labels, it notes the derived label in the record, so that after
-// an edit that failed the next job knows the step's label has not changed. A
-// new label record is saved only once every edit the job needed succeeded:
-// on a write, the edit and the removal that the read after it may call for;
-// when the label is only recorded, the removal of any state label beside
-// `stuck`. So a failed edit, read or removal is tried again at the next look.
+// the snapshot is of another pull request or the watch moved on. When the
+// step's label is back to the recorded one, it only clears any note the
+// record holds, and when the store refuses that clear the job treats the
+// note as gone from then on, so the first successful read after a later
+// change still decides. Otherwise, once the read of the labels succeeded
+// and before any edit, it notes in the record the derived label and whether
+// that read saw `stuck`, unless the record already holds a note for that
+// label, so that after an edit that failed the next job can tell a `stuck`
+// that was on before the step's label changed from one the session set by
+// its own judgement afterwards. When the store refuses that note, the job
+// treats any older note still stored as gone too, so the next job sees no
+// note and writes the label, which is the safe side. A new label record,
+// with no note, is saved only once every edit the job needed succeeded: on a
+// write, the edit and the removal that the read after it may call for; when
+// the label is only recorded, the removal of any state label beside `stuck`.
+// So a failed edit, read or removal is tried again at the next look. Two
+// risks remain. When that final save fails after a read that saw `stuck`,
+// the note still says it saw `stuck`, so a `stuck` the session puts on
+// afterwards by its own judgement comes off at the next look. And the set
+// of hidden notes lives in memory only, so after a restart a note it hid
+// counts again.
 async function settleStateLabel($: $) {
   const r = await read($, run)
   const s = snapshotIn(await read($, pr))
@@ -3362,19 +3385,41 @@ async function settleStateLabel($: $) {
   const derived = labelFor(chooseStep(s, await isAsking($)))
   if (derived === null) return
   const key = stateLabelKey(r)
-  const record = labelRecordIn(await $.store.get(key))
-  if (derived === (record?.label ?? null)) return
-  if (record !== null && record.derived !== derived) await $.store.set(key, { ...record, derived })
+  const stored = labelRecordIn(await $.store.get(key))
+  const record = stored !== null && staleNoteKeys.has(key) ? { label: stored.label, at: stored.at } : stored
+  if (stored !== null && derived === stored.label) {
+    if (stored.note !== undefined) {
+      // The key is added before the write, so a refused clear leaves the
+      // note counted as gone, and taken out only once the write succeeded.
+      staleNoteKeys.add(key)
+      await $.store.set(key, { label: stored.label, at: stored.at })
+      staleNoteKeys.delete(key)
+    }
+    return
+  }
   const live = await liveLabelNames($, r)
   if (live === null || !(await stillWatching($, r))) return
-  const action = labelActionOf(derived, record?.label ?? null, live, record?.derived ?? null)
+  const note = noteAfterRead(record, derived, live)
+  if (record !== null && note !== null) {
+    try {
+      staleNoteKeys.add(key)
+      await $.store.set(key, { label: record.label, at: record.at, note })
+      staleNoteKeys.delete(key)
+    } catch {
+      // A refused note write leaves the key in the set, which hides any
+      // older note still stored, so the next job sees no note and writes
+      // the label, and the edits below still run.
+    }
+  }
+  const action = labelActionOf(derived, record?.label ?? null, live, record?.note ?? null)
   if (action.kind === 'none') return
   if (action.kind === 'write') {
     if (!(await addLabel($, r, derived, action.remove))) return
     if (!(await removeOtherStateLabels($, r, derived, live))) return
   }
   if (action.kind === 'record' && action.remove.length > 0 && !(await removeLabels($, r, action.remove))) return
-  await $.store.set(key, { label: derived, at: await $.clock.now(), derived })
+  await $.store.set(key, { label: derived, at: await $.clock.now() })
+  staleNoteKeys.delete(key)
 }
 
 // Reads the labels again after the edit that added `added`, and removes in one
