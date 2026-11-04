@@ -100,7 +100,7 @@ export type StageBar = { done: number; current: number | null; isRed: boolean }
 export function stageBarOf(row: SubRow): StageBar {
   const { stage, stageDone, state } = row.record
   if (stage === null) return { done: 0, current: null, isRed: false }
-  return { done: stageDone, current: STAGES.findIndex(s => s.id === stage), isRed: state === 'needs-you' }
+  return { done: stageDone, current: STAGES.findIndex(s => s.id === stage), isRed: LIGHT_OF[state] === 'red' }
 }
 
 // What each of the nine segments is: done, current, or not reached. The

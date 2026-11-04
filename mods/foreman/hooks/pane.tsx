@@ -464,7 +464,7 @@ function card(ui: Elements, v: View, row: SubRow, presses: PanePresses, columns:
   const { state } = row.record
   const own = LIGHT_OF[state]
   const light: Light = own !== 'red' && isProbablyHung(row, v.now) ? 'amber' : own
-  const isRed = state === 'needs-you'
+  const isRed = own === 'red'
   const isMenuOpen = v.folds.openMenus.includes(row.file)
   const stateText = `${STATE_ICON[state]} ${STATE_LOOK[state].words}`
   const stateElement = lightText(ui, `state-${row.file}`, stateText, row.isStale ? undefined : LIGHT_COLOR[light])
