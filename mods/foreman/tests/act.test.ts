@@ -1118,6 +1118,20 @@ test('a stall whose idle wake already went gets no frozen wake for the same stre
   ])
 })
 
+test('an idle record whose file froze after its nudges gets the frozen wake and still gets its own idle wake', () => {
+  // An idle record is not a stall, so the frozen wake leaves its stretch as it
+  // was: the idle rule's nudges at five and ten minutes and its wake at
+  // fifteen all come, with the frozen wake at eleven between them.
+  const idle = () => [row({ state: 'idle', stateSince: T0 })]
+  const run = readEach(paired(), idle, T0 + 20 * MINUTE, () => listing({ isRunning: true }))
+  expect(run.seen).toEqual([
+    { at: 5, nudges: 1, reasons: [] },
+    { at: 10, nudges: 1, reasons: [] },
+    { at: 11, nudges: 0, reasons: ['frozen'] },
+    { at: 15, nudges: 0, reasons: ['idle'] },
+  ])
+})
+
 test('a stall that was only nudged before the list stopped reading gets the frozen wake, which counts as its stall\'s wake', () => {
   // The list shows the session stopped up to six minutes, fails from seven to
   // fourteen, and shows it stopped again from fifteen.

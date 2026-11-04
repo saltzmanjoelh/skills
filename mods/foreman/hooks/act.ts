@@ -471,9 +471,13 @@ function goneRule(s: Step) {
 // modification time, or the idle stretch counts idleness, has nudged for this
 // stall, as stallsOwn says, and has woken. A stall that has only been nudged
 // has not woken the parent, so it does not silence the rule. When the wake
-// goes it sets goneWokeFor, and it marks such a nudged stretch as woken, so
+// goes it sets goneWokeFor, and, for a record with the shape of a stall as
+// the gone rule checks it, it marks such a nudged stretch as woken, so
 // neither the gone rule nor the stall wakes the parent again until the file
-// changes. The caller runs it last, after the state rule and the gone rule,
+// changes. A record that is not a stall, such as an idle one, keeps its
+// stretch as it was, so the idle rule's own nudges and wake still come. The
+// idle wake that such a record has already had still silences this rule,
+// so one wake line does not carry two sentences about one session. The caller runs it last, after the state rule and the gone rule,
 // so a gone wake on the same read goes instead of this one, and a pairing
 // that the done rule freed on this read is no longer active. It runs only on
 // a read whose folder listing succeeded: after a failed listing the kept rows
@@ -488,8 +492,9 @@ function frozenRule(s: Step) {
   const { stretch } = s.p.acts
   const nudged = stretch !== null && stretch.wait === null && stallsOwn(stretch, s.row.mtimeMs) ? stretch : null
   if (nudged?.woke === true) return
+  const stallNudged = nudged !== null && stalledShape(s.p, s.row, s.now)
   s.reasons.push({ kind: 'frozen', who: whoOf(s.row.record.issueKey, s.p.ticket), minutes: minutesOf(s.now - s.row.mtimeMs), state: s.row.record.state })
-  setActs(s, { goneWokeFor: s.row.mtimeMs, ...(nudged === null ? {} : { stretch: { ...nudged, woke: true } }) })
+  setActs(s, { goneWokeFor: s.row.mtimeMs, ...(stallNudged ? { stretch: { ...nudged, woke: true } } : {}) })
 }
 
 // Over, in any state but done: the list shows the session archived, or
