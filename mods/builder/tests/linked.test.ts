@@ -17,7 +17,7 @@ const HEAD_TREE = '0'.repeat(40)
 const MISSING = 'b'.repeat(40)
 const INPUT = { home: HOME, repo: 'o/r', base: 'main', merge: MERGE }
 
-type Answer = { exitCode?: number; stdout?: string; stderr?: string; throws?: boolean }
+type Answer = { exitCode?: number; stdout?: string; stderr?: string; throws?: boolean; isStdoutTruncated?: boolean }
 type Script = Record<string, Answer | Answer[]>
 type Call = { argv: string[]; cwd?: string; env?: Record<string, string>; stdin?: string; timeoutMs?: number }
 
@@ -45,7 +45,7 @@ function ioFrom(script: Script, store = new Map<string, unknown>()) {
         used[key] = n + 1
         const answer = list[Math.min(n, list.length - 1)]!
         if (answer.throws === true) throw new Error('the command ran past its time limit')
-        return { exitCode: answer.exitCode ?? 0, stdout: answer.stdout ?? '', stderr: answer.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false }
+        return { exitCode: answer.exitCode ?? 0, stdout: answer.stdout ?? '', stderr: answer.stderr ?? '', isStdoutTruncated: answer.isStdoutTruncated ?? false, isStderrTruncated: false }
       },
     },
     store: {
@@ -410,6 +410,33 @@ test('a command that throws, as one past its time limit does, counts as failed a
   expect(t.text).toContain('time limit')
 })
 
+test('left alone: a listing of links whose output was cut off counts as a failed lookup, and nothing is fast-forwarded', async () => {
+  // The cut-off listing still names the one good link, so only the check on
+  // cut-off output keeps the update from going on to the fast-forward.
+  const t = await updated(world({
+    [`find ${HOME}/.claude/skills/ -mindepth 1 -maxdepth 1 -type l -print0`]: { exitCode: 0, stdout: `${HOME}/.claude/skills/implement\0`, isStdoutTruncated: true },
+  }))
+  expect(t.text).toContain('Left alone')
+  expect(t.text).toContain('could not be listed')
+  expect(t.text).toContain('its output was cut off')
+  expect(t.text).not.toContain('Updated')
+  expect(t.ran(git('fetch')).length).toBe(0)
+  expect(t.ran(MERGE_FF).length).toBe(0)
+})
+
+test('left alone: an address from GitHub that carries credentials is never fetched from when no remote names the repository', async () => {
+  const t = await updated(world({
+    [git('remote', 'get-url', 'origin')]: ok('https://github.com/someone/fork.git\n'),
+    'gh repo view o/r --json url,defaultBranchRef': ok('{"url":"https://user:token@github.com/o/r","defaultBranchRef":{"name":"main"}}\n'),
+  }))
+  expect(t.text).toContain('Left alone')
+  expect(t.text).toContain('GitHub gave no https address to fetch from')
+  expect(t.text).not.toContain('token')
+  expect(t.text).not.toContain('user:')
+  expect(t.ran(git('fetch')).length).toBe(0)
+  expect(t.ran(MERGE_FF).length).toBe(0)
+})
+
 test('left alone, with no command run, when HOME is not set', async () => {
   const t = ioFrom(world())
   const lines = await updateLinkedCheckout(t.io, { ...INPUT, home: undefined })
@@ -419,7 +446,7 @@ test('left alone, with no command run, when HOME is not set', async () => {
 })
 
 test('left alone, with no command run, for a repository, base or merge commit that is not safe to pass to git', async () => {
-  for (const over of [{ repo: 'o/r; rm' }, { base: '--upload-pack=x' }, { merge: 'HEAD' }]) {
+  for (const over of [{ repo: 'o/r; rm' }, { base: '--upload-pack=x' }, { merge: 'HEAD' }, { merge: 'f'.repeat(64) }]) {
     const t = ioFrom(world())
     const lines = await updateLinkedCheckout(t.io, { ...INPUT, ...over })
     expect(lines.join('\n')).toContain('Left alone')

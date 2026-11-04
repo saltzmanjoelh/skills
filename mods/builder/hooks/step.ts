@@ -16,7 +16,7 @@ import type { BaseFacts, Snapshot, Unpushed } from '../types'
 import { ciOf, countingRuns, failedCheckNames, failedRunsOf, headRunsIn, isChangesRequested, isUnfinished, roundInProgress, STATE_LABELS, type StateLabel } from './github'
 import { LINKED_KEPT } from './linked'
 import { factIn, isFullSha } from './review'
-import { printable } from './text'
+import { isPlainRepo, printable } from './text'
 
 export type Limit = { which: 'pushes' | 'rounds'; count: number; max: number }
 
@@ -113,7 +113,7 @@ function factsOf(s: Snapshot): BaseFacts {
 // The repository when it is a plain owner and name, which is safe to put in
 // a text, and null otherwise.
 function plainRepoOf(repo: unknown): string | null {
-  return typeof repo === 'string' && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo) ? repo : null
+  return typeof repo === 'string' && isPlainRepo(repo) ? repo : null
 }
 
 // The step that applies, the first of the list in its order. A failed check

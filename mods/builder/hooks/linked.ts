@@ -17,8 +17,8 @@
 // engine, so a script can load it and run it against real repositories.
 
 import type { EngineInterface } from 'claude-code'
-import { SECRET_SHAPES } from './review'
-import { printable } from './text'
+import { isFullSha, SECRET_SHAPES } from './review'
+import { isPlainRepo, listed, printable } from './text'
 
 // What the update needs from the engine: commands, and the store for the
 // record of each update.
@@ -115,8 +115,6 @@ function gitIn($: LinkedIo, dir: string, args: string[], timeoutMs = COMMAND_MS,
 }
 
 const firstLine = (text: string) => text.split('\n')[0]!.trim()
-const isSha = (text: string) => /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(text)
-const isPlainRepo = (text: string) => /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(text)
 // A branch name that is safe in a git argument: never an option or a range.
 const isPlainBranch = (name: string) => name.length <= 200 && !name.startsWith('-') && !name.includes('..') && /^[A-Za-z0-9._/-]+$/.test(name)
 const parentOf = (path: string) => {
@@ -125,7 +123,6 @@ const parentOf = (path: string) => {
   return at <= 0 ? '/' : trimmed.slice(0, at)
 }
 const unique = <T>(items: T[]) => [...new Set(items)]
-const listed = (items: string[]) => items.length <= 1 ? (items[0] ?? '') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`
 
 // ----- Choosing the source -----
 
@@ -300,7 +297,7 @@ function shownProblems(problems: Problem[]): Problem[] {
 async function updateAll($: LinkedIo, input: LinkedInput): Promise<string[]> {
   const { home, repo, base, merge } = input
   if (home === undefined || home === '') return [leftAloneAll('HOME is not set, so the links under ~/.claude could not be found')]
-  if (!isPlainRepo(repo) || !isPlainBranch(base) || !isSha(merge)) {
+  if (!isPlainRepo(repo) || !isPlainBranch(base) || !isFullSha(merge)) {
     return [leftAloneAll('the repository, the base branch or the merge commit that GitHub gave is not safe to pass to git')]
   }
   const folders = ['skills', 'agents', 'commands'].map(name => `${home.replace(/\/+$/, '')}/.claude/${name}`)
@@ -443,14 +440,14 @@ async function updateOne($: LinkedIo, dir: string, o: { repo: string; base: stri
 async function headLine($: LinkedIo, dir: string, o: { repo: string; merge: string; remote: string | null; isHeld: boolean }): Promise<string> {
   const head = await gitIn($, dir, ['rev-parse', 'HEAD'])
   const sha = firstLine(head.stdout)
-  return updatedLine({ path: dir, merge: o.merge, head: head.ok && isSha(sha) ? sha : null, remote: o.remote, isHeld: o.isHeld, repo: o.repo })
+  return updatedLine({ path: dir, merge: o.merge, head: head.ok && isFullSha(sha) ? sha : null, remote: o.remote, isHeld: o.isHeld, repo: o.repo })
 }
 
 // What a partial clone lacks of the merge: the hashes of the missing objects
 // the listing printed, and whether it succeeded.
 async function missingOf($: LinkedIo, dir: string, mergeTree: string, headTree: string): Promise<{ ok: boolean; hashes: string[] }> {
   const ran = await gitIn($, dir, ['rev-list', '--objects', '--quiet', '--missing=print', mergeTree, '--not', headTree])
-  const hashes = ran.stdout.split('\n').map(line => line.trim()).filter(line => line.startsWith('?')).map(line => line.slice(1)).filter(isSha)
+  const hashes = ran.stdout.split('\n').map(line => line.trim()).filter(line => line.startsWith('?')).map(line => line.slice(1)).filter(isFullSha)
   return { ok: ran.ok, hashes }
 }
 
@@ -461,7 +458,7 @@ async function fetchMissing($: LinkedIo, dir: string, merge: string, source: str
   // clone may not hold the top folder itself.
   const mergeTree = firstLine((await gitIn($, dir, ['log', '-1', '--format=%T', merge])).stdout)
   const headTree = firstLine((await gitIn($, dir, ['log', '-1', '--format=%T', 'HEAD'])).stdout)
-  if (!isSha(mergeTree) || !isSha(headTree)) return 'the snapshots of the merge commit and of its HEAD could not be read'
+  if (!isFullSha(mergeTree) || !isFullSha(headTree)) return 'the snapshots of the merge commit and of its HEAD could not be read'
   let listing = await missingOf($, dir, mergeTree, headTree)
   // An empty listing that succeeded means nothing is missing, as in a full
   // clone, and the object check need not run.
