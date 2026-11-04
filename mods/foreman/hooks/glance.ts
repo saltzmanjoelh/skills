@@ -93,14 +93,14 @@ export function lightsSvg(l: Lights): string {
 // A card's stage bar: how many of the nine stages are done, which one is
 // current, or null when the sub session has reported none yet, and whether
 // the current one is drawn in red because the sub session needs the person.
-// A sub session with no stage yet has nothing filled.
+// A sub session with no stage yet has nothing filled. The record's parser
+// already holds the count of stages done between 0 and the number of stages.
 export type StageBar = { done: number; current: number | null; isRed: boolean }
 
 export function stageBarOf(row: SubRow): StageBar {
   const { stage, stageDone, state } = row.record
   if (stage === null) return { done: 0, current: null, isRed: false }
-  const done = Number.isFinite(stageDone) ? Math.min(Math.max(Math.floor(stageDone), 0), STAGES.length) : 0
-  return { done, current: STAGES.findIndex(s => s.id === stage), isRed: state === 'needs-you' }
+  return { done: stageDone, current: STAGES.findIndex(s => s.id === stage), isRed: state === 'needs-you' }
 }
 
 // What each of the nine segments is: done, current, or not reached. The
