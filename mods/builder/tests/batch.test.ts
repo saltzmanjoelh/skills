@@ -671,6 +671,7 @@ test('an engine wake after the settle minute claimed the completion line clears 
   state = afterWake(state, ALPHA)
   expect(state.batches[0]?.fired).toBeUndefined()
   expect(state.batches[0]?.retryMs).toBeUndefined()
+  expect(state.batches[0]?.retryBeforeSettle).toBeUndefined()
   expect(nextDeadline(state)).toBe(1000 + BATCH_LIMIT_MS)
   expect(dueLines(state, 2000 + BATCH_SETTLE_MS + BATCH_RETRY_MS)).toEqual([])
   expect(afterDelivery(state, report(ALPHA), true, 3000 + BATCH_SETTLE_MS).act).toEqual({ kind: 'release', line: completeLine(2) })
@@ -697,6 +698,8 @@ test('a stored deadline from before the settle reads back as a time or null, and
   expect(batchStateIn(state, SESSION)).toEqual(state)
   const withField = (v: unknown) => ({ ...state, batches: [{ ...state.batches[0], deadlineBeforeSettle: v }, ...state.batches.slice(1)] })
   expect(batchStateIn(withField(null), SESSION)).toEqual(withField(null))
+  const withWait = { ...state, batches: [{ ...state.batches[0], retryBeforeSettle: 2 * BATCH_RETRY_MS }, ...state.batches.slice(1)] }
+  expect(batchStateIn(withWait, SESSION)).toEqual(withWait)
   expect(batchStateIn(withField('soon'), SESSION)).toEqual(emptyBatchState(SESSION))
   expect(batchStateIn(withField(Infinity), SESSION)).toEqual(emptyBatchState(SESSION))
   expect(afterDelivery(state, report(ALPHA), true, 2001).state.batches[0]?.deadlineBeforeSettle).toBeUndefined()
@@ -877,4 +880,68 @@ test('after an engine wake reopens a completion line claimed after an earlier cl
   const again = afterDeadline(held.state, retry)
   expect(again.due).toEqual([{ step: 't1:0', line: deadlineLine(['Plan bbbbbbbb']) }])
   expect(nextDeadline(again.state)).toBe(retry + 4 * BATCH_RETRY_MS)
+})
+
+// The state after the spec's whole back-off chain: the chain that
+// wokenAfterLaterCompletionClaim builds, which leaves a wait of four minutes,
+// then ALPHA's clean turn end, which saves the deadline and that wait.
+const SECOND_STOP = BATCH_LIMIT_MS + BATCH_RETRY_MS + 1
+const settledAfterLaterWake = () => afterMemberStop(wokenAfterLaterCompletionClaim(), ALPHA, [], SECOND_STOP)
+
+test('a wait grown by refused lines survives a clean turn end and a second engine wake', () => {
+  const woken = wokenAfterLaterCompletionClaim()
+  expect(woken.batches[0]?.retryMs).toBe(4 * BATCH_RETRY_MS)
+  const restored = nextDeadline(woken) as number
+  const state = afterWake(settledAfterLaterWake(), ALPHA)
+  expect(state.batches[0]?.retryMs).toBe(4 * BATCH_RETRY_MS)
+  expect(nextDeadline(state)).toBe(restored)
+  const claimed = afterDeadline(state, restored)
+  expect(claimed.due).toEqual([{ step: 't1:0', line: deadlineLine(['Explore aaaaaaaa']) }])
+  expect(nextDeadline(claimed.state)).toBe(restored + 4 * BATCH_RETRY_MS)
+})
+
+test('a saved wait reads back, reads as the empty state in any other shape, and is dropped when the batch is released', () => {
+  const state = settledAfterLaterWake()
+  expect(state.batches[0]?.retryBeforeSettle).toBe(4 * BATCH_RETRY_MS)
+  expect(batchStateIn(state, SESSION)).toEqual(state)
+  const withField = (v: unknown) => ({ ...state, batches: [{ ...state.batches[0], retryBeforeSettle: v }, ...state.batches.slice(1)] })
+  for (const bad of ['x', 0, -1, NaN, Infinity]) {
+    expect(batchStateIn(withField(bad), SESSION)).toEqual(emptyBatchState(SESSION))
+  }
+  const byDelivery = afterDelivery(state, report(ALPHA), true, SECOND_STOP + 1)
+  expect(byDelivery.act).toEqual({ kind: 'release', line: completeLine(2) })
+  expect(byDelivery.state.batches[0]).not.toHaveProperty('retryBeforeSettle')
+  const claimed = afterDeadline(state, nextDeadline(state) as number)
+  expect(claimed.due).toEqual([{ step: 't1:0', line: completeLine(2) }])
+  expect(claimed.state.batches[0]?.retryBeforeSettle).toBe(4 * BATCH_RETRY_MS)
+  const byLine = afterDeadlineSent(claimed.state, ['t1:0'], (nextDeadline(state) as number) + 1)
+  expect(byLine.batches[0]?.releasedAt).toBe((nextDeadline(state) as number) + 1)
+  expect(byLine.batches[0]).not.toHaveProperty('retryBeforeSettle')
+})
+
+test('a turn end that saves a deadline with no wait drops a stale saved wait', () => {
+  const held = afterDelivery(alphaWoken(), report(BRAVO), true, 1000).state
+  const stale = { ...held, batches: [{ ...held.batches[0]!, retryBeforeSettle: 8 * BATCH_RETRY_MS }, ...held.batches.slice(1)] }
+  const state = afterMemberStop(stale, ALPHA, [], 2000)
+  expect(state.batches[0]?.deadlineBeforeSettle).toBe(1000 + BATCH_LIMIT_MS)
+  expect(state.batches[0]).not.toHaveProperty('retryBeforeSettle')
+  expect(afterWake(state, ALPHA).batches[0]?.retryMs).toBeUndefined()
+})
+
+test('a held delivery from a second open batch before the release turn\'s first step leaves the count at zero, so that step reaches the model', () => {
+  const DELTA = 'ddddddddddddddddd'
+  let state = afterLaunch(launched(), 't1:1', { id: DELTA, type: 'Plan' })
+  state = afterDelivery(state, report(ALPHA), true, 0).state
+  const release = afterDelivery(state, report(BRAVO), true, 1)
+  expect(release.act).toEqual({ kind: 'release', line: completeLine(2) })
+  expect(release.state.releasing).toBe(true)
+  const other = afterDelivery(release.state, report(CHARLIE), true, 2)
+  expect(other.act).toEqual({ kind: 'hold' })
+  expect(other.state.marker).toBe(0)
+  expect(answersStep(other.state, { role: 'user', text: `<agent-message from="${CHARLIE}">\nthe report` })).toBe(false)
+  const later = afterDelivery(afterFirstStep(other.state, false), report(DELTA), true, 3)
+  expect(later.act).toEqual({ kind: 'release', line: completeLine(2) })
+  const after = afterDelivery(afterFirstStep(other.state, false), notice(CHARLIE, 'completed'), true, 3)
+  expect(after.act).toEqual({ kind: 'hold' })
+  expect(after.state.marker).toBe(1)
 })
