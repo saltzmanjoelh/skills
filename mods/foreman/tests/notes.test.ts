@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { checkedLine, FOREMAN_REPORTS, isAppParts, isStatusChanged, keptLine, keptNames, NOTED, notesIn, STATUS_CHANGED_TEXT, turnEndIds, wantsNoted } from '../hooks/notes'
+import { checkedLine, FOREMAN_REPORTS, isAppParts, isNotedReply, isStatusChanged, keptLine, keptNames, NOTED, NOTED_REPLY, notesIn, STATUS_CHANGED_TEXT, turnEndIds, wantsNoted } from '../hooks/notes'
 import { newPairing } from '../hooks/tickets'
 import type { ForemanPairing } from '../types'
 import { ARCHIVED, CHANGED, CHANGED_AS_RECEIVED, CHANGED_ELEMENT, EVENT, MESSAGE, note, OTHER_EVENT, PROPOSAL, SENT, STATUS, T0, WORKTREE } from './world'
@@ -244,4 +244,20 @@ test('the marker alongside a status block, another note, the side-sessions eleme
     expect(isAppParts(text)).toBe(true)
     expect(isStatusChanged(text)).toBe(false)
   }
+})
+
+test('foreman\'s reply is known only as one text block that reads exactly Noted.', () => {
+  expect(isNotedReply([{ type: 'text', text: NOTED_REPLY }])).toBe(true)
+  const others = [
+    [],
+    [{ type: 'text', text: 'Noted. ' }],
+    [{ type: 'text', text: ' Noted.' }],
+    [{ type: 'text', text: 'Noted' }],
+    [{ type: 'text', text: 'noted.' }],
+    [{ type: 'text', text: 'Not' }, { type: 'text', text: 'ed.' }],
+    [{ type: 'text', text: NOTED_REPLY }, { type: 'text', text: '' }],
+    [{ type: 'thinking', text: NOTED_REPLY }],
+    [{ type: 'text' }],
+  ]
+  for (const content of others) expect(isNotedReply(content)).toBe(false)
 })

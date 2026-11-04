@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import type { On, SessionMessage, TurnStepChunk, TurnStepInput } from 'claude-code'
+import type { ApiContentBlock, On, SessionAppendInput, SessionAppendResult, SessionMessage, TurnStepChunk, TurnStepInput } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
 import { PASTED_LINE } from '../hooks/commands'
@@ -45,21 +45,34 @@ const submit = ($: Engine, text: string, over: Record<string, unknown> = {}) => 
 const ONE = 'Kept ABC-1\'s turn-end note from the parent\'s model.'
 const BOTH = 'Kept ABC-1\'s and ABC-2\'s turn-end notes from the parent\'s model.'
 
-// Follows foreman's writes of its marker, so a test can see the line it last
-// wrote there, or null when it cleared it or never set it. `seen.writes`
-// counts the writes, and `seen.refuses` makes every write fail. A test that
-// seeds the state with leftInState cannot follow them, because both hook
-// state.set.
-function markerOf(on: On) {
-  const seen = { held: null as unknown, writes: 0, refuses: false }
-  on('state.set', async ($, e, next) => {
-    if (e.plugin !== 'foreman' || e.key !== 'quietLine') return next(e)
-    seen.writes += 1
-    if (seen.refuses) return { deny: 'the state is gone' } as never
-    const out = await next(e)
-    seen.held = e.value
-    return out
-  })
+// What markerOf follows for each marker key of a test, so a test can follow
+// both markers through the one state.set hook a test may register.
+type Seen = { held: unknown; writes: number; refuses: boolean }
+const followed = new WeakMap<On, Map<string, Seen>>()
+
+// Follows foreman's writes of the marker kept under `key`, the line marker
+// unless a test names the reply marker, so a test can see what it last wrote
+// there, or null when it never wrote it. `seen.writes` counts the writes, and
+// `seen.refuses` makes every write fail. A test that seeds the state with
+// leftInState cannot follow them, because both hook state.set.
+function markerOf(on: On, key: 'quietLine' | 'quietReply' = 'quietLine') {
+  let keys = followed.get(on)
+  if (keys === undefined) {
+    const each = new Map<string, Seen>()
+    keys = each
+    followed.set(on, each)
+    on('state.set', async ($, e, next) => {
+      const seen = e.plugin === 'foreman' ? each.get(e.key) : undefined
+      if (seen === undefined) return next(e)
+      seen.writes += 1
+      if (seen.refuses) return { deny: 'the state is gone' } as never
+      const out = await next(e)
+      seen.held = e.value
+      return out
+    })
+  }
+  const seen: Seen = { held: null, writes: 0, refuses: false }
+  keys.set(key, seen)
   return Object.assign(() => seen.held, { seen })
 }
 
@@ -556,4 +569,174 @@ test('while the role is on, a prompt that holds /start-foreman as text gets no p
   const { w } = await parentWith($, on)
   await passes($, w, PASTED)
   await passes($, w, `<pasted_content id="p1">${PASTED}</pasted_content>`)
+})
+
+// A text block reading `text`.
+const block = (text: string): ApiContentBlock => ({ type: 'text', text })
+
+// Appends a response row of the session's own loop whose content is
+// `content`, with `over` changing its fields, and answers the row as stored.
+const row = ($: Engine, content: ApiContentBlock[], over: Partial<SessionAppendInput> = {}) =>
+  $.session.append({
+    message: { type: 'assistant', role: 'assistant', content },
+    door: 'response',
+    origin: { kind: 'model', model: 'example-model' },
+    uuid: 'row-1',
+    ...over,
+  } as SessionAppendInput) as Promise<SessionAppendResult>
+
+// What the engine stores in place of a response row that a hook emptied.
+const NO_CONTENT = [{ type: 'text', text: '(no content)', citations: null }]
+
+// Asserts that a response row with `content` and `over` reached the engine
+// beneath the mod as it came, and was stored as it came.
+async function unchanged($: Engine, w: ReturnType<typeof world>, content: ApiContentBlock[], over: Partial<SessionAppendInput> = {}) {
+  const out = await row($, content, over)
+  expect(out.message?.content).toEqual(content)
+  expect(w.engine.appended.at(-1)).toBe(content.map(b => (b as { text?: string }).text ?? '').join(''))
+}
+
+// Asserts that foreman's Noted. reply row reached the engine beneath the mod
+// with no content, and that the engine stored it as it stores an empty row.
+async function emptied($: Engine, w: ReturnType<typeof world>) {
+  const before = w.engine.appended.length
+  const out = await row($, [block(REPLY)])
+  expect(out.message?.content).toEqual(NO_CONTENT)
+  expect(w.engine.appended.slice(before)).toEqual([''])
+}
+
+// Starts a turn of the session's own loop, or of the subagent `agentId`.
+const turnStart = ($: Engine, agentId?: string) => $.turn.start({ text: '', turnId: 'turn-1', ...(agentId === undefined ? {} : { agentId }) })
+
+// A parent that has kept a note about ABC-1 and answered its turn with Noted.,
+// so the reply marker is set. The reply marker's writes are followed, and the
+// engine beneath answers every turn start.
+async function answered($: Engine, on: On) {
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  const asked = model(on)
+  const talk = conversation(on)
+  const reply = markerOf(on, 'quietReply')
+  const { w, marker } = await parentWith($, on)
+  await kept($, w, marker, note('local_a'), ONE)
+  talk.messages = [user(ONE)]
+  await answersNoted($, asked)
+  expect(reply()).toBe(true)
+  return { w, asked, talk, reply, marker }
+}
+
+test('foreman\'s Noted. reply row is stored with no content, and clears the reply marker', async ($, on) => {
+  const { w, reply } = await answered($, on)
+  await emptied($, w)
+  expect(reply()).toBe(false)
+  await unchanged($, w, [block(REPLY)])
+})
+
+test('with no reply marker set, a Noted. row is stored as it came and writes no state, the model\'s own Noted. to a prompt with the Noted line included', async ($, on) => {
+  const asked = model(on)
+  const reply = markerOf(on, 'quietReply')
+  const { w } = await parentWith($, on)
+  await unchanged($, w, [block(REPLY)])
+  await noted($, w, SENT, { origin: { kind: 'sdk' } })
+  await asksModel($, asked)
+  await unchanged($, w, [block(REPLY)])
+  expect(reply.seen.writes).toBe(0)
+})
+
+test('a subagent\'s row, a prompt row and a tool result row that read Noted. are stored as they came and leave the reply marker set for the reply row after them', async ($, on) => {
+  const { w, reply } = await answered($, on)
+  await unchanged($, w, [block(REPLY)], { agentId: 'agent-1' })
+  await unchanged($, w, [block(REPLY)], { door: 'prompt', message: { type: 'user', role: 'user', content: [block(REPLY)] }, origin: { kind: 'composer' } } as Partial<SessionAppendInput>)
+  await unchanged($, w, [block(REPLY)], { door: 'tool-result', message: { type: 'user', role: 'user', content: [block(REPLY)] } } as Partial<SessionAppendInput>)
+  expect(reply()).toBe(true)
+  await emptied($, w)
+})
+
+for (const [name, content] of [
+  ['Noted. with a trailing space', [block('Noted. ')]],
+  ['Noted with no full stop', [block('Noted')]],
+  ['two text blocks that join to Noted.', [block('Not'), block('ed.')]],
+  ['no blocks', []],
+] as const) {
+  test(`with the reply marker set, a reply row of ${name} is stored as it came and clears the marker`, async ($, on) => {
+    const { w, reply } = await answered($, on)
+    await unchanged($, w, [...content])
+    expect(reply()).toBe(false)
+    await unchanged($, w, [block(REPLY)])
+  })
+}
+
+test('a turn start of the session\'s own loop clears a set reply marker, and a subagent\'s turn start leaves it set', async ($, on) => {
+  const { w, reply } = await answered($, on)
+  await turnStart($, 'agent-1')
+  expect(reply()).toBe(true)
+  await turnStart($)
+  expect(reply()).toBe(false)
+  await unchanged($, w, [block(REPLY)])
+})
+
+test('a turn start with no reply marker set writes no reply marker', async ($, on) => {
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  const reply = markerOf(on, 'quietReply')
+  await parentWith($, on)
+  await turnStart($)
+  expect(reply.seen.writes).toBe(0)
+})
+
+test('the Noted. answer has set the reply marker by its first chunk, and a step that goes to the model writes no reply marker', async ($, on) => {
+  const asked = model(on)
+  const talk = conversation(on)
+  const reply = markerOf(on, 'quietReply')
+  const { w, marker } = await parentWith($, on)
+  await asksModel($, asked)
+  expect(reply.seen.writes).toBe(0)
+  await kept($, w, marker, note('local_a'), ONE)
+  talk.messages = [user(ONE)]
+  const stream = $.turn.step({ turnId: 'turn-1', index: 0, model: 'example-model', messageCount: 1 })
+  const first = await stream.next()
+  expect(first.value).toEqual({ kind: 'text', index: 0, text: REPLY })
+  expect(reply()).toBe(true)
+  while (!(await stream.next()).done);
+})
+
+test('a reply marker that cannot be read lets the reply row be stored as it came', async ($, on) => {
+  let isFailing = false
+  on('state.get', ($, e, next) => (isFailing && e.plugin === 'foreman' && e.key === 'quietReply' ? { deny: 'the state is gone' } : next(e)))
+  const { w } = await answered($, on)
+  isFailing = true
+  await unchanged($, w, [block(REPLY)])
+})
+
+test('two kept notes in a row, the first reply stored as (no content), are both answered alone and both replies are stored empty', async ($, on) => {
+  const { w, asked, talk, marker } = await answered($, on)
+  await emptied($, w)
+  await kept($, w, marker, note('local_a'), ONE)
+  talk.messages = [user(ONE), assistant('(no content)'), user(ONE)]
+  await answersNoted($, asked)
+  await emptied($, w)
+})
+
+test('a reply marker that cannot be written still answers Noted., and its reply is stored as it came', async ($, on) => {
+  const asked = model(on)
+  const talk = conversation(on)
+  const reply = markerOf(on, 'quietReply')
+  const { w, marker } = await parentWith($, on)
+  reply.seen.refuses = true
+  await kept($, w, marker, note('local_a'), ONE)
+  talk.messages = [user(ONE)]
+  await answersNoted($, asked)
+  await unchanged($, w, [block(REPLY)])
+})
+
+test('after a hot reload, a reply marker left in state still empties the reply row', async ($, on) => {
+  const w = world(on)
+  leftInState(on, { parent: { isOn: true, slots: null }, tickets: ledgerOf([paired('local_a', 'ABC-1')]), nextReadAt: T0 + 20_000, quietReply: true })
+  await mountBoth($, on)
+  await emptied($, w)
+  await unchanged($, w, [block(REPLY)])
+})
+
+test('when foreman\'s own append hook fails, because the reply marker cannot be cleared, the reply row is stored as it came', async ($, on) => {
+  const { w, reply } = await answered($, on)
+  reply.seen.refuses = true
+  await unchanged($, w, [block(REPLY)])
 })
