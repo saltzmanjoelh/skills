@@ -137,10 +137,10 @@ reaches the wake.
 ## Risks
 
 - `decideNow` reads the slot count outside the ledger update, so a read
-  already under way when the raise lands can decide the mark with the old
-  count and clear it silently. That raise gets today's silence, which the
-  spec's failure modes accept, and the next read still fills the slot when
-  the list shows a waiting session.
+  already under way when the raise lands decides the mark with the old count
+  and clears it. The review found this, so after its ledger update the read
+  reads the slot count again, and when the count rose meanwhile it sets the
+  mark again, so the next read decides the raise with the new count.
 - A failed mark write, a reload between the count's write and the mark's,
   or two copies writing the same stored ledger each lose the mark. All fail
   toward today's silence, never toward a second wake.

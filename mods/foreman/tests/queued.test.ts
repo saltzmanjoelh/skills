@@ -731,6 +731,32 @@ test('a raise while the desktop app\'s list fails keeps its mark, and the first 
   expect(w.engine.prompts).toEqual([keptFor('ABC-2')])
 })
 
+// A raise that lands while a read is under way, after that read took the
+// slot count but before its ledger update, is decided by that read with the
+// old count. The read sets the mark again, so the next read decides it.
+test('a raise that lands while a read is under way is decided by a later read, which sends the kept sentence', async ($, on) => {
+  let raiseDuringRead = false
+  let raising: Promise<unknown> | null = null
+  on('state.set', async (_hook, e, next) => {
+    if (raiseDuringRead && e.plugin === 'foreman' && e.key === 'tickets') {
+      raiseDuringRead = false
+      raising = foreman($, '2')
+      await raising
+    }
+    return next(e)
+  })
+  const { w, live } = await queueOfTwo($, on)
+  w.desktop.sessions = [listed('local_new1', 'ABC-1'), doubtful('local_new2', 'ABC-2'), doubtful('local_new3', 'ABC-3')]
+  await minutesPass(w, 1, live)
+  raiseDuringRead = true
+  await minutesPass(w, 1, live)
+  expect(raising).not.toBeNull()
+  await minutesPass(w, 1, live)
+  expect(begins(w)).toEqual([])
+  expect(w.engine.prompts).toEqual([keptFor('ABC-2')])
+  expect(ledger(w).slotsRaised).toBe(false)
+})
+
 test('a raise lowered again before the read wakes nobody and leaves no mark', async ($, on) => {
   const { w, live } = await queueOfTwo($, on)
   w.desktop.sessions = [listed('local_new1', 'ABC-1'), doubtful('local_new2', 'ABC-2'), doubtful('local_new3', 'ABC-3')]

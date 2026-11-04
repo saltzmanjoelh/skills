@@ -1039,7 +1039,10 @@ export function decide(input: DecideInput): Decision {
   // The mark for a raised slot count is decided by this read, and cleared
   // whatever it decides, unless the list failed. A read that did not ask for
   // the list clears it too, because needsList asks whenever the queue holds
-  // anyone, so nobody waits then.
+  // anyone, so nobody waited when it was asked. needsList was asked of the
+  // ledger as it was before this update, though, and someone may have begun
+  // to wait since, so the wake below still needs a read that got the list,
+  // or the kept sentence would speak of a list that was never read.
   const raised = input.tickets.slotsRaised && sessions.kind === 'read'
   let tickets: ForemanTickets = folded(capped({ ...withReadings(input.tickets, rows), pairings, keptSlots: [], slotsRaised: sessions.kind === 'failed' && input.tickets.slotsRaised }))
   if (!folderExists && !tickets.folderMissing) logs.push('The status folder is missing, so foreman frees no slot until it is back.')

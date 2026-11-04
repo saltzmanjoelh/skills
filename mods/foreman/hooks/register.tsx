@@ -434,6 +434,11 @@ async function decideNow($: $, folderExists: boolean, listed: boolean, watching:
     const checks = clampedDue(withoutPaired(decision.tickets.checks, decision.tickets.pairings), now, input.limits.idleMs)
     return { ...decision.tickets, checks, outbox: addWork(decision.tickets.outbox, work) }
   })
+  // The slot count was read before the ledger update, so a raise that
+  // landed in between was decided with the old count, which may have
+  // cleared its mark with no slot free. The mark is then set again, so the
+  // next read decides the raise with the new count.
+  if (slotsOf(parentIn(await read($, parent)), currentOptions.slots) > input.slots) await writeTickets($, withSlotsRaised).catch(() => undefined)
   return { decision, rows, written }
 }
 
