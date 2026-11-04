@@ -7,6 +7,7 @@ import {
   isForemanNudge, isProbablyHung, issueOf, keptTicketIn, keptTicketOf, memoOfKeptTicket, newMemo, oldestTaskOf, parentIn, recordOf, shownOrWithheld, startOf, startsBackgrounded, startsIn, startsPruned, startsSeen, startsWithout, STATE_RULES, stateOf,
   STATUS_CHANGED_TEXT, statusMemoIn, TASK_CHARS, taskKeyOf, taskKeyOfId, ticketIn, WITHHELD, type StatusFacts,
 } from '../hooks/status'
+import { afterPackage, afterStage, afterState, emptyTiming } from '../hooks/timing'
 import { afterCost, afterStep, emptyUsage } from '../hooks/usage'
 import type { AgentCard, BackgroundTask, StatusMemo } from '../types'
 import { CROSS_SESSION_SHAPES } from './cross-session-fixture'
@@ -31,7 +32,7 @@ function memo(over: Partial<StatusMemo> = {}): StatusMemo & { ticket: string } {
 function facts(over: Partial<StatusFacts> = {}): StatusFacts {
   return {
     memo: memo(), progress: null, run: null, pr: null, busy: false, agents: [], background: [], backgroundStarts: {}, calls: [], questions: [],
-    nextLook: null, usageHold: null, usage: null, ...over,
+    nextLook: null, usageHold: null, usage: null, timing: null, ...over,
   }
 }
 
@@ -669,6 +670,35 @@ test('the record carries the session\'s spending, the tokens by model and the do
   const none = recordOf(facts(), NOW)
   expect('usage' in none).toBe(false)
   expect(none.version).toBe(1)
+})
+
+test('the record carries the session\'s times with the totals as of the write, leaves them out when there is no record of them, and stays version 1', () => {
+  const kept = afterPackage(afterState(afterStage(emptyTiming('session-1', NOW), 'ABC-123 a change', 'spec', NOW + 1000), 'working', NOW + 2000), 'a'.repeat(40), NOW + 3000)
+  const record = recordOf(facts({ timing: kept }), NOW + 60_000)
+  expect(record.version).toBe(1)
+  expect(record.timing).toEqual({
+    startedAt: NOW,
+    stages: [{ stage: 'spec', at: NOW + 1000 }],
+    prOpenedAt: null,
+    prMergedAt: null,
+    states: { working: 60_000, 'waiting-on-builder': 0, idle: 0, 'needs-you': 0, 'in-cleanup': 0, done: 0 },
+    rounds: [{ head: 'a'.repeat(40), startedAt: NOW + 3000, endedAt: null, ended: null }],
+    olderRounds: 0,
+  })
+  // The record's own bookkeeping, such as the open state and the title, is never written.
+  expect(Object.keys(record.timing ?? {}).sort()).toEqual(['olderRounds', 'prMergedAt', 'prOpenedAt', 'rounds', 'stages', 'startedAt', 'states'])
+  expect('timing' in recordOf(facts(), NOW)).toBe(false)
+})
+
+test('the compared text ignores the totals growing while a state stays open, and still sees a new stamp', () => {
+  const written = memo({ state: 'idle', stateSince: NOW })
+  const kept = afterState(emptyTiming('session-1', NOW), 'idle', NOW)
+  const one = comparedTextOf(recordOf(facts({ memo: written, timing: kept }), NOW))
+  expect(comparedTextOf(recordOf(facts({ memo: written, timing: kept }), NOW + 10 * 60_000))).toBe(one)
+  const staged = afterStage(kept, 'ABC-123 a change', 'spec', NOW + 1000)
+  expect(comparedTextOf(recordOf(facts({ memo: written, timing: staged }), NOW))).not.toBe(one)
+  // The record written still holds the totals; only the compared copy leaves them out.
+  expect(recordOf(facts({ memo: written, timing: kept }), NOW + 60_000).timing?.states.idle).toBe(60_000)
 })
 
 // A record kept for session-1, unless the case says otherwise.

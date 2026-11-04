@@ -3,10 +3,11 @@ import { expect, test } from 'claude-code/testing'
 import { agentSvg } from '../hooks/art'
 import { SETTINGS_HINT } from '../hooks/context'
 import { snapshotOf } from '../hooks/github'
-import { abovePromptLine, agentCount, agentLines, heldLine, agentRowOf, backgroundLines, contextLines, counselLines, messageLines, messagesReadOf, NAMED_AFTER_MS, nextStep, secondRow, STALE_WARNING, timeUntil, type View } from '../hooks/pane'
+import { abovePromptLine, agentCount, timingLinesOf, agentLines, heldLine, agentRowOf, backgroundLines, contextLines, counselLines, messageLines, messagesReadOf, NAMED_AFTER_MS, nextStep, secondRow, STALE_WARNING, timeUntil, type View } from '../hooks/pane'
 import { RELOAD_LINE, resumePrompt, stateLines, stuckPrompt } from '../hooks/prompts'
 import { stepFor } from '../hooks/step'
 import { clockTime, printable, timeOfDay } from '../hooks/text'
+import { afterPackage, afterState, emptyTiming } from '../hooks/timing'
 import { afterCost, afterStep, emptyUsage, usageLines } from '../hooks/usage'
 import type { AgentCard, BackgroundTask, Compactions, ContextMeasure, CounselQuestion, CounselVote, ForegroundCall, NextLook, Progress, Question } from '../types'
 
@@ -55,6 +56,7 @@ function view(over: Partial<View> = {}): View {
     context: null,
     compactions: null,
     usage: null,
+    timing: null,
     heldReports: 0,
     sends: null,
     ...over,
@@ -905,4 +907,16 @@ test('a model name that holds control characters is cleaned before the pane show
 test('the line about held reports counts them in plain words', () => {
   expect(heldLine(1)).toBe('Holding 1 report back from the model until their batch finishes.')
   expect(heldLine(3)).toBe('Holding 3 reports back from the model until their batch finishes.')
+})
+
+test('the pane\'s timing lines count an open round up to the time of the draw, and say the split is not kept in a session without a foreman ticket', () => {
+  const t = afterPackage(emptyTiming('session-1', NOW), C, NOW + 60_000)
+  expect(timingLinesOf(view({ timing: t, now: NOW + 3 * 60_000 }))).toEqual([
+    'Time: 3m 0s so far · the split by state is kept only for a foreman ticket',
+    '  Round at cccccccc: 2m 0s so far, open',
+  ])
+  expect(timingLinesOf(view({ timing: t, now: NOW + 5 * 60_000 }))[1]).toBe('  Round at cccccccc: 4m 0s so far, open')
+  const ticketed = afterState(t, 'working', NOW + 60_000)
+  expect(timingLinesOf(view({ timing: ticketed, now: NOW + 3 * 60_000 }))[0]).toBe('Time: 3m 0s so far · working 3m 0s, waiting on you 0s, other waiting 0s')
+  expect(timingLinesOf(view())).toEqual(['Time: not counted yet'])
 })

@@ -1,6 +1,6 @@
 import type { Elements as EngineElements } from 'claude-code'
 
-import type { AgentCard, BackgroundTask, Compactions, ContextMeasure, CounselQuestion, CounselTally, ForegroundCall, NextLook, Progress, Question, UsageLedger, WaitingOn, Wake } from '../types'
+import type { AgentCard, BackgroundTask, Compactions, ContextMeasure, CounselQuestion, CounselTally, ForegroundCall, NextLook, Progress, Question, TimingLedger, UsageLedger, WaitingOn, Wake } from '../types'
 import { AGENT_SVG_HEIGHT, agentSvg, BAR_SVG_HEIGHT, barSvg, fitBar, hasSvg, PLANNED_SVG_HEIGHT, plannedSvg, svgWidth, type AgentRow } from './art'
 import { contextWords, SETTINGS_HINT, thousands } from './context'
 import { abstainerReason, chosenOf, COUNSEL_KEPT, FOLLOW_UP_WORDS, followUpOutcomes, noOptionCount, shortName, turnoutOf } from './counsel'
@@ -11,6 +11,7 @@ import { isRunning, shownStatus, waitingOn } from './state'
 import { HUNG_AFTER_MS, isProbablyHung, issueOf, oldestTaskOf, startOf } from './status'
 import { sendsLine, type SendsRecord } from './sends'
 import { clockTime, printable, timeOfDay } from './text'
+import { timingLines } from './timing'
 import { usageLines } from './usage'
 
 export const PANE = 'builder'
@@ -69,6 +70,11 @@ export type View = {
   // that seed lands, when the held one is another session's or cannot be
   // read, and always in the band's view, which never reads it.
   usage: UsageLedger | null
+  // How long the session's issue has taken, read through timingIn in
+  // hooks/timing.ts. The session's start seeds the record, so this is null
+  // only before that seed lands, when the held record is another session's or
+  // cannot be read, and always in the band's view, which never reads it.
+  timing: TimingLedger | null
   // How many reports builder holds back from the model until their batch of
   // agents finishes, as heldReports in hooks/batch.ts counts them. It is
   // always zero in the band's view, which never reads the batches.
@@ -597,6 +603,14 @@ function usageTree({ Text }: El, v: View) {
   return usageLines(v.usage).map((line, i) => <Text key={`usage-${i}`} dimColor={i > 0}>{line}</Text>)
 }
 
+// The session's times as of the draw, as timingLines words them.
+export const timingLinesOf = (v: View) => timingLines(v.timing, v.now)
+
+// The session's times, the lines after the first dim.
+function timingTree({ Text }: El, v: View) {
+  return timingLinesOf(v).map((line, i) => <Text key={`timing-${i}`} dimColor={i > 0}>{line}</Text>)
+}
+
 // The line for the sends to the foreman parent, as sendsLine words it, in
 // yellow while the newest send failed, or no line in a session without a
 // parent. The line is a string child, so markup in a reason is drawn as text.
@@ -764,12 +778,13 @@ function staleTree({ Text }: El, v: View) {
 
 // The pane, with a pull request watched or not: the stale warning when the
 // session is stale, then the work, then the pull request's state when one is
-// watched, then the context lines, what the session has spent and, with a
-// foreman parent, its messages to the parent, then the agents, the
-// background work, the open questions, the counsel and, with a pull request,
-// the next step and the last look. With none watched, as during /spec, it
-// still shows the context, the spending and the messages to the parent, and
-// lists the agents, the background work and the counsel.
+// watched, then the context lines, what the session has spent, how long its
+// issue has taken and, with a foreman parent, its messages to the parent,
+// then the agents, the background work, the open questions, the counsel and,
+// with a pull request, the next step and the last look. With none watched, as
+// during /spec, it still shows the context, the spending, the times and the
+// messages to the parent, and lists the agents, the background work and the
+// counsel.
 export function paneTree(ui: Elements, v: View, presses: PanePresses, columns?: number) {
   const { Box, Text } = ui
   const s = v.pr
@@ -781,6 +796,7 @@ export function paneTree(ui: Elements, v: View, presses: PanePresses, columns?: 
         <Text dimColor>{NOTHING_WATCHED}</Text>
         {contextTree(ui, v)}
         {usageTree(ui, v)}
+        {timingTree(ui, v)}
         {sendsTree(ui, v)}
         <Text> </Text>
         {agentsTree(ui, v, columns, presses)}
@@ -806,6 +822,7 @@ export function paneTree(ui: Elements, v: View, presses: PanePresses, columns?: 
       <Text>{`Round ${roundInProgress(s)} (${s.headsReviewed} reviewed) · ${s.pushesSinceVerdict} ${s.pushesSinceVerdict === 1 ? 'push' : 'pushes'} since the last changes-requested verdict`}</Text>
       {contextTree(ui, v)}
       {usageTree(ui, v)}
+      {timingTree(ui, v)}
       {sendsTree(ui, v)}
       <Text> </Text>
       {agentsTree(ui, v, columns, presses)}

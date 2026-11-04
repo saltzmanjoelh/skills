@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Next, PromptOrigin, PromptSubmitInput, Register, ResolveInput, ToolCallInput, ToolCallResult, TurnStepResult } from 'claude-code'
 
-import type { AgentCard, BackgroundTask, BatchState, BuilderRun, Compactions, ContextMeasure, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, StatusMemo, UsageLedger, Wake } from '../types'
+import type { AgentCard, BackgroundTask, BatchState, BuilderRun, Compactions, ContextMeasure, CounselQuestion, CounselTally, ForegroundCall, LoadBegun, StatusMemo, TimingLedger, UsageLedger, Wake } from '../types'
 import { isSvgSurface } from './art'
 import { afterDeadline, afterDeadlineSent, afterDelivery, BATCH_RETRY_MS, afterLaunch, afterResume, afterTask, afterMemberStop, afterWake, afterFirstStep, answersStep, batchStateIn, deliveryOf, heldReports, isBatchLaunch, isEngineWake, listedIdsOf, nextDeadline, NOTED_REPLY, runningLines, taskIdOf, type DeliveryAct } from './batch'
 import { checkoutSentence, otherRepositorySentence, worktreeWithBranch, type Checkout } from './checkout'
@@ -18,10 +18,11 @@ import { ADVERSARIAL_REVIEWER, afterReport, afterSeen, endedOf, FOCUSED_REVIEWER
 import { changePrompt, ciEventContext, GITHUB_NAMES_LINE, resumePrompt, stateLines, stuckPrompt } from './prompts'
 import { changedKinds, commitRecordsOf, decidedItems, factIn, INSTRUCTION_PATHSPECS, instructionFileIsLink, isFullSha, isUpForCheck, LATER_CONTEXT_LINES, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pluginRootsOf, reviewedHeadOf, secretIn, specDirOf, trendOf, trendStopLine, underRoot, verdictHeadOf, verdictsLine, type CommitRecord, type EarlierRound, type FileKind, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, backgroundTaskIdOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isMerge, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
-import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isForemanNudge, keptTicketIn, keptTicketOf, memoOfKeptTicket, newMemo, parentIn, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, STATUS_CHANGED_TEXT, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type KeptTicket, type Starts, type StatusFacts } from './status'
+import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isForemanNudge, keptTicketIn, keptTicketOf, memoOfKeptTicket, newMemo, parentIn, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, STATUS_CHANGED_TEXT, stateOf, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type KeptTicket, type Starts, type StatusFacts } from './status'
 import { afterSend, emptySends, sendOutcomeOf, sendsIn, sendsKey, sendsNewest, SENDS_KEPT_MS, SENDS_PREFIX, type SendOutcome, type SendSettled, type SendsRecord } from './sends'
 import { baseFactsOf, chooseStep, labelActionOf, labelFor, labelRecordIn, labelsToRemoveAfterEdit, needsListing, SHORT_HASH, stepFor, UNPUSHED_KEPT, UNREAD_FACTS } from './step'
 import { timeOfDay } from './text'
+import { afterPackage, afterPr, afterReview, afterStage, afterState, emptyTiming, timingIn, type PullRequestSeen } from './timing'
 import { afterCost, afterStep, emptyUsage, usageIn } from './usage'
 
 type $ = EngineInterface
@@ -89,6 +90,17 @@ const statusMemo = atom({ plugin: 'builder', key: 'statusMemo' } as const, null)
 // file; the minute's write carries the totals. The atom is named for the
 // ledger, because the hooks name the engine's usage figures `usage`.
 const usageLedger = atom({ plugin: 'builder', key: 'usage' } as const, null)
+// How long the session's issue has taken (see hooks/timing.ts), the one
+// record builder keeps of it, which the store keeps a copy of under the
+// session's id. It survives a hot reload, and it is stamped with the session
+// id it was kept for, so a record an earlier conversation of the process left
+// behind, before a /clear, is read as absent. Unlike the spending's, its
+// writes do ask for a write of the status file, because they are few: a stage,
+// the pull request's opening or merge, a round, or a change of state. A
+// change of state is applied by the writer itself, and the pass it asks for
+// changes nothing, because the change hands back the same record once the
+// state is recorded, so the loop ends.
+const timing = atom({ plugin: 'builder', key: 'timing' } as const, null)
 // The batches of background agents the session's own loop launched, and the
 // marker of turns builder answers without the model. It survives a hot
 // reload, and it is stamped with the session id of the conversation it
@@ -114,6 +126,9 @@ let armed = false
 // text of the ledger last stored, so a ledger equal to it is not written again.
 let usageWrites: Promise<void> = Promise.resolve()
 let lastStoredUsage: string | undefined
+// The same for the record of the session's times.
+let timingWrites: Promise<void> = Promise.resolve()
+let lastStoredTiming: string | undefined
 // The chain the dollar readings go through, one after another in the order
 // recordCost was called (see recordCost).
 let costChanges: Promise<void> = Promise.resolve()
@@ -702,6 +717,7 @@ async function lookAt(
     newestStoredLook = seq
     if (leavesReadForHandover) newestRead = { r, s, seq }
     await update($, pr, () => s)
+    await stampPullRequest($, s)
     // A pane snapshot an older build saved counts as different, rather than
     // throwing in the middle of the look, because isSameState checks both
     // sides with snapshotIn.
@@ -1736,6 +1752,114 @@ async function startUsage($: $) {
   await recordCost($, cost)
 }
 
+// How long the session's issue takes (see hooks/timing.ts). The record lives
+// in $.state and is copied whole to the store under `timing:<session id>`, by
+// a chain of writes shaped like the spending's, so a restart, a reload or a
+// resumed session carries on from what is stored, and a state's start and
+// the total it adds to always land in the store together.
+const TIMING_PREFIX = 'timing:'
+const timingKey = (sessionId: string) => `${TIMING_PREFIX}${sessionId}`
+// A stored record untouched for two weeks is dropped, as a ledger is.
+const TIMING_KEPT_MS = 14 * 24 * 60 * 60_000
+
+// The record a change of this session's times builds on: the one held in
+// state, else the one stored, else one that starts now. A refused store read
+// throws, so the change is dropped rather than a fresh record stored over the
+// session's times.
+async function timingSeed($: $, sessionId: string): Promise<TimingLedger> {
+  const held = timingIn(await read($, timing), sessionId)
+  if (held !== null) return held
+  return timingIn(await $.store.get(timingKey(sessionId)), sessionId) ?? emptyTiming(sessionId, await $.clock.now())
+}
+
+// Changes this session's record and then asks for it to be stored, as
+// changeUsage does for the spending: the change runs inside `update`, which
+// may run it again, so it must not have side effects, and a change that
+// changes nothing writes nothing at all.
+async function changeTiming($: $, change: (t: TimingLedger) => TimingLedger) {
+  const sessionId = await $.session.id()
+  const seed = await timingSeed($, sessionId)
+  if (change(seed) === seed) return
+  let changed = false
+  await update($, timing, raw => {
+    const held = timingIn(raw, sessionId) ?? seed
+    const next = change(held)
+    changed = next !== held
+    return next
+  })
+  if (changed) await persistTiming($)
+}
+
+// Writes the record $.state holds to the store, under the session id the
+// record itself carries, one write after another as persistUsage does. A
+// refused write leaves the record in state, and the next change writes it
+// again.
+async function persistTiming($: $) {
+  const next = timingWrites.then(async () => {
+    const raw = await read($, timing)
+    const t = raw === null ? null : timingIn(raw, raw.sessionId)
+    if (t === null) return
+    const text = JSON.stringify(t)
+    if (text === lastStoredTiming) return
+    await $.store.set(timingKey(t.sessionId), t)
+    lastStoredTiming = text
+  })
+  timingWrites = next.catch(() => undefined)
+  await next
+}
+
+// Applies one stamp of the session's times. A stamp is the mod's own
+// record, so a failure is dropped and the event it came with goes on.
+async function stampTiming($: $, change: (t: TimingLedger) => TimingLedger) {
+  try {
+    await changeTiming($, change)
+  } catch {
+    // The next change writes the newest record again.
+  }
+}
+
+// Stamps the pull request a watch or a look just read.
+async function stampPullRequest($: $, s: Snapshot) {
+  const now = await $.clock.now()
+  const seen: PullRequestSeen = { repo: s.repo, number: s.number, state: s.state }
+  await stampTiming($, t => afterPr(t, seen, now))
+}
+
+// Drops every stored record untouched for two weeks, whichever session wrote
+// it, and at once one that reads as damaged or as another session's, as
+// pruneUsage does for the spending.
+async function pruneTiming($: $) {
+  const now = await $.clock.now()
+  for (const key of await $.store.keys()) {
+    if (!key.startsWith(TIMING_PREFIX)) continue
+    const t = timingIn(await $.store.get(key), key.slice(TIMING_PREFIX.length))
+    if (t === null || now - t.at > TIMING_KEPT_MS) await $.store.delete(key)
+  }
+}
+
+// At the session's start: the old records are pruned first, so a session
+// resumed after two weeks starts again; then the record is put in state and
+// stored, so the start is stamped the first time builder loads in the
+// session and a restart before any other change keeps it.
+async function startTiming($: $) {
+  await pruneTiming($).catch(() => undefined)
+  const sessionId = await $.session.id()
+  const seed = await timingSeed($, sessionId)
+  await update($, timing, raw => timingIn(raw, sessionId) ?? seed)
+  await persistTiming($)
+}
+
+// This session's record as the pane and the status file read it, or null
+// when there is none, the held one is another session's, or it cannot be
+// read.
+async function storedTiming($: $): Promise<TimingLedger | null> {
+  try {
+    return timingIn(await read($, timing), await $.session.id())
+  } catch {
+    return null
+  }
+}
+
 // The record of the sends to the parent as the pane draws it, or null when
 // there is none or it belongs to a conversation that a /clear or a resume
 // ended.
@@ -2290,6 +2414,7 @@ async function watch($: $, target: Omit<BuilderRun, 'since'>): Promise<Snapshot 
   newestRead = null
   await update($, run, () => r)
   await update($, pr, () => s)
+  await stampPullRequest($, s)
   requestStateLabel($)
   if (previous !== null && (previous.repo !== r.repo || previous.number !== r.number)) {
     // Through the told queue, so a write for the previous pull request that
@@ -2783,6 +2908,7 @@ async function servePackage($: $, input: PackageInput): Promise<string> {
   // the answer names only for a package they can read.
   const packagedAt = await $.clock.now()
   await update($, packaged, () => ({ head: live.headRefOid, at: packagedAt, reviewers: [...shape.reviewers], check: shape.kind === 'later' && shape.check }))
+  await stampTiming($, t => afterPackage(t, live.headRefOid, packagedAt))
   $.ui.invalidate('ui.render')
   // A streak that stops the rounds comes first, so the session reads it
   // before it launches any reviewer on the package.
@@ -2846,6 +2972,8 @@ async function serveReview($: $, input: ReviewInput): Promise<string> {
     '-f', `commit_id=${input.head}`, '-f', 'event=COMMENT', '-F', `body=@${file}`, '--jq', '.html_url',
   ])
   if (posted === null) return 'gh could not post the review.'
+  const postedAt = await $.clock.now()
+  await stampTiming($, t => afterReview(t, input.head, postedAt))
   // Settled only once gh says the review is posted, so a failed post lists
   // them again next time. A decision left out for looking like a secret is
   // settled too, so it does not take the place of a line in every later review.
@@ -3257,13 +3385,18 @@ async function reportSeen($: $, stage: StageId, note = '') {
   try {
     const watchSince = (await read($, run))?.since ?? null
     const now = await $.clock.now()
-    let isChanged = false
+    // The stage and title the record holds once the report is applied, or
+    // null when the report changed nothing.
+    let seen = null as { title: string; stage: StageId } | null
     await update($, progress, raw => {
       const next = afterSeen(progressIn(raw), { stage, note }, watchSince, now)
-      isChanged = next !== null
+      seen = next === null ? null : { title: next.title, stage: next.stage }
       return next ?? raw
     })
-    if (isChanged) $.ui.invalidate('ui.render')
+    if (seen === null) return
+    $.ui.invalidate('ui.render')
+    const { title, stage: reached } = seen
+    await stampTiming($, t => afterStage(t, title, reached, now))
   } catch {
     // The report is the mod's own idea; the call it came with goes on.
   }
@@ -3734,12 +3867,12 @@ async function agentType($: $, id: string): Promise<string | undefined> {
 
 // What the band and the panes draw from. A value an older build stored in
 // another shape is read as its default: no progress, not started, folded.
-// The spending, the count of held reports and the record of the sends to the
-// parent are read only when `isPane` is set, which only the pane sets,
-// because the band never shows them, and reading the first two while drawing
-// would subscribe the band to values that change after every counted model
-// step and every batch delivery. Without the flag the usage and the record
-// are null and the count is zero.
+// The spending, the times, the count of held reports and the record of the
+// sends to the parent are read only when `isPane` is set, which only the pane
+// sets, because the band never shows them, and reading the spending and the
+// count while drawing would subscribe the band to values that change after
+// every counted model step and every batch delivery. Without the flag the
+// spending, the times and the record are null and the count is zero.
 async function view($: $, isPane: boolean): Promise<View> {
   const s = await read($, pr)
   const shown = isDrawable(s) ? s : null
@@ -3768,6 +3901,7 @@ async function view($: $, isPane: boolean): Promise<View> {
     context: await storedMeasure($),
     compactions: await storedCompactions($),
     usage: isPane ? await storedUsage($) : null,
+    timing: isPane ? await storedTiming($) : null,
     heldReports: isPane ? heldReports(await storedBatches($)) : 0,
     sends: isPane ? await currentSends($) : null,
   }
@@ -3843,6 +3977,7 @@ async function serveProgress($: $, input: ReportInput): Promise<string> {
     return written
   })
   $.ui.invalidate('ui.render')
+  await stampTiming($, t => afterStage(t, report.title, report.stage, now))
   if (opens) {
     try {
       if (!(await isPaneOpen($, PANE))) await openPane($, 'tool')
@@ -4094,7 +4229,8 @@ async function writeStatus($: $, gen: number): Promise<void> {
         })
         if (!stored) return
       }
-      const facts = waitChanged ? { ...found, memo: { ...found.memo, backgroundWait: wait } } : found
+      const waited = waitChanged ? { ...found, memo: { ...found.memo, backgroundWait: wait } } : found
+      const facts = { ...waited, timing: await timedState($, waited, now) }
       const record = recordOf(facts, now)
       const text = comparedTextOf(record)
       const changed = text !== lastWrittenText
@@ -4116,6 +4252,22 @@ async function writeStatus($: $, gen: number): Promise<void> {
   } finally {
     statusPending = false
     if (statusDirty) statusChanged($)
+  }
+}
+
+// Applies the state the record is about to carry to the session's times, and
+// answers the times the record then carries. It runs in the writer, the only
+// place that works out the state, after its generation check, so only the
+// copy of the module that owns the memo applies it. A change that fails
+// leaves the times as the facts read them, so a timing failure never drops
+// a status write.
+async function timedState($: $, facts: StatusFacts, now: number): Promise<TimingLedger | null> {
+  try {
+    const { state } = stateOf(facts)
+    await changeTiming($, t => afterState(t, state, now))
+    return timingIn(await read($, timing), facts.memo.sessionId)
+  } catch {
+    return facts.timing
   }
 }
 
@@ -4293,6 +4445,7 @@ async function statusFacts($: $): Promise<StatusFacts | null> {
     nextLook: await read($, nextLook),
     usageHold: holdIn(await read($, usageHold)),
     usage: usageIn(await read($, usageLedger), memo.sessionId),
+    timing: timingIn(await read($, timing), memo.sessionId),
   }
 }
 
@@ -4880,6 +5033,7 @@ export const register: Register = on => {
     void pruneOwed($).catch(() => undefined)
     void pruneStateLabels($).catch(() => undefined)
     void startUsage($).catch(() => undefined)
+    void startTiming($).catch(() => undefined)
     void pruneSends($).catch(() => undefined)
     // Watching starts only when asked (the watch tool or /builder watch), so a
     // session that has not named a pull request is never handed one.

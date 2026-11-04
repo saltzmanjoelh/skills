@@ -10,12 +10,13 @@
 
 import type { SessionMessage } from 'claude-code'
 
-import type { AgentCard, BackgroundTask, BuilderRun, BuildState, BuildStatus, ForegroundCall, ForemanNudgeText, LastTurn, NextLook, OpenPrompt, Progress, Question, StatusChangedText, StatusMemo, UsageHold, UsageLedger, Verdicts } from '../types'
+import type { AgentCard, BackgroundTask, BuilderRun, BuildState, BuildStatus, ForegroundCall, ForemanNudgeText, LastTurn, NextLook, OpenPrompt, Progress, Question, StatusChangedText, StatusMemo, TimingLedger, UsageHold, UsageLedger, Verdicts } from '../types'
 import { ciOf, type Snapshot } from './github'
 import { barOf } from './progress'
 import { secretIn } from './review'
 import { isRunning } from './state'
 import { printable } from './text'
+import { recordTiming } from './timing'
 
 // The version the record carries. Whoever changes what a field means raises
 // it here and in BuildStatus, so the foreman can tell an older record apart.
@@ -214,6 +215,9 @@ export type StatusFacts = {
   // this session is held: before that seed lands, or when the held one is
   // another session's or cannot be read.
   usage: UsageLedger | null
+  // How long the session's issue has taken, read through timingIn in
+  // hooks/timing.ts, or null while no record for this session is held.
+  timing: TimingLedger | null
 }
 
 // The snapshot of the pull request the watch follows, or null when nothing
@@ -530,14 +534,21 @@ export function recordOf(f: StatusFacts, writtenAt: number): BuildStatus {
   // Only the totals are written; the remembered turns and the engine's last
   // reading are the ledger's own bookkeeping.
   if (f.usage !== null) record.usage = { models: f.usage.models, usd: f.usage.usd }
+  // The times, with the per-state totals as of the write. The record's own
+  // bookkeeping, such as the open state and the progress title, stays out.
+  if (f.timing !== null) record.timing = recordTiming(f.timing, writtenAt)
   return record
 }
 
-// The text two records are compared by: the record with its write time left
-// out. Two records whose texts are equal hold the same values in every field
-// but the write time, so the second needs no write of its own.
+// The text two records are compared by: the record with its write time and
+// its per-state totals left out. Two records whose texts are equal hold the
+// same values in every field but those, so the second needs no write of its
+// own. The totals grow for as long as a state stays open, so comparing them
+// would make every pass a changed write and tell the parent every minute; a
+// change of state is still seen in the `state` field, and the minute's write
+// carries the grown totals.
 export function comparedTextOf(record: BuildStatus): string {
-  return JSON.stringify({ ...record, writtenAt: 0 })
+  return JSON.stringify({ ...record, writtenAt: 0, ...(record.timing === undefined ? {} : { timing: { ...record.timing, states: null } }) })
 }
 
 const STATES: readonly BuildState[] = STATE_RULES.map(rule => rule.state)
