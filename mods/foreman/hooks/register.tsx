@@ -5,7 +5,7 @@ import { checkOutcome, clampedDue, endsOf, isClaimed, soonestDue, withNote, with
 import { CALL_TIMEOUT_MS, decide, desktopOf, freedSlotIn, freeSlots, GONE_MS, keptByUnreadList, needsList, NO_ANSWER, releasedIn, startWaits, topUpCount, watchingFrom, type Decision, type Limits, type SessionsLook } from './act'
 import { isSvgSurface } from './art'
 import { becameParentAnswer, COMMAND, commandOf, isCommandText, PASSED_ON, PASTED_LINE, pastedCommandIn, slotsAnswer, START_FOREMAN_FALLBACK, START_FOREMAN_OFF, startForemanText, type Command } from './commands'
-import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, everySession, failureLine, linkedFamily, listSessions, NUDGE_TEXT, openSession, readHeader, REASONS, sendMessage, type DesktopCall, type Listed, type SavedCopies, type SendResult } from './desktop'
+import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, everySession, failureLine, linkedFamily, listSessions, NUDGE_TEXT, openSession, readHeader, REASONS, sendMessage, WHOLE_LOCAL_ID, type DesktopCall, type Listed, type OpenResult, type SavedCopies, type SendResult } from './desktop'
 import { acceptedLog, beginFailedNotice, heldLine, heldLog, heldNotice, heldSentence, isHeldRefusal, isPersonPrompt, keyOfTitle, topUpLine } from './held'
 import { ignoredLine, readIssueLink } from './links'
 import { afterConsumed, emptyMarkers, FIRST_MARKER_LOG, MARKERS_KEPT_MS, MARKERS_PREFIX, markersIn, markersKey, markersNewest, type MarkersRecord } from './markers'
@@ -18,10 +18,10 @@ import { spendOf, spentSum, ticketTimes, timeSum, withQueued } from './spend'
 import { afterRead, nameOf, nextReadDelay, READ_LATER_MS, rowsOf, type FileRead, type SubRow } from './subs'
 import { printable } from './text'
 import {
-  addWork, briefFor, carriesTicket, fallbackOf, hasWork, isOffRefused, joinOwners, localIdIn, newPairing, nextPlace, NO_TICKET_SENTENCE, OFF_LOG, OFF_REFUSAL, OUTBOX_EMPTY, ownsTicket,
+  addWork, briefFor, carriesTicket, fallbackOf, hasWork, isOffRefused, joinOwners, localIdIn, newPairing, nextPlace, NO_TICKET_SENTENCE, OFF_LOG, OFF_REFUSAL, OUTBOX_EMPTY, ownsTicket, queuedShown,
   runsImplement, shownRows, ticketsIn, ticketsKey, TICKETS_EMPTY, waitingBrief, WAITING_SENTENCE, withOffRefusal, withUnwatched,
 } from './tickets'
-import { REASON_WORDS, splitReasons, wakeLine, whoOf } from './wake'
+import { isWholeKey, REASON_WORDS, splitReasons, wakeLine, whoOf } from './wake'
 
 type $ = EngineInterface
 
@@ -775,18 +775,21 @@ async function ownSpend($: $) {
 // builder's usage value, which reading that value while drawing subscribes
 // the drawing to. They are also worked out only in a parent, because only the
 // parent's pane shows them. The count of status messages is given only in a
-// parent too, and reads no state.
+// parent too, and reads no state. The sub sessions that wait and whether a
+// slot is free come from the same ledger read, and only in a parent.
 async function view($: $, isPane: boolean): Promise<View> {
   const settings = parentIn(await read($, parent))
   const due = await read($, nextReadAt)
   const lines = await read($, log)
   const ledger = settings.isOn ? ticketsIn(await read($, tickets)) : null
   const isPaneInParent = isPane && ledger !== null
-  const rows = ledger === null ? [] : shownRows(await rowsNow($), ledger)
+  const allRows = ledger === null ? [] : await rowsNow($)
+  const rows = ledger === null ? [] : shownRows(allRows, ledger)
   const now = await $.clock.now()
+  const slots = slotsOf(settings, currentOptions.slots)
   return {
     isOn: settings.isOn,
-    slots: slotsOf(settings, currentOptions.slots),
+    slots,
     rows,
     now,
     nextReadAt: typeof due === 'number' && Number.isFinite(due) ? due : null,
@@ -798,6 +801,14 @@ async function view($: $, isPane: boolean): Promise<View> {
     ownSpent: isPaneInParent ? await ownSpend($) : null,
     report: settings.isOn ? shownReport(await read($, report), now) : null,
     markers: settings.isOn ? markers : null,
+    queued: ledger === null ? [] : queuedShown(ledger, now, GONE_MS).map((p, i) => ({
+      ticket: p.ticket,
+      issueKey: p.issueKey !== null && isWholeKey(p.issueKey) ? p.issueKey : null,
+      localId: p.localId,
+      waitedMs: now - p.pairedAt,
+      place: i + 1,
+    })),
+    isSlotFree: ledger !== null && freeSlots(ledger, allRows, now, slots) > 0,
   }
 }
 
@@ -827,20 +838,37 @@ const savedCopies = ($: $): SavedCopies => ({
   size: async path => (await $.fs.stat(path)).size,
 })
 
+// Says what came of opening the sub session named `name`: a line in the log
+// when it opened, and a toast with the same line in the log when it did not.
+async function openResult($: $, name: string, result: OpenResult) {
+  if ('opened' in result) {
+    await addLog($, `Opened ${name} beside this session.`)
+    return
+  }
+  const line = failureLine(name, result.reason)
+  $.ui.toast(line)
+  await addLog($, line)
+}
+
 // Opens the sub session whose file is `file` beside the parent, and says
-// what happened: a line in the log when it opened, and a toast with the same
-// line in the log when it did not.
+// what happened.
 async function openRow($: $, file: string) {
   const row = (await shownNow($)).find(r => r.file === file)
   if (row === undefined) return
-  const result = await openSession(desktopCall($), row.record, savedCopies($))
-  if ('opened' in result) {
-    await addLog($, `Opened ${nameOf(row)} beside this session.`)
-    return
-  }
-  const line = failureLine(nameOf(row), result.reason)
-  $.ui.toast(line)
-  await addLog($, line)
+  await openResult($, nameOf(row), await openSession(desktopCall($), row.record, savedCopies($)))
+}
+
+// Opens the waiting sub session whose ticket is `ticket` beside the parent,
+// and says what happened. The pairing is looked up again in the ledger as it
+// is now, and its session is opened only by a whole local_ id; a start
+// answered with a proposal card has none yet, and a damaged id is never
+// passed on, so either one only says why it did not open.
+async function openQueued($: $, ticket: string) {
+  const p = ticketsIn(await read($, tickets)).pairings.find(q => q.ticket === ticket)
+  if (p === undefined) return
+  const id = p.localId !== null && WHOLE_LOCAL_ID.test(p.localId) ? p.localId : null
+  const result = id === null ? { reason: REASONS.noSessionId } : await openSession(desktopCall($), { desktopSessionId: id, cwd: null }, savedCopies($))
+  await openResult($, whoOf(p.issueKey, p.ticket), result)
 }
 
 // The Nudge button: the same message the idle rule sends, at once, to the
@@ -1675,7 +1703,8 @@ export const register: Register = (on, options) => {
     return startSession($, e, next)
   }).catch(startFallback)
 
-  // The pane. Its presses open, nudge or release a sub session.
+  // The pane. Its presses open, nudge or release a sub session, or open one
+  // that waits in the queue.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const presses = {
       open: (file: string) => {
@@ -1686,6 +1715,9 @@ export const register: Register = (on, options) => {
       },
       release: (file: string) => {
         void releaseRow($, file).catch(() => undefined)
+      },
+      openQueued: (ticket: string) => {
+        void openQueued($, ticket).catch(() => undefined)
       },
     }
     return paneTree(elementsOf($, e), await view($, true), presses, columnsOf(e.props.bodyColumns))

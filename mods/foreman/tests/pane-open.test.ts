@@ -1,6 +1,10 @@
 import { expect, test } from 'claude-code/testing'
+import type { On } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
 
-import { foreman, mountBoth, record, SURFACES, start, world } from './world'
+import { REASONS } from '../hooks/desktop'
+import { newPairing, ticketsKey, TICKETS_EMPTY } from '../hooks/tickets'
+import { foreman, MINUTE, mountBoth, record, SURFACES, start, T0, world } from './world'
 
 // The reason the engine gives when an open the mod made on its own waits.
 const NARROW = 'The terminal is 100 columns wide, under the 144 a pane opened unasked needs.'
@@ -39,7 +43,7 @@ for (const surface of SURFACES) {
     await ui.band.press({ key: 'foreman-head' })
 
     expect(w.panes).toEqual(['foreman'])
-    expect(await ui.bandText()).toBe('foreman: 0 of 2 slots busy · no sub sessions · next read in 2m')
+    expect(await ui.bandText()).toBe('foreman: 0 of 2 slots busy · queue empty · no sub sessions · next read in 2m')
   })
 }
 
@@ -201,4 +205,44 @@ test('a toast the engine refuses does not stop the log line, the role or the ans
   expect(answer.text).toContain(WAITS)
   expect(await ui.newestLog()).toBe(WAITS)
   expect(await ui.bandText()).toStartWith('foreman: 0 of 2 slots busy')
+})
+
+// A parent with one slot, ABC-1 busy in it, and `waiting` in its queue. The
+// desktop app lists ABC-1's session and that of each waiting one with an id.
+async function queued($: Engine, on: On, waiting: ReturnType<typeof newPairing>[]) {
+  const w = world(on, { store: { 'parent:session-1': { isOn: true, slots: 1 }, [ticketsKey('session-1')]: { ...TICKETS_EMPTY, pairings: waiting } } })
+  w.folder.put('a.json', record('ABC-1', 'working', { stage: 'build', desktopSessionId: 'local_a' }))
+  w.desktop.sessions = [{ sessionId: 'local_a', cwd: '/w', title: 'ABC-1: short', isRunning: true }, ...waiting.flatMap(p => (p.localId === null ? [] : [{ sessionId: p.localId, cwd: '/w', title: 'short', isRunning: false }]))]
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await w.clock.settle()
+  w.toasts.length = 0
+  return { w, ui }
+}
+
+const opens = (w: ReturnType<typeof world>) => w.desktop.calls.filter(c => c.tool === 'open_session_in')
+
+test('pressing a queued entry opens its sub session beside the parent by its desktop session id, and logs it', async ($, on) => {
+  const { w, ui } = await queued($, on, [newPairing('ft-ABC-2', 'local_b', T0, 'ABC-2', { place: 1, claim: null })])
+  await ui.pane.press({ key: 'open-queued-ft-ABC-2' })
+  expect(opens(w).map(c => c.args)).toEqual([{ session_id: 'local_b', target: 'split' }])
+  expect(w.toasts).toEqual([])
+  expect(await ui.newestLog()).toBe('Opened ABC-2 beside this session.')
+})
+
+test('pressing a queued entry with no desktop session yet, or with a damaged one, opens nothing and says why in a toast and the log', async ($, on) => {
+  // A start answered with a proposal card a minute ago has no session yet,
+  // and a stored id that is not a whole local_ id is never passed on.
+  const card = newPairing('ft-ABC-2', null, T0 - MINUTE, 'ABC-2', { place: 1, claim: null })
+  const damaged = newPairing('ft-ABC-3', 'local_c and more', T0, 'ABC-3', { place: 2, claim: null })
+  const { w, ui } = await queued($, on, [card, damaged])
+  const cardLine = `Could not open ABC-2: ${REASONS.noSessionId}.`
+  const damagedLine = `Could not open ABC-3: ${REASONS.noSessionId}.`
+  await ui.pane.press({ key: 'open-queued-ft-ABC-2' })
+  expect(w.toasts).toEqual([cardLine])
+  expect(await ui.newestLog()).toBe(cardLine)
+  await ui.pane.press({ key: 'open-queued-ft-ABC-3' })
+  expect(w.toasts).toEqual([cardLine, damagedLine])
+  expect(opens(w)).toEqual([])
 })

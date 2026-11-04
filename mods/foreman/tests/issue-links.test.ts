@@ -1,6 +1,9 @@
 import { expect, test } from 'claude-code/testing'
+import type { On } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
 
-import { foreman, MINUTE, PARENT_DIR, SURFACES, mountBoth, record, start, statusFolder, world } from './world'
+import { newPairing, ticketsKey, TICKETS_EMPTY } from '../hooks/tickets'
+import { foreman, MINUTE, PARENT_DIR, SURFACES, T0, mountBoth, record, start, statusFolder, world } from './world'
 
 // An element of a drawn tree as a found element's children give it.
 type Drawn = { type: string; props?: Record<string, unknown>; children?: unknown[] }
@@ -60,7 +63,10 @@ async function expectLinkedRow(ui: Awaited<ReturnType<typeof mountBoth>>, file: 
 // with the counting of what sessions spend, and were added here then, as were
 // the lines with each sub session's times and their sums later still. The
 // head became a button that opens foreman's pane later still, and the line
-// that counts builder's status messages came after that.
+// that counts builder's status messages came after that. The pane's Queued
+// section, which says that nothing waits when the queue is empty, came later
+// still; the band draws nothing about the queue here, because no slot is free
+// and nothing waits.
 const BAND_BEFORE = {
   type: 'Box', props: { key: 'foreman-band', flexDirection: 'row' },
   children: [
@@ -91,6 +97,8 @@ const PANE_BEFORE = {
       { type: 'Text', props: { dimColor: true }, children: ['Time: unknown'] },
       { type: 'Box', props: { key: 'actions-b.json', flexDirection: 'row' }, children: [{ type: 'Button', props: { key: 'nudge-b.json', label: 'Nudge' } }, { type: 'Text', children: [' '] }, { type: 'Button', props: { key: 'release-b.json', label: 'Release' } }] },
       { type: 'Text', children: [' '] },
+      { type: 'Text', props: { dimColor: true }, children: ['Queued: none — your next message lines up more'] },
+      { type: 'Text', children: [' '] },
       { type: 'Text', children: ['Sub sessions spent: unknown'] },
       { type: 'Text', children: ['Sub sessions\' time, summed: unknown'] },
       { type: 'Text', props: { dimColor: true }, children: ['Summed over sub sessions that run side by side, so a sum can be longer than the run.'] },
@@ -118,6 +126,8 @@ const PANE_BEFORE = {
       { type: 'Text', props: { dimColor: true }, children: ['Spent: unknown'] },
       { type: 'Text', props: { dimColor: true }, children: ['Time: unknown'] },
       { type: 'Box', props: { key: 'actions-b.json', flexDirection: 'row' }, children: [{ type: 'Button', props: { key: 'nudge-b.json', label: 'Nudge' } }, { type: 'Text', children: [' '] }, { type: 'Button', props: { key: 'release-b.json', label: 'Release' } }] },
+      { type: 'Text', children: [' '] },
+      { type: 'Text', props: { dimColor: true }, children: ['Queued: none — your next message lines up more'] },
       { type: 'Text', children: [' '] },
       { type: 'Text', children: ['Sub sessions spent: unknown'] },
       { type: 'Text', children: ['Sub sessions\' time, summed: unknown'] },
@@ -235,6 +245,59 @@ for (const surface of SURFACES) {
       expect(compared(await ui.pane.drawn())).toEqual(pane)
     })
   }
+}
+
+// A parent with one slot, ABC-1 busy in it, and three sub sessions waiting:
+// ABC-2, one with no issue key and one whose key holds an escape sequence.
+// The desktop app lists every one of their sessions.
+// `text` is the project's CLAUDE.md, or null for none.
+async function queuedParent($: Engine, on: On, surface: 'terminal' | 'desktop', text: string | null) {
+  const waiting = [
+    newPairing('ft-ABC-2', 'local_b', T0, 'ABC-2', { place: 1, claim: null }),
+    newPairing('ft-nokey', 'local_n', T0, null, { place: 2, claim: null }),
+    newPairing('ft-escaped', 'local_e', T0, 'ABC-\u001b[31m9', { place: 3, claim: null }),
+  ]
+  const w = world(on, { store: { 'parent:session-1': { isOn: true, slots: 1 }, [ticketsKey('session-1')]: { ...TICKETS_EMPTY, pairings: waiting } } })
+  if (text !== null) w.folder.project.set(`${PARENT_DIR}/CLAUDE.md`, text)
+  w.folder.put('a.json', record('ABC-1', 'working', { stage: 'build', desktopSessionId: 'local_a' }))
+  w.desktop.sessions = [{ sessionId: 'local_a', cwd: '/w', title: 'ABC-1: short', isRunning: true }, ...waiting.map(p => ({ sessionId: p.localId!, cwd: '/w', title: 'short', isRunning: false }))]
+  const ui = await mountBoth($, on, surface)
+  await start($)
+  await foreman($)
+  await w.clock.settle()
+  return { w, ui }
+}
+
+for (const surface of SURFACES) {
+  test(`on the ${surface}, with a usable fact a queued entry with a whole key draws it as a link before the button that opens it, and other entries have no link`, async ($, on) => {
+    const { w, ui } = await queuedParent($, on, surface, fact(ADDRESS))
+    await ui.pane.redraw()
+    const entry = await ui.pane.find({ key: 'queued-ft-ABC-2' })
+    const parts = entry!.children as Drawn[]
+    expect(parts.map(part => part.type)).toEqual(['Text', 'Link', 'Text', 'Button'])
+    expect(parts[0]!.children).toEqual(['1. '])
+    expect(parts[1]!.props?.href).toBe(linkTo('ABC-2'))
+    expect(parts[1]!.children).toEqual(['ABC-2'])
+    expect(parts[2]!.children).toEqual([' '])
+    expect((await ui.pane.find({ key: 'open-queued-ft-ABC-2' }))?.text).toBe('→ waiting for 0m')
+    for (const [ticket, label] of [['ft-nokey', '→ the sub session with ticket ft-nokey · waiting for 0m'], ['ft-escaped', '→ the sub session with ticket ft-escaped · waiting for 0m']] as const) {
+      const other = (await ui.pane.find({ key: `queued-${ticket}` }))!.children as Drawn[]
+      expect(other.map(part => part.type)).toEqual(['Text', 'Button'])
+      expect((await ui.pane.find({ key: `open-queued-${ticket}` }))?.text).toBe(label)
+    }
+    expect((await ui.pane.findAll({ type: 'Link' })).map(link => link.props.href)).toEqual([linkTo('ABC-1'), linkTo('ABC-2')])
+    await ui.pane.press({ key: 'open-queued-ft-ABC-2' })
+    expect(w.desktop.calls.filter(c => c.tool === 'open_session_in').map(c => c.args.session_id)).toEqual(['local_b'])
+  })
+
+  test(`on the ${surface}, with no fact no queued entry has a link`, async ($, on) => {
+    const { ui } = await queuedParent($, on, surface, null)
+    await ui.pane.redraw()
+    expect(await ui.pane.findAll({ type: 'Link' })).toEqual([])
+    const parts = (await ui.pane.find({ key: 'queued-ft-ABC-2' }))!.children as Drawn[]
+    expect(parts.map(part => part.type)).toEqual(['Text', 'Button'])
+    expect((await ui.pane.find({ key: 'open-queued-ft-ABC-2' }))?.text).toBe('→ ABC-2 · waiting for 0m')
+  })
 }
 
 test('a session that is not a parent reads no file and shows no toast, whatever its CLAUDE.md says', async ($, on) => {

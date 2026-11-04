@@ -11,12 +11,19 @@ import { markersLine, type MarkersRecord } from './markers'
 import { spendOf, spendWords, TIMES_UNKNOWN, timesWords } from './spend'
 import { STAGES, stageLabel } from './stages'
 import {
-  busyCount, chipParts, chipText, fitChips, isProbablyHung, keyOf, moreWords, SEPARATOR, STATE_LOOK, staleWords, untilWords, waitWords, type SubRow,
+  ageWords, busyCount, chipParts, chipText, fitChips, isProbablyHung, keyOf, moreWords, SEPARATOR, STATE_LOOK, staleWords, untilWords, waitWords, type SubRow,
   type Tone,
 } from './subs'
 import { printable, timeOfDay } from './text'
+import { whoOf } from './wake'
 
 export const PANE = 'foreman'
+
+// A sub session that waits in foreman's queue, as the band and the pane show
+// it: its ticket, its issue key only when the key is whole, else null, its
+// desktop session id or null, how long ago it was paired, and its place in
+// the order the queue begins, counted from 1.
+export type QueuedEntry = { ticket: string; issueKey: string | null; localId: string | null; waitedMs: number; place: number }
 
 // What the band and the pane draw from, read by the hooks.
 export type View = {
@@ -50,6 +57,11 @@ export type View = {
   // The count of builder's status messages consumed since foreman's hooks
   // loaded, while the session is a parent, else null.
   markers: MarkersRecord | null
+  // The sub sessions that wait in the queue, in the order they begin, while
+  // the session is a parent, else none.
+  queued: QueuedEntry[]
+  // Whether foreman counts a slot as free, while the session is a parent.
+  isSlotFree: boolean
 }
 
 // How long the band shows a report sentence after foreman showed it.
@@ -92,6 +104,14 @@ export function bandHead(v: View): string {
   return `foreman: ${busyCount(v.rows)} of ${v.slots} slots busy`
 }
 
+// What the band says about the queue right after its head: how many sub
+// sessions wait, `queue empty` in the warning color when nobody waits and a
+// slot is free, and nothing when nobody waits and no slot is free.
+export function queueWords(v: Pick<View, 'queued' | 'isSlotFree'>): { text: string; tone: Tone } | null {
+  if (v.queued.length > 0) return { text: `${v.queued.length} queued`, tone: 'plain' }
+  return v.isSlotFree ? { text: 'queue empty', tone: 'amber' } : null
+}
+
 // The link to a row's issue, or null when there is no address or the row's
 // key is not linked. The key is linked only when it is drawn as the record
 // holds it, so a key that `printable` cut or cleaned of an escape sequence
@@ -104,12 +124,14 @@ export function rowLink(row: SubRow, address: string | null): string | null {
 // `open` opens a chip's sub session, and `pane` opens foreman's pane.
 export type BandPresses = { open: (file: string) => void; pane: () => void }
 
-// The band, in a parent only: the head, a chip for each sub session that
-// fits `width` with `+N more` for the rest, when the next read is due, and
-// last the report sentence while there is one, cut to the columns the rest
-// left over. The chips are fitted first, exactly as without a report, so they
-// never give up width to it, and the report is dropped when fewer than
-// REPORT_MIN_COLUMNS columns are left for it.
+// The band, in a parent only: the head, then what queueWords says about the
+// queue, then a chip for each sub session that fits `width` with `+N more`
+// for the rest, when the next read is due, and last the report sentence while
+// there is one, cut to the columns the rest left over. The words about the
+// queue take their columns before the chips are fitted, so the band never
+// runs past its width. The chips are fitted before the report, exactly as
+// without one, so they never give up width to it, and the report is dropped
+// when fewer than REPORT_MIN_COLUMNS columns are left for it.
 // The head is a button that opens foreman's pane. Each chip is a button that
 // opens its sub session; it is colored by its state's tone, or dimmed and
 // uncolored when its file is stale. A chip whose issue has a link draws its
@@ -123,6 +145,14 @@ export function bandTree(ui: Elements, view: View, width: number | undefined, pr
   const { Box, Text, Button, Link } = ui
   const head = bandHead(v)
   const tail = `${SEPARATOR}${nextReadWords(v)}`
+  const queue = queueWords(v)
+  const queueText = queue === null ? '' : `${SEPARATOR}${queue.text}`
+  const queueParts = queue === null
+    ? null
+    : [
+      <Text key="queue-gap">{SEPARATOR}</Text>,
+      queue.tone === 'plain' ? <Text key="queue">{queue.text}</Text> : <Text key="queue" color={TONE_COLOR[queue.tone]}>{queue.text}</Text>,
+    ]
   // The report after the rest of the band, which takes `used` columns.
   const report = (used: number) => {
     if (v.report === null) return null
@@ -135,19 +165,20 @@ export function bandTree(ui: Elements, view: View, width: number | undefined, pr
   const headButton = <Button key="foreman-head" plain onPress={presses.pane}><Text>{head}</Text></Button>
   if (v.rows.length === 0) {
     const rest = `${SEPARATOR}no sub sessions${tail}`
-    return <Box key="foreman-band" flexDirection="row">{headButton}<Text key="rest">{rest}</Text>{report(head.length + rest.length)}</Box>
+    return <Box key="foreman-band" flexDirection="row">{headButton}{queueParts}<Text key="rest">{rest}</Text>{report(head.length + queueText.length + rest.length)}</Box>
   }
   const chips = v.rows.map(row => chipText(row, v.now))
-  const room = width === undefined ? Infinity : width - head.length - tail.length
+  const room = width === undefined ? Infinity : width - head.length - queueText.length - tail.length
   const { shown, more } = fitChips(chips, room)
   const moreText = more > 0 ? `${SEPARATOR}${moreWords(more)}` : ''
-  const used = head.length + chips.slice(0, shown).reduce((sum, chip) => sum + SEPARATOR.length + chip.length, 0) + moreText.length + tail.length
+  const used = head.length + queueText.length + chips.slice(0, shown).reduce((sum, chip) => sum + SEPARATOR.length + chip.length, 0) + moreText.length + tail.length
   const chip = (row: SubRow, text: string) => (row.isStale
     ? <Button key={`chip-${row.file}`} plain dimColor onPress={() => presses.open(row.file)}><Text dimColor>{text}</Text></Button>
     : <Button key={`chip-${row.file}`} plain onPress={() => presses.open(row.file)}><Text color={TONE_COLOR[STATE_LOOK[row.record.state].tone]}>{text}</Text></Button>)
   return (
     <Box key="foreman-band" flexDirection="row">
       {headButton}
+      {queueParts}
       {v.rows.slice(0, shown).flatMap((row, i) => {
         const gap = <Text key={`gap-${row.file}`}>{SEPARATOR}</Text>
         const link = rowLink(row, v.issueLink)
@@ -222,7 +253,9 @@ export function stateWords(row: SubRow, now: number): string {
   return parts.join(SEPARATOR)
 }
 
-export type PanePresses = { open: (file: string) => void; nudge: (file: string) => void; release: (file: string) => void }
+// `open`, `nudge` and `release` act on a row's sub session by its file, and
+// `openQueued` opens a waiting sub session by its ticket.
+export type PanePresses = { open: (file: string) => void; nudge: (file: string) => void; release: (file: string) => void; openQueued: (ticket: string) => void }
 
 // The words a released row shows in place of its state.
 export const RELEASED = 'released'
@@ -301,6 +334,44 @@ function subTree(ui: Elements, row: SubRow, times: ForemanTimes, now: number, ad
   ]
 }
 
+// What the Queued section reads when nobody waits.
+export const QUEUE_EMPTY = 'Queued: none — your next message lines up more'
+
+// One waiting sub session in the Queued section: its place, then the button
+// that opens it, naming it and how long it has waited. When its issue has a
+// link, the place is followed by the key as that link, a space, and the
+// button naming the wait alone, as the issue row of a busy sub session is.
+// One with no whole key is named by its ticket.
+function queuedRow(ui: Elements, entry: QueuedEntry, address: string | null, presses: PanePresses) {
+  const { Box, Text, Button, Link } = ui
+  const open = () => presses.openQueued(entry.ticket)
+  const waited = `waiting for ${ageWords(entry.waitedMs)}`
+  const place = <Text>{`${entry.place}. `}</Text>
+  const link = linkOf(address, entry.issueKey)
+  const button = (label: string) => <Button key={`open-queued-${entry.ticket}`} label={label} onPress={open} />
+  if (link === null || entry.issueKey === null) {
+    return <Box key={`queued-${entry.ticket}`} flexDirection="row">{place}{button(`→ ${printable(whoOf(entry.issueKey, entry.ticket), 80)} · ${waited}`)}</Box>
+  }
+  return (
+    <Box key={`queued-${entry.ticket}`} flexDirection="row">
+      {place}
+      <Link href={link}>{entry.issueKey}</Link>
+      <Text> </Text>
+      {button(`→ ${waited}`)}
+    </Box>
+  )
+}
+
+// The Queued section under the busy rows: a bold heading and one entry for
+// each sub session that waits, in the order they begin, or the one line of
+// QUEUE_EMPTY when nobody waits, and then a blank line.
+function queuedSection(ui: Elements, v: View, presses: PanePresses) {
+  const { Text } = ui
+  const gap = <Text key="queued-gap"> </Text>
+  if (v.queued.length === 0) return [<Text key="queued-none" dimColor>{QUEUE_EMPTY}</Text>, gap]
+  return [<Text key="queued-head" bold>Queued</Text>, ...v.queued.map(entry => queuedRow(ui, entry, v.issueLink, presses)), gap]
+}
+
 // The note under the summed times. Sub sessions run side by side, so an
 // hour in each of two of them sums to two hours in a run of one.
 export const SUMMED_NOTE = 'Summed over sub sessions that run side by side, so a sum can be longer than the run.'
@@ -308,7 +379,8 @@ export const SUMMED_NOTE = 'Summed over sub sessions that run side by side, so a
 export const NOT_A_PARENT = 'This session is not a parent. Run /start-foreman to make it one.'
 export const NO_SUBS = 'No sub sessions are in the status folder.'
 
-// The pane: one row for each sub session, then what the sub sessions spent
+// The pane: one row for each sub session, then the Queued section, then what
+// the sub sessions spent
 // together, then their four times each summed over every sub session with
 // the note that says why a sum can be longer than the run, then what this
 // session spent itself, then how many of builder's
@@ -321,6 +393,7 @@ export function paneTree(ui: Elements, v: View, presses: PanePresses, columns?: 
     <Box key="foreman-pane" flexDirection="column">
       {v.rows.length === 0 ? [<Text key="none" dimColor>{NO_SUBS}</Text>, <Text key="none-gap"> </Text>] : null}
       {v.rows.flatMap(row => subTree(ui, row, v.rowTimes.get(row.file) ?? TIMES_UNKNOWN, v.now, v.issueLink, columns, presses))}
+      {queuedSection(ui, v, presses)}
       <Text key="spent-subs">{`Sub sessions spent: ${spendWords(v.subsSpent)}`}</Text>
       <Text key="time-subs">{`Sub sessions' time, summed: ${timesWords(v.subsTime ?? TIMES_UNKNOWN)}`}</Text>
       <Text key="time-subs-note" dimColor>{SUMMED_NOTE}</Text>

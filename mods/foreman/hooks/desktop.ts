@@ -67,6 +67,7 @@ const SAVED_LIMIT = 4 * 1024 * 1024
 // long or hold anything.
 export const REASONS = {
   noAddress: 'its record names neither a desktop session nor a folder',
+  noSessionId: 'foreman holds no usable desktop session id for it yet',
   noSessionInFolder: 'no desktop session works in its folder',
   notConnected: 'the desktop app\'s tools are not connected in this session',
   listRefused: 'the desktop app could not list its sessions',

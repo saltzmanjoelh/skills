@@ -261,7 +261,7 @@ test('with no sub sessions left, the band shows the report after the no sub sess
   expect(await wide.paneText()).toContain('ABC-1\'s pull request #7 merged.')
   const sentence = 'foreman\'s queue ran dry: a slot is free and no sub session waits, so your next message lines up more.'
   const full = await wide.bandText()
-  expect(full).toMatch(/^foreman: 0 of 2 slots busy · no sub sessions · next read in \S+ · /)
+  expect(full).toMatch(/^foreman: 0 of 2 slots busy · queue empty · no sub sessions · next read in \S+ · /)
   expect(full.endsWith(` · ${sentence}`)).toBe(true)
   const withoutReport = full.slice(0, full.length - ` · ${sentence}`.length)
   for (const columns of [withoutReport.length + 20, withoutReport.length + 10, withoutReport.length]) {

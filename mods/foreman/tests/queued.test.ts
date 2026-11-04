@@ -154,7 +154,7 @@ test('a waiting sub session is not shown, not nudged and raises no wake, and a m
   expect(w.desktop.sent).toEqual([])
   expect(w.engine.prompts).toEqual([])
   const band = await ui.bandText()
-  expect(band).toStartWith('foreman: 1 of 1 slots busy · ABC-1')
+  expect(band).toStartWith('foreman: 1 of 1 slots busy · 2 queued · ABC-1')
   expect(band).not.toContain('no issue')
   const merged = busyFile('ABC-1', ticketOf(w, 0), 'local_new1', { state: 'done', pr: { number: 7, url: 'https://example.com/pull/7', state: 'MERGED', verdicts: null } })
   w.desktop.sessions[0] = listed('local_new1', 'ABC-1', { isArchived: true, isRunning: false })
