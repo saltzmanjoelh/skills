@@ -422,6 +422,24 @@ test('a message the person types while foreman is off still lets go of a kept no
   expect(await ui.bandText()).not.toContain(OPENED)
 })
 
+test('a band write that is refused loses the report from the band only, and the log still holds its sentence and the reason line', async ($, on) => {
+  const w = world(on)
+  on('state.set', ($, e, next) => (e.plugin === 'foreman' && e.key === 'report' ? { deny: 'refused' } as never : next(e)))
+  w.engine.notify = 'off'
+  w.engine.notifyReason = 'no-surface'
+  const before = working('ABC-1')
+  w.folder.put('a.json', before)
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await minutesPass(w, 1, { 'a.json': before })
+  await minutesPass(w, 1, { 'a.json': working('ABC-1', { pr: pr(7, 'OPEN') }) })
+  expect(await ui.bandText()).not.toContain(OPENED)
+  const lines = await ui.logLines()
+  expect(lines).toContain(OPENED)
+  expect(lines).toContain(reasonLine('no-surface', 'none'))
+})
+
 test('an answer whose isSent is not exactly true counts as a failure, and a reason that is not text reads as unknown', async ($, on) => {
   const { w, ui } = await openedUnseen($, on, [])
   w.engine.notify = 'malformed'
