@@ -5,7 +5,7 @@ import { afterTyped, keptOf, REPORT_SHOWN_MS, shownReport, withNotice } from '..
 import { ticketsIn, ticketsKey } from '../hooks/tickets'
 import type { Engine } from 'claude-code/testing'
 
-import { EVENT, foreman, MINUTE, mountBoth, record, SECOND, start, T0, world } from './world'
+import { EVENT, foreman, leftInState, MINUTE, mountBoth, record, SECOND, start, T0, world } from './world'
 
 // The five report sentences: a sub session's pull request opened, got its
 // verdict pair, merged or was closed, and foreman began a queued issue.
@@ -404,6 +404,22 @@ test('a notification that does not answer in time, and one that throws, each log
     reasonLine('the call failed', 'unknown'),
   ])
   expect(await ui.bandText()).toContain(`${MERGED} (2 more since your last message.)`)
+})
+
+test('a message the person types while foreman is off still lets go of a kept notice, which shows for ten minutes once foreman is on again', async ($, on) => {
+  const w = world(on)
+  leftInState(on, { report: { text: OPENED, at: T0 - 30 * MINUTE, kept: 1 } })
+  const ui = await mountBoth($, on)
+  await start($)
+  await w.clock.settle()
+  await typed($)
+  await w.clock.settle()
+  await foreman($)
+  await w.clock.settle()
+  expect(await ui.bandText()).toContain(OPENED)
+  await w.clock.advance(10 * MINUTE + SECOND)
+  await w.clock.settle()
+  expect(await ui.bandText()).not.toContain(OPENED)
 })
 
 test('an answer whose isSent is not exactly true counts as a failure, and a reason that is not text reads as unknown', async ($, on) => {

@@ -635,7 +635,10 @@ async function showReports($: $, sentences: readonly string[]) {
 
 // Lets a notice the band keeps go once the person types: it shows for ten
 // more minutes from now, as afterTyped in pane.tsx says. Most prompts find
-// nothing kept and write nothing.
+// nothing kept and write nothing. It runs whatever the role, because the
+// person's next typed message ends the wait whether or not foreman is on
+// then, so a notice kept while foreman is off does not stay up for good once
+// foreman turns on.
 async function releaseKept($: $) {
   if (keptOf(await read($, report)) === 0) return
   const now = await $.clock.now()
@@ -1660,7 +1663,7 @@ export const register: Register = (on, options) => {
   // may read the whole status folder and the person's prompt or the turn's end
   // should not wait for that read.
   // A prompt the person typed first lets go of a notice the band keeps,
-  // whatever the role, as releaseKept says. A prompt made only of the app's
+  // whatever the role, for the reason releaseKept gives. A prompt made only of the app's
   // notes arrives with the same origin as a typed one, so isAppParts leaves
   // it out.
   // A prompt made only of turn-end notes about sub sessions this parent tracks
