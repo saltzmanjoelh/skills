@@ -92,8 +92,8 @@ minutes, not the hours the backstop was meant to cover.
   would slip around the app's rule that a person stands behind each chain of
   starts.
 - Telling the owner that the queue ran dry and that their next message starts
-  more. The waiting-queue change already adds that report
-  (`foreman-keeps-queue-topped-up.md`).
+  more. The change that keeps foreman's queue of waiting sub sessions topped
+  up already adds that report.
 - A live test of the second answer.
 
 ## Failure modes
@@ -105,8 +105,10 @@ the app's wake, they should test again against the version they run.
 ## Verification
 
 - The live parent's saved record held ten wakes and two starts since the
-  owner's last message, and by the time this was written the app's log held 29 lines that day reading
-  "side-session wake held … at the wake cap", every one for that parent.
+  owner's last message. By the time this was written, the app's log held 29
+  lines from that day reading "side-session wake held … at the wake cap",
+  every one for that parent; the count is a snapshot and grows while the cap
+  holds.
 - The parent's transcript showed each of its ten turns as foreman's rewritten
   log line, answered by foreman.
 - The code reading covers where the app adds to the wake count, the one place
