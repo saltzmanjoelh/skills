@@ -374,6 +374,10 @@ export async function mountBoth($: Engine, on: On, surface: 'terminal' | 'deskto
   on('ui.render', ($, e) => ($.ui.resolve(e) as unknown as { Text: (props: object) => never }).Text({ children: 'host line' }))
   const band = await $.ui.mount({ plugin: 'foreman', surface, component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, bodyColumns } as never })
   const pane = await $.ui.mount({ plugin: 'foreman', surface, component: 'Pane', requestId: 'foreman', props: { bodyColumns } as never })
+  const logLines = async () => {
+    await pane.redraw()
+    return (await pane.findAll({ type: 'Text', text: /^\d\d:\d\d:\d\d / })).map(line => line.text.slice(9))
+  }
   return {
     band,
     pane,
@@ -386,14 +390,8 @@ export async function mountBoth($: Engine, on: On, surface: 'terminal' | 'deskto
       return (await pane.find({ key: 'foreman-pane' }))?.text ?? ''
     },
     // Every line of the log, oldest first, without its time.
-    logLines: async () => {
-      await pane.redraw()
-      return (await pane.findAll({ type: 'Text', text: /^\d\d:\d\d:\d\d / })).map(line => line.text.slice(9))
-    },
-    newestLog: async () => {
-      await pane.redraw()
-      return (await pane.findAll({ type: 'Text', text: /^\d\d:\d\d:\d\d / })).at(-1)?.text.slice(9) ?? ''
-    },
+    logLines,
+    newestLog: async () => (await logLines()).at(-1) ?? '',
   }
 }
 

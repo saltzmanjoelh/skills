@@ -2,7 +2,7 @@
 // reads or writes state; hooks/register.tsx builds the View and wires the
 // presses.
 
-import type { Elements as EngineElements } from 'claude-code'
+import type { Elements as EngineElements, PluginState } from 'claude-code'
 
 import type { ForemanLogLine, ForemanSpend, ForemanTimes } from '../types'
 import { BAR_SVG_HEIGHT, barSvg, fitBar, hasSvg, svgWidth, type Bar } from './art'
@@ -89,9 +89,9 @@ export function keptOf(raw: unknown): number {
 // REPORT_SHOWN_MS even when its notification went.
 export type BandNotice = { newest: string; count: number; isReport: boolean }
 
-// The value foreman keeps in $.state for the band, as the state contract in
-// types/index.d.ts gives it.
-type StoredReport = { text: string; at: number; kept?: number } | null
+// The value foreman keeps in $.state for the band, taken from the state
+// contract in types/index.d.ts, so the two cannot drift apart.
+type StoredReport = PluginState['foreman']['report']
 
 // The band's value after a notice whose notification `failed` or went,
 // arriving at `at`. A failed notice is kept, and so is any notice that
