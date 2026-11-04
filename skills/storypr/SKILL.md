@@ -179,3 +179,32 @@ path/branch in the URL is wrong. Only call it done once every image resolves.
   branch, write and post the body, then check that every image link resolves.
   Never post the body before the images are on the branch.
 - **Footer:** end the PR body with the standard Claude Code footer.
+
+## When another skill calls it
+
+When another skill, such as `/implement`, runs this one as a step of its own,
+do only the following, in this order, and leave the push and the pull request
+to that skill.
+
+1. Read the branch as step 1 says, capture real screenshots as step 2 says,
+   and read each one to check that it is the real screen and that it shows no
+   credential, token or key and no real person's name, email address or other
+   personal details. Take a screenshot that fails this check again with data
+   that shows none, or leave it out and say in the body which screen is
+   missing and why. A screenshot that fails the check is never committed.
+2. Commit the screenshots in one commit, staging each file by its path, never
+   with a glob.
+3. Write the body, laid out as step 4 says, to a file in the session's
+   scratchpad folder, never to a shared folder such as `/tmp`. In every image
+   link, put `<screenshot sha>` where step 4 puts the branch, so that the
+   calling skill can fill in the commit's full sha once it has pushed.
+4. Return the body file's path, the commit's full sha and the list of
+   screenshot paths.
+
+Never push, never create or edit a pull request, and never ask the person
+anything. When no real capture path works, commit nothing, write no body, and
+return the reason instead of stopping to tell the person; a mockup is still
+never the answer. Write the reason in a sentence or two of plain words that
+names no local path, host name, port, device identifier or token and quotes no
+raw error output, because the calling skill publishes it. Everything else in this skill is for a person who calls it
+directly, and it does not change.

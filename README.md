@@ -56,6 +56,7 @@ names.
 | `Max rounds:` | 5 | implement |
 | `Merge command:` | `gh pr merge <n> --merge --match-head-commit <sha>`; a project whose merges go through its own gate names that command, with `<n>` and `<sha>` in it | implement |
 | `Checks:` | `expected` when the base branch has files under `.github/workflows`, else `none`; a project whose checks report from an outside service writes `Checks: expected` | implement |
+| `Frontend paths:` | none; no change is frontend | implement |
 | `Next issue:` | none; ask the person | foreman |
 | `Issue link:` | none; issue keys are drawn as plain text | the builder and foreman mods |
 | `## Gates` heading, one bullet per gate | detect from the manifests, confirm once, offer to write it | implement, verify-loop, pr-comments |
