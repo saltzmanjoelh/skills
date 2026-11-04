@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
-import { FOLDS_CLOSED, foldsIn, menuPressed, prunedMenus } from '../hooks/glance'
+import { FOLDS_CLOSED, foldsIn, menuPressed, prunedMenus, rowPressed } from '../hooks/glance'
 import { mergedOf } from '../hooks/spend'
 import { newPairing, ticketsKey, TICKETS_EMPTY } from '../hooks/tickets'
 import type { ForemanSpent, ForemanTiming } from '../types'
@@ -150,7 +150,7 @@ test('a card that stops being busy with its menu open drops the menu, so it is f
   expect(await ui.pane.find({ key: 'nudge-a.json' })).toBeUndefined()
 })
 
-test('a menu press sets the state it was drawn for, and one for a file with no busy card changes nothing', () => {
+test('a menu or heading press sets the state it was drawn for, and a menu press for a file with no busy card changes nothing', () => {
   const open = menuPressed(FOLDS_CLOSED, 'a.json', true, ['a.json'])
   expect(open.openMenus).toEqual(['a.json'])
   expect(menuPressed(open, 'a.json', true, ['a.json'])).toBe(open)
@@ -159,6 +159,12 @@ test('a menu press sets the state it was drawn for, and one for a file with no b
   expect(prunedMenus(open, ['a.json'])).toBe(open)
   expect(prunedMenus(open, ['b.json'])).toEqual(FOLDS_CLOSED)
   expect(foldsIn(undefined)).toEqual(FOLDS_CLOSED)
+  const logOpen = rowPressed(FOLDS_CLOSED, 'isLogOpen', true)
+  expect(logOpen).toEqual({ ...FOLDS_CLOSED, isLogOpen: true })
+  expect(rowPressed(logOpen, 'isLogOpen', true)).toBe(logOpen)
+  expect(rowPressed(logOpen, 'isLogOpen', false)).toEqual(FOLDS_CLOSED)
+  expect(rowPressed(FOLDS_CLOSED, 'isTokensOpen', true)).toEqual({ ...FOLDS_CLOSED, isTokensOpen: true })
+  expect(rowPressed(FOLDS_CLOSED, 'isTokensOpen', false)).toBe(FOLDS_CLOSED)
   expect(foldsIn({ isLogOpen: true, isTokensOpen: false, openMenus: ['a.json', 3] })).toEqual({ isLogOpen: true, isTokensOpen: false, openMenus: ['a.json'] })
 })
 
@@ -324,9 +330,9 @@ test('released and done sub sessions get one compact line each, with an open but
   await ui.pane.redraw()
   expect(await ui.pane.find({ key: 'card-a.json' })).toBeUndefined()
   expect(await ui.pane.find({ key: 'card-b.json' })).toBeUndefined()
-  expect((await ui.pane.find({ key: 'quiet-a.json' }))?.text).toContain('ABC-1 released')
-  expect((await ui.pane.find({ key: 'quiet-b.json' }))?.text).toContain('ABC-2 done')
-  expect((await ui.pane.find({ key: 'quiet-b.json' }))?.text).toContain('$1.75')
+  expect((await ui.pane.find({ key: 'compact-a.json' }))?.text).toContain('ABC-1 released')
+  expect((await ui.pane.find({ key: 'compact-b.json' }))?.text).toContain('ABC-2 done')
+  expect((await ui.pane.find({ key: 'compact-b.json' }))?.text).toContain('$1.75')
   for (const file of ['a.json', 'b.json']) {
     expect(await ui.pane.find({ key: `menu-${file}` })).toBeUndefined()
     expect(await ui.pane.find({ key: `open-${file}` })).toBeDefined()

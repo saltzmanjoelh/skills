@@ -43,7 +43,7 @@ const chipAt = (parts: Drawn[], file: string) => parts.findIndex(part => part.ty
 // terminal, and that the row's open button is still drawn.
 async function expectLinkedRow(ui: Awaited<ReturnType<typeof mountBoth>>, file: string, key: string) {
   await ui.pane.redraw()
-  const name = (await ui.pane.find({ key: `card-name-${file}` })) ?? (await ui.pane.find({ key: `quiet-name-${file}` }))
+  const name = (await ui.pane.find({ key: `card-name-${file}` })) ?? (await ui.pane.find({ key: `compact-name-${file}` }))
   expect(name?.type).toBe('Box')
   const parts = name!.children as Drawn[]
   const first = parts[0]?.props?.key === `alert-${file}` ? 1 : 0

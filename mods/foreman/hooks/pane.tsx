@@ -496,17 +496,17 @@ function card(ui: Elements, v: View, row: SubRow, presses: PanePresses, columns:
 // the issue's link when it has one, the word `released` or `done`, a button
 // that opens its session, and its working time and cost. It has no `⋯`
 // button, so it cannot be nudged or released.
-function quietLine(ui: Elements, v: View, row: SubRow, presses: PanePresses) {
+function compactLine(ui: Elements, v: View, row: SubRow, presses: PanePresses) {
   const { Box, Text, Button } = ui
   const words = row.isReleased === true ? RELEASED : STATE_LOOK.done.words
   return (
-    <Box key={`quiet-${row.file}`} flexDirection="row" gap={1}>
-      <Box key={`quiet-name-${row.file}`} flexDirection="row">
+    <Box key={`compact-${row.file}`} flexDirection="row" gap={1}>
+      <Box key={`compact-name-${row.file}`} flexDirection="row">
         {keyElement(ui, row, v.issueLink, true)}
         <Text dimColor>{` ${words}`}</Text>
       </Box>
       <Button key={`open-${row.file}`} plain dimColor label="→ open" onPress={() => presses.open(row.file)} />
-      <Box key={`quiet-worked-${row.file}`}><Text dimColor>{workedWords(row, v.rowTimes.get(row.file) ?? TIMES_UNKNOWN)}</Text></Box>
+      <Box key={`compact-worked-${row.file}`}><Text dimColor>{workedWords(row, v.rowTimes.get(row.file) ?? TIMES_UNKNOWN)}</Text></Box>
     </Box>
   )
 }
@@ -667,7 +667,7 @@ export function paneTree(ui: Elements, v: View, presses: PanePresses, columns?: 
     <Box key="foreman-pane" flexDirection="column" gap={1}>
       {lightsRow(ui, v, busy)}
       {busy.length === 0 ? null : <Box key="cards" flexDirection="column">{busy.map(row => card(ui, v, row, presses, columns))}</Box>}
-      {rest.length === 0 ? null : <Box key="not-busy" flexDirection="column">{rest.map(row => quietLine(ui, v, row, presses))}</Box>}
+      {rest.length === 0 ? null : <Box key="not-busy" flexDirection="column">{rest.map(row => compactLine(ui, v, row, presses))}</Box>}
       {upNext(ui, v, presses)}
       {tiles(ui, v)}
       {logRow(ui, v, presses)}

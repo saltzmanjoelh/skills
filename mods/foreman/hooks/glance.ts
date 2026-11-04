@@ -115,6 +115,11 @@ export function segmentsOf(bar: StageBar): Segment[] {
 // The characters the terminal draws each kind of segment with.
 export const SEGMENT_CHAR: Record<Segment, string> = { done: '█', current: '▓', empty: '░' }
 
+// The class each kind of segment is drawn with in the stage bar's drawing.
+// The current stage of a sub session that needs the person is the one
+// exception, drawn with `sn` in red.
+const SEGMENT_CLASS: Record<Segment, string> = { done: 'sd', current: 'sc', empty: 'se' }
+
 // The bar as text, which is also the drawing's text alternative: a cell for
 // each stage, then how many are done out of nine.
 export const stagesText = (bar: StageBar) => `${segmentsOf(bar).map(s => SEGMENT_CHAR[s]).join('')} ${stagesCount(bar)}`
@@ -133,7 +138,7 @@ export function stagesSvg(bar: StageBar, width: number): string {
   const count = STAGES.length
   const each = Math.max((width - SEGMENT_GAP * (count - 1)) / count, 1)
   const rects = segmentsOf(bar).map((segment, i) => {
-    const kind = segment === 'current' ? (bar.isRed ? 'sn' : 'sc') : segment === 'done' ? 'sd' : 'se'
+    const kind = segment === 'current' && bar.isRed ? 'sn' : SEGMENT_CLASS[segment]
     return `<rect class="${kind}" x="${Math.round(i * (each + SEGMENT_GAP))}" y="0" width="${Math.round(each)}" height="${STAGES_SVG_HEIGHT}" rx="2"/>`
   })
   return svg(width, STAGES_SVG_HEIGHT, rects.join(''))
@@ -163,6 +168,14 @@ export function menuPressed(f: ForemanFolds, file: string, isOpen: boolean, busy
   const has = f.openMenus.includes(file)
   if (has === isOpen) return f
   return { ...f, openMenus: isOpen ? [...f.openMenus, file] : f.openMenus.filter(name => name !== file) }
+}
+
+// The folds after a press of the heading of the Log row or the Token details
+// row, which asks for that row to be `isOpen`. Like a menu press, it sets the
+// state rather than toggle it, and a press that changes nothing gives back the
+// very folds it was handed.
+export function rowPressed(f: ForemanFolds, row: 'isLogOpen' | 'isTokensOpen', isOpen: boolean): ForemanFolds {
+  return f[row] === isOpen ? f : { ...f, [row]: isOpen }
 }
 
 // The folds with every open menu dropped whose file no longer has a busy card,

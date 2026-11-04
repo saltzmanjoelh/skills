@@ -6,7 +6,7 @@ import { CALL_TIMEOUT_MS, decide, desktopOf, freedSlotIn, freeSlotsOfShown, GONE
 import { isSvgSurface } from './art'
 import { becameParentAnswer, COMMAND, commandOf, isCommandText, PASSED_ON, PASTED_LINE, pastedCommandIn, slotsAnswer, START_FOREMAN_FALLBACK, START_FOREMAN_OFF, startForemanText, type Command } from './commands'
 import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, everySession, failureLine, linkedFamily, listSessions, NUDGE_TEXT, openSession, readHeader, REASONS, sendMessage, WHOLE_LOCAL_ID, type DesktopCall, type Listed, type OpenResult, type SavedCopies, type SendResult } from './desktop'
-import { FOLDS_CLOSED, foldsIn, menuPressed, prunedMenus } from './glance'
+import { FOLDS_CLOSED, foldsIn, menuPressed, prunedMenus, rowPressed } from './glance'
 import { acceptedLog, beginFailedNotice, heldLine, heldLog, heldNotice, heldSentence, isHeldRefusal, isPersonPrompt, keyOfTitle, topUpLine } from './held'
 import { ignoredLine, readIssueLink } from './links'
 import { failedNoticeLog, loggedLines, type LoggedReport } from './log'
@@ -1894,10 +1894,10 @@ export const register: Register = (on, options) => {
       // one it was drawn in, so a press handled twice, or one from an older
       // drawing on another surface, cannot undo a newer press.
       log: (isOpen: boolean) => {
-        void setFolds($, f => (f.isLogOpen === isOpen ? f : { ...f, isLogOpen: isOpen })).catch(() => undefined)
+        void setFolds($, f => rowPressed(f, 'isLogOpen', isOpen)).catch(() => undefined)
       },
       tokens: (isOpen: boolean) => {
-        void setFolds($, f => (f.isTokensOpen === isOpen ? f : { ...f, isTokensOpen: isOpen })).catch(() => undefined)
+        void setFolds($, f => rowPressed(f, 'isTokensOpen', isOpen)).catch(() => undefined)
       },
       menu: (file: string, isOpen: boolean) => {
         void busyFilesNow($).then(busyFiles => setFolds($, f => menuPressed(f, file, isOpen, busyFiles))).catch(() => undefined)
