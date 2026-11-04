@@ -163,7 +163,7 @@ async function addLogs($: $, texts: readonly string[]): Promise<number> {
 // The log with `texts` added at `at`: a line the same as the newest one is
 // counted on that one rather than added, and only the newest LOG_KEPT lines
 // are kept.
-function withLines(lines: readonly ForemanLogLine[], texts: readonly string[], at: number): ForemanLogLine[] {
+export function withLines(lines: readonly ForemanLogLine[], texts: readonly string[], at: number): ForemanLogLine[] {
   let kept = [...lines]
   for (const text of texts) {
     const last = kept.at(-1)
@@ -179,7 +179,7 @@ function withLines(lines: readonly ForemanLogLine[], texts: readonly string[], a
 // each text and that time is taken out, or has its count lowered when the
 // same text came more than once in a row. A line already pushed out of the
 // kept lines is skipped.
-function withoutLines(lines: readonly ForemanLogLine[], texts: readonly string[], at: number): ForemanLogLine[] {
+export function withoutLines(lines: readonly ForemanLogLine[], texts: readonly string[], at: number): ForemanLogLine[] {
   const kept = [...lines]
   for (const text of [...texts].reverse()) {
     let i = kept.length - 1
@@ -190,6 +190,15 @@ function withoutLines(lines: readonly ForemanLogLine[], texts: readonly string[]
     else kept.splice(i, 1)
   }
   return kept
+}
+
+// The log after a notice whose notification failed: the report lines it
+// `logged`, when it logged any, taken out as withoutLines says, then `added`,
+// the reason line when it is the first for its reason and the marked line,
+// added at `now` as withLines says. notify writes it in one update.
+export function failedNoticeLog(lines: readonly ForemanLogLine[], logged: LoggedReport | undefined, added: readonly string[], now: number): ForemanLogLine[] {
+  const without = logged === undefined ? lines : withoutLines(lines, logged.texts, logged.at)
+  return withLines(without, added, now)
 }
 
 // Reads the Issue link fact from the session's working folder, keeps what it
@@ -511,7 +520,7 @@ type NotifyFailure = { key: string; words: string }
 
 // The lines a report wrote to the log before its notification was tried:
 // their texts and the time addLogs wrote them at.
-type LoggedReport = { texts: readonly string[]; at: number }
+export type LoggedReport = { texts: readonly string[]; at: number }
 
 // Raises one native notification and records how it went. The engine raises
 // one only by writing a terminal's own notification sequence, so it can never
@@ -568,11 +577,7 @@ async function notify($: $, text: string, { quiet = false, band, logged }: { qui
   const marked = quiet && logged === undefined ? [] : [`${text} (notification not raised: ${failure.words})`]
   if (reasonLine.length + marked.length === 0) return
   const now = await $.clock.now()
-  await update($, log, lines => {
-    const kept = Array.isArray(lines) ? lines : []
-    const without = logged === undefined ? kept : withoutLines(kept, logged.texts, logged.at)
-    return withLines(without, [...reasonLine, ...marked], now)
-  })
+  await update($, log, lines => failedNoticeLog(Array.isArray(lines) ? lines : [], logged, [...reasonLine, ...marked], now))
 }
 
 // The surfaces the session draws on, for the line that says why
