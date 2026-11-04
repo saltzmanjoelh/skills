@@ -390,6 +390,30 @@ test('a sub session whose file stopped saying working while its session is not r
   expect(w.engine.prompts).toHaveLength(1)
 })
 
+test('after a gap of more than five minutes between listings of the folder, the frozen wake waits two minutes from the first listing that works again', async ($, on) => {
+  // The listings fail from one minute to twenty, as they would if the
+  // machine slept, so the first one that works again comes long after the one
+  // before it. A file whose builder has not yet rewritten it then looks old,
+  // and foreman waits before judging it frozen.
+  const w = world(on)
+  w.folder.put('a.json', record('ABC-1', 'working', { desktopSessionId: 'local_a' }))
+  w.desktop.sessions = [{ sessionId: 'local_a', cwd: '/w', isArchived: false, isRunning: true }]
+  await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await minutesPass(w, 1)
+  w.folder.listFails = 'EIO: i/o error, scandir'
+  await minutesPass(w, 19)
+  w.folder.listFails = null
+  await minutesPass(w, 1)
+  expect(w.engine.prompts).toEqual([])
+  await minutesPass(w, 1)
+  expect(w.engine.prompts).toEqual([])
+  await minutesPass(w, 2)
+  expect(w.engine.prompts).toHaveLength(1)
+  expect(w.engine.prompts[0]).toMatch(/^foreman: ABC-1's status file has not changed for \d+ minutes and still shows the state working\.$/)
+})
+
 test('several reasons found in one read go in one line', async ($, on) => {
   const w = world(on)
   const cleaning = (key: string) => record(key, 'in-cleanup', { desktopSessionId: `local_${key}`, cleanup: { failedCalls: 3, lastError: '' } })

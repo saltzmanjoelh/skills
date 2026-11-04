@@ -1241,8 +1241,8 @@ test('a read just after the machine wakes from sleep brings no frozen wake for a
 })
 
 test('a watch goes on across reads that come at most five minutes apart, and starts again after a longer gap or with no earlier read', () => {
-  expect(watchingFrom(T0, T0 - 20 * MINUTE, T0 + GONE_MS)).toBe(T0 - 20 * MINUTE)
-  expect(watchingFrom(T0, T0 - 20 * MINUTE, T0 + GONE_MS + 1)).toBe(T0 + GONE_MS + 1)
+  expect(watchingFrom(T0, T0 - 20 * MINUTE, T0 + 5 * MINUTE)).toBe(T0 - 20 * MINUTE)
+  expect(watchingFrom(T0, T0 - 20 * MINUTE, T0 + 5 * MINUTE + 1)).toBe(T0 + 5 * MINUTE + 1)
   expect(watchingFrom(null, T0 - 20 * MINUTE, T0)).toBe(T0)
   expect(watchingFrom(T0 - MINUTE, null, T0)).toBe(T0)
 })
