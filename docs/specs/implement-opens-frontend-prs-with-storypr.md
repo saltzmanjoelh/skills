@@ -27,17 +27,20 @@ touches one of those paths while the pull request is open.
    whose value is a comma-separated list of path globs, such as
    `Frontend paths: web/src/**, app/screens/**`. Its default is none. A
    change is frontend when
-   `git diff --name-only origin/<base>...HEAD -- ':(glob)<glob>' …`, with one
-   pathspec per glob, prints at least one path. A file the change adds,
-   modifies, deletes or renames counts, because each of them changes what a
-   person can see. With the fact missing or empty, no change is frontend, and
+   `git diff --no-renames --name-only origin/<base>...HEAD -- ':(glob)<glob>' …`,
+   with one pathspec per glob, prints at least one path. A file the change
+   adds, modifies, deletes or renames counts, because each of them changes
+   what a person can see. Without `--no-renames`, git reports a rename only
+   under its new path, so a file moved out of a frontend path would not
+   count. With the fact missing or empty, no change is frontend, and
    step 7 runs exactly as it does today.
 2. **Opening a frontend pull request.** At step 7, after the checks it
    already runs on the diff, `/implement` runs `/storypr` in its section for
    a calling skill (point 3). On success, `/implement` checks the diff that
    is about to be pushed for credentials, including the new screenshot
    commit, pushes, opens the pull request with
-   `gh pr create --base <base> --body-file <the body file>`, and watches it,
+   `gh pr create --base <base> --title <title> --body-file <the body file>`,
+   and watches it,
    as step 7 does today. Right after the push, and before
    `gh pr create`, it puts the full sha of the screenshot commit into every
    image link of the body file, so each link has the form
