@@ -426,6 +426,10 @@ export type BuildStatus = {
   // as builder counted them up to the write. An older record has no such
   // field, and a reader takes a missing one as spending that is unknown.
   usage?: BuildUsage
+  // How long the session's issue has taken, as BuildTiming says, with the
+  // per-state totals as of the write. An older record has no such field, and
+  // a reader takes a missing one as times that are unknown.
+  timing?: BuildTiming
   // Present whenever at least one background task is in flight, whatever the
   // state: the oldest task by its start time. `description` is cleaned and cut
   // short like those in `backgroundOnly`, or the withheld text in place of one
@@ -477,6 +481,73 @@ export type ModelTokens = TokenCounts & { model: string }
 // name, and the dollar total, or null while the engine has given no dollar
 // reading. The foreman type-checks its reader against this type.
 export type BuildUsage = { models: ModelTokens[]; usd: number | null }
+
+// How a review round ended: reviewed when post_review posted the review at
+// its head, superseded when the package tool packaged a different head first,
+// and carried over for a review posted at a head that was never packaged.
+export type BuildRoundEnd = 'reviewed' | 'superseded' | 'carried-over'
+
+// One review round: the head the package tool packaged, the stamp of the
+// first package call for it, and the stamp and manner of its end, both null
+// while it is open.
+export type BuildRound = {
+  head: string
+  startedAt: number
+  endedAt: number | null
+  ended: BuildRoundEnd | null
+}
+
+// The first time a stage of /implement was reached under the current title.
+export type BuildStageStamp = { stage: StageId; at: number }
+
+// The times of the session's issue, as the status file carries them, every
+// one a stamp of the engine's clock in milliseconds since the epoch:
+// `startedAt` when builder first loaded in the session, `stages` in the order
+// first reached, the pull request's opening and merge as first seen by a
+// watch, `states` the milliseconds spent in each status state from the start
+// up to the write or the merge, and the newest 20 rounds with `olderRounds`
+// counting those dropped. The foreman type-checks its reader against this
+// type.
+export type BuildTiming = {
+  startedAt: number
+  stages: BuildStageStamp[]
+  prOpenedAt: number | null
+  prMergedAt: number | null
+  states: Record<BuildState, number>
+  rounds: BuildRound[]
+  olderRounds: number
+}
+
+// The one record builder keeps of how long the session's issue takes, in its
+// state and in the store under `timing:<session id>`. `sessionId` is the
+// session it was kept for, and a reader treats a record stamped with another
+// session id as absent, as for the spending. `startedAt`, `stages`,
+// `prOpenedAt`, `prMergedAt`, `rounds` and `olderRounds` are as BuildTiming
+// says. `title` is the progress title the stages were reached under, or null
+// before the first stage. `pr` is the pull request the two stamps belong to,
+// or null before a watch saw one. `state` is the status state that is open,
+// or null before the first status write worked one out, and `stateSince` is
+// when it began counting; a merge stops it counting, and a different pull
+// request watched after a merge starts it again from that moment. `states`
+// holds the totals of the stretches already closed, so the open stretch is
+// added only when the totals are read. `at` is when anything last changed,
+// from which a stored record is pruned after 14 days. Read through timingIn
+// in hooks/timing.ts.
+export type TimingLedger = {
+  sessionId: string
+  startedAt: number
+  title: string | null
+  stages: BuildStageStamp[]
+  pr: { repo: string; number: number } | null
+  prOpenedAt: number | null
+  prMergedAt: number | null
+  state: BuildState | null
+  stateSince: number
+  states: Record<BuildState, number>
+  rounds: BuildRound[]
+  olderRounds: number
+  at: number
+}
 
 // One turn whose steps the session counted: the turn's id and the highest
 // step index added for it.
@@ -725,6 +796,12 @@ declare module 'claude-code' {
       // `usd`; the other fields are builder's own bookkeeping. Read through
       // usageIn in hooks/usage.ts.
       usage: UsageLedger | null
+      // How long the session's issue has taken, kept in every session,
+      // ticketed or not, or null before the session's start seeded it. Only
+      // a ticketed session works out a status state, so only its record
+      // holds a split of the time by state. Read through timingIn in
+      // hooks/timing.ts.
+      timing: TimingLedger | null
       // The batches of background agents the session's own loop launched and
       // the marker of turns builder answers without the model, or null before
       // the first launch. It survives a hot reload; a restart starts without

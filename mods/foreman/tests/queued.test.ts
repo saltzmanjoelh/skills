@@ -2,6 +2,8 @@ import { expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 import { listFailedNotice, NO_ANSWER } from '../hooks/act'
+import { AUTOMATED_REFUSAL } from '../hooks/held'
+import { ticketTimes } from '../hooks/spend'
 import { BEGIN_TEXT, REASONS } from '../hooks/desktop'
 import { newPairing, ticketsIn, ticketsKey, WAIT_LINE, WAITING_SENTENCE } from '../hooks/tickets'
 import type { ForemanTickets } from '../types'
@@ -174,6 +176,85 @@ test('a waiting sub session is not shown, not nudged and raises no wake, and a m
   await minutesPass(w, 6, { 'b.json': live['b.json'], 'c.json': live['c.json'] })
   expect(w.desktop.sent.filter(([to]) => to === 'local_new2').map(([, text]) => text)).toEqual([BEGIN_TEXT, 'what\'s next?'])
   expect(begins(w)).toEqual(['local_new2'])
+})
+
+test('a ticket that waited gets the time from its reservation to its begin message, one begun without waiting gets zero, and one still waiting has none', async ($, on) => {
+  const { w, live } = await queueOfTwo($, on)
+  const [first, second, third] = [ticketOf(w, 0), ticketOf(w, 1), ticketOf(w, 2)]
+  // ABC-1 began without waiting, so its queue time is zero, not unknown.
+  expect(ticketTimes(ledger(w), first).queued).toBe(0)
+  expect(ledger(w).spent.map(e => e.ticket)).toEqual([first])
+  const reservedAt = ledger(w).pairings.find(p => p.ticket === second)!.pairedAt
+  const merged = busyFile('ABC-1', first, 'local_new1', { state: 'done', pr: { number: 7, url: 'https://example.com/pull/7', state: 'MERGED', verdicts: null } })
+  await minutesPass(w, 20, live)
+  expect(begins(w)).toEqual([])
+  w.desktop.sessions[0] = listed('local_new1', 'ABC-1', { isArchived: true, isRunning: false })
+  await minutesPass(w, 2, { ...live, 'a.json': merged })
+  expect(begins(w)).toEqual(['local_new2'])
+  const begunAt = ledger(w).pairings.find(p => p.ticket === second)!.pairedAt
+  expect(begunAt - reservedAt).toBeGreaterThan(20 * MINUTE)
+  expect(ticketTimes(ledger(w), second).queued).toBe(begunAt - reservedAt)
+  // ABC-3 still waits, so its queue time is unknown and it has no entry.
+  expect(ticketTimes(ledger(w), third).queued).toBeNull()
+  expect(ledger(w).spent.map(e => e.ticket)).toEqual([first, second])
+})
+
+for (const [name, damaged] of [['zero', 0], ['later than the clock', T0 + 365 * 24 * 60 * MINUTE]] as const) {
+  test(`a waiting ticket whose reservation time is ${name} gets an unknown queue time at its begin message, never a wrong one`, async ($, on) => {
+    // Every write of the ledger gives ABC-2's pairing the damaged reservation
+    // time, so the begin message finds it there.
+    on('state.set', ($, e, next) => {
+      if (e.plugin !== 'foreman' || e.key !== 'tickets') return next(e)
+      const t = e.value as ForemanTickets
+      return next({ ...e, value: { ...t, pairings: t.pairings.map(p => (p.issueKey === 'ABC-2' ? { ...p, pairedAt: damaged } : p)) } } as never)
+    })
+    const { w, live } = await queueOfTwo($, on)
+    const [first, second] = [ticketOf(w, 0), ticketOf(w, 1)]
+    const merged = busyFile('ABC-1', first, 'local_new1', { state: 'done', pr: { number: 7, url: 'https://example.com/pull/7', state: 'MERGED', verdicts: null } })
+    w.desktop.sessions[0] = listed('local_new1', 'ABC-1', { isArchived: true, isRunning: false })
+    await minutesPass(w, 2, { ...live, 'a.json': merged })
+    expect(begins(w)).toEqual(['local_new2'])
+    expect(ticketTimes(ledger(w), second).queued).toBeNull()
+    // The stored ledger holds no queue time for it either.
+    const stored = w.stored.get(ticketsKey('session-1')) as ForemanTickets
+    expect(stored.spent.find(e => e.ticket === second)?.queuedMs ?? null).toBeNull()
+  })
+}
+
+test('a start that is refused, held, answers an error or throws leaves no ledger entry', async ($, on) => {
+  const { w } = await parent($, on, 1)
+  w.engine.startAnswers = [AUTOMATED_REFUSAL]
+  await startSession($, keyed('ABC-1'))
+  w.engine.startFails = true
+  await startSession($, keyed('ABC-2'))
+  w.engine.startFails = false
+  w.engine.startThrows = true
+  await startSession($, keyed('ABC-3')).catch(() => undefined)
+  await w.clock.settle()
+  expect(ledger(w).held).toEqual(['ABC-1'])
+  expect(ledger(w).pairings).toEqual([])
+  expect(ledger(w).spent).toEqual([])
+})
+
+test('a start that does not wait and whose reservation the ledger lost is paired again with a queue time of zero', async ($, on) => {
+  let losing = false
+  on('state.set', ($, e, next) => {
+    if (!losing || e.plugin !== 'foreman' || e.key !== 'tickets') return next(e)
+    const t = e.value as ForemanTickets
+    return next({ ...e, value: { ...t, pairings: t.pairings.filter(p => p.issueKey !== 'ABC-1') } } as never)
+  })
+  const { w } = await parent($, on, 1)
+  w.engine.startAnswers = [answer(1)]
+  losing = true
+  w.engine.onStart = async () => {
+    losing = false
+    await w.clock.settle()
+    expect(ledger(w).pairings).toEqual([])
+  }
+  await startSession($, keyed('ABC-1'))
+  await w.clock.settle()
+  expect(ledger(w).pairings.map(p => [p.issueKey, p.queue])).toEqual([['ABC-1', null]])
+  expect(ticketTimes(ledger(w), ticketOf(w, 0)).queued).toBe(0)
 })
 
 test('a slot freed while the desktop app\'s list fails is kept for the queue, and the first read that lists begins the waiting session in it', async ($, on) => {

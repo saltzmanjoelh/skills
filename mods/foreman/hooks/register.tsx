@@ -14,7 +14,7 @@ import { bandTree, PANE, paneTree, shownReport, type Elements, type View } from 
 import type { ForemanCheck, ForemanEffect, ForemanParent, ForemanTickets } from '../types'
 import { PARENT_OFF, parentIn, slotsOf, storeKey } from './parent'
 import { usageIn } from './record'
-import { spendOf, spentSum } from './spend'
+import { spendOf, spentSum, ticketTimes, timeSum, withQueued } from './spend'
 import { afterRead, nameOf, nextReadDelay, READ_LATER_MS, rowsOf, type FileRead, type SubRow } from './subs'
 import { printable } from './text'
 import {
@@ -450,7 +450,12 @@ async function notify($: $, text: string, { quiet = false } = {}) {
 // Sends one waiting sub session its begin message and records how it went,
 // in one ledger update. A begin that went takes the pairing out of the queue
 // and sets its pairing time to now, so it counts as busy and is watched like
-// any other from here, and answers the began sentence as a report. A begin
+// any other from here, and answers the began sentence as a report. Until
+// then the pairing time is still when the start reserved the ticket, so the
+// same update stores the difference as the ticket's queue time, before the
+// pairing time is overwritten. A pairing time that is not a real moment
+// before now, as a damaged one read as 0 or one from a clock that went back
+// is not, leaves the queue time unknown rather than wrong. A begin
 // that did not go keeps the claim, records the time of this try, and raises
 // the notification only when this update is the one that first marked the
 // failure as told, so two tries at once raise one. It answers null then, and
@@ -463,8 +468,12 @@ async function beginOne($: $, effect: Extract<ForemanEffect, { kind: 'begin' }>)
   if (result === 'sent') {
     let began = false
     await writeTickets($, t => {
-      began = t.pairings.some(waits)
-      return began ? { ...t, pairings: t.pairings.map(p => (waits(p) ? { ...p, queue: null, pairedAt: now } : p)) } : t
+      const waiting = t.pairings.find(waits)
+      began = waiting !== undefined
+      if (waiting === undefined) return t
+      const begun = { ...t, pairings: t.pairings.map(p => (waits(p) ? { ...p, queue: null, pairedAt: now } : p)) }
+      const pairedAt = waiting.pairedAt
+      return pairedAt > 0 && pairedAt <= now ? withQueued(begun, waiting.ticket, now - pairedAt) : begun
     })
     await addLog($, `Began ${who} with foreman's begin message.`)
     return began ? REASON_WORDS.began({ kind: 'began', who, by: effect.by }) : null
@@ -717,30 +726,34 @@ async function ownSpend($: $) {
 }
 
 // The View the band and the pane draw from. The ledger is read and parsed
-// once per draw, for both the rows and the sum. The spending figures are
-// worked out only when `withSpending` is set, which only the pane sets,
-// because the band never shows them and is drawn every second and again
-// after each change to builder's usage value, which reading that value while
-// drawing subscribes the drawing to. They are also worked out only in a
-// parent, because only the parent's pane shows them. The count of status
-// messages is given only in a parent too, and reads no state.
-async function view($: $, withSpending: boolean): Promise<View> {
+// once per draw, for the rows, the sums and each row's times. `isPane` is set
+// when the View is for the pane, and is unset for the band. The spending
+// figures and the times are worked out only for the pane, because the band
+// never shows them and is drawn every second and again after each change to
+// builder's usage value, which reading that value while drawing subscribes
+// the drawing to. They are also worked out only in a parent, because only the
+// parent's pane shows them. The count of status messages is given only in a
+// parent too, and reads no state.
+async function view($: $, isPane: boolean): Promise<View> {
   const settings = parentIn(await read($, parent))
   const due = await read($, nextReadAt)
   const lines = await read($, log)
   const ledger = settings.isOn ? ticketsIn(await read($, tickets)) : null
-  const isSpendingShown = withSpending && ledger !== null
+  const isPaneInParent = isPane && ledger !== null
+  const rows = ledger === null ? [] : shownRows(await rowsNow($), ledger)
   const now = await $.clock.now()
   return {
     isOn: settings.isOn,
     slots: slotsOf(settings, currentOptions.slots),
-    rows: ledger === null ? [] : shownRows(await rowsNow($), ledger),
+    rows,
     now,
     nextReadAt: typeof due === 'number' && Number.isFinite(due) ? due : null,
     log: Array.isArray(lines) ? lines : [],
     issueLink: settings.isOn ? issueAddress : null,
-    subsSpent: isSpendingShown ? spentSum(ledger) : null,
-    ownSpent: isSpendingShown ? await ownSpend($) : null,
+    subsSpent: isPaneInParent ? spentSum(ledger) : null,
+    rowTimes: isPaneInParent ? new Map(rows.map(row => [row.file, ticketTimes(ledger, row.record.ticket)])) : new Map(),
+    subsTime: isPaneInParent ? timeSum(ledger) : null,
+    ownSpent: isPaneInParent ? await ownSpend($) : null,
     report: settings.isOn ? shownReport(await read($, report), now) : null,
     markers: settings.isOn ? markers : null,
   }
@@ -1001,10 +1014,17 @@ async function afterStart($: $, key: string | null, title: unknown, ticket: stri
 
 // The ledger with the reservation of `ticket` given the desktop session id
 // the start's answer named, or with the pairing added again, at the back of
-// the queue when it waits, when the reservation is gone.
+// the queue when it waits, when the reservation is gone. A start that does
+// not wait gets a queue time of zero, known rather than unknown. It is
+// written here, once the start is accepted, and not when startSession
+// reserves the ticket, because a start that is refused, held or fails takes
+// its reservation back out and would leave an entry behind for a sub session
+// that never ran.
 function withAnswer(t: ForemanTickets, ticket: string, localId: string | null, at: number, key: string | null, waits: boolean): ForemanTickets {
-  if (t.pairings.some(p => p.ticket === ticket)) return { ...t, pairings: t.pairings.map(p => (p.ticket === ticket ? { ...p, localId } : p)) }
-  return { ...t, pairings: [...t.pairings, newPairing(ticket, localId, at, key, waits ? { place: nextPlace(t), claim: null } : null)] }
+  const paired = t.pairings.some(p => p.ticket === ticket)
+    ? { ...t, pairings: t.pairings.map(p => (p.ticket === ticket ? { ...p, localId } : p)) }
+    : { ...t, pairings: [...t.pairings, newPairing(ticket, localId, at, key, waits ? { place: nextPlace(t), claim: null } : null)] }
+  return waits ? paired : withQueued(paired, ticket, 0)
 }
 
 // Whether a prompt is only its text: a slash command, attachments or context

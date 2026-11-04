@@ -57,7 +57,8 @@ async function expectLinkedRow(ui: Awaited<ReturnType<typeof mountBoth>>, file: 
 // changes from run to run, and so is each drawing's source, as `compared`
 // says. The band is the same on both surfaces. The lines that say what each
 // sub session, the sub sessions together and this session spent came later,
-// with the counting of what sessions spend, and were added here then. The
+// with the counting of what sessions spend, and were added here then, as were
+// the lines with each sub session's times and their sums later still. The
 // head became a button that opens foreman's pane later still, and the line
 // that counts builder's status messages came after that.
 const BAND_BEFORE = {
@@ -80,15 +81,19 @@ const PANE_BEFORE = {
       { type: 'Text', children: ['Title of ABC-1 · plan tournament · ███░░░░░░░ 3 of 9 · 33%'] },
       { type: 'Text', children: ['working'] },
       { type: 'Text', props: { dimColor: true }, children: ['Spent: unknown'] },
+      { type: 'Text', props: { dimColor: true }, children: ['Time: unknown'] },
       { type: 'Box', props: { key: 'actions-a.json', flexDirection: 'row' }, children: [{ type: 'Button', props: { key: 'nudge-a.json', label: 'Nudge' } }, { type: 'Text', children: [' '] }, { type: 'Button', props: { key: 'release-a.json', label: 'Release' } }] },
       { type: 'Text', children: [' '] },
       { type: 'Button', props: { key: 'open-b.json', label: '→ ABC-2 · no pull request yet', variant: 'primary' } },
       { type: 'Text', children: ['Title of ABC-2 · spec · ██░░░░░░░░ 2 of 9 · 22%'] },
       { type: 'Text', props: { color: 'error' }, children: ['needs you'] },
       { type: 'Text', props: { dimColor: true }, children: ['Spent: unknown'] },
+      { type: 'Text', props: { dimColor: true }, children: ['Time: unknown'] },
       { type: 'Box', props: { key: 'actions-b.json', flexDirection: 'row' }, children: [{ type: 'Button', props: { key: 'nudge-b.json', label: 'Nudge' } }, { type: 'Text', children: [' '] }, { type: 'Button', props: { key: 'release-b.json', label: 'Release' } }] },
       { type: 'Text', children: [' '] },
       { type: 'Text', children: ['Sub sessions spent: unknown'] },
+      { type: 'Text', children: ['Sub sessions\' time, summed: unknown'] },
+      { type: 'Text', props: { dimColor: true }, children: ['Summed over sub sessions that run side by side, so a sum can be longer than the run.'] },
       { type: 'Text', children: ['This session spent: unknown'] },
       { type: 'Text', children: ['Status messages consumed since 12:00:00 UTC: none yet'] },
       { type: 'Text', children: [' '] },
@@ -104,15 +109,19 @@ const PANE_BEFORE = {
       { type: 'Svg', props: { alt: 'Title of ABC-1 · plan tournament · ███░░░░░░░ 3 of 9 · 33%', width: 1600, height: 34 } },
       { type: 'Text', children: ['working'] },
       { type: 'Text', props: { dimColor: true }, children: ['Spent: unknown'] },
+      { type: 'Text', props: { dimColor: true }, children: ['Time: unknown'] },
       { type: 'Box', props: { key: 'actions-a.json', flexDirection: 'row' }, children: [{ type: 'Button', props: { key: 'nudge-a.json', label: 'Nudge' } }, { type: 'Text', children: [' '] }, { type: 'Button', props: { key: 'release-a.json', label: 'Release' } }] },
       { type: 'Text', children: [' '] },
       { type: 'Button', props: { key: 'open-b.json', label: '→ ABC-2 · no pull request yet', variant: 'primary' } },
       { type: 'Svg', props: { alt: 'Title of ABC-2 · spec · ██░░░░░░░░ 2 of 9 · 22%', width: 1600, height: 34 } },
       { type: 'Text', props: { color: 'error' }, children: ['needs you'] },
       { type: 'Text', props: { dimColor: true }, children: ['Spent: unknown'] },
+      { type: 'Text', props: { dimColor: true }, children: ['Time: unknown'] },
       { type: 'Box', props: { key: 'actions-b.json', flexDirection: 'row' }, children: [{ type: 'Button', props: { key: 'nudge-b.json', label: 'Nudge' } }, { type: 'Text', children: [' '] }, { type: 'Button', props: { key: 'release-b.json', label: 'Release' } }] },
       { type: 'Text', children: [' '] },
       { type: 'Text', children: ['Sub sessions spent: unknown'] },
+      { type: 'Text', children: ['Sub sessions\' time, summed: unknown'] },
+      { type: 'Text', props: { dimColor: true }, children: ['Summed over sub sessions that run side by side, so a sum can be longer than the run.'] },
       { type: 'Text', children: ['This session spent: unknown'] },
       { type: 'Text', children: ['Status messages consumed since 12:00:00 UTC: none yet'] },
       { type: 'Text', children: [' '] },

@@ -688,6 +688,10 @@ function queueStep(
     const row = ownerRow(p)
     const who = whoOf(p.issueKey, p.ticket)
     if (row !== undefined && showsProgress(row)) {
+      // Its queue time is left unknown on purpose. Foreman never sent the
+      // begin message, so it has no stamp of its own for the end of the
+      // wait, and neither builder's start, which comes as soon as the
+      // waiting session loads, nor the time of this read measures it.
       logs.push(`${who} began before foreman's begin message, so foreman counts it as busy.`)
       return [{ ...p, queue: null }]
     }

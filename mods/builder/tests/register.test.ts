@@ -949,6 +949,8 @@ test('records of pull requests no session has looked at for two weeks are pruned
     'seen:live-session:o/r#2',
     'seen:older-build:o/r#3',
     'seen:writing:o/r#4',
+    // The session's own record of its times, stored at its start.
+    'timing:session-1',
   ])
   expect(stored.get('seen:older-build:o/r#3')).toBe(now)
 })
@@ -3904,7 +3906,8 @@ test('each decision owed to a pull request is pruned ninety days after it was ma
   await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
   await clock.settle()
 
-  expect([...stored.keys()].sort()).toEqual(['counsel-owed:o/r#2:live-session:c1', 'counsel-owed:o/r#5:quiet-session:c5'])
+  // The session's own record of its times is stored at its start too.
+  expect([...stored.keys()].sort()).toEqual(['counsel-owed:o/r#2:live-session:c1', 'counsel-owed:o/r#5:quiet-session:c5', 'timing:session-1'])
 })
 
 // Every member votes.
@@ -11321,7 +11324,7 @@ async function watchUntilMerged($: Engine, s: ReturnType<typeof foremanSession>)
   await s.clock.advance(10 * MINUTE)
 }
 
-test('a session whose first prompt holds a ticket writes its record under the configuration folder, idle, with its ticket, ids and folder, and nothing spent yet', async ($, on) => {
+test('a session whose first prompt holds a ticket writes its record under the configuration folder, idle, with its ticket, ids and folder, nothing spent yet and no time counted yet', async ($, on) => {
   const s = foremanSession(on)
   await firstPrompt($, s.clock)
 
@@ -11329,6 +11332,10 @@ test('a session whose first prompt holds a ticket writes its record under the co
     version: 1, sessionId: 'session-1', ticket: 'slot-1', desktopSessionId: 'desk-1', cwd: '/repo', issueKey: null, issueTitle: '',
     stage: null, stageDone: 0, pr: null, state: 'idle', reason: 'Nothing runs and nothing is waiting.', stateSince: S0, writtenAt: S0,
     usage: { models: [], usd: null },
+    timing: {
+      startedAt: S0, stages: [], prOpenedAt: null, prMergedAt: null,
+      states: { working: 0, 'waiting-on-builder': 0, idle: 0, 'needs-you': 0, 'in-cleanup': 0, done: 0 }, rounds: [], olderRounds: 0,
+    },
   })
 })
 
@@ -12569,7 +12576,7 @@ test('the count never reaches the status file or the memo, and causes no status 
   expect(s.writesOf()).toBe(2)
   expect(sends.log.map(send => send.writes)).toEqual([1, 2])
   expect(Object.keys(s.statusAt() ?? {}).sort()).toEqual([
-    'cwd', 'desktopSessionId', 'issueKey', 'issueTitle', 'pr', 'reason', 'sessionId', 'stage', 'stageDone', 'state', 'stateSince', 'ticket', 'usage', 'version', 'writtenAt',
+    'cwd', 'desktopSessionId', 'issueKey', 'issueTitle', 'pr', 'reason', 'sessionId', 'stage', 'stageDone', 'state', 'stateSince', 'ticket', 'timing', 'usage', 'version', 'writtenAt',
   ])
   expect(memos.length).toBeGreaterThan(0)
   for (const memo of memos) expect(memo).not.toMatch(/delivered|failed|sends/)
@@ -15176,6 +15183,253 @@ test('with no progress record, or one newer than the watch, the mod reports no s
   await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
   await loose($)({ tool: 'Bash', command: 'gh pr merge 7 --merge' })
   expect(shownStage(state)).toMatchObject({ stage: 'verify' })
+})
+
+// The times the store holds for session-1, as builder records them (see
+// hooks/timing.ts), or undefined while none is stored.
+type StoredTiming = {
+  startedAt: number
+  stages: { stage: string; at: number }[]
+  prOpenedAt: number | null
+  prMergedAt: number | null
+  state: string | null
+  stateSince: number
+  states: Record<string, number>
+  rounds: { head: string; startedAt: number; endedAt: number | null; ended: string | null }[]
+}
+const timingOf = (stored: Map<string, unknown>, sessionId = 'session-1') => stored.get(`timing:${sessionId}`) as StoredTiming | undefined
+const timingAt = (sessionId: string, at: number, over: object = {}) => ({
+  sessionId, startedAt: at, title: null, stages: [], pr: null, prOpenedAt: null, prMergedAt: null, state: null, stateSince: at,
+  states: { working: 0, 'waiting-on-builder': 0, idle: 0, 'needs-you': 0, 'in-cleanup': 0, done: 0 }, rounds: [], olderRounds: 0, at, ...over,
+})
+
+test('the session\'s start is stamped and stored at once, and a stage reported twice keeps its first stamp', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const stored = memoryStore(on)
+  engine(on)
+  fakeGitHub(on)
+  fakePanes(on)
+  await startOnly($)
+  await clock.settle()
+  expect(timingOf(stored)?.startedAt).toBe(T0)
+
+  await clock.advance(MINUTE)
+  await report($, 'spec')
+  await clock.advance(MINUTE)
+  await report($, 'spec')
+  await report($, 'plan')
+  await clock.settle()
+  expect(timingOf(stored)?.stages).toEqual([{ stage: 'spec', at: T0 + MINUTE }, { stage: 'plan', at: T0 + 2 * MINUTE }])
+})
+
+test('a stage the mod reports itself is stamped, and the watch that first sees the pull request open stamps the opening', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const stored = memoryStore(on)
+  engine(on)
+  fakeGitHub(on)
+  fakePanes(on)
+  fakeFiles(on)
+  await startOnly($)
+  await report($, 'verify')
+  await clock.advance(MINUTE)
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await clock.settle()
+  const t = timingOf(stored)
+  expect(t?.stages).toEqual([{ stage: 'verify', at: T0 }, { stage: 'pr', at: T0 + MINUTE }])
+  expect(t?.prOpenedAt).toBe(T0 + MINUTE)
+  expect(t?.prMergedAt).toBe(null)
+
+  // A later watch keeps the first stamp.
+  await clock.advance(MINUTE)
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await clock.settle()
+  expect(timingOf(stored)?.prOpenedAt).toBe(T0 + MINUTE)
+})
+
+test('the first poll that sees the pull request merged stamps the merge, and later polls keep that stamp', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const stored = memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  fakePanes(on)
+  await watch($)
+  await clock.settle()
+  expect(timingOf(stored)?.prOpenedAt).toBe(T0)
+  world.pr = openPullRequest({ state: 'MERGED' })
+  await clock.advance(10 * MINUTE)
+  const mergedAt = timingOf(stored)?.prMergedAt ?? null
+  expect(mergedAt).not.toBe(null)
+  expect(mergedAt! > T0 && mergedAt! <= T0 + 10 * MINUTE).toBe(true)
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await clock.advance(10 * MINUTE)
+  expect(timingOf(stored)?.prMergedAt).toBe(mergedAt)
+  expect(timingOf(stored)?.prOpenedAt).toBe(T0)
+})
+
+test('a poll of the old pull request that finishes after a watch of another one leaves the timing record on the new one and its opening stamp', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const stored = memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  fakePanes(on)
+  // Once armed, the next save of #7's snapshot waits until it is released,
+  // which holds a look after its last check that #7 is still watched.
+  let isArmed = false
+  let release = () => {}
+  const held = new Promise<void>(resolve => { release = resolve })
+  let reached = () => {}
+  const isReached = new Promise<void>(resolve => { reached = resolve })
+  on('state.set', async ($, e, next) => {
+    if (isArmed && e.plugin === 'builder' && e.key === 'pr' && (e.value as { number?: number } | null)?.number === 7) {
+      isArmed = false
+      reached()
+      await held
+    }
+    return next(e)
+  })
+  await watch($)
+  await clock.settle()
+  expect(timingOf(stored)?.prOpenedAt).toBe(T0)
+
+  // The poll of #7 reads it and is held at the save of its snapshot.
+  isArmed = true
+  const poll = clock.advance(10 * MINUTE)
+  await isReached
+  // The session watches #8 meanwhile, which stamps #8's opening.
+  await clock.advance(MINUTE)
+  const switchedAt = T0 + 11 * MINUTE
+  world.pr = openPullRequest({ number: 8 })
+  world.otherNumber = 8
+  await loose($)({ tool: 'mcp__builder__watch', number: 8 })
+  expect(timingOf(stored)).toMatchObject({ pr: { repo: 'o/r', number: 8 }, prOpenedAt: switchedAt })
+
+  // The poll of #7 then finishes, and must not put #7 back.
+  release()
+  await poll
+  await clock.settle()
+  expect(timingOf(stored)).toMatchObject({ pr: { repo: 'o/r', number: 8 }, prOpenedAt: switchedAt, prMergedAt: null })
+})
+
+test('a review round runs from the package call to the post_review call at its head, and a second package call for the head starts nothing', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const stored = memoryStore(on)
+  engine(on)
+  fakeGitHub(on)
+  fakePanes(on)
+  fakeFiles(on)
+  await watch($)
+  await clock.advance(MINUTE)
+  await packageAnswer($)
+  await clock.advance(MINUTE)
+  await packageAnswer($)
+  await clock.settle()
+  expect(timingOf(stored)?.rounds).toEqual([{ head: C, startedAt: T0 + MINUTE, endedAt: null, ended: null }])
+
+  await clock.advance(10 * MINUTE)
+  await loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
+  await clock.settle()
+  expect(timingOf(stored)?.rounds).toEqual([{ head: C, startedAt: T0 + MINUTE, endedAt: T0 + 12 * MINUTE, ended: 'reviewed' }])
+})
+
+test('a damaged record stored under the session\'s key reads as none, and the timing starts again from the session\'s start', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const stored = memoryStore(on, [['timing:session-1', { ...timingAt('session-1', T0 - HOUR), stages: 'garbage' }]])
+  engine(on)
+  fakeGitHub(on)
+  await startOnly($)
+  await clock.settle()
+  expect(timingOf(stored)?.startedAt).toBe(T0)
+  expect(timingOf(stored)?.stages).toEqual([])
+})
+
+test('a stored record carries on after a restart, and one untouched for more than 14 days is pruned at the session\'s start', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const stored = memoryStore(on, [
+    ['timing:session-1', timingAt('session-1', T0 - HOUR)],
+    ['timing:old-session', timingAt('old-session', T0 - 15 * DAY)],
+    ['timing:fresh-session', timingAt('fresh-session', T0 - 13 * DAY)],
+  ])
+  engine(on)
+  fakeGitHub(on)
+  await startOnly($)
+  await clock.settle()
+  expect(timingOf(stored)?.startedAt).toBe(T0 - HOUR)
+  expect([...stored.keys()].filter(key => key.startsWith('timing:')).sort()).toEqual(['timing:fresh-session', 'timing:session-1'])
+})
+
+test('in a ticketed session a state change adds the stretch to the outgoing state and moves its start in one stored record, and the file\'s totals count the open state up to the write', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  expect(timingOf(s.stored)).toMatchObject({ state: 'idle', stateSince: S0 })
+  expect(s.statusAt()?.timing?.states.idle).toBe(0)
+
+  await s.clock.advance(5 * MINUTE)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  expect(s.statusAt()?.state).toBe('working')
+  const t = timingOf(s.stored)
+  expect(t).toMatchObject({ state: 'working', stateSince: S0 + 5 * MINUTE })
+  expect(t?.states.idle).toBe(5 * MINUTE)
+
+  await s.clock.advance(3 * MINUTE)
+  const record = s.statusAt()
+  expect(record?.timing?.states.idle).toBe(5 * MINUTE)
+  expect(record?.timing?.states.working).toBe(record!.writtenAt - (S0 + 5 * MINUTE))
+  expect(record?.version).toBe(1)
+})
+
+test('after a restart in the middle of a state, the stretch since that state began is counted once, in that state', async ($, on) => {
+  const s = foremanSession(on, { stored: [['timing:session-1', timingAt('session-1', S0 - 20 * MINUTE, { state: 'idle', stateSince: S0 - 10 * MINUTE })]] })
+  await firstPrompt($, s.clock)
+  await s.clock.advance(5 * MINUTE)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.settle()
+  const t = timingOf(s.stored)
+  expect(t?.states.idle).toBe(15 * MINUTE)
+  expect(t).toMatchObject({ state: 'working', stateSince: S0 + 5 * MINUTE, startedAt: S0 - 20 * MINUTE })
+})
+
+test('a timing change that the state refuses does not drop the status write', async ($, on) => {
+  const refusal = refusedWrites(on, 'timing', value => (value as { state?: unknown } | null)?.state !== null)
+  refusal.writes = 100
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  expect(refusal.refusals > 0).toBe(true)
+  expect(s.statusAt()?.state).toBe('idle')
+  expect(s.statusAt()?.timing?.startedAt).toBe(S0)
+})
+
+test('the pane shows the session\'s times with a pull request watched and without one, and the band\'s draw never reads them', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  memoryStore(on)
+  engine(on)
+  fakeGitHub(on)
+  const reads = new Map<string, number>()
+  on('state.get', ($, e, next) => {
+    if (e.plugin === 'builder') reads.set(e.key, (reads.get(e.key) ?? 0) + 1)
+    return next(e)
+  })
+  const { band } = await liveBand($, on)
+  await startOnly($)
+  await clock.settle()
+  const pane = await $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'Pane', requestId: 'builder', props: {} as never })
+  const timeLine = async () => {
+    await pane.redraw()
+    return (await pane.find({ type: 'Text', text: /^Time: / }))?.text ?? ''
+  }
+  await clock.advance(2 * MINUTE)
+  expect(await timeLine()).toBe('Time: 2m 0s so far · the split by state is kept only for a foreman ticket')
+
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await clock.settle()
+  expect(await timeLine()).toMatch(/^Time: 2m \d+s so far/)
+  await pane.redraw()
+  expect((await pane.find({ type: 'Text', text: /^  Pull request: opened at / }))?.text).toContain('not merged yet')
+
+  reads.clear()
+  await band.redraw()
+  expect(reads.get('pr') ?? 0).toBeGreaterThan(0)
+  expect(reads.get('timing') ?? 0).toBe(0)
 })
 
 // The update of the linked checkout after a merge, through the real look: the

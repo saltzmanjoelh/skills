@@ -589,6 +589,52 @@ test('with no reading yet, the sum and this session\'s spending say unknown', as
   expect(await linesOf(ui, 'This session spent: ')).toEqual(['This session spent: unknown'])
 })
 
+// How long a sub session's issue has taken, as builder writes it in its
+// status file, and the words for it.
+const TIMING = {
+  startedAt: T0, stages: [{ stage: 'spec', at: T0 }], prOpenedAt: null, prMergedAt: null,
+  states: { 'working': 10 * MINUTE, 'waiting-on-builder': MINUTE, 'idle': 2 * MINUTE, 'needs-you': 65 * MINUTE, 'in-cleanup': 0, 'done': 0 },
+  rounds: [], olderRounds: 0,
+}
+
+test('each row shows its sub session\'s times under its spending, unknown when its file carries none, and the pane sums them over sub sessions', async ($, on) => {
+  const w = world(on)
+  w.folder.put('a.json', record('ABC-1', 'working', { usage: USAGE, timing: TIMING }))
+  w.folder.put('b.json', record('ABC-2', 'working', { timing: { ...TIMING, states: { ...TIMING.states, 'working': 5 * MINUTE, 'needs-you': 0 } } }))
+  w.folder.put('c.json', record('ABC-3', 'working'))
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await w.clock.settle()
+  // These sub sessions were paired without foreman's queue, so their queue
+  // time is unknown.
+  expect(await linesOf(ui, 'Time: ')).toEqual([
+    'Time: working 10m · waiting on you 1h 5m · other waiting 3m · queued unknown',
+    'Time: working 5m · waiting on you 0m · other waiting 3m · queued unknown',
+    'Time: unknown',
+  ])
+  const lines = await linesOf(ui, 'Sub sessions')
+  expect(lines).toEqual([
+    'Sub sessions spent: 4K in, 1K out, 90K cache read, 2K cache write · $1.75',
+    'Sub sessions\' time, summed: working 15m · waiting on you 1h 5m · other waiting 6m · queued unknown',
+  ])
+  expect(await linesOf(ui, 'Summed over')).toEqual(['Summed over sub sessions that run side by side, so a sum can be longer than the run.'])
+  // A sub session whose file is gone stays in the sums.
+  w.folder.files.delete('b.json')
+  await w.clock.advance(30 * SECOND)
+  expect(await linesOf(ui, 'Time: ')).toHaveLength(2)
+  expect(await linesOf(ui, 'Sub sessions\' time')).toEqual([lines[1]])
+})
+
+test('with no times read yet, the sums say unknown, never zero', async ($, on) => {
+  const w = world(on)
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await w.clock.settle()
+  expect(await linesOf(ui, 'Sub sessions\' time')).toEqual(['Sub sessions\' time, summed: unknown'])
+})
+
 // Builder's usage value for this session, which foreman shows as this
 // session's own spending, and values it reads as unknown.
 const OWN_LEDGER = { ...USAGE, sessionId: 'session-1', lastEngineUsd: 1.75, turns: [], at: T0 }

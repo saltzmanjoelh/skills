@@ -4,11 +4,11 @@
 
 import type { Elements as EngineElements } from 'claude-code'
 
-import type { ForemanLogLine, ForemanSpend } from '../types'
+import type { ForemanLogLine, ForemanSpend, ForemanTimes } from '../types'
 import { BAR_SVG_HEIGHT, barSvg, fitBar, hasSvg, svgWidth, type Bar } from './art'
 import { linkOf } from './links'
 import { markersLine, type MarkersRecord } from './markers'
-import { spendOf, spendWords } from './spend'
+import { spendOf, spendWords, TIMES_UNKNOWN, timesWords } from './spend'
 import { STAGES, stageLabel } from './stages'
 import {
   busyCount, chipParts, chipText, fitChips, isProbablyHung, keyOf, moreWords, SEPARATOR, STATE_LOOK, staleWords, untilWords, waitWords, type SubRow,
@@ -38,6 +38,12 @@ export type View = {
   // works them out, so in the band's view both are always null.
   subsSpent: ForemanSpend | null
   ownSpent: ForemanSpend | null
+  // Each shown row's four times, by its file name, and each of the four
+  // summed over every sub session this parent started, or null. Only the
+  // pane's view works them out, so in the band's view the map is empty and
+  // the sums are null.
+  rowTimes: ReadonlyMap<string, ForemanTimes>
+  subsTime: ForemanTimes | null
   // The newest report sentence foreman showed, while it is less than
   // REPORT_SHOWN_MS old, else null. The band shows it after the chips.
   report: string | null
@@ -245,15 +251,24 @@ function spentRow(ui: Elements, row: SubRow) {
   return <Text key={`spent-${row.file}`} dimColor>{`Spent: ${spendWords(spendOf(row.record.usage))}`}</Text>
 }
 
+// How long a row's sub session has taken, from foreman's ledger, dimmed: its
+// time working, waiting on the person, other waiting and queued. A time
+// foreman does not know shows as unknown, never as zero.
+function timeRow(ui: Elements, row: SubRow, times: ForemanTimes) {
+  const { Text } = ui
+  return <Text key={`time-${row.file}`} dimColor>{`Time: ${timesWords(times)}`}</Text>
+}
+
 // One sub session in the pane: the issue row, the bar, the state, what it
-// spent, and the Nudge and Release buttons. A released one shows `released`,
-// dimmed, in place of its state and has no Nudge or Release button; its issue
-// button still opens it, and it still shows what it spent. The state is
+// spent and how long it has taken, and the Nudge and Release buttons. A
+// released one shows `released`, dimmed, in place of its state and has no
+// Nudge or Release button; its issue button still opens it, and it still
+// shows what it spent and its times. The state is
 // drawn in its own tone, or in the warning tone once the sub session's oldest
 // background task is probably hung, unless its own tone is red, so the mark
 // never makes a row look less urgent. A stale state stays dimmed and
 // uncolored either way.
-function subTree(ui: Elements, row: SubRow, now: number, address: string | null, columns: number | undefined, presses: PanePresses) {
+function subTree(ui: Elements, row: SubRow, times: ForemanTimes, now: number, address: string | null, columns: number | undefined, presses: PanePresses) {
   const { Box, Text, Button } = ui
   const own = STATE_LOOK[row.record.state].tone
   const tone: Tone = own !== 'red' && isProbablyHung(row, now) ? 'amber' : own
@@ -265,6 +280,7 @@ function subTree(ui: Elements, row: SubRow, now: number, address: string | null,
       bar,
       <Text key={`state-${row.file}`} dimColor>{RELEASED}</Text>,
       spentRow(ui, row),
+      timeRow(ui, row, times),
       <Text key={`gap-${row.file}`}> </Text>,
     ]
   }
@@ -275,6 +291,7 @@ function subTree(ui: Elements, row: SubRow, now: number, address: string | null,
       ? <Text key={`state-${row.file}`} dimColor>{stateWords(row, now)}</Text>
       : <Text key={`state-${row.file}`} color={TONE_COLOR[tone]}>{stateWords(row, now)}</Text>,
     spentRow(ui, row),
+    timeRow(ui, row, times),
     <Box key={`actions-${row.file}`} flexDirection="row">
       <Button key={`nudge-${row.file}`} label="Nudge" onPress={() => presses.nudge(row.file)} />
       <Text> </Text>
@@ -284,11 +301,17 @@ function subTree(ui: Elements, row: SubRow, now: number, address: string | null,
   ]
 }
 
+// The note under the summed times. Sub sessions run side by side, so an
+// hour in each of two of them sums to two hours in a run of one.
+export const SUMMED_NOTE = 'Summed over sub sessions that run side by side, so a sum can be longer than the run.'
+
 export const NOT_A_PARENT = 'This session is not a parent. Run /start-foreman to make it one.'
 export const NO_SUBS = 'No sub sessions are in the status folder.'
 
 // The pane: one row for each sub session, then what the sub sessions spent
-// together and what this session spent itself, then how many of builder's
+// together, then their four times each summed over every sub session with
+// the note that says why a sum can be longer than the run, then what this
+// session spent itself, then how many of builder's
 // status messages foreman consumed since its hooks loaded, then the log,
 // newest last, each line with its time.
 export function paneTree(ui: Elements, v: View, presses: PanePresses, columns?: number) {
@@ -297,8 +320,10 @@ export function paneTree(ui: Elements, v: View, presses: PanePresses, columns?: 
   return (
     <Box key="foreman-pane" flexDirection="column">
       {v.rows.length === 0 ? [<Text key="none" dimColor>{NO_SUBS}</Text>, <Text key="none-gap"> </Text>] : null}
-      {v.rows.flatMap(row => subTree(ui, row, v.now, v.issueLink, columns, presses))}
+      {v.rows.flatMap(row => subTree(ui, row, v.rowTimes.get(row.file) ?? TIMES_UNKNOWN, v.now, v.issueLink, columns, presses))}
       <Text key="spent-subs">{`Sub sessions spent: ${spendWords(v.subsSpent)}`}</Text>
+      <Text key="time-subs">{`Sub sessions' time, summed: ${timesWords(v.subsTime ?? TIMES_UNKNOWN)}`}</Text>
+      <Text key="time-subs-note" dimColor>{SUMMED_NOTE}</Text>
       <Text key="spent-own">{`This session spent: ${spendWords(v.ownSpent)}`}</Text>
       {v.markers === null ? null : <Text key="markers">{markersLine(v.markers, v.now)}</Text>}
       <Text key="spent-gap"> </Text>

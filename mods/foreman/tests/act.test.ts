@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import { decide, GONE_MS, keptByUnreadList, listFailedNotice, needsList, NO_ANSWER, slotOutcome, stallsNeedList, type DecideInput, type Decision, type SessionsLook } from '../hooks/act'
 import { REASONS } from '../hooks/desktop'
 import { recordIn } from '../hooks/record'
-import { spentSum } from '../hooks/spend'
+import { spentSum, TIMES_UNKNOWN } from '../hooks/spend'
 import type { SubRow } from '../hooks/subs'
 import { joinOwners, newPairing, TICKETS_EMPTY } from '../hooks/tickets'
 import { DATA_NOTE, wakeLine } from '../hooks/wake'
@@ -829,7 +829,7 @@ test('a working record without the field, or with a malformed one, is never nudg
 test('a read takes the owner\'s spending into the ledger, and when the owner\'s file disappears the pairing is forgotten while its entry stays and the sum is unchanged', () => {
   const usage = { models: [{ model: 'model-a', input: 4000, output: 300, cacheRead: 90_000, cacheWrite: 2000 }], usd: 0.75 }
   const first = read(paired(), [row({ usage })], T0)
-  const entry = { ticket: 'ft-a', counts: { input: 4000, output: 300, cacheRead: 90_000, cacheWrite: 2000 }, usd: 0.75 }
+  const entry = { ticket: 'ft-a', counts: { input: 4000, output: 300, cacheRead: 90_000, cacheWrite: 2000 }, usd: 0.75, timing: null, queuedMs: null }
   expect(first.tickets.spent).toEqual([entry])
   const sum = spentSum(first.tickets)
   const gone = read(first.tickets, [], T0 + MINUTE)
@@ -839,7 +839,7 @@ test('a read takes the owner\'s spending into the ledger, and when the owner\'s 
 })
 
 test('past 200 entries a read folds, in the same ledger, the entry of a pairing that this read forgot', () => {
-  const one = (ticket: string, input: number) => ({ ticket, counts: { input, output: 0, cacheRead: 0, cacheWrite: 0 }, usd: null })
+  const one = (ticket: string, input: number) => ({ ticket, counts: { input, output: 0, cacheRead: 0, cacheWrite: 0 }, usd: null, timing: null, queuedMs: null })
   // ft-a's entry is the oldest, and its file leaves the folder at this read.
   const spent = [one('ft-a', 500), ...Array.from({ length: 199 }, (_, i) => one(`ft-old-${i}`, 1))]
   const a = { ...newPairing('ft-a', 'local_a', T0), owner: 's-a', ownerFile: 'a.json' }
@@ -850,7 +850,7 @@ test('past 200 entries a read folds, in the same ledger, the entry of a pairing 
   expect(d.tickets.spent).toHaveLength(200)
   expect(d.tickets.spent.map(e => e.ticket)).not.toContain('ft-a')
   expect(d.tickets.spent.at(-1)!.ticket).toBe('ft-b')
-  expect(d.tickets.earlier).toEqual({ counts: { input: 500, output: 0, cacheRead: 0, cacheWrite: 0 }, usd: null })
+  expect(d.tickets.earlier).toEqual({ counts: { input: 500, output: 0, cacheRead: 0, cacheWrite: 0 }, usd: null, times: TIMES_UNKNOWN })
   expect(spentSum(d.tickets)).toEqual({ counts: { input: 500 + 199 + 4000, output: 0, cacheRead: 0, cacheWrite: 0 }, usd: 1 })
 })
 

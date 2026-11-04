@@ -3,10 +3,10 @@
 // answer, the ledger as the store keeps it, which record owns each ticket,
 // and which rows show. Every function is pure.
 
-import type { ForemanActs, ForemanEffect, ForemanOutbox, ForemanPairing, ForemanSpend, ForemanSpent, ForemanStanding, ForemanTickets } from '../types'
+import type { ForemanActs, ForemanEarlier, ForemanEffect, ForemanOutbox, ForemanPairing, ForemanSpend, ForemanSpent, ForemanStanding, ForemanTickets, ForemanTimes } from '../types'
 import { checksIn } from './checks'
 import { BEGIN_TEXT, LOCAL_ID, WHOLE_LOCAL_ID } from './desktop'
-import { countsIn, isDollars, isPullRequestNumber, isPullRequestState, verdictsIn } from './record'
+import { countsIn, isDollars, isDuration, isPullRequestNumber, isPullRequestState, timingIn, verdictsIn } from './record'
 import { byKeyThenFile, keyOf, nameOf, type SubRow } from './subs'
 import { objectOf } from './text'
 import { byTicket, isTicket, isWholeKey, isWhoName, KEY, TICKET_PREFIX } from './wake'
@@ -372,15 +372,38 @@ function spendIn(raw: unknown): ForemanSpend | null {
   return { counts, usd: s.usd }
 }
 
+// A stored time in milliseconds, or null when it is missing or is not a
+// duration, so a damaged one reads as unknown and never as zero.
+const durationOr = (raw: unknown): number | null => (isDuration(raw) ? raw : null)
+
 // The stored spent list read tolerantly: a value that is not a list reads as
 // empty, and an entry without a ticket or with unsound spending is dropped.
+// An entry's times, and its queue time, read as unknown when they are missing,
+// as in an entry stored before foreman kept them, or damaged, and the entry
+// keeps its spending.
 const spentIn = (raw: unknown): ForemanSpent[] => (Array.isArray(raw)
   ? raw.flatMap(e => {
     const ticket = textOr(objectOf(e)?.ticket, null)
     const spend = spendIn(e)
-    return ticket === null || spend === null ? [] : [{ ticket, ...spend }]
+    if (ticket === null || spend === null) return []
+    return [{ ticket, ...spend, timing: timingIn(objectOf(e)?.timing) ?? null, queuedMs: durationOr(objectOf(e)?.queuedMs) }]
   })
   : [])
+
+// The stored time sums of the earlier total, each read as unknown when it is
+// missing or damaged, as all four are in a total stored before foreman kept
+// times.
+function timesIn(raw: unknown): ForemanTimes {
+  const t = objectOf(raw)
+  return { working: durationOr(t?.working), needsYou: durationOr(t?.needsYou), otherWaiting: durationOr(t?.otherWaiting), queued: durationOr(t?.queued) }
+}
+
+// The stored earlier total, or null unless its spending is sound. Its time
+// sums are read by timesIn.
+function earlierIn(raw: unknown): ForemanEarlier | null {
+  const spend = spendIn(raw)
+  return spend === null ? null : { ...spend, times: timesIn(objectOf(raw)?.times) }
+}
 
 // A stored ledger read tolerantly: a value in any other shape, such as none
 // at all from a parent of the read-only build, reads as empty, and a pairing
@@ -388,6 +411,7 @@ const spentIn = (raw: unknown): ForemanSpent[] => (Array.isArray(raw)
 // A ledger from before the role-off facts were kept reads with no refusal
 // given and no unwatched sub sessions, and one from before foreman kept
 // spending reads with none, and one from before slots were kept keeps none.
+// One from before foreman kept times reads every time as unknown.
 // One from before foreman checked sub sessions itself holds no checks, and an
 // outbox from before reports were kept holds none. The mark for a failed list
 // read is set only when it was stored as exactly true, so a ledger from
@@ -404,7 +428,7 @@ export function ticketsIn(raw: unknown): ForemanTickets {
     offRefusedFor: textOr(t.offRefusedFor, null),
     unwatched: unwatchedIn(t.unwatched),
     spent: spentIn(t.spent),
-    earlier: spendIn(t.earlier),
+    earlier: earlierIn(t.earlier),
     keptSlots: keptSlotsIn(t.keptSlots),
     checks: checksIn(t.checks),
     listFailNotified: t.listFailNotified === true,
