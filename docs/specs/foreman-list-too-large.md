@@ -76,7 +76,13 @@ beside the parent.
 4. **The saved copy is parsed strictly.** The file's whole contents must
    parse as a JSON array. Each read then picks the fields it needs from the
    entries, as it does today. A read never answers a partial or empty list
-   when the copy cannot be used; it answers a reason instead.
+   when the copy cannot be used; it answers a reason instead. Claude Code
+   saves a copy only for an answer too large to pass back, so a copy in
+   which no entry has a string `sessionId`, an empty array included, cannot
+   be an honest list and answers the not-a-list reason. This keeps a copy
+   saved in another form, such as an array of content blocks, from reading
+   as an empty, complete list that would free every slot. An answer passed
+   back directly may still be an empty list.
 5. **The completeness rule stays.** A list is complete only when it holds
    fewer than 100 entries, entries foreman could not read included, whether
    the entries came from the answer or from the saved copy.
@@ -110,8 +116,9 @@ beside the parent.
   list.
 - The saved file was removed between the answer and the read. Foreman reports
   the missing-file reason.
-- The saved copy parses as a JSON object, or as nothing. Foreman reports the
-  not-a-list reason.
+- The saved copy parses as a JSON object, or as nothing, or as an array in
+  which no entry has a string `sessionId`. Foreman reports the not-a-list
+  reason.
 - The linked family holds 100 sessions or more. The list is not complete, as
   today.
 
@@ -154,7 +161,9 @@ beside the parent.
   refused with the outside-the-folder reason, and the file reader is never
   called for them.
 - Tests show the missing-file, too-large and not-a-list reasons, and that no
-  reason contains the path or the file's text.
+  reason contains the path or the file's text. The not-a-list cases include
+  a copy that is an empty array and a copy that is an array of content
+  blocks.
 - A test in `mods/foreman/tests/act.test.ts` shows that each new reason keeps
   a freed slot and wakes no one, as `listUnreadable` does.
 - The four gates in the project's `CLAUDE.md` pass.
