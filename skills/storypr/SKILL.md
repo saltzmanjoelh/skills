@@ -204,5 +204,7 @@ to that skill.
 Never push, never create or edit a pull request, and never ask the person
 anything. When no real capture path works, commit nothing, write no body, and
 return the reason instead of stopping to tell the person; a mockup is still
-never the answer. Everything else in this skill is for a person who calls it
+never the answer. Write the reason in a sentence or two of plain words that
+names no local path, host name, port, device identifier or token and quotes no
+raw error output, because the calling skill publishes it. Everything else in this skill is for a person who calls it
 directly, and it does not change.

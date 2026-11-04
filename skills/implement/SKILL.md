@@ -154,7 +154,9 @@ Every command started in the background runs under its own time limit (see
 ### 7. Open the pull request
 
 First find out whether the change is frontend, as **A frontend change** below
-says. A frontend change opens as that paragraph says, not as the next one.
+says. A frontend change keeps the next paragraph's checks, its rules for the
+body and its watch call, and replaces only its push and its `gh pr create` with
+what **A frontend change** says.
 
 Check the diff against the base lists only this change's files, check it
 for credentials (see "Rules"), then push and open it with
@@ -197,14 +199,18 @@ public repository, `curl -sL -o /dev/null -w "%{http_code}" "<link>"` prints
 a private repository, use
 `gh api "repos/<owner>/<repo>/contents/<path>?ref=<full sha>" --jq .path`.
 Correct the path or the sha with `gh pr edit <n> --body-file <file>` until
-every link resolves. Then call `mcp__builder__watch` and follow the step its
-answer names, as for any pull request.
+every link resolves. Then call `mcp__builder__watch` as the paragraph above
+says.
 
 When `/storypr` returns a reason instead, it has committed nothing. Open the
 pull request the plain way, with `--title` and `--body-file`, and end the body
 with a `## Screenshots` section that says the change is frontend, that its
 screenshots are missing, and the reason. Tell the person the same in one
-sentence, and carry on without waiting for an answer.
+sentence, and carry on without waiting for an answer. Every reason that this
+step or a later commit publishes, in a body or a commit message, is a sentence
+or two of plain words that names no local path, host name, port, device
+identifier or token and quotes no raw error output, because the body and the
+history are published for good.
 
 ## With the pull request open
 
@@ -458,8 +464,9 @@ When a retake cannot capture real screenshots, or the opening capture failed
 so that there are none to retake, the commit goes ahead without them. Its
 message then carries, after a blank line and outside the round's lists, the
 line `Screenshots not retaken: <the screenshots, or "never captured">: <the
-reason>`, so that the reason survives a restart before the push. Tell the
-person the same in one sentence, and carry on.
+reason>`, so that the reason survives a restart before the push. The reason
+is written as step 7 says a published reason is written. Tell the person the
+same in one sentence, and carry on.
 
 After every push to a frontend pull request, bring its screenshot section up
 to date. It is up to date when each image link names the newest commit on the
