@@ -469,12 +469,15 @@ function card(ui: Elements, v: View, row: SubRow, presses: PanePresses, columns:
   const stateElement = row.isStale || LIGHT_COLOR[light] === undefined
     ? <Box key={`state-${row.file}`}><Text dimColor>{stateText}</Text></Box>
     : <Box key={`state-${row.file}`}><Text color={LIGHT_COLOR[light]}>{stateText}</Text></Box>
-  const border = hasSvg(ui) ? (isRed ? { borderStyle: 'round', borderColor: 'error' } : { borderStyle: 'round', borderDimColor: true }) : {}
+  const drawn = hasSvg(ui)
+  let border = {}
+  if (drawn && isRed) border = { borderStyle: 'round', borderColor: 'error' }
+  else if (drawn) border = { borderStyle: 'round', borderDimColor: true }
   return (
-    <Box key={`card-${row.file}`} flexDirection="column" marginBottom={1} paddingX={hasSvg(ui) ? 1 : 0} {...border}>
+    <Box key={`card-${row.file}`} flexDirection="column" marginBottom={1} paddingX={drawn ? 1 : 0} {...border}>
       <Box key={`card-top-${row.file}`} flexDirection="row" justifyContent="space-between">
         <Box key={`card-name-${row.file}`} flexDirection="row" flexShrink={1}>
-          {isRed && !hasSvg(ui) ? <Box key={`alert-${row.file}`}><Text color="error" bold>! </Text></Box> : null}
+          {isRed && !drawn ?<Box key={`alert-${row.file}`}><Text color="error" bold>! </Text></Box> : null}
           {keyElement(ui, row, v.issueLink)}
           <Box key={`title-${row.file}`}><Text>{` ${printable(row.record.issueTitle, 60)}`}</Text></Box>
         </Box>
@@ -630,15 +633,21 @@ function heading(ui: Elements, key: string, title: string, isOpen: boolean, pres
 // taken for a line of the open log. Open, it shows every kept line, newest
 // last, each after its time.
 function logRow(ui: Elements, v: View, presses: PanePresses) {
-  const { Box, Text } = ui
+  const { Box } = ui
   const isOpen = v.folds.isLogOpen
+  return <Box key="log" flexDirection="column">{heading(ui, 'log-toggle', 'Log', isOpen, presses.log)}{logLines(ui, v, isOpen)}</Box>
+}
+
+// The Log row's lines under its heading, as logRow describes them.
+function logLines(ui: Elements, v: View, isOpen: boolean) {
+  const { Box, Text } = ui
   const newest = v.log.at(-1)
-  const lines = isOpen
-    ? (v.log.length === 0
-      ? [<Box key="log-none"><Text dimColor>Nothing yet.</Text></Box>]
-      : v.log.map((line, i) => <Box key={`log-${i}`}><Text dimColor>{`${timeOfDay(line.at, v.now)} ${logWords(line)}`}</Text></Box>))
-    : [<Box key="log-last"><Text dimColor>{newest === undefined ? 'last: nothing yet' : `last: ${logWords(newest)} ${timeOfDay(newest.at, v.now)}`}</Text></Box>]
-  return <Box key="log" flexDirection="column">{heading(ui, 'log-toggle', 'Log', isOpen, presses.log)}{lines}</Box>
+  if (!isOpen) {
+    const last = newest === undefined ? 'last: nothing yet' : `last: ${logWords(newest)} ${timeOfDay(newest.at, v.now)}`
+    return [<Box key="log-last"><Text dimColor>{last}</Text></Box>]
+  }
+  if (v.log.length === 0) return [<Box key="log-none"><Text dimColor>Nothing yet.</Text></Box>]
+  return v.log.map((line, i) => <Box key={`log-${i}`}><Text dimColor>{`${timeOfDay(line.at, v.now)} ${logWords(line)}`}</Text></Box>)
 }
 
 // The Token details row. Open, it shows the four token kinds for the sub
