@@ -49,14 +49,14 @@ export type Delivery = { id: string; isReport: boolean; status: string | null; f
 export type DeliveryAct = { kind: 'pass' } | { kind: 'end' } | { kind: 'hold' } | { kind: 'release'; line: string }
 
 // The state stays at version 1 although it may now carry optional fields:
-// `retryMs`, `deadlineBeforeSettle`, `wokenAfterClaim` and `completionClaimed`
-// on a batch, `releasing` on the state, and `tasks`, `live` and `woken` on a
-// member (see
-// types/index.d.ts). The previous build reads a value with any of
-// them as it reads any other, and this build reads a value without them as
-// it did before each was added. A new version would make the old and the new build
-// read each other's state as empty across a hot reload, so a batch whose
-// reports were answered "Noted." would never get its line.
+// `retryMs`, `deadlineBeforeSettle`, `retryBeforeSettle`, `wokenAfterClaim`
+// and `completionClaimed` on a batch, `releasing` on the state, and `tasks`,
+// `live` and `woken` on a member (see types/index.d.ts). The previous build
+// reads a value with any of them as it reads any other, and this build reads
+// a value without them as it did before each was added. A new version would
+// make the old and the new build read each other's state as empty across a
+// hot reload, so a batch whose reports were answered "Noted." would never get
+// its line.
 export const emptyBatchState = (sessionId: string): BatchState => ({ version: 1, sessionId, batches: [], marker: 0 })
 
 const isMember = (raw: unknown): raw is BatchMember => {
@@ -68,14 +68,19 @@ const isMember = (raw: unknown): raw is BatchMember => {
 }
 
 const isTime = (raw: unknown): raw is number | null => raw === null || (typeof raw === 'number' && Number.isFinite(raw))
+// A wait, stored or saved beside a deadline, is absent or a finite number of
+// milliseconds above zero.
+const isWait = (raw: unknown): raw is number | undefined =>
+  raw === undefined || (typeof raw === 'number' && Number.isFinite(raw) && raw > 0)
 
 const isBatch = (raw: unknown): raw is Batch => {
   const b = raw as Batch | null
   return typeof b === 'object' && b !== null && typeof b.step === 'string' && Array.isArray(b.members) && b.members.every(isMember) &&
     Number.isInteger(b.heldReports) && b.heldReports >= 0 && isTime(b.deadline) && isTime(b.releasedAt) &&
     (b.fired === undefined || b.fired === true) &&
-    (b.retryMs === undefined || (typeof b.retryMs === 'number' && Number.isFinite(b.retryMs) && b.retryMs > 0)) &&
+    isWait(b.retryMs) &&
     (b.deadlineBeforeSettle === undefined || isTime(b.deadlineBeforeSettle)) &&
+    isWait(b.retryBeforeSettle) &&
     (b.wokenAfterClaim === undefined || b.wokenAfterClaim === true) &&
     (b.completionClaimed === undefined || b.completionClaimed === true)
 }
@@ -126,13 +131,13 @@ function trimmed(batches: Batch[]): Batch[] {
 
 // A member as a released batch keeps it: without its task ids, its last
 // turn-end reading and its mark of an engine wake, so that nothing carries
-// over to a later batch. The batch drops the deadline it had before a turn end
-// ended its last member, which only an engine wake of an open batch reads, and
-// the marks of a wake after a claim and of a claimed completion line, which
-// only an open batch reads.
+// over to a later batch. The batch drops the deadline it had before a turn
+// end ended its last member and the wait saved beside it, which only an
+// engine wake of an open batch reads, and the marks of a wake after a claim
+// and of a claimed completion line, which only an open batch reads.
 const settled = ({ id, type, ended }: BatchMember): BatchMember => ({ id, type, ended })
 function released(b: Batch, now: number): Batch {
-  const { deadlineBeforeSettle: _, wokenAfterClaim: __, completionClaimed: ___, ...rest } = b
+  const { deadlineBeforeSettle: _savedDeadline, retryBeforeSettle: _savedWait, wokenAfterClaim: _wokenMark, completionClaimed: _claimMark, ...rest } = b
   return { ...rest, members: b.members.map(settled), heldReports: 0, deadline: null, releasedAt: now }
 }
 
@@ -193,9 +198,14 @@ export function isEngineWake(prompt: string): boolean {
 // sends the line that fits the members then. When a turn end had ended the
 // batch's last member and moved its deadline to BATCH_SETTLE_MS from then
 // (see afterMemberStop), the batch gets back the deadline it had before, the
-// time limit or none when it holds no delivery, and any wait of a claim made
-// in that minute is cleared, so that the batch's own deadline line goes out at
-// its own time. When the deadline had claimed the batch to send the deadline
+// time limit, the time of a retry or none when it holds no delivery, together
+// with the wait saved beside that deadline, or no wait when none was saved.
+// Any wait of a claim made in that minute is cleared, because it was never
+// saved, so that the batch's own deadline line goes out at its own time, and a
+// wait that refused lines grew before the minute is kept, so that a line the
+// engine keeps refusing is not tried again every minute. A wake that only
+// clears a claim of the completion line drops any saved wait with the saved
+// deadline. When the deadline had claimed the batch to send the deadline
 // line before its last member ended, no earlier deadline was kept, and the
 // batch keeps the time of its next claim and its wait, because that refused
 // deadline line still has to be tried again with its back-off.
@@ -209,9 +219,11 @@ export function afterWake(state: BatchState, id: string): BatchState {
     if (!b.members.some(m => m.id === id)) return b
     const members = b.members.map(m => (m.id === id ? { ...m, ended: false, woken: true as const } : m))
     if (b.completionClaimed !== true && b.deadlineBeforeSettle === undefined) return { ...b, members }
-    const { deadlineBeforeSettle, fired, retryMs, completionClaimed: _, ...rest } = b
+    const { deadlineBeforeSettle, retryBeforeSettle, fired, retryMs, completionClaimed: _, ...rest } = b
     const woken = fired === true ? { wokenAfterClaim: true as const } : {}
-    if (deadlineBeforeSettle !== undefined) return { ...rest, members, deadline: deadlineBeforeSettle, ...woken }
+    if (deadlineBeforeSettle !== undefined) {
+      return { ...rest, members, deadline: deadlineBeforeSettle, ...(retryBeforeSettle === undefined ? {} : { retryMs: retryBeforeSettle }), ...woken }
+    }
     return { ...rest, members, ...(retryMs === undefined ? {} : { retryMs }), ...woken }
   }
   const batches = state.batches.map(b => (b.releasedAt === null ? reopened(b) : { ...b, members: b.members.filter(m => m.id !== id) }))
@@ -265,11 +277,13 @@ export function afterTask(state: BatchState, id: string, taskId: string): BatchS
 // deadline moves to BATCH_SETTLE_MS from now, or stays if it is sooner, so
 // that the deadline's timer submits the completion line if no delivery from
 // the batch comes first (see afterDeadline). Unless the deadline had already
-// claimed the batch, the deadline it replaces is kept, so that an engine wake
-// of a member, which makes the batch incomplete again, can give it back (see
-// afterWake). A turn end of a batch whose members had all ended already
-// leaves its deadline as it was. An agent in no batch of two or more, or in a
-// released one, changes nothing, and the state comes back as it was.
+// claimed the batch, the deadline it replaces is kept, with the batch's wait
+// at that moment, or no wait when it has none, in place of any wait saved
+// earlier, so that an engine wake of a member, which makes the batch
+// incomplete again, can give both back (see afterWake). A turn end of a batch
+// whose members had all ended already leaves its deadline as it was. An agent
+// in no batch of two or more, or in a released one, changes nothing, and the
+// state comes back as it was.
 export function afterMemberStop(state: BatchState, id: string, listed: string[], now: number): BatchState {
   const batch = openBatchOf(state, id)
   if (batch === undefined || !countsAsBatch(batch)) return state
@@ -280,13 +294,15 @@ export function afterMemberStop(state: BatchState, id: string, listed: string[],
   })
   const endsLastMember = members.every(m => m.ended) && !batch.members.every(m => m.ended)
   if (!endsLastMember) return { ...state, batches: state.batches.map(b => (b === batch ? { ...batch, members } : b)) }
-  const settledBatch: Batch = {
-    ...batch,
-    members,
-    deadline: Math.min(batch.deadline ?? Infinity, now + BATCH_SETTLE_MS),
-    ...(batch.fired === true ? {} : { deadlineBeforeSettle: batch.deadline }),
-  }
-  return { ...state, batches: state.batches.map(b => (b === batch ? settledBatch : b)) }
+  const deadline = Math.min(batch.deadline ?? Infinity, now + BATCH_SETTLE_MS)
+  const withSettled = (settledBatch: Batch): BatchState => ({ ...state, batches: state.batches.map(b => (b === batch ? settledBatch : b)) })
+  if (batch.fired === true) return withSettled({ ...batch, members, deadline })
+  // A wait saved at an earlier turn end belongs to the deadline saved then, so
+  // it is removed before this turn end saves the current deadline, and only
+  // the batch's current wait, if it has one, is saved beside it.
+  const { retryBeforeSettle: _, ...withoutSavedWait } = batch
+  const savedWait = batch.retryMs === undefined ? {} : { retryBeforeSettle: batch.retryMs }
+  return withSettled({ ...withoutSavedWait, members, deadline, deadlineBeforeSettle: batch.deadline, ...savedWait })
 }
 
 // The summary the engine writes when an agent finished, as the whole text of
@@ -364,10 +380,13 @@ const ends = (d: Delivery, m: BatchMember) =>
 // answer the release turn with "Noted.", because its last message is a report
 // from a member of the batch just released, which is still remembered. A
 // release while the session is idle also marks the state as releasing until
-// the release turn's first step, and a held delivery from a released batch in
-// between leaves the marker alone, because the releasing member's own
-// notification can arrive before that step and would otherwise answer it. A
-// release into a running turn marks nothing, because that turn has already
+// the release turn's first step, and any held delivery in between, from the
+// released batch or from another batch still open, leaves the marker alone,
+// because the releasing member's own notification, or a member of the other
+// batch, can arrive before that step and would otherwise answer it. If the
+// other batch's delivery gets a turn of its own before the release turn, that
+// turn reaches the model once, which costs one model turn and loses nothing.
+// A release into a running turn marks nothing, because that turn has already
 // taken its first step and reads the line itself. A held delivery after the
 // first step raises the marker again as usual.
 export function afterDelivery(state: BatchState, d: Delivery, isIdle: boolean, now: number): { state: BatchState; act: DeliveryAct } {
@@ -375,7 +394,7 @@ export function afterDelivery(state: BatchState, d: Delivery, isIdle: boolean, n
   const batch = kept.batches.find(b => countsAsBatch(b) && b.members.some(m => m.id === d.id))
   if (batch === undefined) return { state: kept, act: { kind: 'pass' } }
   const held = (changed: Batch): { state: BatchState; act: DeliveryAct } => ({
-    state: { ...kept, batches: kept.batches.map(b => (b === batch ? changed : b)), marker: kept.marker + (isIdle && !(changed.releasedAt !== null && kept.releasing === true) ? 1 : 0) },
+    state: { ...kept, batches: kept.batches.map(b => (b === batch ? changed : b)), marker: kept.marker + (isIdle && kept.releasing !== true ? 1 : 0) },
     act: { kind: 'hold' },
   })
   if (batch.releasedAt !== null) return held(batch)

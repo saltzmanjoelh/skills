@@ -434,10 +434,10 @@ test('with the role on, a note split by its title records checks, but at the due
 })
 
 const LINKED_FAILURES = [
-  { name: 'a tool error', linked: 'error', reason: 'the desktop app could not list its sessions' },
-  { name: 'tools that are not connected', linked: 'not-connected', reason: 'the desktop app\'s tools are not connected in this session' },
-  { name: 'an answer that is not a list', linked: 'garbage', reason: 'the desktop app\'s list of sessions could not be read' },
-  { name: 'a call that never answers', linked: 'hang', reason: 'the desktop app did not answer within 30 seconds' },
+  { name: 'a tool error', list: 'error', reason: 'the desktop app could not list its sessions' },
+  { name: 'tools that are not connected', list: 'not-connected', reason: 'the desktop app\'s tools are not connected in this session' },
+  { name: 'an answer that is not a list', list: 'garbage', reason: 'the desktop app\'s list of sessions could not be read' },
+  { name: 'a call that never answers', list: 'hang', reason: 'the desktop app did not answer within 30 seconds' },
 ] as const
 
 for (const f of LINKED_FAILURES) {
@@ -445,7 +445,7 @@ for (const f of LINKED_FAILURES) {
     const { w, seen } = await notedOff($, on)
     w.desktop.events.set('local_v', { state: 'idle' })
     await submit($, note('local_v'))
-    w.desktop.linked = f.linked
+    w.desktop.list = f.list
     await pass(w, 5 * MINUTE)
     await pass(w, 30 * SECOND)
     const u = `Stopped checking the sub session local_u, because ${f.reason}.`

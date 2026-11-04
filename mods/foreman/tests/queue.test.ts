@@ -1,10 +1,10 @@
 import { expect, test } from 'claude-code/testing'
 
-import { CALL_TIMEOUT_MS, decide, freeSlots, GONE_MS, needsList, startWaits, UNOWNED_FOR_MS, type DecideInput, type Decision, type SessionsLook } from '../hooks/act'
+import { CALL_TIMEOUT_MS, decide, freeSlots, GONE_MS, needsList, releasedIn, startWaits, UNOWNED_FOR_MS, type DecideInput, type Decision, type SessionsLook } from '../hooks/act'
 import type { Listed } from '../hooks/desktop'
 import { recordIn } from '../hooks/record'
 import type { SubRow } from '../hooks/subs'
-import { joinOwners, newPairing, TICKETS_EMPTY, waitingUnclaimed } from '../hooks/tickets'
+import { joinOwners, MAX_PAIRINGS, newPairing, TICKETS_EMPTY, waitingUnclaimed } from '../hooks/tickets'
 import type { ForemanPairing, ForemanTickets } from '../types'
 
 // The queue's rules, decided without the engine: which sub sessions wait,
@@ -335,6 +335,35 @@ test('a slot freed on a failed read wakes the parent at once when only claimed s
   const woken = read(damaged, [row('ft-b')], T0 + MINUTE, { sessions: { kind: 'failed' } })
   expect(woken.reasons).toEqual([{ kind: 'slot-kept', whos: ['ABC-2'] }])
   expect(woken.tickets.keptSlots).toEqual([])
+})
+
+test('a Release while an issue waits carries the released name, two Releases before a read carry both names in order, and the list keeps the newest names', () => {
+  const rows = [busyRow('ft-a', 'ABC-1'), busyRow('ft-d', 'ABC-4'), row('ft-b')]
+  const t = joinOwners(ledger(ahead('ft-a', 'ABC-1'), ahead('ft-d', 'ABC-4'), waiting('ft-b', 'ABC-2', 1)), rows).tickets
+  const first = releasedIn(t, rows[0]!, T0 + MINUTE)
+  expect([first.released, first.waits]).toEqual([true, true])
+  expect(first.tickets.keptSlots).toEqual(['ABC-1'])
+  expect(first.tickets.pairings[0]!.standing).toBe('released')
+  const second = releasedIn(first.tickets, rows[1]!, T0 + MINUTE)
+  expect(second.tickets.keptSlots).toEqual(['ABC-1', 'ABC-4'])
+  // A second press on a row already released changes nothing.
+  const again = releasedIn(second.tickets, rows[1]!, T0 + MINUTE)
+  expect([again.released, again.tickets]).toEqual([false, second.tickets])
+  const full = { ...t, keptSlots: Array.from({ length: MAX_PAIRINGS }, (_, i) => `ABC-${100 + i}`) }
+  const capped = releasedIn(full, rows[0]!, T0 + MINUTE).tickets.keptSlots
+  expect([capped.length, capped[0], capped.at(-1)]).toEqual([MAX_PAIRINGS, 'ABC-101', 'ABC-1'])
+})
+
+test('a Release while nobody waits unclaimed carries no name, and a damaged ticket\'s name is not carried', () => {
+  const rows = [busyRow('ft-a', 'ABC-1'), row('ft-b')]
+  const alone = joinOwners(ledger(ahead('ft-a', 'ABC-1')), rows.slice(0, 1)).tickets
+  const none = releasedIn(alone, rows[0]!, T0 + MINUTE)
+  expect([none.released, none.waits, none.tickets.keptSlots]).toEqual([true, false, []])
+  // A damaged stored ticket gives a name that the ledger's reader would drop.
+  const badRows = [busyRow('bad ticket', 'not a key'), row('ft-b')]
+  const damaged = joinOwners(ledger(ahead('bad ticket', 'not a key'), waiting('ft-b', 'ABC-2', 1)), badRows).tickets
+  const out = releasedIn(damaged, badRows[0]!, T0 + MINUTE)
+  expect([out.released, out.waits, out.tickets.keptSlots]).toEqual([true, true, []])
 })
 
 test('with the queue empty a freed slot wakes the parent as before', () => {

@@ -666,30 +666,38 @@ export type BatchMember = { id: string; type: string; ended: boolean; tasks?: st
 // of the completion line first. When the engine has taken the line, a batch
 // that got the completion line is released and any other is dropped.
 // `retryMs` is how long the next claim of the batch waits before it is
-// claimed again. It doubles at each claim from one
-// minute up to one hour, and a batch stored without it waits one minute.
-// `deadlineBeforeSettle` is the deadline that the one-minute deadline after
-// the turn end that ended the last member replaced, set only when the
-// deadline had not claimed the batch, so that an engine wake of a member can
-// give it back, and dropped at the release. `wokenAfterClaim` is set when an
-// engine wake of a member cleared a claim of the completion line, so that the
-// batch is still released if the engine takes that line, and it is dropped at
-// the next claim and at the release. `completionClaimed` is set when the
-// deadline claims the batch with every member ended, so that the line it
-// claimed is the completion line, and it is dropped at the next claim of the
-// deadline line, by an engine wake that clears the claim, and at the release.
-export type Batch = { step: string; members: BatchMember[]; heldReports: number; deadline: number | null; releasedAt: number | null; fired?: true; retryMs?: number; deadlineBeforeSettle?: number | null; wokenAfterClaim?: true; completionClaimed?: true }
+// claimed again. It doubles at each claim from one minute up to one hour, and
+// a batch stored without it waits one minute. `deadlineBeforeSettle` is the
+// deadline that the one-minute deadline after the turn end that ended the
+// last member replaced, set only when the deadline had not claimed the batch,
+// so that an engine wake of a member can give it back, and dropped at the
+// release. `retryBeforeSettle` is the batch's `retryMs` at the moment
+// `deadlineBeforeSettle` was saved, absent when the batch had no wait then;
+// it is saved with that deadline at a turn end, given back with it as
+// `retryMs` by an engine wake, and dropped at the release, so that a wait
+// that refused lines grew survives a wake while the wait of a claim made in
+// the settle minute does not. `wokenAfterClaim` is set when an engine wake of
+// a member cleared a claim of the completion line, so that the batch is still
+// released if the engine takes that line, and it is dropped at the next claim
+// and at the release. `completionClaimed` is set when the deadline claims the
+// batch with every member ended, so that the line it claimed is the
+// completion line, and it is dropped at the next claim of the deadline line,
+// by an engine wake that clears the claim, and at the release.
+export type Batch = { step: string; members: BatchMember[]; heldReports: number; deadline: number | null; releasedAt: number | null; fired?: true; retryMs?: number; deadlineBeforeSettle?: number | null; retryBeforeSettle?: number; wokenAfterClaim?: true; completionClaimed?: true }
 
 // The batches, oldest first, and the counter marker: how many held deliveries
 // have arrived while the session was idle and still owe a turn answered
 // without the model, stamped with the session id of the conversation they
 // belong to. `releasing` is set when a delivery that arrives while the
 // session is idle releases a batch, and cleared by the next first step of a
-// turn of the session's loop, so that a held delivery in between does not
-// raise the marker and answer the release turn with "Noted.". The state stays
-// at version 1 with this field, because an older build ignores it and a
-// state without it reads as not releasing. Read through batchStateIn in
-// hooks/batch.ts.
+// turn of the session's loop, so that a held delivery in between, from the
+// released batch or from any other batch, does not raise the marker and
+// answer the release turn with "Noted.". A release turn that never takes its
+// first step leaves the mark set, so idle held deliveries reach the model
+// until the next first step of the session's loop, which costs model turns
+// and loses nothing. The state stays at version 1 with this field, because an
+// older build ignores it and a state without it reads as not releasing. Read
+// through batchStateIn in hooks/batch.ts.
 export type BatchState = { version: 1; sessionId: string; batches: Batch[]; marker: number; releasing?: true }
 
 declare module 'claude-code' {

@@ -12,7 +12,7 @@ import { prStateOf, type BuildState, type RecordVerdicts } from './record'
 import { folded, withReadings } from './spend'
 import type { ForemanActs, ForemanEffect, ForemanPairing, ForemanTickets } from '../types'
 import { busyCount, nameOf, type SubRow } from './subs'
-import { ANNOUNCED_NONE, capped, isReserved, MAX_PAIRINGS, ownsTicket, queueOf, shownRows, waitingUnclaimed } from './tickets'
+import { ANNOUNCED_NONE, capped, isReserved, keptSlotsIn, ownsTicket, queueOf, shownRows, waitingUnclaimed } from './tickets'
 import { printable } from './text'
 import { byTicket, isWholeKey, isWhoName, whoOf, type Reason } from './wake'
 
@@ -79,7 +79,7 @@ export const NO_ANSWER = `the desktop app did not answer within ${CALL_TIMEOUT_M
 // The reasons a failed read of the desktop app's list may show the person.
 // Any other text came from somewhere foreman does not control, so it is
 // shown as the refused reason instead.
-const LIST_FAILURES: ReadonlySet<string> = new Set([REASONS.notConnected, REASONS.listRefused, REASONS.listUnreadable, NO_ANSWER])
+const LIST_FAILURES: ReadonlySet<string> = new Set([REASONS.notConnected, REASONS.listRefused, REASONS.listUnreadable, REASONS.savedOutside, REASONS.savedMissing, REASONS.savedTooLarge, REASONS.savedNotList, NO_ANSWER])
 
 // The notification for reads of the desktop app's list that started failing,
 // with the fixed reason `why`.
@@ -94,8 +94,10 @@ export const listFailedNotice = (why: string) => `foreman cannot read the deskto
 // out may have started after the list was made, so its absence from the list
 // says nothing. Without `known`, every id counts as held then. A failed look
 // carries the fixed reason it failed, which the notice for a failed read
-// shows, and one without a reason counts as refused.
-export type SessionsLook = { kind: 'unread' } | { kind: 'failed'; reason?: string } | { kind: 'read'; sessions: Listed[]; complete?: boolean; known?: readonly string[] }
+// shows, and one without a reason counts as refused. `holders` holds the
+// sessions of the desktop app's whole list, read beside the family's only
+// while a key is held, which only the release of a hold reads.
+export type SessionsLook = { kind: 'unread' } | { kind: 'failed'; reason?: string } | { kind: 'read'; sessions: Listed[]; complete?: boolean; known?: readonly string[]; holders?: readonly Listed[] }
 
 // A list that was read, as the rules look things up in it: its sessions by
 // id, whether it is complete, and the ids the ledger held when it was asked
@@ -635,12 +637,35 @@ function mergedOnLeaving(p: ForemanPairing): Reason[] {
   return [{ kind: 'merged', who: whoOf(p.issueKey, p.ticket), number: told.number }]
 }
 
+// Release's ledger update for `row`: each active pairing that owns the row's
+// ticket becomes released. Whether anyone still waits unclaimed is decided on
+// the ledger this update writes, and while someone does, the released slots'
+// names are added to the end of keptSlots in the same write, so the next read
+// decides them like any other freed slot. The names go through the ledger
+// reader's own rule, so a name from a damaged ticket is not carried and the
+// list keeps only the newest MAX_PAIRINGS names.
+export function releasedIn(t: ForemanTickets, row: SubRow, now: number): { tickets: ForemanTickets; released: boolean; waits: boolean } {
+  let released = false
+  const names: string[] = []
+  const pairings = t.pairings.map(p => {
+    if (!ownsTicket(p, row) || p.standing !== 'active') return p
+    released = true
+    names.push(whoOf(p.issueKey, p.ticket))
+    return { ...p, standing: 'released' as const }
+  })
+  const next = { ...t, pairings }
+  const waits = released && waitingUnclaimed(next, now, GONE_MS).length > 0
+  return { tickets: waits ? { ...next, keptSlots: keptSlotsIn([...next.keptSlots, ...names]) } : next, released, waits }
+}
+
 // What a freed slot leads to, given how many slots are free now and, when
 // someone still waits unclaimed in the queue, the names of the waiting issues
 // a wake line may carry: nothing when no slot is free, the kept sentence when
 // someone waits, and otherwise a wake with the number free. A read and
-// Release both decide by it. Release passes no names, because it defers to a
-// read whenever someone waits unclaimed.
+// Release both decide by it. Release calls it only when nobody waits
+// unclaimed, so it passes no names: while someone waits, Release carries the
+// freed slot's name in keptSlots instead, and the next read decides it like
+// any other freed slot.
 export type SlotOutcome = { kind: 'none' } | { kind: 'wake'; reason: Reason }
 
 export function slotOutcome(free: number, waiting: string[] | null = null): SlotOutcome {
@@ -857,7 +882,7 @@ function queueStep(
 // milestones come after its other reasons, and foreman reports them itself
 // rather than waking the parent with them, since splitReasons in wake.ts sets
 // them apart. A list that was read releases each held key that a session in
-// it shows started.
+// it, or in the whole list read beside it as `holders`, shows started.
 // An active pairing whose session the list shows over is freed by the over
 // rule before its state rules, but after its milestones, so a merge on the
 // same read is still reported. The frozen rule runs after the state rule and
@@ -953,7 +978,7 @@ export function decide(input: DecideInput): Decision {
   if (!folderExists && !tickets.folderMissing) logs.push('The status folder is missing, so foreman frees no slot until it is back.')
   tickets = { ...tickets, folderMissing: !folderExists }
   if (sessions.kind === 'read' && tickets.held.length > 0) {
-    const released = releasedBy(tickets.held, sessions.sessions)
+    const released = releasedBy(tickets.held, [...sessions.sessions, ...(sessions.holders ?? [])])
     if (released.logs.length > 0) tickets = { ...tickets, held: released.held }
     logs.push(...released.logs)
   }
@@ -975,7 +1000,7 @@ export function decide(input: DecideInput): Decision {
   const left = keeps ? freedBy.filter(who => !isWhoName(who)) : freedBy
   if (keeps) {
     for (const who of freedNow.filter(isWhoName)) logs.push(`Kept the slot of ${who} for the queue, because the desktop app's list of sessions could not be read.`)
-    tickets = { ...tickets, keptSlots: freedBy.filter(isWhoName).slice(-MAX_PAIRINGS) }
+    tickets = { ...tickets, keptSlots: keptSlotsIn(freedBy) }
   }
   // Each claim took the name of a slot this read freed, or of one an earlier
   // read kept, so a name left over is a freed slot that no waiting sub

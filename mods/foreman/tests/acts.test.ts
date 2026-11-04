@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
+import { NO_ANSWER } from '../hooks/act'
 import { BACKGROUND_NUDGE_TEXT, REASONS } from '../hooks/desktop'
 import { DATA_NOTE } from '../hooks/wake'
 import { FORK_REFUSAL, newPairing, NO_TICKET_SENTENCE, noTicketLog, OFF_REFUSAL, ticketsIn, ticketsKey, TICKETS_EMPTY, TITLE_LOG, TITLE_REFUSAL } from '../hooks/tickets'
@@ -940,6 +941,45 @@ test('a neighbouring key, an archived entry, an entry with a doubtful archived f
   const logs = await ui.paneText()
   expect(logs).toContain(`Could not read the desktop app's list of sessions, so no held issue was released: ${REASONS.listRefused}.`)
   expect(logs).not.toContain('so no slot was freed')
+})
+
+test('a session the person starts by hand outside the parent\'s family releases a held key through the whole list', async ($, on) => {
+  const { w, ui } = await refusingParent($, on)
+  const whole = () => w.desktop.calls.filter(c => c.tool === 'list_sessions' && c.args.linked !== true).length
+  await startFull($, KEYED_START)
+  await w.clock.settle()
+  w.desktop.sessions = [{ sessionId: 'local_h', cwd: '/w', title: 'ABC-7: by hand', isArchived: false, isRunning: true, outside: true }]
+  await minutesPass(w, 2)
+  expect(whole()).toBeGreaterThan(0)
+  expect(ledger(w).held).toEqual([])
+  expect(await ui.paneText()).toContain('Stopped holding ABC-7, because the desktop app\'s list shows a session for it.')
+})
+
+test('a whole list that cannot be read releases no held key and is logged, and the family list still releases one', async ($, on) => {
+  const { w, ui } = await refusingParent($, on)
+  await startFull($, KEYED_START)
+  await w.clock.settle()
+  w.desktop.sessions = [{ sessionId: 'local_h', cwd: '/w', title: 'ABC-7: by hand', isArchived: false, isRunning: true, outside: true }]
+  w.desktop.wholeList = 'error'
+  await minutesPass(w, 2)
+  expect(ledger(w).held).toEqual(['ABC-7'])
+  expect(await ui.paneText()).toContain(`Could not read the desktop app's whole list of sessions, so no held issue started by hand was released: ${REASONS.listRefused}.`)
+  w.desktop.sessions = [{ sessionId: 'local_h', cwd: '/w', title: 'ABC-7: by hand', isArchived: false, isRunning: true }]
+  await minutesPass(w, 2)
+  expect(ledger(w).held).toEqual([])
+})
+
+test('a whole list that never answers releases no held key and logs that it did not answer, while the family list is still read', async ($, on) => {
+  const { w, ui } = await refusingParent($, on)
+  await startFull($, KEYED_START)
+  await w.clock.settle()
+  w.desktop.sessions = [{ sessionId: 'local_h', cwd: '/w', title: 'ABC-7: by hand', isArchived: false, isRunning: true, outside: true }]
+  w.desktop.wholeList = 'hang'
+  const family = w.desktop.calls.filter(c => c.tool === 'list_sessions' && c.args.linked === true).length
+  await minutesPass(w, 3)
+  expect(ledger(w).held).toEqual(['ABC-7'])
+  expect(w.desktop.calls.filter(c => c.tool === 'list_sessions' && c.args.linked === true).length).toBeGreaterThan(family)
+  expect(await ui.paneText()).toContain(`Could not read the desktop app's whole list of sessions, so no held issue started by hand was released: ${NO_ANSWER}.`)
 })
 
 // A start whose brief runs /implement, and one whose brief does not.

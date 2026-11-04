@@ -2,10 +2,10 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PromptSubmitInput, Register, ResolveInput, ToolCallResult } from 'claude-code'
 
 import { checkOutcome, clampedDue, endsOf, isClaimed, soonestDue, withNote, withoutPaired, type CheckDone } from './checks'
-import { CALL_TIMEOUT_MS, decide, desktopOf, freeSlots, GONE_MS, keptByUnreadList, needsList, NO_ANSWER, slotOutcome, startWaits, watchingFrom, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
+import { CALL_TIMEOUT_MS, decide, desktopOf, freeSlots, GONE_MS, keptByUnreadList, needsList, NO_ANSWER, releasedIn, slotOutcome, startWaits, watchingFrom, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
 import { isSvgSurface } from './art'
 import { becameParentAnswer, COMMAND, commandOf, PASSED_ON, PASTED_LINE, pastedCommandIn, slotsAnswer, type Command } from './commands'
-import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, failureLine, linkedFamily, listSessions, NUDGE_TEXT, openSession, readHeader, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
+import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, everySession, failureLine, linkedFamily, listSessions, NUDGE_TEXT, openSession, readHeader, REASONS, sendMessage, type DesktopCall, type Listed, type SavedCopies, type SendResult } from './desktop'
 import { acceptedLog, beginFailedNotice, heldLine, heldLog, heldNotice, heldSentence, isHeldRefusal, isPersonPrompt, keyOfTitle } from './held'
 import { ignoredLine, readIssueLink } from './links'
 import { afterConsumed, emptyMarkers, FIRST_MARKER_LOG, MARKERS_KEPT_MS, MARKERS_PREFIX, markersIn, markersKey, markersNewest, type MarkersRecord } from './markers'
@@ -19,7 +19,7 @@ import { afterRead, nameOf, nextReadDelay, READ_LATER_MS, rowsOf, type FileRead,
 import { printable } from './text'
 import {
   addWork, briefFor, carriesTicket, fallbackOf, hasWork, isOffRefused, joinOwners, localIdIn, newPairing, nextPlace, NO_TICKET_SENTENCE, OFF_LOG, OFF_REFUSAL, OUTBOX_EMPTY, ownsTicket,
-  runsImplement, shownRows, ticketsIn, ticketsKey, TICKETS_EMPTY, waitingBrief, waitingUnclaimed, WAITING_SENTENCE, withOffRefusal, withUnwatched,
+  runsImplement, shownRows, ticketsIn, ticketsKey, TICKETS_EMPTY, waitingBrief, WAITING_SENTENCE, withOffRefusal, withUnwatched,
 } from './tickets'
 import { REASON_WORDS, splitReasons, wakeLine, whoOf } from './wake'
 
@@ -119,12 +119,17 @@ let markerLogged = false
 // in order.
 let markerWrites: Promise<void> = Promise.resolve()
 
-// The status folder: under CLAUDE_CONFIG_DIR when it is set, else under the
-// home folder's `.claude`.
-async function statusFolderOf($: $): Promise<string> {
+// Claude Code's configuration folder, without trailing slashes:
+// CLAUDE_CONFIG_DIR when it is set, else the home folder's `.claude`.
+async function configFolderOf($: $): Promise<string> {
   const config = await $.env.get('CLAUDE_CONFIG_DIR')
   const base = typeof config === 'string' && config !== '' ? config : `${(await $.env.get('HOME')) ?? ''}/.claude`
-  return `${base.replace(/\/+$/, '')}/foreman/builds`
+  return base.replace(/\/+$/, '')
+}
+
+// The status folder, inside the configuration folder.
+async function statusFolderOf($: $): Promise<string> {
+  return `${await configFolderOf($)}/foreman/builds`
 }
 
 // Adds a line to the log, keeping the newest LOG_KEPT. A line the same as the
@@ -381,20 +386,31 @@ function later($: $, work: () => Promise<unknown>) {
 // list that could not be read is logged with what it kept from happening: a
 // freed slot when a slot rule needed it, else a released hold when a key is
 // held, and otherwise a queued issue begun or dropped. Its fixed reason goes
-// to decide too, which raises the notification for it.
+// to decide too, which raises the notification for it. While a key is held,
+// the desktop app's whole list is read too, because a session the person
+// started by hand for a held issue is outside the family. A whole list that
+// cannot be read is only logged, by holdersIn, and changes nothing that
+// decide sees but the holds it would have released.
 async function decideNow($: $, folderExists: boolean, listed: boolean, watching: number, now: number): Promise<{ decision: Decision; rows: SubRow[]; written: ForemanTickets }> {
   const rows = await rowsNow($)
   const before = joinOwners(ticketsIn(await read($, tickets)), rows).tickets
   let sessions: SessionsLook = { kind: 'unread' }
   if (needsList(before, rows, now)) {
-    const sessionList = await within($, listSessions(desktopCall($)))
+    const family = within($, listSessions(desktopCall($), savedCopies($)))
+    // The whole list is asked for only while a key is held, at the same time
+    // as the family's, so a read waits for the slower of the two calls rather
+    // than for both in turn. It is used only when the family's list was read.
+    const whole = before.held.length > 0 ? within($, everySession(desktopCall($), savedCopies($))) : null
+    const sessionList = await family
+    const wholeList = whole === null ? null : await whole
     if (sessionList === TIMED_OUT || 'reason' in sessionList) {
       const why = sessionList === TIMED_OUT ? NO_ANSWER : sessionList.reason
       sessions = { kind: 'failed', reason: why }
       await addLog($, `Could not read the desktop app's list of sessions, so ${keptByUnreadList(before, rows, now)}: ${why}.`)
     } else {
       const known = before.pairings.flatMap(p => (p.localId === null ? [] : [p.localId]))
-      sessions = { kind: 'read', sessions: sessionList.sessions, complete: sessionList.complete, known }
+      const holders = wholeList === null ? [] : await holdersIn($, wholeList)
+      sessions = { kind: 'read', sessions: sessionList.sessions, complete: sessionList.complete, known, holders }
     }
   }
   const settings = parentIn(await read($, parent))
@@ -410,6 +426,15 @@ async function decideNow($: $, folderExists: boolean, listed: boolean, watching:
     return { ...decision.tickets, checks, outbox: addWork(decision.tickets.outbox, work) }
   })
   return { decision, rows, written }
+}
+
+// The sessions of the desktop app's whole list, which may release a held key
+// that the person started by hand outside the parent's linked family, or none
+// when that list could not be read, which is logged.
+async function holdersIn($: $, whole: Awaited<ReturnType<typeof everySession>> | typeof TIMED_OUT): Promise<Listed[]> {
+  if (whole !== TIMED_OUT && !('reason' in whole)) return whole.sessions
+  await addLog($, `Could not read the desktop app's whole list of sessions, so no held issue started by hand was released: ${whole === TIMED_OUT ? NO_ANSWER : whole.reason}.`)
+  return []
 }
 
 // What `within` answers when the call did not answer in time.
@@ -603,7 +628,7 @@ async function runDueChecks($: $) {
       return { ...t, checks: kept.map(c => claims.find(claim => claim.id === c.id) ?? c) }
     })
     if (claims.length === 0) return
-    const family = await within($, linkedFamily(desktopCall($))).catch(() => ({ reason: REASONS.notConnected }))
+    const family = await within($, linkedFamily(desktopCall($), savedCopies($))).catch(() => ({ reason: REASONS.notConnected }))
     const refusal = (id: string): string | null => {
       if (family === TIMED_OUT) return NO_ANSWER
       if ('reason' in family) return family.reason
@@ -787,13 +812,21 @@ function columnsOf(columns: unknown): number | undefined {
 // The desktop app's tools, called through the engine.
 const desktopCall = ($: $): DesktopCall => (server, tool, args) => $.mcp.call(server, tool, args)
 
+// Claude Code's saved tool results, read through the engine, for a list
+// answer that Claude Code saved to a file rather than pass back whole.
+const savedCopies = ($: $): SavedCopies => ({
+  config: () => configFolderOf($),
+  read: path => $.fs.read(path),
+  size: async path => (await $.fs.stat(path)).size,
+})
+
 // Opens the sub session whose file is `file` beside the parent, and says
 // what happened: a line in the log when it opened, and a toast with the same
 // line in the log when it did not.
 async function openRow($: $, file: string) {
   const row = (await shownNow($)).find(r => r.file === file)
   if (row === undefined) return
-  const result = await openSession(desktopCall($), row.record)
+  const result = await openSession(desktopCall($), row.record, savedCopies($))
   if ('opened' in result) {
     await addLog($, `Opened ${nameOf(row)} beside this session.`)
     return
@@ -828,11 +861,26 @@ function withSlotOutcome(t: ForemanTickets, outcome: SlotOutcome): ForemanTicket
   return { ...t, outbox: addWork(t.outbox, { logs: [], effects: [], lines: [wakeLine([outcome.reason])!] }) }
 }
 
-// After Release freed a slot: a read begins the first waiting sub session
-// when one waits unclaimed, and otherwise the parent is woken with the number
-// of slots free. Nothing happens when no slot is free.
-async function slotFreed($: $) {
-  if (waitingUnclaimed(ticketsIn(await read($, tickets)), await $.clock.now(), GONE_MS).length > 0) {
+// After Release freed a slot. When a sub session waited unclaimed in the
+// ledger update that released the pairing, that update also carried the
+// released issue's name in keptSlots, and `waits` is true, so a read is asked
+// for, which decides the slot as if it had freed on that read: a claim takes
+// the name, a list that does not show the waiting session surely open wakes
+// the parent with the kept sentence, a list that cannot be read keeps
+// carrying the name, and once nobody waits unclaimed the name wakes the
+// parent with the slot-free sentence. A read already under way decides on the
+// live ledger inside its own update, so it either takes the name or leaves it
+// stored for the next scheduled read, which is always armed. A name the
+// ledger's reader would drop, from a damaged ticket, is not carried, so no
+// read counts that slot as freed: it ends in neither a claim nor a wake, and
+// stays idle until another slot frees or a kept sentence wakes the parent, as
+// it did before Release carried names. When nobody waited, the parent is
+// woken at once with the number of slots free, and nothing happens when no
+// slot is free. The verdict comes from the release's own write rather than a
+// second look at the ledger, which could find nobody waiting after a read had
+// already claimed with the name and so handle the slot twice.
+async function slotFreed($: $, waits: boolean) {
+  if (waits) {
     later($, () => readNow($))
     return
   }
@@ -843,25 +891,26 @@ async function slotFreed($: $) {
 
 // The Release button: the row's ticket is released, which frees its slot
 // without archiving the session or touching its status file. The row stays
-// in the pane, dimmed, until its file leaves the folder.
+// in the pane, dimmed, until its file leaves the folder. When a sub session
+// waits unclaimed in the queue, the same ledger update keeps the freed slot
+// for it, as slotFreed says.
 async function releaseRow($: $, file: string) {
   const row = (await shownNow($)).find(r => r.file === file && r.isReleased !== true)
   if (row === undefined) return
+  const now = await $.clock.now()
   let released = false
+  let waits = false
   await writeTickets($, t => {
-    released = false
-    return {
-      ...t,
-      pairings: t.pairings.map(p => {
-        if (!ownsTicket(p, row) || p.standing !== 'active') return p
-        released = true
-        return { ...p, standing: 'released' }
-      }),
-    }
+    // The store may run this again when another write got in first, so the
+    // verdict is taken from the last run.
+    const out = releasedIn(t, row, now)
+    released = out.released
+    waits = out.waits
+    return out.tickets
   })
   if (!released) return
   await addLog($, `Released ${nameOf(row)}; its session and its status file are left as they are.`)
-  await slotFreed($)
+  await slotFreed($, waits)
 }
 
 // The tool.call hook on start_session, in a parent: a forked start and a

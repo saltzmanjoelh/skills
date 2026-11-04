@@ -121,7 +121,13 @@ fields. It found:
    from the agent's final one; the batch can then be released before that
    agent finishes, and its final report is answered with "Noted.", as any
    delivery from a member of a released batch is, so the model reads it at
-   its next turn.
+   its next turn. A wake makes the batch incomplete again, so when a turn
+   end had ended its last member and saved the deadline it replaced, as
+   item 3 describes, the wake gives back that saved deadline together with
+   the wait saved beside it. A chain of wakes and turn ends therefore never
+   shrinks a wait that refused lines grew, while the wait of a claim made
+   inside the settle minute is still dropped, because it was never saved.
+   `docs/specs/builder-batch-wake-follow-ups.md` gives the reasons.
 2. **A member ends only when none of its own background work is running.**
    When a member's tool call returns a `backgroundTaskId` or a `taskId`,
    builder stores that id with the member in the batch state. At each
@@ -178,8 +184,10 @@ fields. It found:
    minute and doubles after each refusal, up to a ceiling of one hour: 1, 2,
    4, 8, 16 and 32 minutes, then every 60 minutes for as long as the batch
    stays open. The wait is stored in the batch's state, so it survives a hot
-   reload. A batch stored by the previous code, without a wait, starts at
-   one minute. While the batch waits, a person's prompt still carries the
+   reload, and it survives an engine wake that gives back a deadline saved
+   at a turn end, because the wait is saved and given back beside that
+   deadline, as item 1 says. A batch stored by the previous code, without a
+   wait, starts at one minute. While the batch waits, a person's prompt still carries the
    line naming the members still running, and a member's later report or
    notification still ends the batch in the usual way: the delivery that
    comes once every member has ended, even when the last one ended at a
@@ -191,16 +199,18 @@ fields. It found:
 6. **The release turn reaches the model.** When a delivery that arrives
    while the session is idle releases a batch with the completion line,
    builder clears its count of turns to answer without the model, so the
-   turn that carries the line goes to the model. Until that turn's first
-   step has run, a held delivery from a member of a released batch does not
-   raise the count again. The engine sends each agent's notification after
-   its report, and nothing in the engine stops the releasing member's
-   notification from arriving before the release turn's first step, which
-   would otherwise raise the count and answer that turn with "Noted.". A
-   held delivery that arrives after that first step raises the count again
-   as usual. If another batch is open at the same moment, or a delivery from
-   the same batch was held earlier and the engine gives it a turn of its own
-   before the release turn, that delivery's turn may reach the model once,
+   turn that carries the line goes to the model, and it marks the state as
+   releasing until that turn's first step has run. While the state is
+   marked as releasing, a held delivery from any batch, released or still
+   open, does not raise the count again, so the release turn always reaches
+   the model. Without that rule, the releasing member's own notification, or
+   a held delivery from a second batch still open, could arrive before the
+   release turn's first step, raise the count and answer that turn with
+   "Noted."; `docs/specs/builder-batch-wake-follow-ups.md` gives the reasons
+   for covering every batch. A held delivery that arrives after that first
+   step raises the count again as usual. If a delivery from another open
+   batch, or one from the same batch that was held earlier, gets a turn of
+   its own before the release turn, that turn may reach the model once,
    which costs one model turn and loses nothing.
 7. **The test rename.** The hook test that claimed a person's prompt after a
    held member's notification goes to the model is renamed to claim only
@@ -290,9 +300,10 @@ fields. It found:
   finished ends a member that the engine woke; one whose summary says the agent is waiting on
   its own background work ends nothing, nor does the word finished outside
   the summary; a release that comes after more idle deliveries than turns
-  clears the count, so the release turn reaches the model; and the releasing
-  member's own notification before the release turn's first step does not
-  stop that turn from reaching the model.
+  clears the count, so the release turn reaches the model; and neither the
+  releasing member's own notification nor a held delivery from a second
+  batch still open, arriving before the release turn's first step, stops
+  that turn from reaching the model.
 - For this change, `batch.test.ts` covers: a member that reports while its
   own Monitor is still listed is not ended, the batch stays open, and its
   later report after a clean turn end releases the batch once; a woken
