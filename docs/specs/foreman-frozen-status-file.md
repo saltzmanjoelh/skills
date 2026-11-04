@@ -61,9 +61,11 @@ changed for longer than the new limit.
    the frozen rule could wake, the gone wake goes and the frozen wake stays
    quiet. It never runs for a pairing that the over rule or the done rule
    freed on that read.
-7. The stored mark is the existing `goneWokeFor` field. No field is added,
-   so the stored pairings need no new default and no migration. The field's
-   comment says that the frozen wake sets it too.
+7. The stored mark is the existing `goneWokeFor` field. No field is added to
+   the stored pairings, so they need no new default and no migration. The
+   field's comment says that the frozen wake sets it too. The one new value
+   is `watchingSince` in foreman's session state, which rule 10 describes; it
+   is not part of the stored pairings, and a restart clears it.
 8. The wake skill gets a section for the new sentence. The parent finds the
    session in `list_sessions` by its key or ticket, as the idle section
    does. If the list shows it not running, archived or missing, the parent
@@ -76,6 +78,17 @@ changed for longer than the new limit.
    kind of wake.
 9. The README's rules table and wake list name the new rule and sentence,
    and the test that pins every wake sentence pins the new one.
+10. The frozen rule waits until foreman has listed the status folder for two
+    minutes, twice builder's one-minute rewrite interval, without a gap of
+    more than five minutes between successful listings. The first listing
+    after foreman starts, and the first after a longer gap, begin a new
+    watch. The reason is the machine sleeping: when it wakes, foreman's first
+    read and each builder's rewrite race, so foreman can find every live file
+    as old as the sleep before its builder rewrites it, and would wake the
+    parent for every live sub session. The five-minute gap limit stays above
+    foreman's slowest read interval of two minutes, or every quiet read would
+    begin a new watch, and well below `FROZEN_MS`. A file whose builder really
+    stopped still gets the wake, two minutes into the watch.
 
 ## Edge cases
 
@@ -101,6 +114,12 @@ changed for longer than the new limit.
   limit, so nothing wakes.
 - Foreman restarts during a stretch. `goneWokeFor` is stored with the
   pairing, so the wake does not repeat.
+- The machine wakes from a sleep longer than five minutes, or the folder's
+  listings fail for that long. The first listing that works begins a new
+  watch, so a live file that its builder has not yet rewritten does not wake
+  the parent; a file still unchanged two minutes later does.
+- Foreman starts with files already more than ten minutes old. The first
+  listing begins a watch, so the wake comes two minutes later.
 
 ## Non-goals
 
@@ -142,6 +161,11 @@ and show:
 - after it goes, the gone rule does not wake for the same stretch;
 - it goes with a list that cannot be read and with a list that shows the
   session running.
+- a read that begins a new watch, after a gap of more than five minutes,
+  brings no wake, and a read two minutes into the watch does; the read loop
+  carries the watch across reads and begins a new one after failed listings;
+  and the gap limit stays between the slow read interval and the frozen
+  limit.
 
 `mods/foreman/tests/wake.test.ts` pins the new sentence. The four gates in
 the project's `CLAUDE.md` pass.
