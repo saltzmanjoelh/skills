@@ -355,6 +355,10 @@ test('a restart keeps a fresh stamp for a kept slot, and begins no waiting sessi
     ['ft-b', { place: 1, claim: null, keptAt: T0 - MINUTE }],
     ['ft-c', { place: 2, claim: null }],
   ])
+  // Once the kept slot is more than five minutes old, the next read begins
+  // the session it was kept for, which shows the restart did read the list.
+  await minutesPass(w, 7, { 'b.json': waitingFile('ft-b', 'local_b') })
+  expect(begins(w)).toEqual(['local_b'])
 })
 
 test('an active sub session archived before its file said done frees its slot, and the next issue in the queue begins in it', async ($, on) => {
