@@ -292,6 +292,12 @@ for (const surface of SURFACES) {
   })
 }
 
+test('on the desktop, a card\'s stage drawing fits inside the card\'s border and padding', async ($, on) => {
+  const { ui } = await parent($, on, 2, { 'a.json': busy('ABC-1', 'working', { stage: 'build' }) }, 'desktop')
+  await ui.pane.redraw()
+  expect(held(await ui.pane.find({ key: 'stages-a.json' }))?.props?.width).toBe((200 - 4) * 8)
+})
+
 for (const surface of SURFACES) {
   test(`on the ${surface}, a card with no stage yet fills nothing and its line says so`, async ($, on) => {
     const { ui } = await parent($, on, 2, { 'a.json': busy('ABC-1', 'working', { stageDone: 4 }) }, surface)
@@ -406,6 +412,21 @@ test('a ledger that cannot be read leaves the tiles and the merged count unknown
   expect((await ui.pane.find({ key: 'tile-merged' }))?.text).toContain('unknown')
   expect((await ui.pane.find({ key: 'tile-merged' }))?.text).not.toContain('Merged 0')
   expect((await ui.pane.find({ key: 'tile-spent' }))?.text).toContain('unknown')
+})
+
+test('a ledger that cannot be read hands the band back to the host rather than claim no slot is busy', async ($, on) => {
+  const w = world(on, { store: { 'parent:session-1': { isOn: true, slots: 2 }, [ticketsKey('session-1')]: { ...TICKETS_EMPTY } } })
+  w.folder.put('a.json', record('ABC-1', 'working', { stage: 'build', desktopSessionId: 'local_ABC-1' }))
+  w.desktop.sessions = [{ sessionId: 'local_ABC-1', cwd: '/w', title: 'ABC-1: short', isRunning: true }]
+  let fails = false
+  on('state.get', ($, e, next) => (fails && e.plugin === 'foreman' && e.key === 'tickets' ? { deny: 'the state is gone' } as never : next(e)))
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await w.clock.settle()
+  expect(await ui.bandText()).toContain('1 of 2 slots busy')
+  fails = true
+  expect(await ui.bandText()).toBe('')
 })
 
 test('a ledger that cannot be read draws no slot lights, says the busy slots are unknown and shows no badge', async ($, on) => {

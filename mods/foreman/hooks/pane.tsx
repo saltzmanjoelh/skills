@@ -225,9 +225,11 @@ export type BandPresses = { open: (file: string) => void; pane: () => void }
 // key as that link, then a space as its own text, then the button holding the
 // rest of the chip. The chips are fitted by their whole text either way. A
 // released sub session has no chip. Null in a session that is not a parent,
-// so the host draws what it would without foreman.
+// so the host draws what it would without foreman, and null too when the
+// ledger cannot be read, so the band never claims a busy count it does not
+// know.
 export function bandTree(ui: Elements, view: View, width: number | undefined, presses: BandPresses) {
-  if (!view.isOn) return null
+  if (!view.isOn || !view.isLedgerRead) return null
   const v = { ...view, rows: view.rows.filter(row => row.isReleased !== true) }
   const { Box, Text, Button, Link } = ui
   const head = bandHead(v)
@@ -289,6 +291,10 @@ export function bandTree(ui: Elements, view: View, width: number | undefined, pr
 // which turns the columns the engine gives into a drawing's width, as
 // builder's pane does.
 const PX_PER_COLUMN = 8
+
+// The columns a card's round border and its side padding take on a surface
+// that draws images, which its stage drawing leaves out.
+const CARD_FRAME_COLUMNS = 4
 
 function drawingWidth(columns: number | undefined): number {
   return svgWidth(typeof columns === 'number' && Number.isFinite(columns) ? columns * PX_PER_COLUMN : Number.NaN)
@@ -482,7 +488,7 @@ function card(ui: Elements, v: View, row: SubRow, presses: PanePresses, columns:
         </Box>
         {stateElement}
       </Box>
-      {stagesRow(ui, row, columns)}
+      {stagesRow(ui, row, drawn && typeof columns === 'number' ? columns - CARD_FRAME_COLUMNS : columns)}
       <Box key={`line-${row.file}`} flexDirection="row" justifyContent="space-between">
         <Box key={`line-words-${row.file}`}><Text dimColor>{cardLineWords(row, v.now)}</Text></Box>
         <Box key={`line-worked-${row.file}`}><Text dimColor>{` ${workedWords(row, v.rowTimes.get(row.file) ?? TIMES_UNKNOWN)}`}</Text></Box>
