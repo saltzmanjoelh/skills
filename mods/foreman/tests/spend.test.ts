@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { recordIn } from '../hooks/record'
-import { folded, MAX_SPENT, spendOf, spendWords, spentSum, ticketTimes, timeSum, timesOf, timesWords, TIMES_UNKNOWN, withQueued, withReadings } from '../hooks/spend'
+import { folded, MAX_SPENT, spendOf, spendWords, spentSum, ticketTimes, timeSum, timesOf, TIMES_UNKNOWN, withQueued, withReadings } from '../hooks/spend'
 import type { SubRow } from '../hooks/subs'
 import { newPairing, TICKETS_EMPTY } from '../hooks/tickets'
 import type { ForemanPairing, ForemanSpent, ForemanTickets, ForemanTiming } from '../types'
@@ -241,8 +241,3 @@ test('past 200 entries the fold keeps the four time sums unchanged', () => {
   expect(bare.earlier!.times).toEqual(TIMES_UNKNOWN)
 })
 
-test('the words for times say unknown for a missing value, never zero, and unknown alone when all four are missing', () => {
-  expect(timesWords(TIMES_UNKNOWN)).toBe('unknown')
-  expect(timesWords({ working: 65 * MINUTE, needsYou: null, otherWaiting: 3 * MINUTE, queued: 0 })).toBe('working 1h 5m · waiting on you unknown · other waiting 3m · queued 0m')
-  expect(timesWords({ working: null, needsYou: null, otherWaiting: null, queued: 0 })).toBe('working unknown · waiting on you unknown · other waiting unknown · queued 0m')
-})

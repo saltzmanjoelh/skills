@@ -9,7 +9,7 @@
 import type { ForemanCounts, ForemanSpend, ForemanSpent, ForemanTickets, ForemanTimes } from '../types'
 import type { RecordTiming, RecordUsage } from './record'
 import { STATES } from './record'
-import { ageWords, type SubRow } from './subs'
+import type { SubRow } from './subs'
 import { ownsTicket } from './tickets'
 
 // The most entries the spent list keeps before the oldest ones whose pairing
@@ -29,7 +29,7 @@ const larger = (a: ForemanCounts, b: ForemanCounts): ForemanCounts => ({
 // The sum of two figures, such as dollars or times, either of which may be
 // unknown: the known one when only one is known, and unknown only when
 // neither is.
-const plusKnown = (a: number | null, b: number | null) => (a === null ? b : b === null ? a : a + b)
+export const plusKnown = (a: number | null, b: number | null): number | null => (a === null ? b : b === null ? a : a + b)
 
 // The larger of two dollar figures, a known one always winning over an
 // unknown one, so a known figure never turns unknown.
@@ -215,17 +215,6 @@ export function ticketTimes(t: ForemanTickets, ticket: string | null): ForemanTi
 // sum can be longer than the run.
 export function timeSum(t: ForemanTickets): ForemanTimes {
   return t.spent.reduce((sum, e) => plusTimes(sum, entryTimes(e)), t.earlier?.times ?? TIMES_UNKNOWN)
-}
-
-// The words for four times, such as `working 1h 5m · waiting on you 12m ·
-// other waiting 3m · queued 0m`, each in whole minutes, or hours and minutes
-// from an hour on. A missing time reads "unknown", never zero, and when all
-// four are missing the words are "unknown" alone.
-export function timesWords(times: ForemanTimes): string {
-  const { working, needsYou, otherWaiting, queued } = times
-  if (working === null && needsYou === null && otherWaiting === null && queued === null) return 'unknown'
-  const words = (ms: number | null) => (ms === null ? 'unknown' : ageWords(ms))
-  return `working ${words(working)} · waiting on you ${words(needsYou)} · other waiting ${words(otherWaiting)} · queued ${words(queued)}`
 }
 
 // A count as builder's pane shows it: in thousands below a million, and in

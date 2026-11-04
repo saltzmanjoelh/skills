@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { BEGIN_TEXT } from '../hooks/desktop'
 import { afterTyped, keptOf, noticeArrived, noticeFailed, REPORT_SHOWN_MS, shownReport } from '../hooks/pane'
-import { failedNoticeLog, LOG_KEPT } from '../hooks/register'
+import { failedNoticeLog, LOG_KEPT, loggedLines } from '../hooks/log'
 import { ticketsIn, ticketsKey } from '../hooks/tickets'
 import type { Engine } from 'claude-code/testing'
 
@@ -633,21 +633,33 @@ test('the band\'s value: a failure or a kept value adds to the count, typing rel
   expect(shownReport({ text: OPENED, at: 'soon', kept: 2 }, at)).toBeNull()
 })
 
-test('a failed report whose line was merged with the same line before it lowers that line\'s count by one, then adds the reason line when it is the first and one marked line', () => {
+test('a failed report whose line was merged with the same line before it lowers that line\'s count by one and gives it back its own time, then adds the reason line when it is the first and one marked line', () => {
   const earlier = { at: T0 - MINUTE, text: 'Opened ABC-1 beside this session.' }
   // The same sentence was logged at T0 - 30 seconds, and again by this report
   // at T0, which merged it onto the older line as (3 times).
   const lines = [earlier, { at: T0, text: OPENED, times: 3 }]
+  const before = [T0 - 30 * SECOND]
   const marked = `${OPENED} (notification not raised: no-surface)`
   const reason = reasonLine('no-surface', 'none')
-  const first = failedNoticeLog(lines, { texts: [OPENED], at: T0 }, [reason, marked], T0 + SECOND)
-  expect(first).toEqual([earlier, { at: T0, text: OPENED, times: 2 }, { at: T0 + SECOND, text: reason }, { at: T0 + SECOND, text: marked }])
+  const first = failedNoticeLog(lines, { texts: [OPENED], at: T0, before }, [reason, marked], T0 + SECOND)
+  expect(first).toEqual([earlier, { at: T0 - 30 * SECOND, text: OPENED, times: 2 }, { at: T0 + SECOND, text: reason }, { at: T0 + SECOND, text: marked }])
   // A count of two drops to a line with no count, and a later failure for a
   // reason already logged adds only the marked line.
-  const second = failedNoticeLog([earlier, { at: T0, text: OPENED, times: 2 }], { texts: [OPENED], at: T0 }, [marked], T0 + SECOND)
-  expect(second).toEqual([earlier, { at: T0, text: OPENED }, { at: T0 + SECOND, text: marked }])
+  const second = failedNoticeLog([earlier, { at: T0, text: OPENED, times: 2 }], { texts: [OPENED], at: T0, before }, [marked], T0 + SECOND)
+  expect(second).toEqual([earlier, { at: T0 - 30 * SECOND, text: OPENED }, { at: T0 + SECOND, text: marked }])
   // A line the report wrote that was already pushed out of the kept lines is
   // skipped, and the older lines stay as they were.
   const full = Array.from({ length: LOG_KEPT }, (_, i) => ({ at: T0 + i, text: `line ${i}` }))
-  expect(failedNoticeLog(full, { texts: [OPENED], at: T0 - MINUTE }, [marked], T0 + MINUTE)).toEqual([...full.slice(1), { at: T0 + MINUTE, text: marked }])
+  expect(failedNoticeLog(full, { texts: [OPENED], at: T0 - MINUTE, before: [null] }, [marked], T0 + MINUTE)).toEqual([...full.slice(1), { at: T0 + MINUTE, text: marked }])
+})
+
+test('a report logged onto the same line before it and then taken back leaves that line as it was before the report, time included', () => {
+  const older = { at: T0 - MINUTE, text: 'Opened ABC-1 beside this session.' }
+  const same = { at: T0 - 30 * SECOND, text: OPENED, times: 2 }
+  const texts = [OPENED, MERGED]
+  const added = loggedLines([older, same], texts, T0)
+  expect(added.before).toEqual([T0 - 30 * SECOND, null])
+  expect(added.lines).toEqual([older, { at: T0, text: OPENED, times: 3 }, { at: T0, text: MERGED }])
+  const marked = `${OPENED} ${MERGED} (notification not raised: no-surface)`
+  expect(failedNoticeLog(added.lines, { texts, at: T0, before: added.before }, [marked], T0 + SECOND)).toEqual([older, same, { at: T0 + SECOND, text: marked }])
 })

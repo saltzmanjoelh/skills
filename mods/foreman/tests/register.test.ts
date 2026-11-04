@@ -540,8 +540,6 @@ for (const surface of SURFACES) {
 const USAGE = { models: [{ model: 'model-a', input: 4000, output: 1000, cacheRead: 90_000, cacheWrite: 2000 }], usd: 1.75 }
 const USAGE_WORDS = '4K in, 1K out, 90K cache read, 2K cache write · $1.75'
 
-// The text of every line of the pane that begins with `head`, in the order
-// the pane draws them.
 // The pane's lines that begin with `head`, read with the Log and Token
 // details rows unfolded.
 async function linesOf(ui: Awaited<ReturnType<typeof mountBoth>>, head: string): Promise<string[]> {

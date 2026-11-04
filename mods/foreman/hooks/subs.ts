@@ -102,7 +102,9 @@ export const busyCount = (rows: readonly SubRow[]) => rows.filter(isBusy).length
 export type Tone = 'red' | 'amber' | 'plain'
 
 // Every state's words and tone. It is typed over every state, so a state
-// added to the record fails the type check until it has an entry here.
+// added to the record fails the type check until it has an entry here. A
+// state's light is in LIGHT_OF in hooks/glance.ts, and its icon is in
+// STATE_ICON in hooks/pane.tsx.
 export const STATE_LOOK: Record<BuildState, { words: string; tone: Tone }> = {
   'working': { words: 'working', tone: 'plain' },
   'waiting-on-builder': { words: 'waiting on builder', tone: 'plain' },

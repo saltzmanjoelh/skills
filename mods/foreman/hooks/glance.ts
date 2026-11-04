@@ -20,7 +20,8 @@ export type Light = 'green' | 'red' | 'amber' | 'muted'
 // Every state's light. It is typed over every state, so a state added to the
 // record fails the type check until it has an entry here. A done sub session
 // takes no slot and so draws no light; its entry is there only to complete
-// the table.
+// the table. A state's words and tone are in STATE_LOOK in hooks/subs.ts, and
+// its icon is in STATE_ICON in hooks/pane.tsx.
 export const LIGHT_OF: Record<BuildState, Light> = {
   'working': 'green',
   'waiting-on-builder': 'green',

@@ -16,7 +16,8 @@ import { objectOf } from './text'
 export type { BuildStage, BuildState }
 
 // The states a sub session can be in. STATE_LOOK in hooks/subs.ts gives each
-// one its words and its color.
+// one its words and its color, LIGHT_OF in hooks/glance.ts its light, and
+// STATE_ICON in hooks/pane.tsx its icon.
 export const STATES = ['working', 'waiting-on-builder', 'idle', 'needs-you', 'in-cleanup', 'done'] as const
 
 // This line stops the type check when foreman's list of states and builder's

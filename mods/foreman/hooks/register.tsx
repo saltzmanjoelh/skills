@@ -9,6 +9,7 @@ import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, everySession, failureLine, linkedFam
 import { FOLDS_CLOSED, foldsIn, menuPressed, prunedMenus } from './glance'
 import { acceptedLog, beginFailedNotice, heldLine, heldLog, heldNotice, heldSentence, isHeldRefusal, isPersonPrompt, keyOfTitle, topUpLine } from './held'
 import { ignoredLine, readIssueLink } from './links'
+import { failedNoticeLog, loggedLines, type LoggedReport } from './log'
 import { afterConsumed, emptyMarkers, FIRST_MARKER_LOG, MARKERS_KEPT_MS, MARKERS_PREFIX, markersIn, markersKey, markersNewest, type MarkersRecord } from './markers'
 import { checkedLine, isAppParts, isNotedReply, isStatusChanged, keptLine, keptNames, NOTED, NOTED_REPLY, notesIn } from './notes'
 import { afterTyped, bandTree, noticeArrived, noticeFailed, PANE, paneTree, shownReport, type BandNotice, type Elements, type StoredReport, type View } from './pane'
@@ -57,9 +58,6 @@ const builderUsage = atom({ plugin: 'builder', key: 'usage' } as const, null)
 
 // A stored time, or null when the store holds none or holds something else.
 const numberOrNull = (raw: unknown): number | null => (typeof raw === 'number' && Number.isFinite(raw) ? raw : null)
-
-// How many lines the log keeps.
-export const LOG_KEPT = 20
 
 // How often the band is drawn again while the role is on, so the time until
 // the next read and a stale file's age stay true.
@@ -152,53 +150,17 @@ async function addLog($: $, text: string) {
 }
 
 // Adds several lines to the log in one update, each as addLog would, and
-// answers the time it wrote them at.
-async function addLogs($: $, texts: readonly string[]): Promise<number> {
+// answers what it wrote, so that a failed notification can take it back.
+async function addLogs($: $, texts: readonly string[]): Promise<LoggedReport> {
   const at = await $.clock.now()
-  if (texts.length === 0) return at
-  await update($, log, lines => withLines(Array.isArray(lines) ? lines : [], texts, at))
-  return at
-}
-
-// The log with `texts` added at `at`: a line the same as the newest one is
-// counted on that one rather than added, and only the newest LOG_KEPT lines
-// are kept.
-export function withLines(lines: readonly ForemanLogLine[], texts: readonly string[], at: number): ForemanLogLine[] {
-  let kept = [...lines]
-  for (const text of texts) {
-    const last = kept.at(-1)
-    kept = last !== undefined && last.text === text
-      ? [...kept.slice(0, -1), { at, text, times: (last.times ?? 1) + 1 }]
-      : [...kept, { at, text }].slice(-LOG_KEPT)
-  }
-  return kept
-}
-
-// The log without the lines that `texts` wrote at `at`, as showReports wrote
-// a report's sentences before its notification failed. The newest line with
-// each text and that time is taken out, or has its count lowered when the
-// same text came more than once in a row. A line already pushed out of the
-// kept lines is skipped.
-export function withoutLines(lines: readonly ForemanLogLine[], texts: readonly string[], at: number): ForemanLogLine[] {
-  const kept = [...lines]
-  for (const text of [...texts].reverse()) {
-    let i = kept.length - 1
-    while (i >= 0 && !(kept[i]!.text === text && kept[i]!.at === at)) i--
-    if (i < 0) continue
-    const times = kept[i]!.times ?? 1
-    if (times > 1) kept[i] = times === 2 ? { at, text } : { at, text, times: times - 1 }
-    else kept.splice(i, 1)
-  }
-  return kept
-}
-
-// The log after a notice whose notification failed: the report lines it
-// `logged`, when it logged any, taken out as withoutLines says, then `added`,
-// the reason line when it is the first for its reason and the marked line,
-// added at `now` as withLines says. notify writes it in one update.
-export function failedNoticeLog(lines: readonly ForemanLogLine[], logged: LoggedReport | undefined, added: readonly string[], now: number): ForemanLogLine[] {
-  const without = logged === undefined ? lines : withoutLines(lines, logged.texts, logged.at)
-  return withLines(without, added, now)
+  let before: readonly (number | null)[] = texts.map(() => null)
+  if (texts.length === 0) return { texts, at, before }
+  await update($, log, lines => {
+    const added = loggedLines(Array.isArray(lines) ? lines : [], texts, at)
+    before = added.before
+    return added.lines
+  })
+  return { texts, at, before }
 }
 
 // Reads the Issue link fact from the session's working folder, keeps what it
@@ -385,8 +347,9 @@ async function readAndSchedule($: $) {
       await update($, watchingSince, () => since)
     }
     const { decision, rows, written } = await decideNow($, listing.exists, listing.found !== null, since, now)
-    await pruneMenus($).catch(() => undefined)
-    const usual = nextReadDelay(shownRows(rows, decision.tickets))
+    const shown = shownRows(rows, decision.tickets)
+    await pruneMenus($, busyFilesOf(shown)).catch(() => undefined)
+    const usual = nextReadDelay(shown)
     const checkDue = soonestDue(written.checks)
     const dues = [decision.nextDueAt, checkDue].filter((at): at is number => at !== null)
     const delay = dues.length === 0 ? usual : Math.min(usual, Math.max(Math.min(...dues) - now, SOONEST_READ_MS))
@@ -517,10 +480,6 @@ async function nudge($: $, to: string, name: string, why: string, text = NUDGE_T
 // the reason already, and the reason's words for that line and for the
 // notice's own line.
 type NotifyFailure = { key: string; words: string }
-
-// The lines a report wrote to the log before its notification was tried:
-// their texts and the time addLogs wrote them at.
-export type LoggedReport = { texts: readonly string[]; at: number }
 
 // Raises one native notification and records how it went. The engine raises
 // one only by writing a terminal's own notification sequence, so it can never
@@ -696,8 +655,8 @@ const OLD_SLOT_LINE = / (?:one slot free; pick the next issue and start it\.|(?:
 // person next types when it did not.
 async function showReports($: $, sentences: readonly string[]) {
   if (sentences.length === 0) return
-  const at = await addLogs($, sentences)
-  await notify($, sentences.join(' '), { quiet: true, band: { newest: sentences.at(-1)!, count: sentences.length, isReport: true }, logged: { texts: sentences, at } })
+  const logged = await addLogs($, sentences)
+  await notify($, sentences.join(' '), { quiet: true, band: { newest: sentences.at(-1)!, count: sentences.length, isReport: true }, logged })
 }
 
 // Lets a notice the band keeps go once the person types: it shows for ten
@@ -973,22 +932,20 @@ async function ledgerRead($: $): Promise<{ ledger: ForemanTickets; isRead: boole
   }
 }
 
-// The status files of the busy cards the pane draws now, which are the only
-// cards whose menu row can be open.
+// The status files of the busy cards among `shown`, which are the only cards
+// whose menu row can be open.
+const busyFilesOf = (shown: readonly SubRow[]): string[] => shown.filter(isBusy).map(row => row.file)
+
+// The status files of the busy cards the pane draws now.
 async function busyFilesNow($: $): Promise<string[]> {
-  return (await shownNow($)).filter(isBusy).map(row => row.file)
+  return busyFilesOf(await shownNow($))
 }
 
-// Closes the menu row of every card that is no longer busy, so a card that
-// comes back starts folded. It writes nothing when every open menu still has
-// its card.
-async function pruneMenus($: $) {
-  const busyFiles = await busyFilesNow($)
-  await update($, folds, raw => {
-    const f = foldsIn(raw)
-    const pruned = prunedMenus(f, busyFiles)
-    return pruned === f ? raw : pruned
-  })
+// Closes the menu row of every card whose file is not in `busyFiles`, so a
+// card that comes back starts folded. It writes nothing when every open menu
+// still has its card.
+async function pruneMenus($: $, busyFiles: readonly string[]) {
+  await setFolds($, f => prunedMenus(f, busyFiles))
 }
 
 // Sets one of the pane's fold states, as `change` gives it from the folds
@@ -1119,7 +1076,8 @@ async function slotFreed($: $, waits: boolean) {
 // waits unclaimed in the queue, the same ledger update keeps the freed slot
 // for it, as slotFreed says.
 async function releaseRow($: $, file: string) {
-  const row = (await shownNow($)).find(r => r.file === file && isBusy(r))
+  const shown = await shownNow($)
+  const row = shown.find(r => r.file === file && isBusy(r))
   if (row === undefined) return
   const now = await $.clock.now()
   let released = false
@@ -1133,7 +1091,9 @@ async function releaseRow($: $, file: string) {
     return out.tickets
   })
   if (!released) return
-  await pruneMenus($).catch(() => undefined)
+  // The released card is no longer busy, and the others are as the rows read
+  // before the release say.
+  await pruneMenus($, busyFilesOf(shown).filter(f => f !== file)).catch(() => undefined)
   await addLog($, `Released ${nameOf(row)}; its session and its status file are left as they are.`)
   await slotFreed($, waits)
 }

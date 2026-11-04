@@ -84,12 +84,11 @@ test('on a fresh mount the Log and Token details rows are folded, the last line 
 })
 
 test('the last line never begins with a time of day, and reads nothing yet on an empty log', async ($, on) => {
-  const w = world(on)
+  world(on)
   leftInState(on, { parent: { isOn: true, slots: null }, log: [] })
   const ui = await mountBoth($, on)
   await ui.pane.redraw()
   expect((await ui.pane.find({ key: 'log-last' }))?.text).toBe('last: nothing yet')
-  void w
 })
 
 test('the folds survive a second mount on the same state, a value left in state draws as it says, and a damaged value draws folded', async ($, on) => {

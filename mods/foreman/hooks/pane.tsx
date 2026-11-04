@@ -13,7 +13,7 @@ import {
 import { linkOf } from './links'
 import { markersLine, type MarkersRecord } from './markers'
 import type { BuildState } from './record'
-import { spendOf, spendWords, TIMES_UNKNOWN, type Merged } from './spend'
+import { plusKnown, spendOf, spendWords, TIMES_UNKNOWN, type Merged } from './spend'
 import { STAGES, stageLabel } from './stages'
 import {
   ageWords, busyCount, chipParts, chipText, fitChips, isBusy, isProbablyHung, keyOf, moreWords, SEPARATOR, STATE_LOOK, staleWords, untilWords, waitWords, type SubRow,
@@ -280,11 +280,6 @@ export function bandTree(ui: Elements, view: View, width: number | undefined, pr
   )
 }
 
-
-// The engine keeps a key only on a Box or a Button, never on a Text, a Link
-// or a drawing, so the pane holds each of those that a test finds by its key
-// in a Box of its own with that key.
-
 // About how many CSS pixels wide one column of the pane is on the desktop,
 // which turns the columns the engine gives into a drawing's width, as
 // builder's pane does.
@@ -299,7 +294,9 @@ function drawingWidth(columns: number | undefined): number {
 const LIGHT_COLOR: Record<Light, string | undefined> = { green: 'success', red: 'error', amber: 'warning', muted: undefined }
 
 // The icon a card draws before its state word. It is typed over every state,
-// so a state added to the record fails the type check until it has one.
+// so a state added to the record fails the type check until it has one. A
+// state's words and tone are in STATE_LOOK in hooks/subs.ts, and its light is
+// in LIGHT_OF in hooks/glance.ts.
 const STATE_ICON: Record<BuildState, string> = {
   'working': '▸',
   'waiting-on-builder': '…',
@@ -392,7 +389,10 @@ function lightsRow(ui: Elements, v: View, busy: readonly SubRow[]) {
 }
 
 // A row's key: the issue's link when it has one, else text, in bold on a
-// card and dimmed on a compact line.
+// card and dimmed on a compact line. The engine keeps a key only on a Box or
+// a Button, never on a Text, a Link or a drawing, so this, like every keyed
+// text, link and drawing in the pane, sits in a Box of its own that carries
+// the key a test finds it by.
 function keyElement(ui: Elements, row: SubRow, address: string | null, isDim = false) {
   const { Box, Text, Link } = ui
   const link = rowLink(row, address)
@@ -536,6 +536,15 @@ function upNext(ui: Elements, v: View, presses: PanePresses) {
 // The three tiles' words: a figure and its small print each.
 export type Tile = { key: string; figure: string; small: string }
 
+// The Merged tile's small print: nothing when nothing merged or the ledger
+// could not be read, `cost unknown` when no merged issue has a dollar figure,
+// and otherwise the average cost of each merged issue.
+function mergedSmallPrint(merged: Merged | null): string {
+  if (merged === null || merged.count === 0) return ''
+  if (merged.average === null) return 'cost unknown'
+  return `${usdWords(merged.average)} per merged issue`
+}
+
 // The tiles: what the sub sessions and this session spent together, with the
 // split; the working time summed over every sub session this parent started,
 // with the time spent waiting on the person; and how many issues merged, with
@@ -545,14 +554,13 @@ export type Tile = { key: string; figure: string; small: string }
 export function tilesOf(v: View): Tile[] {
   const subs = v.subsSpent?.usd ?? null
   const own = v.ownSpent?.usd ?? null
-  const total = subs === null ? own : own === null ? subs : subs + own
+  const total = plusKnown(subs, own)
   const times = v.subsTime ?? TIMES_UNKNOWN
   const merged = v.merged
-  const mergedSmall = merged === null || merged.count === 0 ? '' : merged.average === null ? 'cost unknown' : `${usdWords(merged.average)} per merged issue`
   return [
     { key: 'tile-spent', figure: `Spent ${usdWords(total)}`, small: `sub sessions ${usdWords(subs)}${SEPARATOR}this session ${usdWords(own)}` },
     { key: 'tile-working', figure: `Working ${timeWords(times.working)}`, small: `waiting on you ${timeWords(times.needsYou)}` },
-    { key: 'tile-merged', figure: `Merged ${merged === null ? 'unknown' : merged.count}`, small: mergedSmall },
+    { key: 'tile-merged', figure: `Merged ${merged === null ? 'unknown' : merged.count}`, small: mergedSmallPrint(merged) },
   ]
 }
 
