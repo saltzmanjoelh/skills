@@ -510,7 +510,8 @@ test('an archived claimed sub session is held, with a notification only when no 
     const t = ledger(waiting('ft-b', 'ABC-2', 1, { attemptAt: T0, notified }), waiting('ft-c', 'ABC-3', 2))
     const d = read(t, [row('ft-b'), row('ft-c')], T0 + MINUTE, { sessions: list([archived, listed('local_ft-c')]) })
     expect(d.tickets.held).toEqual(['ABC-2'])
-    expect(notices(d)).toEqual(notified ? [] : ['ABC-2 waits to start: foreman could not begin its waiting session, and it starts on your next message.'])
+    const told = notified ? [] : [{ kind: 'notify', text: 'ABC-2 waits to start: foreman could not begin its waiting session, and it starts on your next message.', quiet: true, keep: true }]
+    expect(d.effects.filter(e => e.kind === 'notify')).toEqual(told)
     expect(d.logs).toContain('Held ABC-2, because its waiting session is archived or no longer listed and foreman could not begin it.')
     expect(begins(d)).toEqual([['local_ft-c', 'ABC-3', null]])
   }

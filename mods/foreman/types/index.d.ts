@@ -112,13 +112,14 @@ export type ForemanPairing = {
 // the sub session for the log, a notification with its text, or the begin
 // message to the waiting sub session of `ticket`, whose desktop session is
 // `to`. A notification is `quiet` when the log already holds its text, so
-// only a failure to raise it is logged. A nudge's `about` is 'background' for a sub session that waits only
+// it logs no line of its own, and `keep` when the band keeps its text until
+// the person next types should it fail to be raised. A nudge's `about` is 'background' for a sub session that waits only
 // on background work, which gets its own text, and is absent for an idle one.
 // A begin's `key` is its issue key, or null, and `by` names the sub session
 // whose slot it takes, or is null when the slot was free already.
 export type ForemanEffect =
   | { kind: 'nudge'; to: string; name: string; about?: 'background' }
-  | { kind: 'notify'; text: string; quiet?: true }
+  | { kind: 'notify'; text: string; quiet?: true; keep?: true }
   | { kind: 'begin'; to: string; ticket: string; key: string | null; by: string | null }
 
 // What foreman decided and has not yet carried out: log lines, effects,
@@ -267,10 +268,18 @@ declare module 'claude-code' {
       // loop, or the next start of a turn of that loop, clears it. The row it
       // waits for is stored with no content.
       quietReply: boolean
-      // The newest report sentence foreman showed and when it showed it, so
-      // the band can show it for a while, or null before the first. It is
-      // kept in $.state only, so it outlives a hot reload but not a restart.
-      report: { text: string; at: number } | null
+      // The newest notice the band shows and when it arrived, so the band can
+      // show it for a while, or null before the first: a report sentence, or a
+      // needs-you, held or begin-held notice whose notification failed. `kept`
+      // counts the notices kept since the person last typed: while it is above 0
+      // the band shows the text whatever its age, and when it is 0 or missing
+      // the band shows it for ten minutes from `at`. `released` says that the
+      // person typed after this notice arrived; when it was kept, typing let go
+      // of it and moved `at` to that moment. `newestOut` says that the newest
+      // notice is not in `kept`: it arrived when nothing was kept, and an
+      // earlier notice failed after it. It is kept in $.state only, so it
+      // outlives a hot reload but not a restart.
+      report: { text: string; at: number; kept?: number; released?: true; newestOut?: true } | null
     }
   }
 }

@@ -632,6 +632,28 @@ test('a begin that fails raises one notification and is tried again, not while t
   expect(w.engine.notices).toEqual([failed, listFailedNotice(REASONS.listRefused), 'foreman began ABC-3, the next issue in the queue, in a free slot.'])
 })
 
+test('a failed begin and a failed list read whose notifications fail are logged once each and never kept in the band', async ($, on) => {
+  const { w, ui, live } = await queueOfTwo($, on)
+  w.engine.notify = 'off'
+  w.engine.notifyReason = 'no-surface'
+  w.desktop.sendTo.set('local_new2', 'error')
+  await minutesPass(w, 1, live)
+  await ui.pane.press({ key: 'release-a.json' })
+  await w.clock.settle()
+  w.desktop.list = 'error'
+  await minutesPass(w, 3, live)
+  const failed = 'foreman could not send ABC-2\'s waiting session its begin message, and tries again while that session stays open.'
+  const band = await ui.bandText()
+  expect(band).not.toContain(failed)
+  expect(band).not.toContain(listFailedNotice(REASONS.listRefused))
+  expect(w.engine.notices).toContain(failed)
+  expect(w.engine.notices).toContain(listFailedNotice(REASONS.listRefused))
+  const lines = await ui.logLines()
+  expect(lines.filter(line => line.includes(failed))).toEqual([])
+  expect(lines.filter(line => line.startsWith('Could not begin ABC-2'))).toHaveLength(1)
+  expect(lines.filter(line => line.startsWith('Could not read the desktop app\'s list of sessions, so no queued issue was begun or dropped:'))).toHaveLength(1)
+})
+
 test('a restart keeps the queue, and a claim whose begin never went is sent on the first read', async ($, on) => {
   const stored = {
     pairings: [

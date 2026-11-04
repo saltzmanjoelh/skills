@@ -277,7 +277,7 @@ const STATE_RULES: Record<BuildState, (s: Step) => void> = {
     const key = episodeKey(s)
     if (s.p.acts.notifiedFor === key) return
     const reason = printable(s.row.record.reason, 120)
-    s.effects.push({ kind: 'notify', text: reason === '' ? `${nameOf(s.row)} needs you.` : `${nameOf(s.row)} needs you: ${reason}` })
+    s.effects.push({ kind: 'notify', text: reason === '' ? `${nameOf(s.row)} needs you.` : `${nameOf(s.row)} needs you: ${reason}`, keep: true })
     setActs(s, { notifiedFor: key })
   },
   'in-cleanup': s => {
@@ -902,7 +902,7 @@ function queueStep(
     logs.push(beginHeldLog(key))
     if (!held.includes(key)) {
       held = [...held, key]
-      if (!p.queue.claim.notified) effects.push({ kind: 'notify', text: beginHeldNotice(key) })
+      if (!p.queue.claim.notified) effects.push({ kind: 'notify', text: beginHeldNotice(key), quiet: true, keep: true })
     }
     return []
   })

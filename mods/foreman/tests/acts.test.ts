@@ -255,6 +255,22 @@ test('a sub session that needs the person raises one notification and never wake
   expect(w.engine.prompts).toEqual([])
 })
 
+test('a needs-you notice whose notification goes never writes the band', async ($, on) => {
+  const w = world(on)
+  const bandWrites: unknown[] = []
+  on('state.set', ($, e, next) => {
+    if (e.plugin === 'foreman' && e.key === 'report') bandWrites.push(e.value)
+    return next(e)
+  })
+  w.folder.put('a.json', record('ABC-1', 'needs-you', { desktopSessionId: 'local_a', reason: 'a question is open' }))
+  await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await w.clock.settle()
+  expect(w.engine.notices).toEqual(['ABC-1 needs you: a question is open'])
+  expect(bandWrites).toEqual([])
+})
+
 test('a notification that cannot go is logged', async ($, on) => {
   const w = world(on)
   w.folder.put('a.json', record('ABC-1', 'needs-you', { desktopSessionId: 'local_a' }))
@@ -264,6 +280,22 @@ test('a notification that cannot go is logged', async ($, on) => {
   await foreman($)
   await w.clock.settle()
   expect(await ui.newestLog()).toBe('Could not raise a notification (disabled): ABC-1 needs you.')
+})
+
+test('a needs-you notice whose notification fails stays in the band until the person types, with one line of its own in the log', async ($, on) => {
+  const w = world(on)
+  const needs = record('ABC-1', 'needs-you', { desktopSessionId: 'local_a', reason: 'a question is open' })
+  w.folder.put('a.json', needs)
+  w.engine.notify = 'off'
+  w.engine.notifyReason = 'no-surface'
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await w.clock.settle()
+  const lines = await ui.logLines()
+  expect(lines.filter(line => line.includes('ABC-1 needs you'))).toEqual(['Could not raise a notification (no-surface): ABC-1 needs you: a question is open'])
+  await minutesPass(w, 15, { 'a.json': needs })
+  expect(await ui.bandText()).toContain('ABC-1 needs you: a question is open')
 })
 
 test('cleanup with three failed calls wakes the parent once, its last error cleaned and quoted as data', async ($, on) => {
@@ -872,7 +904,21 @@ test('the app\'s Remote Control refusal of a keyed start holds the key, adds the
   expect(w.engine.notices).toEqual([HELD_NOTICE])
   const logs = await ui.paneText()
   expect(logs).toContain('Held ABC-7, because the desktop app refused to start it.')
-  expect(logs).toContain(`Raised a notification: ${HELD_NOTICE}`)
+  expect(logs).not.toContain(HELD_NOTICE)
+})
+
+test('a held notice whose notification fails stays in the band, and adds only its Held line to the log', async ($, on) => {
+  const { w, ui } = await refusingParent($, on)
+  w.engine.notify = 'off'
+  w.engine.notifyReason = 'no-surface'
+  const before = await ui.logLines()
+  await startFull($, KEYED_START)
+  await w.clock.settle()
+  const added = (await ui.logLines()).slice(before.length).filter(line => !line.startsWith('Could not raise notifications ('))
+  expect(added).toEqual(['Held ABC-7, because the desktop app refused to start it.'])
+  await w.clock.advance(15 * MINUTE)
+  await w.clock.settle()
+  expect(await ui.bandText()).toContain(HELD_NOTICE)
 })
 
 test('the app\'s refusal on a turn no person typed holds the key the same way, with one notification', async ($, on) => {

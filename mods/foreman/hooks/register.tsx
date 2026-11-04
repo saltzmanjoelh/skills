@@ -10,7 +10,7 @@ import { acceptedLog, beginFailedNotice, heldLine, heldLog, heldNotice, heldSent
 import { ignoredLine, readIssueLink } from './links'
 import { afterConsumed, emptyMarkers, FIRST_MARKER_LOG, MARKERS_KEPT_MS, MARKERS_PREFIX, markersIn, markersKey, markersNewest, type MarkersRecord } from './markers'
 import { checkedLine, isAppParts, isNotedReply, isStatusChanged, keptLine, keptNames, NOTED, NOTED_REPLY, notesIn } from './notes'
-import { bandTree, PANE, paneTree, shownReport, type Elements, type View } from './pane'
+import { afterTyped, bandTree, noticeArrived, noticeFailed, PANE, paneTree, shownReport, type BandNotice, type Elements, type StoredReport, type View } from './pane'
 import type { ForemanCheck, ForemanEffect, ForemanParent, ForemanTickets } from '../types'
 import { PARENT_OFF, parentIn, slotsOf, storeKey } from './parent'
 import { usageIn } from './record'
@@ -40,8 +40,10 @@ const tickets = atom({ plugin: 'foreman', key: 'tickets' } as const, TICKETS_EMP
 const turnRuns = atom({ plugin: 'foreman', key: 'turnRuns' } as const, false)
 const quietLine = atom({ plugin: 'foreman', key: 'quietLine' } as const, null)
 const quietReply = atom({ plugin: 'foreman', key: 'quietReply' } as const, false)
-// The newest report sentence foreman showed and when, for the band. It is
-// never stored in the ledger, so a restart drops it.
+// The newest notice the band shows and when it arrived: a report sentence,
+// or a needs-you, held or begin-held notice whose notification failed, with
+// the count of notices kept since the person last typed (see noticeArrived
+// in pane.tsx). It is never stored in the ledger, so a restart drops it.
 const report = atom({ plugin: 'foreman', key: 'report' } as const, null)
 
 // The spending builder publishes for the session it runs in, which ownSpend
@@ -115,6 +117,10 @@ let issueAddress: string | null = null
 // second first line.
 let markers: MarkersRecord | null = null
 let markerLogged = false
+// The reasons a notification failed for that this load has already logged,
+// so the first failure for each reason writes its one line. It lives in
+// memory, so every load, and every test, starts with none logged.
+const reasonsLogged = new Set<string>()
 // The store writes of the count under way, so the copies and the prune go
 // in order.
 let markerWrites: Promise<void> = Promise.resolve()
@@ -467,18 +473,69 @@ async function nudge($: $, to: string, name: string, why: string, text = NUDGE_T
   await addLog($, result === 'sent' ? `Nudged ${name} with "${text}"${why}.` : `Could not nudge ${name}: ${sendFailure(result)}.`)
 }
 
-// Raises one native notification and logs how it went. A `quiet` one, whose
-// text the log already holds, logs only a failure to raise it.
-async function notify($: $, text: string, { quiet = false } = {}) {
+// Why a notification did not go: the key that says whether this load logged
+// the reason already, the reason's words for that line, and the notice's own
+// line for a notice that is not quiet.
+type NotifyFailure = { key: string; words: string; line: string }
+
+// Raises one native notification and records how it went. The engine raises
+// one only by writing a terminal's own notification sequence, so it can never
+// raise one in the desktop app, which has no terminal, and answers no-surface
+// there. When `band` is given, the band is told before the call (see
+// noticeArrived in pane.tsx), so it never waits on the call, and again when
+// the call fails (see noticeFailed), so a notice whose notification failed
+// stays in the band until the person next types; a failed write of the band
+// loses only that. The first failure for each reason in this load then logs
+// one line naming the reason and the surfaces attached. Last, a notice that
+// is not `quiet`, whose text no other log line holds, logs its own line, so
+// every notice gives one line in the log.
+async function notify($: $, text: string, { quiet = false, band }: { quiet?: boolean; band?: BandNotice } = {}) {
+  const at = await $.clock.now()
+  let counted = false
+  if (band !== undefined) {
+    await changeBand($, raw => {
+      const arrived = noticeArrived(raw, band, at)
+      counted = arrived.counted
+      return arrived.value
+    }).catch(() => undefined)
+  }
+  let failure: NotifyFailure | null
   try {
     const sent = await within($, $.ui.notify(text, { title: 'foreman' }))
-    if (sent === TIMED_OUT) await addLog($, `Could not raise a notification, because it did not go within ${CALL_TIMEOUT_MS / 1000} seconds: ${text}`)
-    else if (sent.isSent) {
-      if (!quiet) await addLog($, `Raised a notification: ${text}`)
+    if (sent === TIMED_OUT) {
+      failure = {
+        key: 'timed-out',
+        words: `no answer within ${CALL_TIMEOUT_MS / 1000} seconds`,
+        line: `Could not raise a notification, because it did not go within ${CALL_TIMEOUT_MS / 1000} seconds: ${text}`,
+      }
+    } else if (sent.isSent === true) {
+      failure = null
+    } else {
+      const reason = typeof sent.reason === 'string' ? printable(sent.reason, 40) : 'unknown'
+      failure = { key: `reason:${reason}`, words: reason, line: `Could not raise a notification (${reason}): ${text}` }
     }
-    else await addLog($, `Could not raise a notification (${sent.reason}): ${text}`)
   } catch {
-    await addLog($, `Could not raise a notification: ${text}`)
+    failure = { key: 'threw', words: 'the call failed', line: `Could not raise a notification: ${text}` }
+  }
+  if (band !== undefined && failure !== null && !counted) await update($, report, raw => noticeFailed(raw, band, at)).catch(() => undefined)
+  if (failure !== null && !reasonsLogged.has(failure.key)) {
+    reasonsLogged.add(failure.key)
+    await addLog($, `Could not raise notifications (${failure.words}; surfaces attached: ${await surfacesWords($)}), so the band keeps each report until your next message.`)
+  }
+  if (!quiet) await addLog($, failure === null ? `Raised a notification: ${text}` : failure.line)
+}
+
+// The surfaces the session draws on, for the line that says why
+// notifications fail: their names, "none" when there are none, and "unknown"
+// when they cannot be read in time.
+async function surfacesWords($: $): Promise<string> {
+  try {
+    const surfaces = await within($, $.session.surfaces())
+    if (surfaces === TIMED_OUT || !Array.isArray(surfaces)) return 'unknown'
+    const names = [...new Set(surfaces.map(s => printable(String(s), 20)))]
+    return names.length === 0 ? 'none' : names.join(', ')
+  } catch {
+    return 'unknown'
   }
 }
 
@@ -526,7 +583,7 @@ async function beginOne($: $, effect: Extract<ForemanEffect, { kind: 'begin' }>)
     }
   })
   await addLog($, `Could not begin ${who}: ${sendFailure(result)}.`)
-  if (tells) await notify($, beginFailedNotice(who))
+  if (tells) await notify($, beginFailedNotice(who), { quiet: true })
   return null
 }
 
@@ -546,7 +603,10 @@ async function carryOut($: $) {
   if (!hasWork(work)) return
   await addLogs($, work.logs)
   const done = await Promise.all(work.effects.map(async (effect): Promise<string | null> => {
-    if (effect.kind === 'notify') await notify($, effect.text, { quiet: effect.quiet === true }).catch(() => undefined)
+    if (effect.kind === 'notify') {
+      const band = effect.keep === true ? { newest: effect.text, count: 1, isReport: false } : undefined
+      await notify($, effect.text, { quiet: effect.quiet === true, band }).catch(() => undefined)
+    }
     else if (effect.kind === 'begin') return beginOne($, effect).catch(() => null)
     else {
       await (effect.about === 'background'
@@ -573,15 +633,38 @@ async function carryOut($: $) {
 const OLD_SLOT_LINE = / (?:one slot free; pick the next issue and start it\.|(?:[a-z]+|[0-9]+) slots free; pick the next issues and start them\.)$/
 
 // Shows report sentences without waking the parent's model: each as a line
-// in the log, the newest in the band from now, and all of them joined in one
-// notification, which logs only a failure to raise it, since the log already
-// holds the sentences.
+// in the log, and all of them joined in one quiet notification, since the log
+// already holds the sentences. The newest goes in the band, for ten minutes
+// when the notification went and until the person next types when it did
+// not, as notify says.
 async function showReports($: $, sentences: readonly string[]) {
   if (sentences.length === 0) return
   await addLogs($, sentences)
-  const at = await $.clock.now()
-  await update($, report, () => ({ text: sentences.at(-1)!, at }))
-  await notify($, sentences.join(' '), { quiet: true })
+  await notify($, sentences.join(' '), { quiet: true, band: { newest: sentences.at(-1)!, count: sentences.length, isReport: true } })
+}
+
+// Lets a notice the band keeps go once the person types: it shows for ten
+// more minutes from now, as afterTyped in pane.tsx says, and any notice the
+// band holds is marked as seen. Only the first typed message after a new
+// notice reaches the band writes it; the others find nothing to change. It
+// runs whatever the role, because the person's next typed message ends the
+// wait whether or not foreman is on then, so a notice kept while foreman is
+// off does not stay up for good once foreman turns on.
+async function releaseKept($: $) {
+  const now = await $.clock.now()
+  await changeBand($, raw => afterTyped(raw, now))
+}
+
+// Writes the band's value through `change`, unless `change` leaves the value
+// it reads as it was, such as a needs-you notice that arrives while nothing
+// is kept, or a typed message when the band holds no notice to release. A
+// write always lands and draws the band again, even when the value is the
+// same. A failed read throws, as a failed write does, so the caller's catch
+// loses only the band entry.
+async function changeBand($: $, change: (raw: StoredReport) => StoredReport) {
+  const raw = await read($, report)
+  if (change(raw) === raw) return
+  await update($, report, change)
 }
 
 // Wakes the parent's model with one line: appended to the turn that runs, or
@@ -1085,7 +1168,7 @@ async function afterStart($: $, key: string | null, title: unknown, ticket: stri
       const t = unreserved(raw)
       return t.held.includes(key)
         ? t
-        : { ...t, held: [...t.held, key], outbox: addWork(t.outbox, { logs: [heldLog(key)], effects: [{ kind: 'notify', text: heldNotice(key) }], lines: [] }) }
+        : { ...t, held: [...t.held, key], outbox: addWork(t.outbox, { logs: [heldLog(key)], effects: [{ kind: 'notify', text: heldNotice(key), quiet: true, keep: true }], lines: [] }) }
     })
     later($, () => carryOut($))
     return { ...out, context: [...(out.context ?? []), heldSentence(key)] }
@@ -1601,6 +1684,10 @@ export const register: Register = (on, options) => {
   // again. Neither waits for the arming, as builder's do not, because arming
   // may read the whole status folder and the person's prompt or the turn's end
   // should not wait for that read.
+  // A prompt the person typed first lets go of a notice the band keeps,
+  // whatever the role, for the reason releaseKept gives. A prompt made only
+  // of the app's notes arrives with the same origin as a typed one, so
+  // isAppParts leaves it out.
   // A prompt made only of turn-end notes about sub sessions this parent tracks
   // or foreman checks goes on with its text replaced by its line in the log,
   // because the pane already shows the tracked ones and foreman checks the
@@ -1622,6 +1709,7 @@ export const register: Register = (on, options) => {
   // the line.
   on('prompt.submit', async ($, e, next) => {
     void ensureArmed($).catch(() => undefined)
+    if (isPersonPrompt(e) && !isAppParts(e.text)) await releaseKept($).catch(() => undefined)
     const choice = await choiceFor($, e)
     if (choice.kind === 'pass') {
       void ensureOffRoleWork($).catch(() => undefined)

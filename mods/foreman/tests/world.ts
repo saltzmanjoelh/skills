@@ -219,7 +219,14 @@ export function engine(on: On, now: () => number = () => T0) {
     contexts: [] as (readonly string[] | undefined)[],
     appended: [] as string[],
     started: [] as Record<string, unknown>[],
-    notify: 'sent' as 'sent' | 'off' | 'throws' | 'hang',
+    // 'malformed' answers with an isSent that is not true and a reason that
+    // is not a string, as an engine that changes its answer might.
+    notify: 'sent' as 'sent' | 'off' | 'throws' | 'hang' | 'malformed',
+    // The reason a notification that is 'off' answers with.
+    notifyReason: 'disabled',
+    // The surfaces $.session.surfaces() answers, 'throws' to make it throw,
+    // or 'hang' to make it never answer.
+    surfaces: [] as readonly string[] | 'throws' | 'hang',
     submit: 'ok' as 'ok' | 'dropped' | 'hang',
     // How a pane open fares: placed, not placed with the engine's reason, or
     // refused, which rejects the mod's call with the text as its message.
@@ -251,7 +258,13 @@ export function engine(on: On, now: () => number = () => T0) {
     if (answers.notify === 'hang') return new Promise<never>(() => {})
     answers.notices.push(e.text)
     answers.raised.push({ title: e.title, at: now() })
-    return { value: answers.notify === 'sent' ? { isSent: true, channel: 'terminal' } : { isSent: false, reason: 'disabled' } } as never
+    if (answers.notify === 'malformed') return { value: { isSent: 'yes', reason: 42 } } as never
+    return { value: answers.notify === 'sent' ? { isSent: true, channel: 'terminal' } : { isSent: false, reason: answers.notifyReason } } as never
+  })
+  on('session.surfaces', () => {
+    if (answers.surfaces === 'throws') throw new Error('no surfaces')
+    if (answers.surfaces === 'hang') return new Promise<never>(() => {})
+    return { value: answers.surfaces } as never
   })
   on('prompt.submit', ($, e) => {
     if (answers.submit === 'dropped') return { drop: 'a Stop stands' }
@@ -363,6 +376,10 @@ export async function mountBoth($: Engine, on: On, surface: 'terminal' | 'deskto
   on('ui.render', ($, e) => ($.ui.resolve(e) as unknown as { Text: (props: object) => never }).Text({ children: 'host line' }))
   const band = await $.ui.mount({ plugin: 'foreman', surface, component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, bodyColumns } as never })
   const pane = await $.ui.mount({ plugin: 'foreman', surface, component: 'Pane', requestId: 'foreman', props: { bodyColumns } as never })
+  const logLines = async () => {
+    await pane.redraw()
+    return (await pane.findAll({ type: 'Text', text: /^\d\d:\d\d:\d\d / })).map(line => line.text.slice(9))
+  }
   return {
     band,
     pane,
@@ -374,10 +391,9 @@ export async function mountBoth($: Engine, on: On, surface: 'terminal' | 'deskto
       await pane.redraw()
       return (await pane.find({ key: 'foreman-pane' }))?.text ?? ''
     },
-    newestLog: async () => {
-      await pane.redraw()
-      return (await pane.findAll({ type: 'Text', text: /^\d\d:\d\d:\d\d / })).at(-1)?.text.slice(9) ?? ''
-    },
+    // Every line of the log, oldest first, without its time.
+    logLines,
+    newestLog: async () => (await logLines()).at(-1) ?? '',
   }
 }
 
