@@ -2,6 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 import { listFailedNotice, NO_ANSWER } from '../hooks/act'
+import { slotsAnswer } from '../hooks/commands'
 import { AUTOMATED_REFUSAL } from '../hooks/held'
 import { ticketTimes } from '../hooks/spend'
 import { BEGIN_TEXT, REASONS } from '../hooks/desktop'
@@ -566,6 +567,35 @@ test('raising the slot count begins the waiting sub sessions in the new slots', 
   ])
   await minutesPass(w, 2, live)
   expect(begins(w)).toEqual(['local_new2', 'local_new3'])
+})
+
+// A raised count is stored and counted again on every read, so while the
+// list fails the new slots wait with the queue and nobody is woken, and the
+// first read that gets the list fills them. Four slots leave one over.
+test('raising the slot count while the desktop app\'s list fails begins nothing and wakes nobody, and the first read that lists begins the waiting sessions', async ($, on) => {
+  const { w, ui, live } = await queueOfTwo($, on)
+  w.desktop.list = 'error'
+  expect((await foreman($, '4')).text).toBe(slotsAnswer(4))
+  await w.clock.settle()
+  await minutesPass(w, 3, live)
+  expect(begins(w)).toEqual([])
+  expect(w.engine.prompts).toEqual([])
+  expect(ledger(w).keptSlots).toEqual([])
+  expect(ledger(w).pairings.filter(p => p.queue !== null).map(p => [p.issueKey, p.queue!.claim])).toEqual([['ABC-2', null], ['ABC-3', null]])
+  expect(w.engine.notices).toEqual([listFailedNotice(REASONS.listRefused)])
+  expect(await ui.paneText()).toContain(`Could not read the desktop app's list of sessions, so no queued issue was begun or dropped: ${REASONS.listRefused}.`)
+  w.desktop.list = 'ok'
+  await minutesPass(w, 1, live)
+  expect(begins(w)).toEqual(['local_new2', 'local_new3'])
+  expect(w.engine.prompts).toEqual([])
+  expect(w.engine.notices).toEqual([
+    listFailedNotice(REASONS.listRefused),
+    'foreman began ABC-2, the next issue in the queue, in a free slot. foreman began ABC-3, the next issue in the queue, in a free slot.',
+  ])
+  expect(ledger(w).keptSlots).toEqual([])
+  await minutesPass(w, 2, live)
+  expect(begins(w)).toEqual(['local_new2', 'local_new3'])
+  expect(w.engine.prompts).toEqual([])
 })
 
 test('a begin that fails raises one notification and is tried again, not while the list fails, and an archived target is held and the next one begins', async ($, on) => {
