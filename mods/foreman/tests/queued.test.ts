@@ -7,7 +7,7 @@ import { ticketTimes } from '../hooks/spend'
 import { BEGIN_TEXT, REASONS } from '../hooks/desktop'
 import { newPairing, ticketsIn, ticketsKey, WAIT_LINE, WAITING_SENTENCE } from '../hooks/tickets'
 import type { ForemanTickets } from '../types'
-import { foreman, MINUTE, mountBoth, record, SECOND, start, T0, world } from './world'
+import { foreman, MINUTE, mountBoth, record, SAVED_PATH, SECOND, start, T0, world } from './world'
 
 // The queue as the person meets it: starts beyond the free slots wait, and
 // foreman begins them itself, through the fake desktop app in tests/world.ts.
@@ -409,6 +409,24 @@ test('an active sub session archived before its file said done frees its slot, a
   const stuck = busyFile('ABC-1', ticketOf(w, 0), 'local_new1', { state: 'waiting-on-builder' })
   w.desktop.sessions[0] = listed('local_new1', 'ABC-1', { isArchived: true, isRunning: false })
   await minutesPass(w, 2, { ...live, 'a.json': stuck })
+  // The queue needs the list, but no key is held, so only the family's list
+  // is read and the whole list is never asked for.
+  expect(w.desktop.calls.some(c => c.tool === 'list_sessions')).toBe(true)
+  expect(w.desktop.calls.filter(c => c.tool === 'list_sessions' && c.args.linked !== true)).toEqual([])
+  expect(begins(w)).toEqual(['local_new2'])
+  expect(w.engine.prompts).toEqual([])
+  expect(w.engine.notices).toEqual(['foreman began ABC-2, the next issue in the queue, in the slot ABC-1 freed.'])
+  expect(ledger(w).pairings.find(p => p.localId === 'local_new1')!.standing).toBe('freed')
+})
+
+test('a list answer that Claude Code replaced with its notice is read from the saved copy, so a waiting issue begins in the slot a finished sub session freed', async ($, on) => {
+  const { w, live } = await queueOfTwo($, on)
+  w.desktop.list = 'saved'
+  const reads = w.folder.projectReads.length
+  w.desktop.sessions[0] = listed('local_new1', 'ABC-1', { isArchived: true, isRunning: false })
+  await minutesPass(w, 2, { ...live, 'a.json': busyFile('ABC-1', ticketOf(w, 0), 'local_new1', { state: 'done' }) })
+  expect(w.folder.projectReads.slice(reads)).toContain(SAVED_PATH)
+  expect(w.desktop.calls.filter(c => c.tool === 'list_sessions').every(c => c.args.linked === true)).toBe(true)
   expect(begins(w)).toEqual(['local_new2'])
   expect(w.engine.prompts).toEqual([])
   expect(w.engine.notices).toEqual(['foreman began ABC-2, the next issue in the queue, in the slot ABC-1 freed.'])
