@@ -51,8 +51,8 @@ export type View = {
   // the sums are null.
   rowTimes: ReadonlyMap<string, ForemanTimes>
   subsTime: ForemanTimes | null
-  // The newest report sentence foreman showed, while it is less than
-  // REPORT_SHOWN_MS old, else null. The band shows it after the chips.
+  // The newest report sentence foreman showed, as shownReport gives it, else
+  // null. The band shows it after the chips.
   report: string | null
   // The count of builder's status messages consumed since foreman's hooks
   // loaded, while the session is a parent, else null.
@@ -75,13 +75,54 @@ export const REPORT_MIN_COLUMNS = 16
 // width.
 const REPORT_MAX = 240
 
-// The report the band shows, from the value foreman keeps in $.state: its
-// sentence while it is less than REPORT_SHOWN_MS old at `now`, else null. A
-// value of any other shape shows nothing.
+// How many notices the band keeps since the person last typed, from the
+// value foreman keeps in $.state: its `kept` when that is a positive whole
+// number, else 0, so a value stored before `kept` existed is not kept.
+export function keptOf(raw: unknown): number {
+  if (typeof raw !== 'object' || raw === null) return 0
+  const { kept } = raw as { kept?: unknown }
+  return typeof kept === 'number' && Number.isInteger(kept) && kept > 0 ? kept : 0
+}
+
+// A notice that reaches the band: its newest sentence, how many notices it
+// counts as, and whether it is a report, which the band shows for
+// REPORT_SHOWN_MS even when its notification went.
+export type BandNotice = { newest: string; count: number; isReport: boolean }
+
+// The value foreman keeps in $.state for the band, as the state contract in
+// types/index.d.ts gives it.
+type StoredReport = { text: string; at: number; kept?: number } | null
+
+// The band's value after a notice whose notification `failed` or went,
+// arriving at `at`. A failed notice is kept, and so is any notice that
+// arrives while another is kept, so a delivered one never pushes a kept one
+// out of the count. A delivered report shows for its ten minutes, as it
+// always has, and any other delivered notice leaves the band as it was.
+export function withNotice(raw: StoredReport, notice: BandNotice, failed: boolean, at: number): StoredReport {
+  const kept = keptOf(raw)
+  if (failed || kept > 0) return { text: notice.newest, at, kept: kept + notice.count }
+  return notice.isReport ? { text: notice.newest, at, kept: 0 } : raw
+}
+
+// The band's value once the person types: a kept notice shows for
+// REPORT_SHOWN_MS more from `now`, alone, since the count said "since your
+// last message". Any other value is left as it was.
+export function afterTyped(raw: StoredReport, now: number): StoredReport {
+  return raw === null || keptOf(raw) === 0 ? raw : { ...raw, at: now, kept: 0 }
+}
+
+// The report the band shows, from the value foreman keeps in $.state. A kept
+// notice shows whatever its age, followed by the count of the others kept
+// since the person last typed. Any other shows while it is less than
+// REPORT_SHOWN_MS old at `now`, else nothing. A value of any other shape
+// shows nothing.
 export function shownReport(raw: unknown, now: number): string | null {
   if (typeof raw !== 'object' || raw === null) return null
   const { text, at } = raw as { text?: unknown; at?: unknown }
   if (typeof text !== 'string' || typeof at !== 'number' || !Number.isFinite(at)) return null
+  const kept = keptOf(raw)
+  if (kept > 1) return `${text} (${kept - 1} more since your last message.)`
+  if (kept === 1) return text
   return now - at < REPORT_SHOWN_MS ? text : null
 }
 

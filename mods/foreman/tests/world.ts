@@ -220,6 +220,10 @@ export function engine(on: On, now: () => number = () => T0) {
     appended: [] as string[],
     started: [] as Record<string, unknown>[],
     notify: 'sent' as 'sent' | 'off' | 'throws' | 'hang',
+    // The reason a notification that is 'off' answers with.
+    notifyReason: 'disabled',
+    // The surfaces $.session.surfaces() answers, or 'throws' to make it throw.
+    surfaces: [] as readonly string[] | 'throws',
     submit: 'ok' as 'ok' | 'dropped' | 'hang',
     // How a pane open fares: placed, not placed with the engine's reason, or
     // refused, which rejects the mod's call with the text as its message.
@@ -251,7 +255,11 @@ export function engine(on: On, now: () => number = () => T0) {
     if (answers.notify === 'hang') return new Promise<never>(() => {})
     answers.notices.push(e.text)
     answers.raised.push({ title: e.title, at: now() })
-    return { value: answers.notify === 'sent' ? { isSent: true, channel: 'terminal' } : { isSent: false, reason: 'disabled' } } as never
+    return { value: answers.notify === 'sent' ? { isSent: true, channel: 'terminal' } : { isSent: false, reason: answers.notifyReason } } as never
+  })
+  on('session.surfaces', () => {
+    if (answers.surfaces === 'throws') throw new Error('no surfaces')
+    return { value: answers.surfaces } as never
   })
   on('prompt.submit', ($, e) => {
     if (answers.submit === 'dropped') return { drop: 'a Stop stands' }
@@ -373,6 +381,11 @@ export async function mountBoth($: Engine, on: On, surface: 'terminal' | 'deskto
     paneText: async () => {
       await pane.redraw()
       return (await pane.find({ key: 'foreman-pane' }))?.text ?? ''
+    },
+    // Every line of the log, oldest first, without its time.
+    logLines: async () => {
+      await pane.redraw()
+      return (await pane.findAll({ type: 'Text', text: /^\d\d:\d\d:\d\d / })).map(line => line.text.slice(9))
     },
     newestLog: async () => {
       await pane.redraw()

@@ -189,7 +189,7 @@ const isKeyOrNull = (raw: unknown): raw is string | null => raw === null || (typ
 
 function effectIn(raw: unknown): ForemanEffect | null {
   const e = objectOf(raw)
-  if (e?.kind === 'notify' && typeof e.text === 'string') return e.quiet === true ? { kind: 'notify', text: e.text, quiet: true } : { kind: 'notify', text: e.text }
+  if (e?.kind === 'notify' && typeof e.text === 'string') return { kind: 'notify', text: e.text, ...(e.quiet === true ? { quiet: true } : {}), ...(e.keep === true ? { keep: true } : {}) }
   // A begin goes only to a whole desktop session id for a whole ticket, and
   // the names it puts in the wake line are an issue key or a name whoOf gives.
   if (e?.kind === 'begin') {

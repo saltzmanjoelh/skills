@@ -482,6 +482,20 @@ test('while the role is off, the first hook after a hot reload carries out the w
   expect(ledger(w).outbox).toEqual(TICKETS_EMPTY.outbox)
 })
 
+test('a failed-checks notice whose notification fails is never kept in the band', async ($, on) => {
+  const failed = 'Stopped checking the sub session local_v, because the desktop app could not read its events.'
+  const outbox = { logs: [failed], effects: [{ kind: 'notify', text: failed, quiet: true }], lines: [], reports: [] }
+  const w = world(on, { store: { 'parent:session-1': { isOn: true, slots: null }, [ticketsKey('session-1')]: { ...TICKETS_EMPTY, outbox } } })
+  w.engine.notify = 'off'
+  w.engine.notifyReason = 'no-surface'
+  const ui = await mountBoth($, on)
+  await start($)
+  await w.clock.settle()
+  expect(w.engine.notices).toEqual([failed])
+  expect(await ui.bandText()).not.toContain(failed)
+  expect((await ui.logLines()).filter(line => line.includes(failed))).toEqual([failed])
+})
+
 test('while the nudge is out, its record carries the nudge mark and the sending mark, and the sending mark is cleared once it went', async ($, on) => {
   const { w } = await notedOff($, on)
   const during: ForemanCheck[][] = []

@@ -1,9 +1,11 @@
 import { expect, test } from 'claude-code/testing'
 
 import { BEGIN_TEXT } from '../hooks/desktop'
-import { REPORT_SHOWN_MS } from '../hooks/pane'
+import { afterTyped, keptOf, REPORT_SHOWN_MS, shownReport, withNotice } from '../hooks/pane'
 import { ticketsIn, ticketsKey } from '../hooks/tickets'
-import { foreman, MINUTE, mountBoth, record, SECOND, start, T0, world } from './world'
+import type { Engine } from 'claude-code/testing'
+
+import { EVENT, foreman, MINUTE, mountBoth, record, SECOND, start, T0, world } from './world'
 
 // The five report sentences: a sub session's pull request opened, got its
 // verdict pair, merged or was closed, and foreman began a queued issue.
@@ -228,7 +230,7 @@ test('on a narrow band every chip keeps its full text, and the report is cut to 
   }
 })
 
-test('a report whose notification is not raised is still in the log and the band, and the log says the notification failed', async ($, on) => {
+test('a report whose notification is not raised is in the log once and in the band, and the log says once why notifications fail', async ($, on) => {
   const w = world(on)
   w.engine.notify = 'off'
   const a = working('ABC-1')
@@ -238,9 +240,9 @@ test('a report whose notification is not raised is still in the log and the band
   await foreman($)
   await minutesPass(w, 1, { 'a.json': a })
   await minutesPass(w, 1, { 'a.json': working('ABC-1', { pr: pr(7, 'OPEN') }) })
-  const pane = await ui.paneText()
-  expect(pane).toContain('ABC-1 opened pull request #7.')
-  expect(pane).toContain('Could not raise a notification (disabled): ABC-1 opened pull request #7.')
+  const lines = await ui.logLines()
+  expect(lines.filter(line => line.includes('ABC-1 opened pull request #7.'))).toEqual(['ABC-1 opened pull request #7.'])
+  expect(lines).toContain('Could not raise notifications (disabled; surfaces attached: none), so the band keeps each report until your next message.')
   expect(await ui.bandText()).toContain('ABC-1 opened pull request #7.')
   expect(w.engine.prompts).toEqual([])
 })
@@ -273,4 +275,157 @@ test('with no sub sessions left, the band shows the report after the no sub sess
     if (columns - withoutReport.length >= 19) expect(text).toBe(`${withoutReport} · ${sentence.slice(0, columns - withoutReport.length - 4)}…`)
     else expect(text).toBe(withoutReport)
   }
+})
+
+// A report whose notification fails stays in the band until the person next
+// types a message in the parent, then for REPORT_SHOWN_MS more. The fake
+// engine answers every notification with `no-surface`, as the desktop app's
+// engine does.
+
+const OPENED = 'ABC-1 opened pull request #7.'
+const VERDICTS = 'ABC-1\'s pull request #7 has verdicts at aaaaaaa: spec approves, adversarial approves.'
+const MERGED = 'ABC-1\'s pull request #7 merged.'
+const reasonLine = (words: string, surfaces: string) => `Could not raise notifications (${words}; surfaces attached: ${surfaces}), so the band keeps each report until your next message.`
+
+const typed = ($: Engine, text = 'go on', origin: Record<string, unknown> = { kind: 'composer' }) => $.prompt.submit({ text, wait: false, origin } as never)
+
+// A parent watching ABC-1, whose notifications fail with `no-surface`, after
+// the read that reported its pull request opened.
+async function openedUnseen($: Engine, on: Parameters<typeof world>[0], surfaces: readonly string[] = ['desktop']) {
+  const w = world(on)
+  w.engine.notify = 'off'
+  w.engine.notifyReason = 'no-surface'
+  w.engine.surfaces = surfaces
+  const before = working('ABC-1')
+  w.folder.put('a.json', before)
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await minutesPass(w, 1, { 'a.json': before })
+  const opened = working('ABC-1', { pr: pr(7, 'OPEN') })
+  await minutesPass(w, 1, { 'a.json': opened })
+  return { w, ui, live: { 'a.json': opened } }
+}
+
+test('a report whose notification fails stays in the band past ten minutes, and leaves ten minutes after the person types, not before', async ($, on) => {
+  const { w, ui, live } = await openedUnseen($, on)
+  await minutesPass(w, 25, live)
+  expect(await ui.bandText()).toContain(OPENED)
+  await typed($)
+  await w.clock.settle()
+  await minutesPass(w, 9, live)
+  await w.clock.advance(59 * SECOND)
+  expect(await ui.bandText()).toContain(OPENED)
+  await w.clock.advance(2 * SECOND)
+  expect(await ui.bandText()).not.toContain(OPENED)
+})
+
+test('a prompt from a mod, a peer, the app\'s own wake or a CI event does not release a kept report', async ($, on) => {
+  const { w, ui, live } = await openedUnseen($, on)
+  const others: [string, Record<string, unknown>][] = [
+    ['from another mod', { kind: 'plugin', name: 'other', asUser: true }],
+    ['from a peer', { kind: 'peer' }],
+    [EVENT, { kind: 'sdk' }],
+    ['<ci-monitor-event>The checks passed.</ci-monitor-event>', { kind: 'sdk' }],
+  ]
+  for (const [text, origin] of others) {
+    await typed($, text, origin)
+    await w.clock.settle()
+    await minutesPass(w, 15, live)
+    expect([text, await ui.bandText()]).toEqual([text, expect.stringContaining(OPENED)])
+  }
+})
+
+test('three failed reports show the newest and the count of the others, and one shows its sentence alone', async ($, on) => {
+  const { w, ui } = await openedUnseen($, on)
+  const single = await ui.bandText()
+  expect(single).toContain(OPENED)
+  expect(single).not.toContain('more since')
+  const verdicts = working('ABC-1', { pr: pr(7, 'OPEN', PAIR) })
+  await minutesPass(w, 1, { 'a.json': verdicts })
+  const merged = working('ABC-1', { pr: pr(7, 'MERGED', PAIR) })
+  await minutesPass(w, 1, { 'a.json': merged })
+  const band = await ui.bandText()
+  expect(band).toContain(`${MERGED} (2 more since your last message.)`)
+  expect(band).not.toContain(VERDICTS)
+  expect(band).not.toContain(OPENED)
+})
+
+test('after the person types, the kept report shows alone, and a report that fails after that message counts from one', async ($, on) => {
+  const { w, ui } = await openedUnseen($, on)
+  const verdicts = working('ABC-1', { pr: pr(7, 'OPEN', PAIR) })
+  await minutesPass(w, 1, { 'a.json': verdicts })
+  expect(await ui.bandText()).toContain(`${VERDICTS} (1 more since your last message.)`)
+  await typed($)
+  await w.clock.settle()
+  const shown = await ui.bandText()
+  expect(shown).toContain(VERDICTS)
+  expect(shown).not.toContain('more since')
+  const merged = working('ABC-1', { pr: pr(7, 'MERGED', PAIR) })
+  await minutesPass(w, 1, { 'a.json': merged })
+  const after = await ui.bandText()
+  expect(after).toContain(MERGED)
+  expect(after).not.toContain('more since')
+})
+
+test('a report delivered while another is kept adds to the count, so the kept one is never lost', async ($, on) => {
+  const { w, ui } = await openedUnseen($, on)
+  w.engine.notify = 'sent'
+  const verdicts = working('ABC-1', { pr: pr(7, 'OPEN', PAIR) })
+  await minutesPass(w, 1, { 'a.json': verdicts })
+  await minutesPass(w, 20, { 'a.json': verdicts })
+  expect(await ui.bandText()).toContain(`${VERDICTS} (1 more since your last message.)`)
+})
+
+test('a failed report adds one log line, its sentence, and the first failure of a load adds one line naming the reason and the surfaces', async ($, on) => {
+  const { w, ui } = await openedUnseen($, on)
+  const first = await ui.logLines()
+  expect(first.filter(line => line.startsWith('Could not raise'))).toEqual([reasonLine('no-surface', 'desktop')])
+  const verdicts = working('ABC-1', { pr: pr(7, 'OPEN', PAIR) })
+  await minutesPass(w, 1, { 'a.json': verdicts })
+  expect((await ui.logLines()).slice(first.length)).toEqual([VERDICTS])
+})
+
+test('a notification that does not answer in time, and one that throws, each log a reason line of their own once', async ($, on) => {
+  const { w, ui } = await openedUnseen($, on, [])
+  w.engine.notify = 'hang'
+  const verdicts = working('ABC-1', { pr: pr(7, 'OPEN', PAIR) })
+  await minutesPass(w, 1, { 'a.json': verdicts })
+  await w.clock.advance(31 * SECOND)
+  await w.clock.settle()
+  w.engine.notify = 'throws'
+  w.engine.surfaces = 'throws'
+  const merged = working('ABC-1', { pr: pr(7, 'MERGED', PAIR) })
+  await minutesPass(w, 1, { 'a.json': merged })
+  const reasons = (await ui.logLines()).filter(line => line.startsWith('Could not raise'))
+  expect(reasons).toEqual([
+    reasonLine('no-surface', 'none'),
+    reasonLine('no answer within 30 seconds', 'none'),
+    reasonLine('the call failed', 'unknown'),
+  ])
+  expect(await ui.bandText()).toContain(`${MERGED} (2 more since your last message.)`)
+})
+
+test('the band\'s value: a failure or a kept value adds to the count, typing releases it, and old or damaged values read as not kept', () => {
+  const at = T0
+  const report = { newest: OPENED, count: 1, isReport: true }
+  expect(keptOf(null)).toBe(0)
+  expect(keptOf({ text: OPENED, at })).toBe(0)
+  expect(keptOf({ text: OPENED, at, kept: -1 })).toBe(0)
+  expect(keptOf({ text: OPENED, at, kept: 1.5 })).toBe(0)
+  expect(keptOf({ text: OPENED, at, kept: 2 })).toBe(2)
+  expect(withNotice(null, report, false, at)).toEqual({ text: OPENED, at, kept: 0 })
+  expect(withNotice(null, report, true, at)).toEqual({ text: OPENED, at, kept: 1 })
+  expect(withNotice(null, { newest: MERGED, count: 2, isReport: true }, true, at)).toEqual({ text: MERGED, at, kept: 2 })
+  expect(withNotice({ text: OPENED, at, kept: 1 }, { newest: MERGED, count: 1, isReport: true }, false, at + 1)).toEqual({ text: MERGED, at: at + 1, kept: 2 })
+  const needs = { newest: 'ABC-1 needs you.', count: 1, isReport: false }
+  const shown = { text: OPENED, at }
+  expect(withNotice(shown, needs, false, at + 1)).toBe(shown)
+  expect(withNotice(shown, needs, true, at + 1)).toEqual({ text: 'ABC-1 needs you.', at: at + 1, kept: 1 })
+  expect(afterTyped({ text: OPENED, at, kept: 3 }, at + 5)).toEqual({ text: OPENED, at: at + 5, kept: 0 })
+  expect(afterTyped(shown, at + 5)).toBe(shown)
+  expect(shownReport({ text: OPENED, at, kept: 1 }, at + 100 * REPORT_SHOWN_MS)).toBe(OPENED)
+  expect(shownReport({ text: OPENED, at, kept: 3 }, at + 100 * REPORT_SHOWN_MS)).toBe(`${OPENED} (2 more since your last message.)`)
+  expect(shownReport({ text: OPENED, at, kept: 0 }, at + REPORT_SHOWN_MS)).toBeNull()
+  expect(shownReport({ text: OPENED, at: 'soon', kept: 2 }, at)).toBeNull()
 })

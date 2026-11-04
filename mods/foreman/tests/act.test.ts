@@ -130,7 +130,7 @@ test('a record that needs the person is notified once per episode and never wake
   // The session still runs, so its file is rewritten at each read.
   const needs = (since: number, now: number) => live([row({ state: 'needs-you', stateSince: since, reason: 'a question is open' })], now)
   let d = read(paired(), needs(T0, T0), T0)
-  expect(d.effects).toEqual([{ kind: 'notify', text: 'ABC-1 needs you: a question is open' }])
+  expect(d.effects).toEqual([{ kind: 'notify', text: 'ABC-1 needs you: a question is open', keep: true }])
   d = read(d.tickets, needs(T0, T0 + 30 * MINUTE), T0 + 30 * MINUTE)
   expect(d.effects).toEqual([])
   expect(d.reasons).toEqual([])
