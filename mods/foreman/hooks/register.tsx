@@ -828,8 +828,10 @@ function withSlotOutcome(t: ForemanTickets, outcome: SlotOutcome): ForemanTicket
 // parent with the slot-free sentence. A read already under way decides on the
 // live ledger inside its own update, so it either takes the name or leaves it
 // stored for the next scheduled read, which is always armed. A name the
-// ledger's reader would drop, from a damaged ticket, is not carried, and its
-// slot is left to that read as before. When nobody waited, the parent is
+// ledger's reader would drop, from a damaged ticket, is not carried, so no
+// read counts that slot as freed: it ends in neither a claim nor a wake, and
+// stays idle until another slot frees or a kept sentence wakes the parent, as
+// it did before Release carried names. When nobody waited, the parent is
 // woken at once with the number of slots free, and nothing happens when no
 // slot is free. The verdict comes from the release's own write rather than a
 // second look at the ledger, which could find nobody waiting after a read had

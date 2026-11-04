@@ -49,8 +49,9 @@ Release.
      parent with the slot-free sentence.
 3. **Release with nobody waiting is unchanged.** It still puts the slot wake,
    from `slotOutcome`, in the outbox at once and sends it.
-4. **The texts say what now happens.** The comments above `slotFreed` and
-   above `slotOutcome` in `mods/foreman/hooks/act.ts` say that Release, while
+4. **The texts say what now happens.** The comment above `slotFreed` in
+   `mods/foreman/hooks/register.tsx` and the one above `slotOutcome` in
+   `mods/foreman/hooks/act.ts` say that Release, while
    someone waits unclaimed, carries the slot's name for the next read, which
    decides it. The foreman README's paragraph on Release says that a slot it
    frees while an issue waits is decided by the next read like any other
