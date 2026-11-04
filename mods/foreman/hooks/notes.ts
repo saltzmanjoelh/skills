@@ -29,6 +29,14 @@ import { whoOf } from './wake'
 // of a prompt it rewrote to its log line.
 export const NOTED_REPLY = 'Noted.'
 
+// Whether a stored row's content is foreman's own reply as its turn.step hook
+// streams it: exactly one text block that reads NOTED_REPLY, untrimmed. Any
+// other content means the engine stored something other than foreman's answer.
+export function isNotedReply(content: readonly { type: string; [field: string]: unknown }[]): boolean {
+  const [only] = content
+  return content.length === 1 && only?.type === 'text' && only.text === NOTED_REPLY
+}
+
 // The sentences that say foreman's own lines report the pull request
 // milestones. The app's own text asks the parent to report the outcome, so
 // these say plainly that a foreman parent does not.
