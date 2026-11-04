@@ -10,7 +10,7 @@ import { acceptedLog, beginFailedNotice, heldLine, heldLog, heldNotice, heldSent
 import { ignoredLine, readIssueLink } from './links'
 import { afterConsumed, emptyMarkers, FIRST_MARKER_LOG, MARKERS_KEPT_MS, MARKERS_PREFIX, markersIn, markersKey, markersNewest, type MarkersRecord } from './markers'
 import { checkedLine, isAppParts, isNotedReply, isStatusChanged, keptLine, keptNames, NOTED, NOTED_REPLY, notesIn } from './notes'
-import { afterTyped, bandTree, keptOf, noticeArrived, noticeFailed, PANE, paneTree, shownReport, type BandNotice, type Elements, type View } from './pane'
+import { afterTyped, bandTree, noticeArrived, noticeFailed, PANE, paneTree, shownReport, type BandNotice, type Elements, type StoredReport, type View } from './pane'
 import type { ForemanCheck, ForemanEffect, ForemanParent, ForemanTickets } from '../types'
 import { PARENT_OFF, parentIn, slotsOf, storeKey } from './parent'
 import { usageIn } from './record'
@@ -492,12 +492,8 @@ type NotifyFailure = { key: string; words: string; line: string }
 async function notify($: $, text: string, { quiet = false, band }: { quiet?: boolean; band?: BandNotice } = {}) {
   const at = await $.clock.now()
   let counted = false
-  // A notice that leaves the band as it was, such as a needs-you notice while
-  // nothing is kept, writes nothing, because a write always lands and draws
-  // the band again even when the value is the same.
-  const changes = band !== undefined && await read($, report).then(raw => noticeArrived(raw, band, at).value !== raw, () => true)
-  if (band !== undefined && changes) {
-    await update($, report, raw => {
+  if (band !== undefined) {
+    await changeBand($, raw => {
       const arrived = noticeArrived(raw, band, at)
       counted = arrived.counted
       return arrived.value
@@ -656,9 +652,19 @@ async function showReports($: $, sentences: readonly string[]) {
 // foreman turns on.
 async function releaseKept($: $) {
   const now = await $.clock.now()
+  await changeBand($, raw => afterTyped(raw, now))
+}
+
+// Writes the band's value through `change`, unless `change` leaves the value
+// it reads as it was, such as a needs-you notice that arrives while nothing
+// is kept, or a typed message when the band holds no notice to release. A
+// write always lands and draws the band again, even when the value is the
+// same. A failed read throws, as a failed write does, so the caller's catch
+// loses only the band entry.
+async function changeBand($: $, change: (raw: StoredReport) => StoredReport) {
   const raw = await read($, report)
-  if (afterTyped(raw, now) === raw) return
-  await update($, report, value => afterTyped(value, now))
+  if (change(raw) === raw) return
+  await update($, report, change)
 }
 
 // Wakes the parent's model with one line: appended to the turn that runs, or

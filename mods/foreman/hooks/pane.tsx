@@ -92,7 +92,7 @@ export type BandNotice = { newest: string; count: number; isReport: boolean }
 
 // The value foreman keeps in $.state for the band, taken from the state
 // contract in types/index.d.ts, so the two cannot drift apart.
-type StoredReport = PluginState['foreman']['report']
+export type StoredReport = PluginState['foreman']['report']
 
 // The band's value when a notice arrives at `at`, before its notification
 // is raised, so the band never waits on that call. A notice that arrives while

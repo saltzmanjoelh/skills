@@ -422,6 +422,51 @@ test('a message the person types while foreman is off still lets go of a kept no
   expect(await ui.bandText()).not.toContain(OPENED)
 })
 
+test('a typed message writes the band only when it has a notice to release, and never twice for the same one', async ($, on) => {
+  const w = world(on)
+  // Seeds a kept notice as leftInState does, and counts the band's writes in
+  // the same hook, because a test may register only one state.set hook.
+  let seeded = true
+  const bandWrites: unknown[] = []
+  on('state.get', ($, e, next) => (seeded && e.plugin === 'foreman' && e.key === 'report'
+    ? { value: { value: { text: OPENED, at: T0 - 30 * MINUTE, kept: 1 }, version: 0 } } as never
+    : next(e)))
+  on('state.set', ($, e, next) => {
+    if (e.plugin === 'foreman' && e.key === 'report') {
+      seeded = false
+      bandWrites.push(e.value)
+    }
+    return next(e)
+  })
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await w.clock.settle()
+  await typed($)
+  await w.clock.settle()
+  expect(bandWrites).toHaveLength(1)
+  await typed($)
+  await w.clock.settle()
+  expect(bandWrites).toHaveLength(1)
+  expect(await ui.bandText()).toContain(OPENED)
+})
+
+test('a typed message writes nothing while the band holds no notice', async ($, on) => {
+  const w = world(on)
+  const bandWrites: unknown[] = []
+  on('state.set', ($, e, next) => {
+    if (e.plugin === 'foreman' && e.key === 'report') bandWrites.push(e.value)
+    return next(e)
+  })
+  await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await w.clock.settle()
+  await typed($)
+  await w.clock.settle()
+  expect(bandWrites).toEqual([])
+})
+
 // Moves the clock a second at a time until foreman next reads the status
 // folder, so a test can look at the band before a call that hangs runs out
 // of time.
