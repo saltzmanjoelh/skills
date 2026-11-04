@@ -499,7 +499,10 @@ add one line that names the screenshots that may now be out of date, or the
 change's screens as never captured, the commit's full sha, and the reason from
 its `Screenshots not retaken:` line. Build each image link from that sha and the path in the list,
 never by copying a link from the body, and drop from the section any image
-link whose path is not in the list. Post the body with
+link whose path is not in the list. Just before posting, read the body again
+the same way, and when it differs from the copy that was rewritten, make the
+same rewrite on the fresh copy instead, so that an edit made in between is
+kept. Post the body with
 `gh pr edit <n> --body-file <file>`, and check the links again as step 7 says.
 When the push fails, rewrite nothing: "Commits the pull request lacks" applies,
 and the push that does carry the commit brings the section up to date.

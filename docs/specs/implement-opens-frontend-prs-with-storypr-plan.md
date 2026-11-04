@@ -12,7 +12,11 @@ hold everything:
 
 - A pull request was opened as frontend when its body has a
   `## Screenshots` section, which the plain body never writes.
-- The screenshots to retake are the paths that the body's image links name.
+- The screenshots to retake are the files that the pull request changed
+  under `/storypr`'s screenshot directory, which `git diff` against the base
+  lists. The paths never come from the body's image links, because anyone
+  who can edit the body could then choose which file is overwritten and
+  committed, or put shell text into a command.
 - The sha each link should carry is the newest commit on the pull request
   that changed that file, which `git log -1 --format=%H <head> -- <path>`
   prints.
@@ -28,7 +32,7 @@ The edits are:
    a frontend change.
 3. In "A review round" of `/implement`, after the Retag paragraph and before
    "A streak of 3", a rule in three short paragraphs: when it applies and
-   the retake, what happens after a push, and a failed retake.
+   the retake, a failed retake, and what happens after a push.
 4. In "When a turn ends", one sentence that sends the session to that rule
    after any push to a frontend pull request.
 5. A new last section of `/storypr`, `## When another skill calls it`.
