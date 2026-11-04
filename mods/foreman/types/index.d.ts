@@ -211,6 +211,9 @@ export type ForemanEarlier = ForemanSpend & { times: ForemanTimes }
 // by itself, oldest note first. `listFailNotified` says that foreman raised
 // the notification for a failed read of the desktop app's list and no read
 // has got the list since, so a run of failed reads raises it only once.
+// `dryNotified` says that foreman reported its queue running dry and that no
+// sub session has waited in the queue since, so a dry queue is reported only
+// once each time it runs dry.
 export type ForemanTickets = {
   pairings: ForemanPairing[]
   folderMissing: boolean
@@ -223,6 +226,7 @@ export type ForemanTickets = {
   keptSlots: string[]
   checks: ForemanCheck[]
   listFailNotified: boolean
+  dryNotified: boolean
 }
 
 declare module 'claude-code' {

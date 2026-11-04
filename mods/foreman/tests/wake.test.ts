@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { STATES } from '../hooks/record'
-import { DATA_NOTE, quoted, REASON_WORDS, REPORT_KINDS, slotWords, splitReasons, wakeLine, whoOf, type Reason } from '../hooks/wake'
+import { DATA_NOTE, quoted, REASON_WORDS, REPORT_KINDS, splitReasons, wakeLine, whoOf, type Reason } from '../hooks/wake'
 
 const TICKET = 'ft-1234'
 
@@ -18,12 +18,6 @@ test('quoted text loses escape sequences and control characters, is cut, and has
   const long = quoted('x'.repeat(300))
   expect(long.length).toBe(122)
   expect(long.endsWith('…"')).toBe(true)
-})
-
-test('the slot words count the free slots in words', () => {
-  expect(slotWords(1)).toBe('one slot free; pick the next issue and start it.')
-  expect(slotWords(2)).toBe('two slots free; pick the next issues and start them.')
-  expect(slotWords(20)).toBe('twenty slots free; pick the next issues and start them.')
 })
 
 // The skill at skills/wake/SKILL.md quotes each of these sentences, so they
@@ -44,7 +38,6 @@ test('every wake sentence is pinned', () => {
     .toBe('ABC-1 has not updated its status file for 6 minutes and its session is not running, so restart it or release the issue.')
   expect(REASON_WORDS.frozen({ kind: 'frozen', who: 'ABC-1', minutes: 10, state: 'working' }))
     .toBe('ABC-1\'s status file has not changed for 10 minutes and still shows the state working.')
-  expect(REASON_WORDS['slot-free']({ kind: 'slot-free', free: 1 })).toBe('one slot free; pick the next issue and start it.')
   expect(REASON_WORDS.opened({ kind: 'opened', who: 'ABC-1', number: 7 })).toBe('ABC-1 opened pull request #7.')
   expect(REASON_WORDS.verdicts({ kind: 'verdicts', who: 'ABC-1', number: 7, sha: 'abcdef0123456789', spec: 'APPROVE', adversarial: 'REQUEST_CHANGES' }))
     .toBe('ABC-1\'s pull request #7 has verdicts at abcdef0: spec approves, adversarial requests changes.')
@@ -92,8 +85,8 @@ test('a milestone sentence names a sub session with no usable key by its ticket,
 
 test('several reasons make one line, which ends with the data sentence only when it quotes record text', () => {
   expect(wakeLine([])).toBeNull()
-  expect(wakeLine([{ kind: 'idle', who: 'ABC-1', nudged: true, minutes: 15 }, { kind: 'slot-free', free: 1 }]))
-    .toBe('foreman: ABC-1 is still idle after two nudges. one slot free; pick the next issue and start it.')
+  expect(wakeLine([{ kind: 'idle', who: 'ABC-1', nudged: true, minutes: 15 }, { kind: 'slot-kept', whos: ['ABC-2'] }]))
+    .toBe('foreman: ABC-1 is still idle after two nudges. a slot is free, but foreman keeps it for ABC-2, whose waiting session it could not find in the desktop app\'s list; send that session foreman\'s begin message by hand or release the issue, and do not start a new issue.')
   const line = wakeLine([{ kind: 'cleanup', who: 'ABC-2', minutes: 15, failedCalls: 0, lastError: 'boom' }])!
   expect(line.endsWith(` ${DATA_NOTE}`)).toBe(true)
   expect(wakeLine([{ kind: 'cleanup', who: 'ABC-2', minutes: 15, failedCalls: 0, lastError: '\u001b[0m' }])).not.toContain(DATA_NOTE)
@@ -152,9 +145,18 @@ test('the still-waits sentence names the sub session by its id', () => {
     .toBe('the sub session local_abc, which foreman holds no record of, still waits after foreman\'s nudge.')
 })
 
-test('the five report kinds are the pull request milestones and the begin, and nothing else', () => {
-  expect([...REPORT_KINDS].sort()).toEqual(['began', 'closed', 'merged', 'opened', 'verdicts'])
+test('the six report kinds are the pull request milestones, the begin and the dry queue, and nothing else', () => {
+  expect([...REPORT_KINDS].sort()).toEqual(['began', 'closed', 'merged', 'opened', 'queue-dry', 'verdicts'])
   expect(REPORT_KINDS.has('still-waits')).toBe(false)
+})
+
+// Foreman shows the dry-queue sentence itself, in the band, the pane's log
+// and one notification, so it is the owner who reads it, not the parent's
+// model, and it asks nothing of that model.
+test('the dry-queue sentence says the queue ran dry, a slot is free, and the next message lines up more', () => {
+  expect(REASON_WORDS['queue-dry']({ kind: 'queue-dry' }))
+    .toBe('foreman\'s queue ran dry: a slot is free and no sub session waits, so your next message lines up more.')
+  expect(wakeLine(splitReasons([{ kind: 'queue-dry' }]).wakes)).toBeNull()
 })
 
 test('reasons split into the ones that wake, in order, and the report sentences, in order', () => {
@@ -162,12 +164,12 @@ test('reasons split into the ones that wake, in order, and the report sentences,
     { kind: 'opened', who: 'ABC-1', number: 7 },
     { kind: 'idle', who: 'ABC-2', nudged: true, minutes: 15 },
     { kind: 'merged', who: 'ABC-1', number: 7 },
-    { kind: 'slot-free', free: 1 },
+    { kind: 'queue-dry' },
     { kind: 'still-waits', id: 'local_abc' },
     { kind: 'frozen', who: 'ABC-3', minutes: 10, state: 'done' },
   ]
   const { wakes, reports } = splitReasons(reasons)
-  expect(wakes.map(r => r.kind)).toEqual(['idle', 'slot-free', 'still-waits', 'frozen'])
-  expect(reports).toEqual(['ABC-1 opened pull request #7.', 'ABC-1\'s pull request #7 merged.'])
+  expect(wakes.map(r => r.kind)).toEqual(['idle', 'still-waits', 'frozen'])
+  expect(reports).toEqual(['ABC-1 opened pull request #7.', 'ABC-1\'s pull request #7 merged.', REASON_WORDS['queue-dry']({ kind: 'queue-dry' })])
   expect(splitReasons([])).toEqual({ wakes: [], reports: [] })
 })

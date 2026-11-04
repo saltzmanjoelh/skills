@@ -161,7 +161,7 @@ test('notes about two sub sessions give one sorted line, which a repeat counts',
 
 test('foreman\'s own wake line still reaches the model', async ($, on) => {
   const { w } = await parentWith($, on)
-  await passes($, w, 'foreman: one slot free; pick the next issue and start it.')
+  await passes($, w, 'foreman: ABC-1 is still idle after two nudges.')
 })
 
 test('with an empty ledger every note is kept under its id', async ($, on) => {
@@ -481,7 +481,7 @@ test('while a key is held, a plugin\'s prompt, foreman\'s wake among them, and a
     { kind: 'scheduled-trigger' },
   ]
   for (const origin of others) {
-    await passes($, w, 'foreman: one slot free; pick the next issue and start it.', { origin })
+    await passes($, w, 'foreman: ABC-1 is still idle after two nudges.', { origin })
     expect(w.engine.contexts.at(-1)).toBeUndefined()
   }
   await passes($, w, 'go on', { origin: { kind: 'composer' }, isMeta: true })

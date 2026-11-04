@@ -2,7 +2,7 @@
 // joined, with any text from a status record quoted as data. A sub session
 // can influence the text in its own record, so that text is cleaned, cut and
 // quoted, and the line says that quoted text is data, not instructions.
-// Five kinds of reason only report something, so they never go in that line:
+// Six kinds of reason only report something, so they never go in that line:
 // foreman shows their sentences itself, and splitReasons sets them apart.
 // Every function is pure.
 //
@@ -25,13 +25,14 @@ import { listOf, plural, printable } from './text'
 // that waits only on background work, with its first task's description as
 // builder wrote it, or null when the record names none. `still-waits` is a
 // sub session that foreman holds no record of, named by its `local_…` id,
-// that still waits after foreman's nudge. `slot-kept` is a freed slot that
-// foreman keeps for the sub sessions waiting unclaimed in its queue, which it
-// could not find in the desktop app's list, with the names of the waiting
-// issues that a wake line may carry, or none. `frozen` is a sub session whose
-// status file has not changed for FROZEN_MS, with the state the file last
-// showed. That state is one of builder's checked names, not text a sub
-// session wrote, so its sentence quotes nothing.
+// that still waits after foreman's nudge. `queue-dry` is a freed slot with
+// no sub session waiting in the queue to take it. `slot-kept` is a freed
+// slot that foreman keeps for the sub sessions waiting unclaimed in its
+// queue, which it could not find in the desktop app's list, with the names of
+// the waiting issues that a wake line may carry, or none. `frozen` is a sub
+// session whose status file has not changed for FROZEN_MS, with the state
+// the file last showed. That state is one of builder's checked names, not
+// text a sub session wrote, so its sentence quotes nothing.
 export type Reason =
   | { kind: 'idle'; who: string; nudged: boolean; minutes: number }
   | { kind: 'unseen'; who: string; minutes: number; mismatch: boolean }
@@ -43,16 +44,18 @@ export type Reason =
   | ({ kind: 'verdicts'; who: string; number: number } & RecordVerdicts)
   | { kind: 'merged'; who: string; number: number }
   | { kind: 'closed'; who: string; number: number }
-  | { kind: 'slot-free'; free: number }
+  | { kind: 'queue-dry' }
   | { kind: 'slot-kept'; whos: string[] }
   | { kind: 'began'; who: string; by: string | null }
   | { kind: 'still-waits'; id: string }
 
 // The kinds of reason that only report something: a sub session's pull
-// request opened, got its verdict pair, merged or was closed, and foreman
-// began a queued issue. The parent's model could only repeat them, so foreman
-// shows their sentences itself and never wakes the model with one.
-export const REPORT_KINDS: ReadonlySet<Reason['kind']> = new Set<Reason['kind']>(['opened', 'verdicts', 'merged', 'closed', 'began'])
+// request opened, got its verdict pair, merged or was closed, foreman began a
+// queued issue, and foreman's queue ran dry. The parent's model could only
+// repeat the first five, and the desktop app refuses a start made on a turn
+// that a wake began, so the dry queue is the owner's to act on. Foreman shows
+// their sentences itself and never wakes the model with one.
+export const REPORT_KINDS: ReadonlySet<Reason['kind']> = new Set<Reason['kind']>(['opened', 'verdicts', 'merged', 'closed', 'began', 'queue-dry'])
 
 // The shape of an issue key, such as ABC-123, as a pattern for other patterns
 // to build on. The title check in tickets.ts uses it too, so the two agree.
@@ -111,12 +114,6 @@ export const NUMBER_WORDS = [
 // `n` in words, or in digits past twenty.
 export const inWords = (n: number) => NUMBER_WORDS[n] ?? String(n)
 
-// The slot-free sentence for `free` slots free, the number in words.
-export function slotWords(free: number): string {
-  const n = NUMBER_WORDS[free] ?? String(free)
-  return free === 1 ? 'one slot free; pick the next issue and start it.' : `${n} slots free; pick the next issues and start them.`
-}
-
 // A verdict as the verdict sentence words it.
 const verdictWord = (v: RecordVerdicts['spec']) => (v === 'APPROVE' ? 'approves' : 'requests changes')
 
@@ -149,7 +146,7 @@ export const REASON_WORDS: { [K in Reason['kind']]: (r: Extract<Reason, { kind: 
   'verdicts': r => `${r.who}'s pull request #${r.number} has verdicts at ${r.sha.slice(0, 7)}: spec ${verdictWord(r.spec)}, adversarial ${verdictWord(r.adversarial)}.`,
   'merged': r => `${r.who}'s pull request #${r.number} merged.`,
   'closed': r => `${r.who}'s pull request #${r.number} was closed without merging.`,
-  'slot-free': r => slotWords(r.free),
+  'queue-dry': () => 'foreman\'s queue ran dry: a slot is free and no sub session waits, so your next message lines up more.',
   'slot-kept': r => {
     if (r.whos.length === 1) {
       return `a slot is free, but foreman keeps it for ${r.whos[0]}, whose waiting session it could not find in the desktop app's list; send that session foreman's begin message by hand or release the issue, and do not start a new issue.`

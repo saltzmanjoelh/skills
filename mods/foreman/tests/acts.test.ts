@@ -25,6 +25,15 @@ async function minutesPass(w: World, minutes: number, live: Record<string, strin
 }
 
 const ledger = (w: World) => ticketsIn(w.stored.get(ticketsKey('session-1')))
+
+// The sentence foreman shows itself when a slot frees and nobody waits, and
+// how many notifications carried it.
+const DRY = 'foreman\'s queue ran dry: a slot is free and no sub session waits, so your next message lines up more.'
+const dryNotices = (w: World) => w.engine.notices.filter(n => n.includes(DRY)).length
+
+// A sub session in cleanup with three failed calls, which wakes the parent on
+// the first read that finds it.
+const cleaning = (key: string, id: string) => record(key, 'in-cleanup', { desktopSessionId: id, cleanup: { failedCalls: 3, lastError: '' } })
 const startSession = ($: Engine, args: Record<string, unknown>) => $.tool.call({ tool: START, ...args } as never) as Promise<{ deny?: string; text?: string; context?: readonly string[] }>
 
 test('in a parent, start_session gets the ticket line and then the parent line with the parent\'s own session id, and the local_ id it answers is paired with the ticket', async ($, on) => {
@@ -283,7 +292,7 @@ test('cleanup wakes the parent once it has lasted fifteen minutes', async ($, on
   expect(w.engine.prompts).toEqual(['foreman: ABC-1 has been in cleanup for 15 minutes with 0 failed calls.'])
 })
 
-test('a done sub session whose session is archived frees its slot and wakes the parent once', async ($, on) => {
+test('a done sub session whose session is archived frees its slot, wakes nobody, and reports the dry queue once', async ($, on) => {
   const w = world(on)
   const done = record('ABC-1', 'done', { desktopSessionId: 'local_a' })
   w.folder.put('a.json', done)
@@ -294,12 +303,14 @@ test('a done sub session whose session is archived frees its slot and wakes the 
   expect(await ui.pane.find({ key: 'open-a.json' })).toBeDefined()
   w.desktop.sessions = [{ sessionId: 'local_a', cwd: '/w', isArchived: true, isRunning: false }]
   await minutesPass(w, 2, { 'a.json': done })
-  expect(w.engine.prompts).toEqual(['foreman: two slots free; pick the next issues and start them.'])
+  expect(w.engine.prompts).toEqual([])
+  expect(dryNotices(w)).toBe(1)
   await ui.paneText()
   expect(await ui.pane.find({ key: 'open-a.json' })).toBeUndefined()
   expect(ledger(w).pairings[0]!.standing).toBe('freed')
   await minutesPass(w, 10, { 'a.json': done })
-  expect(w.engine.prompts).toHaveLength(1)
+  expect(w.engine.prompts).toEqual([])
+  expect(dryNotices(w)).toBe(1)
 })
 
 test('a sub session whose file leaves the folder frees its slot, and a missing folder frees nothing', async ($, on) => {
@@ -317,11 +328,12 @@ test('a sub session whose file leaves the folder frees its slot, and a missing f
   w.folder.exists = true
   w.folder.files.delete('a.json')
   await minutesPass(w, 2)
-  expect(w.engine.prompts).toEqual(['foreman: one slot free; pick the next issue and start it.'])
+  expect(w.engine.prompts).toEqual([])
+  expect(dryNotices(w)).toBe(1)
   expect(ledger(w).pairings).toEqual([])
 })
 
-test('Release frees the slot, leaves the row dimmed and labelled released, and wakes the parent once', async ($, on) => {
+test('Release frees the slot, leaves the row dimmed and labelled released, wakes nobody, and reports the dry queue once', async ($, on) => {
   const w = world(on)
   const working = record('ABC-1', 'working', { desktopSessionId: 'local_a' })
   w.folder.put('a.json', working)
@@ -331,8 +343,10 @@ test('Release frees the slot, leaves the row dimmed and labelled released, and w
   await foreman($)
   await ui.pane.press({ key: 'release-a.json' })
   await w.clock.settle()
-  expect(w.engine.prompts).toEqual(['foreman: one slot free; pick the next issue and start it.'])
-  await ui.paneText()
+  expect(w.engine.prompts).toEqual([])
+  expect(w.engine.notices).toEqual([DRY])
+  expect(await ui.paneText()).toContain(DRY)
+  expect(ledger(w).dryNotified).toBe(true)
   const band = await ui.bandText()
   expect(band).toStartWith('foreman: 1 of 2 slots busy · ABC-2')
   expect(band).not.toContain('ABC-1')
@@ -346,7 +360,12 @@ test('Release frees the slot, leaves the row dimmed and labelled released, and w
   await minutesPass(w, 1)
   await ui.paneText()
   expect(await ui.pane.find({ key: 'open-a.json' })).toBeUndefined()
-  expect(w.engine.prompts).toHaveLength(1)
+  // A second Release while the queue stays empty reports nothing more.
+  await ui.pane.press({ key: 'release-b.json' })
+  await w.clock.settle()
+  expect(w.engine.prompts).toEqual([])
+  expect(dryNotices(w)).toBe(1)
+  expect(await ui.paneText()).toContain('A slot is free and foreman\'s queue is still empty, which foreman already reported.')
 })
 
 test('a sub session whose file stopped and whose session is not running wakes the parent once', async ($, on) => {
@@ -437,9 +456,8 @@ test('while a turn of the parent runs the wake is appended to it, and a subagent
   await foreman($)
   await $.turn.start({ text: 'go', turnId: 't1' } as never)
   await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', agentId: 'agent-1' } as never)
-  await ui.pane.press({ key: 'release-a.json' })
-  await w.clock.settle()
-  expect(w.engine.appended).toEqual(['foreman: two slots free; pick the next issues and start them.'])
+  await minutesPass(w, 1, { 'a.json': cleaning('ABC-1', 'local_a') })
+  expect(w.engine.appended).toEqual(['foreman: ABC-1 has been in cleanup for 0 minutes with 3 failed calls.'])
   expect(w.engine.prompts).toEqual([])
 })
 
@@ -636,7 +654,7 @@ test('work a read decided before a reload dropped its timer is carried out once 
   leftInState(on, {
     tickets: {
       ...ticketsIn(w.stored.get(ticketsKey('session-1'))),
-      outbox: { logs: ['A line decided before the reload.'], effects: [{ kind: 'nudge', to: 'local_a', name: 'ABC-1' }], lines: ['foreman: one slot free; pick the next issue and start it.'] },
+      outbox: { logs: ['A line decided before the reload.'], effects: [{ kind: 'nudge', to: 'local_a', name: 'ABC-1' }], lines: ['foreman: ABC-1 is still idle after two nudges.'] },
     },
     parent: { isOn: true, slots: null },
     nextReadAt: T0 + 20 * SECOND,
@@ -647,8 +665,34 @@ test('work a read decided before a reload dropped its timer is carried out once 
   await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as never)
   await w.clock.settle()
   expect(w.desktop.sent).toEqual([['local_a', NUDGE]])
-  expect(w.engine.prompts).toEqual(['foreman: one slot free; pick the next issue and start it.'])
+  expect(w.engine.prompts).toEqual(['foreman: ABC-1 is still idle after two nudges.'])
   expect(await ui.paneText()).toContain('A line decided before the reload.')
+  expect(ledger(w).outbox).toEqual({ logs: [], effects: [], lines: [], reports: [] })
+})
+
+// A wake line stored by a build from before the queue top-up asked the
+// parent's model to start the next issue, which no section of the wake skill
+// answers any more, so carrying it out after the upgrade drops it.
+test('a stored wake line that is only the old slot-free sentence is dropped when the outbox is carried out, in either form', async ($, on) => {
+  const w = world(on)
+  w.folder.put('a.json', record('ABC-1', 'working', { desktopSessionId: 'local_a' }))
+  const lines = [
+    'foreman: one slot free; pick the next issue and start it.',
+    'foreman: two slots free; pick the next issues and start them.',
+    'foreman: 21 slots free; pick the next issues and start them.',
+    'foreman: ABC-1 is still idle after two nudges.',
+  ]
+  leftInState(on, {
+    tickets: { ...ticketsIn(w.stored.get(ticketsKey('session-1'))), outbox: { logs: [], effects: [], lines } },
+    parent: { isOn: true, slots: null },
+    nextReadAt: T0 + 20 * SECOND,
+    readAt: T0 - 10 * SECOND,
+  })
+  on('turn.complete', ($, e) => ({ text: e.answer }) as never)
+  await mountBoth($, on)
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as never)
+  await w.clock.settle()
+  expect(w.engine.prompts).toEqual(['foreman: ABC-1 is still idle after two nudges.'])
   expect(ledger(w).outbox).toEqual({ logs: [], effects: [], lines: [], reports: [] })
 })
 
@@ -726,34 +770,30 @@ test('a subagent\'s turn start does not count as the parent\'s turn, and the end
   await start($)
   await foreman($)
   await $.turn.start({ text: 'go', turnId: 't1', agentId: 'agent-1' } as never)
-  await ui.pane.press({ key: 'release-a.json' })
-  await w.clock.settle()
+  await minutesPass(w, 1, { 'a.json': cleaning('ABC-1', 'local_a') })
   expect(w.engine.prompts).toHaveLength(1)
   expect(w.engine.appended).toEqual([])
   await $.turn.start({ text: 'go', turnId: 't2' } as never)
   await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't2', reason: 'answer' } as never)
-  await ui.pane.press({ key: 'release-b.json' })
-  await w.clock.settle()
+  await minutesPass(w, 1, { 'a.json': cleaning('ABC-1', 'local_a'), 'b.json': cleaning('ABC-2', 'local_b') })
   expect(w.engine.prompts).toHaveLength(2)
   expect(w.engine.appended).toEqual([])
 })
 
 test('the words after /start-foreman reach the model before a wake that the first read finds', async ($, on) => {
   const w = world(on, { store: { 'parent:session-1': { isOn: false, slots: 2 } } })
-  w.folder.put('a.json', record('ABC-1', 'done', { desktopSessionId: 'local_a' }))
-  w.desktop.sessions = [{ sessionId: 'local_a', cwd: '/w', isArchived: true, isRunning: false }]
+  w.folder.put('a.json', cleaning('ABC-1', 'local_a'))
   await mountBoth($, on)
   await start($)
   await foreman($, 'clean up the worktrees first')
   await w.clock.settle()
   expect(w.engine.prompts[0]).toBe('clean up the worktrees first')
-  expect(w.engine.prompts.slice(1)).toEqual(['foreman: two slots free; pick the next issues and start them.'])
+  expect(w.engine.prompts.slice(1)).toEqual(['foreman: ABC-1 has been in cleanup for 0 minutes with 3 failed calls.'])
 })
 
 test('a wake waits at most 30 seconds for the words after /start-foreman, and logs that it stopped waiting', async ($, on) => {
   const w = world(on, { store: { 'parent:session-1': { isOn: false, slots: 2 } } })
-  w.folder.put('a.json', record('ABC-1', 'done', { desktopSessionId: 'local_a' }))
-  w.desktop.sessions = [{ sessionId: 'local_a', cwd: '/w', isArchived: true, isRunning: false }]
+  w.folder.put('a.json', cleaning('ABC-1', 'local_a'))
   w.engine.submit = 'hang'
   const ui = await mountBoth($, on)
   await start($)
@@ -762,7 +802,7 @@ test('a wake waits at most 30 seconds for the words after /start-foreman, and lo
   expect(w.engine.prompts).toEqual(['clean up the worktrees first'])
   await w.clock.advance(30 * SECOND)
   await w.clock.settle()
-  expect(w.engine.prompts).toEqual(['clean up the worktrees first', 'foreman: two slots free; pick the next issues and start them.'])
+  expect(w.engine.prompts).toEqual(['clean up the worktrees first', 'foreman: ABC-1 has been in cleanup for 0 minutes with 3 failed calls.'])
   const logs = await ui.paneText()
   expect(logs).toContain('Stopped waiting for the words after /start-foreman to be sent, after 30 seconds.')
 })
@@ -1050,6 +1090,14 @@ test('a ledger left in $.state that holds only unwatched ids outweighs an older 
   await start($)
   expect((await startSession($, IMPLEMENT)).deny).toBe(OFF_REFUSAL)
   expect(ledger(w).unwatched).toEqual(['local_old'])
+})
+
+test('a ledger left in $.state that holds only the dry-queue mark outweighs an older stored one', async ($, on) => {
+  const w = world(on, { store: { [ticketsKey('session-1')]: { ...TICKETS_EMPTY, offRefusedFor: 'session-1' } } })
+  leftInState(on, { tickets: { ...TICKETS_EMPTY, dryNotified: true } })
+  await start($)
+  expect((await startSession($, IMPLEMENT)).deny).toBe(OFF_REFUSAL)
+  expect(ledger(w).dryNotified).toBe(true)
 })
 
 test('a ledger left in $.state that holds only kept slots outweighs an older stored one', async ($, on) => {

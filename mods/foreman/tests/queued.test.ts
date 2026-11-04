@@ -332,14 +332,66 @@ test('a restart keeps a kept slot, and the first read that lists begins the wait
   expect(ledger(w).keptSlots).toEqual([])
 })
 
-test('with the queue empty, a freed slot wakes the parent to pick the next issue as before', async ($, on) => {
-  const { w } = await parent($, on, 1)
+// The sentence foreman shows itself when a slot frees and nobody waits.
+const DRY = 'foreman\'s queue ran dry: a slot is free and no sub session waits, so your next message lines up more.'
+const dryNotices = (w: World) => w.engine.notices.filter(n => n.includes(DRY)).length
+
+test('with the queue empty, a freed slot wakes nobody and reports the dry queue once, in the log, the band and one notification', async ($, on) => {
+  const { w, ui } = await parent($, on, 1)
   w.engine.startAnswers = [answer(1)]
   await startSession($, keyed('ABC-1'))
   const done = busyFile('ABC-1', ticketOf(w, 0), 'local_new1', { state: 'done' })
   w.desktop.sessions = [listed('local_new1', 'ABC-1', { isArchived: true, isRunning: false })]
   await minutesPass(w, 3, { 'a.json': done })
-  expect(w.engine.prompts).toEqual(['foreman: one slot free; pick the next issue and start it.'])
+  expect(w.engine.prompts).toEqual([])
+  expect(w.engine.appended).toEqual([])
+  expect(w.engine.notices).toEqual([DRY])
+  expect(await ui.paneText()).toContain(DRY)
+  expect(await ui.bandText()).toContain(DRY)
+  expect(ledger(w).dryNotified).toBe(true)
+  await minutesPass(w, 3, { 'a.json': done })
+  expect(w.engine.notices).toEqual([DRY])
+})
+
+test('a slot that frees later while the queue stays empty raises no second notification', async ($, on) => {
+  const { w, ui } = await parent($, on, 2)
+  w.engine.startAnswers = [answer(1), answer(2)]
+  await startSession($, keyed('ABC-1'))
+  await startSession($, keyed('ABC-2'))
+  const live = { 'a.json': busyFile('ABC-1', ticketOf(w, 0), 'local_new1'), 'b.json': busyFile('ABC-2', ticketOf(w, 1), 'local_new2') }
+  w.desktop.sessions = [listed('local_new1', 'ABC-1'), listed('local_new2', 'ABC-2')]
+  await minutesPass(w, 1, live)
+  w.desktop.sessions[0] = listed('local_new1', 'ABC-1', { isArchived: true, isRunning: false })
+  await minutesPass(w, 2, { ...live, 'a.json': busyFile('ABC-1', ticketOf(w, 0), 'local_new1', { state: 'done' }) })
+  expect(dryNotices(w)).toBe(1)
+  w.desktop.sessions[1] = listed('local_new2', 'ABC-2', { isArchived: true, isRunning: false })
+  await minutesPass(w, 2, { 'b.json': busyFile('ABC-2', ticketOf(w, 1), 'local_new2', { state: 'done' }) })
+  expect(ledger(w).pairings.every(p => p.standing === 'freed')).toBe(true)
+  expect(dryNotices(w)).toBe(1)
+  expect(w.engine.prompts).toEqual([])
+  expect(await ui.paneText()).toContain('A slot is free and foreman\'s queue is still empty, which foreman already reported.')
+})
+
+test('a start that waits arms the dry report again, even when its session is archived before any read sees it', async ($, on) => {
+  const { w } = await parent($, on, 1)
+  w.engine.startAnswers = [answer(1), answer(2), answer(3)]
+  await startSession($, keyed('ABC-1'))
+  w.desktop.sessions = [listed('local_new1', 'ABC-1', { isArchived: true, isRunning: false })]
+  await minutesPass(w, 2, { 'a.json': busyFile('ABC-1', ticketOf(w, 0), 'local_new1', { state: 'done' }) })
+  expect(dryNotices(w)).toBe(1)
+  // ABC-2 goes ahead in the free slot, and ABC-3 waits behind it, but the
+  // person archives ABC-3's session before any read lists it.
+  await startSession($, keyed('ABC-2'))
+  await startSession($, keyed('ABC-3'))
+  expect(ledger(w).dryNotified).toBe(false)
+  const b = busyFile('ABC-2', ticketOf(w, 1), 'local_new2')
+  w.desktop.sessions = [listed('local_new2', 'ABC-2'), listed('local_new3', 'ABC-3', { isArchived: true, isRunning: false })]
+  await minutesPass(w, 2, { 'b.json': b })
+  expect(ledger(w).pairings.some(p => p.queue !== null)).toBe(false)
+  w.desktop.sessions[0] = listed('local_new2', 'ABC-2', { isArchived: true, isRunning: false })
+  await minutesPass(w, 2, { 'b.json': busyFile('ABC-2', ticketOf(w, 1), 'local_new2', { state: 'done' }) })
+  expect(dryNotices(w)).toBe(2)
+  expect(w.engine.prompts).toEqual([])
 })
 
 test('a waiting start answered with a proposal card holds back no slot once its call is long over, and begins once its session starts', async ($, on) => {
@@ -355,12 +407,35 @@ test('a waiting start answered with a proposal card holds back no slot once its 
   const done = busyFile('ABC-1', ticketOf(w, 0), 'local_new1', { state: 'done' })
   w.desktop.sessions = [listed('local_new1', 'ABC-1', { isArchived: true, isRunning: false })]
   await minutesPass(w, 2, { 'a.json': done })
-  expect(w.engine.prompts).toEqual(['foreman: one slot free; pick the next issue and start it.'])
+  expect(w.engine.prompts).toEqual([])
+  expect(dryNotices(w)).toBe(1)
   // The person starts the card later: its session writes its file with the
   // ticket, foreman learns its id from it, and begins it in the free slot.
   w.desktop.sessions.push(listed('local_card', 'ABC-2'))
   await minutesPass(w, 2, { 'a.json': done, 'b.json': waitingFile(card, 'local_card') })
   expect(begins(w)).toEqual(['local_card'])
+})
+
+test('a proposal card nobody started does not arm the dry report again once its call is long over', async ($, on) => {
+  const { w } = await parent($, on, 1)
+  w.engine.startAnswers = [answer(1), 'Proposed the session as a card for the person to start.', answer(3)]
+  await startSession($, keyed('ABC-1'))
+  await startSession($, keyed('ABC-2'))
+  w.desktop.sessions = [listed('local_new1', 'ABC-1')]
+  await minutesPass(w, 6, { 'a.json': busyFile('ABC-1', ticketOf(w, 0), 'local_new1') })
+  w.desktop.sessions = [listed('local_new1', 'ABC-1', { isArchived: true, isRunning: false })]
+  await minutesPass(w, 2, { 'a.json': busyFile('ABC-1', ticketOf(w, 0), 'local_new1', { state: 'done' }) })
+  expect(dryNotices(w)).toBe(1)
+  // ABC-3 goes ahead in the free slot, since the card is owed none, and then
+  // frees it again while the card still waits.
+  await startSession($, keyed('ABC-3'))
+  expect(String(w.engine.started[2]!.prompt)).not.toContain('Wait for foreman')
+  w.desktop.sessions.push(listed('local_new3', 'ABC-3'))
+  await minutesPass(w, 1, { 'c.json': busyFile('ABC-3', ticketOf(w, 2), 'local_new3') })
+  w.desktop.sessions[1] = listed('local_new3', 'ABC-3', { isArchived: true, isRunning: false })
+  await minutesPass(w, 2, { 'c.json': busyFile('ABC-3', ticketOf(w, 2), 'local_new3', { state: 'done' }) })
+  expect(ledger(w).pairings.find(p => p.ticket === ticketOf(w, 2))?.standing).toBe('freed')
+  expect(dryNotices(w)).toBe(1)
 })
 
 test('a slot that frees soon after a waiting start was answered with a proposal card wakes the parent with the kept sentence', async ($, on) => {

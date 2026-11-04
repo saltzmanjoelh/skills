@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PromptSubmitInput, Register, ResolveInput, ToolCallResult } from 'claude-code'
 
 import { checkOutcome, clampedDue, endsOf, isClaimed, soonestDue, withNote, withoutPaired, type CheckDone } from './checks'
-import { CALL_TIMEOUT_MS, decide, desktopOf, freeSlots, GONE_MS, keptByUnreadList, needsList, NO_ANSWER, releasedIn, slotOutcome, startWaits, topUpCount, watchingFrom, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
+import { CALL_TIMEOUT_MS, decide, desktopOf, freedSlotIn, freeSlots, GONE_MS, keptByUnreadList, needsList, NO_ANSWER, releasedIn, startWaits, topUpCount, watchingFrom, type Decision, type Limits, type SessionsLook } from './act'
 import { isSvgSurface } from './art'
 import { becameParentAnswer, COMMAND, commandOf, isCommandText, PASSED_ON, PASTED_LINE, pastedCommandIn, slotsAnswer, START_FOREMAN_FALLBACK, START_FOREMAN_OFF, startForemanText, type Command } from './commands'
 import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, everySession, failureLine, linkedFamily, listSessions, NUDGE_TEXT, openSession, readHeader, REASONS, sendMessage, type DesktopCall, type Listed, type SavedCopies, type SendResult } from './desktop'
@@ -557,8 +557,15 @@ async function carryOut($: $) {
   }))
   const began = done.flatMap(sentence => (sentence === null ? [] : [sentence]))
   await showReports($, [...work.reports, ...began]).catch(() => undefined)
-  for (const line of work.lines) await wake($, line)
+  for (const line of work.lines.filter(l => !OLD_SLOT_LINE.test(l))) await wake($, line)
 }
+
+// A wake line that is only the slot-free sentence an earlier build stored,
+// for one slot or several. It asked the parent's model to start the next
+// issue, which no section of the wake skill answers any more, and a start on
+// a turn that a wake began is refused, so carryOut drops such a line when a
+// reload carries it across the upgrade. Nothing else uses this pattern.
+const OLD_SLOT_LINE = /^foreman: (?:one slot free; pick the next issue and start it\.|(?:[a-z]+|[0-9]+) slots free; pick the next issues and start them\.)$/
 
 // Shows report sentences without waking the parent's model: each as a line
 // in the log, the newest in the band from now, and all of them joined in one
@@ -847,45 +854,45 @@ async function nudgeRow($: $, file: string) {
   await nudge($, to, nameOf(row), ', because Nudge was pressed')
 }
 
-// What a freed slot leads to now, from the slots free.
-async function slotOutcomeNow($: $) {
-  const settings = parentIn(await read($, parent))
-  return slotOutcome(freeSlots(ticketsIn(await read($, tickets)), await rowsNow($), await $.clock.now(), slotsOf(settings, currentOptions.slots)))
-}
-
-// The ledger with a freed slot's outcome applied: the slot wake put in the
-// outbox, which carryOut then sends, as a read's wakes are, so a reload
-// before it is sent loses nothing.
-function withSlotOutcome(t: ForemanTickets, outcome: SlotOutcome): ForemanTickets {
-  if (outcome.kind === 'none') return t
-  return { ...t, outbox: addWork(t.outbox, { logs: [], effects: [], lines: [wakeLine([outcome.reason])!] }) }
-}
-
 // After Release freed a slot. When a sub session waited unclaimed in the
 // ledger update that released the pairing, that update also carried the
 // released issue's name in keptSlots, and `waits` is true, so a read is asked
 // for, which decides the slot as if it had freed on that read: a claim takes
 // the name, a list that does not show the waiting session surely open wakes
 // the parent with the kept sentence, a list that cannot be read keeps
-// carrying the name, and once nobody waits unclaimed the name wakes the
-// parent with the slot-free sentence. A read already under way decides on the
+// carrying the name, and once nobody waits unclaimed the name leads to the
+// dry-queue report. A read already under way decides on the
 // live ledger inside its own update, so it either takes the name or leaves it
 // stored for the next scheduled read, which is always armed. A name the
 // ledger's reader would drop, from a damaged ticket, is not carried, so no
 // read counts that slot as freed: it ends in neither a claim nor a wake, and
 // stays idle until another slot frees or a kept sentence wakes the parent, as
-// it did before Release carried names. When nobody waited, the parent is
-// woken at once with the number of slots free, and nothing happens when no
-// slot is free. The verdict comes from the release's own write rather than a
-// second look at the ledger, which could find nobody waiting after a read had
-// already claimed with the name and so handle the slot twice.
+// it did before Release carried names. When nobody waited, the freed slot is
+// decided at once by freedSlotIn inside one ledger update: the dry-queue
+// report, or its log line when foreman already reported the dry queue, goes
+// in the outbox together with the mark, and nothing happens when no slot is
+// free. The update may run again when another write got in first, so the
+// rows, the clock and the slot count are read before it, and only pure work
+// runs inside it. The outbox is carried out by carryOut, as a read's is, so a
+// reload before it goes loses nothing. The verdict on waiting comes from the
+// release's own write rather than a second look at the ledger, which could
+// find nobody waiting after a read had already claimed with the name and so
+// handle the slot twice.
 async function slotFreed($: $, waits: boolean) {
   if (waits) {
     later($, () => readNow($))
     return
   }
-  const outcome = await slotOutcomeNow($)
-  await writeTickets($, t => withSlotOutcome(t, outcome))
+  const rows = await rowsNow($)
+  const now = await $.clock.now()
+  const slots = slotsOf(parentIn(await read($, parent)), currentOptions.slots)
+  await writeTickets($, t => {
+    const out = freedSlotIn(t, rows, now, slots)
+    if (out.tickets === t && out.reasons.length === 0 && out.logs.length === 0) return t
+    const { wakes, reports } = splitReasons(out.reasons)
+    const line = wakeLine(wakes)
+    return { ...out.tickets, outbox: addWork(out.tickets.outbox, { logs: out.logs, effects: [], lines: line === null ? [] : [line], reports }) }
+  })
   later($, () => carryOut($))
 }
 
@@ -939,9 +946,13 @@ async function startSession<E extends Record<string, unknown>>($: $, e: E, next:
     const now = await $.clock.now()
     const rows = await rowsNow($)
     const slots = slotsOf(parentIn(await read($, parent)), currentOptions.slots)
+    // A start that waits clears the dry-queue mark in the same update, so
+    // the queue's next dry spell is reported again even when this session is
+    // archived before any read sees it.
     await writeTickets($, t => {
       waits = key !== null && startWaits(t, rows, now, slots)
-      return { ...t, pairings: [...t.pairings, newPairing(ticket, null, now, key, waits ? { place: nextPlace(t), claim: null } : null)] }
+      const pairings = [...t.pairings, newPairing(ticket, null, now, key, waits ? { place: nextPlace(t), claim: null } : null)]
+      return waits ? { ...t, pairings, dryNotified: false } : { ...t, pairings }
     })
   }
   let sent: E = e
@@ -1483,7 +1494,7 @@ export const register: Register = (on, options) => {
         const held = ticketsIn(heldRaw)
         const isEmpty = held.pairings.length === 0 && !hasWork(held.outbox) && held.held.length === 0 && held.offRefusedFor === null && held.unwatched.length === 0
           && held.spent.length === 0 && held.earlier === null && held.keptSlots.length === 0 && held.checks.length === 0
-          && !held.listFailNotified
+          && !held.listFailNotified && !held.dryNotified
         return isEmpty ? storedTickets : held
       })
     }

@@ -1,12 +1,12 @@
 import { expect, test } from 'claude-code/testing'
 
-import { decide, FROZEN_MS, GONE_MS, keptByUnreadList, listFailedNotice, needsList, NO_ANSWER, slotOutcome, READ_GAP_MS, SETTLE_MS, stallsNeedList, TOP_UP_MAX, topUpCount, watchingFrom, type DecideInput, type Decision, type SessionsLook } from '../hooks/act'
+import { decide, DRY_AGAIN_LOG, dryStep, FROZEN_MS, GONE_MS, keptByUnreadList, listFailedNotice, needsList, NO_ANSWER, slotOutcome, READ_GAP_MS, SETTLE_MS, stallsNeedList, TOP_UP_MAX, topUpCount, watchingFrom, type DecideInput, type Decision, type SessionsLook } from '../hooks/act'
 import { REASONS } from '../hooks/desktop'
 import { recordIn, STATES } from '../hooks/record'
 import { spentSum, TIMES_UNKNOWN } from '../hooks/spend'
 import { READ_LATER_MS, type SubRow } from '../hooks/subs'
 import { joinOwners, newPairing, TICKETS_EMPTY, ticketsIn } from '../hooks/tickets'
-import { DATA_NOTE, wakeLine } from '../hooks/wake'
+import { DATA_NOTE, REASON_WORDS, splitReasons, wakeLine } from '../hooks/wake'
 import type { ForemanStanding, ForemanTickets } from '../types'
 
 const T0 = Date.UTC(2026, 9, 20, 12, 0, 0)
@@ -151,21 +151,21 @@ test('a done session frees its slot once it is archived, not running or not list
   for (const sessions of [look([{ isArchived: true, isRunning: false }]), look([{ isArchived: false, isRunning: false }]), look([])]) {
     const d = read(paired(), done, T0, { sessions })
     expect(d.tickets.pairings[0]!.standing).toBe('freed')
-    expect(d.reasons).toEqual([{ kind: 'slot-free', free: 2 }])
+    expect(d.reasons).toEqual([{ kind: 'queue-dry' }])
   }
   expect(read(paired(), done, T0, { sessions: { kind: 'failed' } }).tickets.pairings[0]!.standing).toBe('active')
 })
 
-test('a record whose file leaves while its pull request was last told open wakes with the merged sentence before the slot-free one', () => {
+test('a record whose file leaves while its pull request was last told open reports the merged sentence before the dry-queue one', () => {
   const open = read(paired(), [row({ state: 'working', pr: pr(7) })], T0)
   const left = read(open.tickets, [], T0 + MINUTE)
-  expect(wakeLine(left.reasons)).toBe('foreman: ABC-1\'s pull request #7 merged. two slots free; pick the next issues and start them.')
+  expect(splitReasons(left.reasons)).toEqual({ wakes: [], reports: ['ABC-1\'s pull request #7 merged.', REASON_WORDS['queue-dry']({ kind: 'queue-dry' })] })
   const merged = read(open.tickets, [row({ state: 'working', pr: pr(7, 'MERGED') })], T0 + MINUTE)
-  expect(read(merged.tickets, [], T0 + 2 * MINUTE).reasons).toEqual([{ kind: 'slot-free', free: 2 }])
+  expect(read(merged.tickets, [], T0 + 2 * MINUTE).reasons).toEqual([{ kind: 'queue-dry' }])
   const closed = read(open.tickets, [row({ state: 'working', pr: pr(7, 'CLOSED') })], T0 + MINUTE)
-  expect(read(closed.tickets, [], T0 + 2 * MINUTE).reasons).toEqual([{ kind: 'slot-free', free: 2 }])
+  expect(read(closed.tickets, [], T0 + 2 * MINUTE).reasons).toEqual([{ kind: 'queue-dry' }])
   const none = read(paired(), [row({ state: 'working' })], T0)
-  expect(read(none.tickets, [], T0 + MINUTE).reasons).toEqual([{ kind: 'slot-free', free: 2 }])
+  expect(read(none.tickets, [], T0 + MINUTE).reasons).toEqual([{ kind: 'queue-dry' }])
   const released = { ...open.tickets, pairings: open.tickets.pairings.map(p => ({ ...p, standing: 'released' as const })) }
   expect(read(released, [], T0 + MINUTE).reasons).toEqual([])
 })
@@ -174,7 +174,7 @@ test('a record whose file leaves frees its slot, but a missing folder frees noth
   const first = read(paired(), [row({ state: 'working' })], T0)
   const left = read(first.tickets, [], T0 + MINUTE)
   expect(left.tickets.pairings).toEqual([])
-  expect(left.reasons).toEqual([{ kind: 'slot-free', free: 2 }])
+  expect(left.reasons).toEqual([{ kind: 'queue-dry' }])
   const missing = read(first.tickets, [], T0 + MINUTE, { folderExists: false })
   expect(missing.tickets.pairings).toHaveLength(1)
   expect(missing.reasons).toEqual([])
@@ -481,14 +481,14 @@ test('a pairing stored without a milestone memory takes its first read as announ
   expect(before.lines).toEqual([null, line(OPENED)])
 })
 
-test('the milestone sentences come after the state and gone sentences of the same pairing, and before the slot-free sentence', () => {
+test('the milestone sentences come after the state and gone sentences of the same pairing, and before the dry-queue sentence', () => {
   const cleaning = row({ state: 'in-cleanup', cleanup: { failedCalls: 3, lastError: '' }, pr: pr(7, 'MERGED') })
   expect(read(paired(), [cleaning], T0).reasons.map(r => r.kind)).toEqual(['cleanup', 'opened', 'merged'])
   const notRunning: SessionsLook = { kind: 'read', sessions: [{ sessionId: 'local_a', isArchived: false, isRunning: false, title: null, surelyUnarchived: true }] }
   const stopped = row({ state: 'waiting-on-builder', pr: pr(7) }, 'a.json', T0)
   expect(read(paired(), [stopped], T0 + GONE_MS + MINUTE, { sessions: notRunning }).reasons.map(r => r.kind)).toEqual(['gone', 'opened'])
   const done = row({ state: 'done', pr: pr(7, 'MERGED') })
-  expect(read(paired(), [done], T0, { sessions: { kind: 'read', sessions: [] } }).reasons.map(r => r.kind)).toEqual(['opened', 'merged', 'slot-free'])
+  expect(read(paired(), [done], T0, { sessions: { kind: 'read', sessions: [] } }).reasons.map(r => r.kind)).toEqual(['opened', 'merged', 'queue-dry'])
 })
 
 test('a released or freed pairing, or a record that does not own the ticket, wakes nothing for its pull request', () => {
@@ -901,13 +901,67 @@ test('past 200 entries a read folds, in the same ledger, the entry of a pairing 
   expect(spentSum(d.tickets)).toEqual({ counts: { input: 500 + 199 + 4000, output: 0, cacheRead: 0, cacheWrite: 0 }, usd: 1 })
 })
 
-test('a freed slot leads to nothing when none is free, the kept sentence while someone waits, and the slot-free sentence otherwise', () => {
+test('a freed slot leads to nothing when none is free, the kept sentence while someone waits, and the dry queue otherwise', () => {
   expect(slotOutcome(0)).toEqual({ kind: 'none' })
   expect(slotOutcome(0, ['ABC-2'])).toEqual({ kind: 'none' })
-  expect(slotOutcome(2)).toEqual({ kind: 'wake', reason: { kind: 'slot-free', free: 2 } })
+  expect(slotOutcome(2)).toEqual({ kind: 'dry' })
   expect(slotOutcome(1, ['ABC-2'])).toEqual({ kind: 'wake', reason: { kind: 'slot-kept', whos: ['ABC-2'] } })
   // Someone waits but no name may go in a wake line: the unnamed form.
   expect(slotOutcome(1, [])).toEqual({ kind: 'wake', reason: { kind: 'slot-kept', whos: [] } })
+})
+
+test('the dry step reports the dry queue and sets the mark, and with the mark set only logs', () => {
+  const first = dryStep(TICKETS_EMPTY)
+  expect(first).toEqual({ tickets: { ...TICKETS_EMPTY, dryNotified: true }, reasons: [{ kind: 'queue-dry' }], logs: [] })
+  const again = dryStep(first.tickets)
+  expect(again).toEqual({ tickets: first.tickets, reasons: [], logs: [DRY_AGAIN_LOG] })
+  expect(again.tickets).toBe(first.tickets)
+})
+
+// Two sub sessions that went ahead and work, ft-a in a.json and ft-b in b.json.
+const rowB = (over: Record<string, unknown> = {}) => row({ sessionId: 's-b', ticket: 'ft-b', desktopSessionId: 'local_b', issueKey: 'ABC-2', state: 'working', ...over }, 'b.json')
+const pairedTwo = (): ForemanTickets => ({ ...TICKETS_EMPTY, pairings: [newPairing('ft-a', 'local_a', T0), newPairing('ft-b', 'local_b', T0)] })
+
+test('a slot freed with the queue empty reports the dry queue once, and a later freed slot only logs while the queue stays empty', () => {
+  const first = read(pairedTwo(), [row({ state: 'working' }), rowB()], T0)
+  expect(first.tickets.dryNotified).toBe(false)
+  const leftA = read(first.tickets, [rowB()], T0 + MINUTE)
+  expect(leftA.reasons).toEqual([{ kind: 'queue-dry' }])
+  expect(leftA.tickets.dryNotified).toBe(true)
+  const leftB = read(leftA.tickets, [], T0 + 2 * MINUTE)
+  expect(leftB.reasons).toEqual([])
+  expect(leftB.logs).toContain(DRY_AGAIN_LOG)
+  expect(leftB.tickets.dryNotified).toBe(true)
+  // A read that frees nothing neither reports nor logs the dry queue.
+  const quiet = read(leftB.tickets, [], T0 + 3 * MINUTE)
+  expect([quiet.reasons, quiet.logs]).toEqual([[], []])
+})
+
+test('a read whose queue shows a waiting sub session clears the dry mark before its freed slots are decided, so the next dry queue reports again', () => {
+  const waiting = newPairing('ft-w', 'local_w', T0, 'ABC-3', { place: 1, claim: null })
+  const marked = { ...pairedTwo(), dryNotified: true }
+  const first = read(marked, [row({ state: 'working' }), rowB()], T0)
+  expect(first.tickets.dryNotified).toBe(true)
+  const queued = read({ ...first.tickets, pairings: [...first.tickets.pairings, waiting] }, [row({ state: 'working' }), rowB()], T0 + MINUTE)
+  expect(queued.tickets.dryNotified).toBe(false)
+  // The waiting sub session is begun and leaves the queue; then a slot frees
+  // with the queue empty, and the dry queue is reported again.
+  const begun = { ...queued.tickets, pairings: queued.tickets.pairings.filter(p => p.ticket !== 'ft-w') }
+  const left = read(begun, [rowB()], T0 + 2 * MINUTE)
+  expect(left.reasons).toEqual([{ kind: 'queue-dry' }])
+  // A slot freed on the same read that still shows a claimed waiting sub
+  // session reports the dry queue too, since nobody waits unclaimed.
+  const claimed = newPairing('ft-w', 'local_w', T0, 'ABC-3', { place: 1, claim: { attemptAt: T0, notified: false } })
+  const both = read({ ...first.tickets, pairings: [...first.tickets.pairings, claimed] }, [rowB()], T0 + MINUTE, { slots: 3 })
+  expect(both.reasons).toEqual([{ kind: 'queue-dry' }])
+  expect(both.tickets.dryNotified).toBe(true)
+})
+
+test('a proposal card nobody started does not clear the dry mark once it is older than the gone wait, but a fresh one does', () => {
+  const card = newPairing('ft-c', null, T0, 'ABC-3', { place: 1, claim: null })
+  const marked: ForemanTickets = { ...TICKETS_EMPTY, pairings: [card], dryNotified: true }
+  expect(read(marked, [], T0 + GONE_MS + MINUTE).tickets.dryNotified).toBe(true)
+  expect(read(marked, [], T0 + MINUTE).tickets.dryNotified).toBe(false)
 })
 
 // A working record whose file stopped at T0 while its episode began an hour
@@ -1294,10 +1348,10 @@ test('a pairing that the done rule or the over rule frees on a read gets no froz
   const later = T0 + 11 * MINUTE
   const done = read(paired(), [row({ state: 'done' }, 'a.json', T0)], later, { sessions: listing({}) })
   expect(done.tickets.pairings[0]!.standing).toBe('freed')
-  expect(done.reasons.map(r => r.kind)).toEqual(['slot-free'])
+  expect(done.reasons.map(r => r.kind)).toEqual(['queue-dry'])
   const over = read(paired(), [row({ state: 'waiting-on-builder' }, 'a.json', T0)], later, { sessions: listing({ isArchived: true }) })
   expect(over.tickets.pairings[0]!.standing).toBe('freed')
-  expect(over.reasons.map(r => r.kind)).toEqual(['slot-free'])
+  expect(over.reasons.map(r => r.kind)).toEqual(['queue-dry'])
 })
 
 test('the frozen wake\'s mark survives the ledger\'s round trip through the store, so a restart does not repeat the wake', () => {
