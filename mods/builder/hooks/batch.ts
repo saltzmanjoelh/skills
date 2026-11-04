@@ -278,8 +278,9 @@ export function afterTask(state: BatchState, id: string, taskId: string): BatchS
 // at that moment, or no wait when it has none, in place of any wait saved
 // earlier, so that an engine wake of a member, which makes the batch
 // incomplete again, can give both back (see afterWake). A turn end of a batch
-// whose members had all ended already leaves its deadline as it was. An agent in no batch of two or more, or in a
-// released one, changes nothing, and the state comes back as it was.
+// whose members had all ended already leaves its deadline as it was. An agent
+// in no batch of two or more, or in a released one, changes nothing, and the
+// state comes back as it was.
 export function afterMemberStop(state: BatchState, id: string, listed: string[], now: number): BatchState {
   const batch = openBatchOf(state, id)
   if (batch === undefined || !countsAsBatch(batch)) return state

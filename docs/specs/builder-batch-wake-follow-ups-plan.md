@@ -110,8 +110,8 @@ handling and `withBatch` already apply these functions inside one
    member ends at a clean turn end listing none of its own tasks or at a
    finished notification, the batch waits a settle minute for the report,
    and the deadline's timer submits the completion line when none comes.
-6. Edit the earlier spec in place: Behavior items 1, 5 and 6, and the Edge
-   cases and Verification lines on the releasing member's notification.
+6. Edit the earlier spec in place: Behavior items 1, 5 and 6, and the
+   Verification line on the releasing member's notification.
 7. Run the four gates for both mods.
 
 ## Test plan

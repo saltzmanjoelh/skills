@@ -18,10 +18,22 @@ does, and `register.tsx` picks between them.
   notification element means the same thing in both places: a whole element,
   closing tag included, at the very start of the text.
 - `afterWake(state: BatchState, id: string): BatchState` keeps the agent in
-  every batch that is not released and marks it as not ended, because the
-  report it sent before it parked ended it. In a released, remembered batch it
-  forgets the agent, as `afterResume` does, and drops a batch left with no
-  members. It never releases a batch.
+  every batch that is not released, marks it as woken and counts it as
+  running again, because its report or its turn end before it parked may
+  have ended it. A woken member then ends at a clean turn end, one whose
+  SubagentStop lists none of the background tasks that `afterTask` recorded
+  from its own tool calls, or at a `completed` notification whose summary
+  says the agent finished. When that ends the batch's last member,
+  `afterMemberStop` does not release the batch but moves its deadline to a
+  settle minute from then, so that the member's report, which normally
+  follows within seconds, releases it with the completion line; when no
+  delivery comes, the deadline's timer submits the completion line itself.
+  Because a wake makes the batch incomplete again, `afterWake` clears a
+  claim of that completion line and gives back the deadline that the turn
+  end saved before the settle minute, together with the wait saved beside it
+  as `retryBeforeSettle` (see `docs/specs/builder-batch-wake-follow-ups.md`).
+  In a released, remembered batch it forgets the agent, as `afterResume`
+  does, and drops a batch left with no members. It never releases a batch.
 - In the `agent.spawn` hook, a resume calls
   `isEngineWake(e.prompt) ? afterWake(state, resumed) : afterResume(state, resumed, now)`
   inside one `changeBatches` write, as today's resume does.
@@ -70,9 +82,13 @@ else as the empty state, as it does for a bad `fired` mark.
 
 The judge asked whether a parking agent reports before it parks. The first
 probe's log shows that it does: a report and a `completed` notification
-arrive before the wake, and the final report comes after it. That report ends
-the member, so `afterWake` reopens it rather than only keeping it, and the
-spec was corrected to say so.
+arrive before the wake, and the final report, when the engine accepts one,
+comes after it. That earlier report can end the member, so `afterWake`
+reopens it rather than only keeping it. Later probes showed that a woken
+agent often cannot report a second time and that its finished notification
+often skips the prompt submission hook, so a woken member ends at a clean
+turn end or at a finished notification, and the settle minute and the
+deadline's completion line make sure the batch is still released once.
 
 ## Rejected alternatives
 
@@ -92,8 +108,12 @@ spec was corrected to say so.
 
 1. Tests first in `mods/builder/tests/batch.test.ts`: `isEngineWake` with its
    negatives; `afterWake` reopens an ended member of an open batch so that a
-   later report from a still-running member is held and the woken member's
-   final report releases the batch with the completion line; `afterWake` keeps
+   later report from a still-running member is held, the woken member ends at
+   a clean turn end that lists none of its own tasks, and its report within
+   the settle minute releases the batch with the completion line, or the
+   deadline's timer claims the completion line when no delivery comes;
+   a wake after that turn end gives back the earlier deadline and the wait
+   saved beside it; `afterWake` keeps
    a member of a fired batch and marks it running; `afterWake` forgets the
    agent in a released batch so its later report passes; `afterWake` never
    releases a batch; the gaps 1, 2, 4, 8, 16, 32, 60 and 60 minutes; a stored
@@ -102,8 +122,11 @@ spec was corrected to say so.
    taken after refusals ends the batch.
 2. Hook tests in `mods/builder/tests/batches.test.ts`, after making the
    `spawns` mock realistic: a member that reports, parks and is woken twice is
-   held and the batch is released once, with the completion line, at its
-   final report; a member resumed with the session's own text is forgotten
+   held, ends at its clean turn end after the last wake, and the batch is
+   released once, with the completion line, at the report that follows; a
+   woken member that ends with plain text, whose finished notification never
+   passes the hook, has the completion line submitted by the deadline's timer
+   a settle minute later, once; a member resumed with the session's own text is forgotten
    and the rest are released as one batch; a member woken after its batch was
    released has its final report reach the model; a refused line is tried
    again after 1, 2, 4, 8, 16, 32, 60 and 60 minutes, and a person's prompt
