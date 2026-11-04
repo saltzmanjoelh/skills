@@ -386,9 +386,7 @@ function lightsRow(ui: Elements, v: View, busy: readonly SubRow[]) {
   const drawn = hasSvg(ui)
     ? [<Box key="lights-drawing"><ui.Svg source={lightsSvg(lights)} alt={lightsText(lights)} width={lightsWidth(lights)} height={LIGHTS_SVG_HEIGHT} /></Box>]
     : [
-      ...lights.lights.map((light, i) => (LIGHT_COLOR[light] === undefined
-        ? <Box key={`light-${i}`}><Text dimColor>{BUSY_CHAR}</Text></Box>
-        : <Box key={`light-${i}`}><Text color={LIGHT_COLOR[light]}>{BUSY_CHAR}</Text></Box>)),
+      ...lights.lights.map((light, i) => lightText(ui, `light-${i}`, BUSY_CHAR, LIGHT_COLOR[light])),
       ...Array.from({ length: lights.free }, (_, i) => <Box key={`light-${lights.lights.length + i}`}><Text dimColor>{FREE_CHAR}</Text></Box>),
     ]
   return (
@@ -398,6 +396,13 @@ function lightsRow(ui: Elements, v: View, busy: readonly SubRow[]) {
       {badgeElement(ui, queueWords(v))}
     </Box>
   )
+}
+
+// Keyed text in a light's theme color, or dimmed when the light has no color.
+function lightText(ui: Elements, key: string, text: string, color: (typeof LIGHT_COLOR)[Light]) {
+  const { Box, Text } = ui
+  if (color === undefined) return <Box key={key}><Text dimColor>{text}</Text></Box>
+  return <Box key={key}><Text color={color}>{text}</Text></Box>
 }
 
 // The badge after the lights: what queueWords says, in the plain color or in
@@ -466,9 +471,7 @@ function card(ui: Elements, v: View, row: SubRow, presses: PanePresses, columns:
   const isRed = state === 'needs-you'
   const isMenuOpen = v.folds.openMenus.includes(row.file)
   const stateText = `${STATE_ICON[state]} ${STATE_LOOK[state].words}`
-  const stateElement = row.isStale || LIGHT_COLOR[light] === undefined
-    ? <Box key={`state-${row.file}`}><Text dimColor>{stateText}</Text></Box>
-    : <Box key={`state-${row.file}`}><Text color={LIGHT_COLOR[light]}>{stateText}</Text></Box>
+  const stateElement = lightText(ui, `state-${row.file}`, stateText, row.isStale ? undefined : LIGHT_COLOR[light])
   const drawn = hasSvg(ui)
   let border = {}
   if (drawn && isRed) border = { borderStyle: 'round', borderColor: 'error' }
