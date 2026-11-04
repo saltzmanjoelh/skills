@@ -171,12 +171,14 @@ export const TIMES_UNKNOWN: ForemanTimes = { working: null, needsYou: null, othe
 
 // The four times of a reading and a queue time: working is the `working`
 // total, waiting on the person the `needs-you` total, and other waiting the
-// sum of the other four states. Each is unknown without a reading, and the
-// queue time is unknown when it is null.
+// sum of every other state, worked out from STATES so that a state builder
+// adds later is counted there too, as builder's own pane counts it. Each is
+// unknown without a reading, and the queue time is unknown when it is null.
 export function timesOf(timing: RecordTiming | null, queuedMs: number | null): ForemanTimes {
   if (timing === null) return { ...TIMES_UNKNOWN, queued: queuedMs }
   const s = timing.states
-  return { working: s.working, needsYou: s['needs-you'], otherWaiting: s['waiting-on-builder'] + s.idle + s['in-cleanup'] + s.done, queued: queuedMs }
+  const otherWaiting = STATES.filter(state => state !== 'working' && state !== 'needs-you').reduce((sum, state) => sum + s[state], 0)
+  return { working: s.working, needsYou: s['needs-you'], otherWaiting, queued: queuedMs }
 }
 
 const entryTimes = (e: ForemanSpent) => timesOf(e.timing, e.queuedMs)
