@@ -443,7 +443,7 @@ test('the list_events answer of the engine tests holds the paging line, the warn
 // text its wait line quoted, so the message keeps that text as its exact start.
 const OLD_BEGIN_TEXT = 'foreman begins this session now: first bring your branch up to date with the base branch, with the desktop app\'s sync_with_base_branch tool, and then run the /implement command your brief gives. If you have already begun it, ignore this message.'
 
-test('the begin message starts with its older text and then tells a session whose issue is stale to comment, move the issue and run /cleanup without waiting', () => {
+test('the begin message starts with its older text and then tells a session whose issue is stale to run /cleanup without waiting, after it comments on and moves an issue the tracker still shows not started', () => {
   expect(BEGIN_TEXT.startsWith(OLD_BEGIN_TEXT)).toBe(true)
-  expect(BEGIN_TEXT.slice(OLD_BEGIN_TEXT.length)).toBe(' If /implement stops because your issue is already done on the base branch or already has an open pull request, do not wait for an answer: when the issue is already done but the tracker still shows it not started, comment on the issue with the evidence and move it to the tracker\'s in-progress state, and then run /cleanup.')
+  expect(BEGIN_TEXT.slice(OLD_BEGIN_TEXT.length)).toBe(' If /implement stops because your issue is already done on the base branch or already has an open pull request, do not wait for an answer. If the issue is already done but the tracker still shows it not started, first comment on the issue with the evidence and move it to the tracker\'s in-progress state. In every such case, then run /cleanup.')
 })

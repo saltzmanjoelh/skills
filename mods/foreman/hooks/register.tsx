@@ -557,15 +557,20 @@ async function carryOut($: $) {
   }))
   const began = done.flatMap(sentence => (sentence === null ? [] : [sentence]))
   await showReports($, [...work.reports, ...began]).catch(() => undefined)
-  for (const line of work.lines.filter(l => !OLD_SLOT_LINE.test(l))) await wake($, line)
+  for (const stored of work.lines) {
+    const line = stored.replace(OLD_SLOT_LINE, '')
+    if (line !== 'foreman:') await wake($, line)
+  }
 }
 
-// A wake line that is only the slot-free sentence an earlier build stored,
-// for one slot or several. It asked the parent's model to start the next
-// issue, which no section of the wake skill answers any more, and a start on
-// a turn that a wake began is refused, so carryOut drops such a line when a
-// reload carries it across the upgrade. Nothing else uses this pattern.
-const OLD_SLOT_LINE = /^foreman: (?:one slot free; pick the next issue and start it\.|(?:[a-z]+|[0-9]+) slots free; pick the next issues and start them\.)$/
+// The slot-free sentence that an earlier build stored at the end of a wake
+// line, for one slot or several, either alone or joined after other reasons.
+// It asked the parent's model to start the next issue, which no section of
+// the wake skill answers any more, and a start on a turn that a wake began is
+// refused. So when a reload carries such a line across the upgrade, carryOut
+// strips this sentence, sends the other reasons without it, and drops the
+// line when nothing but "foreman:" is left. Nothing else uses this pattern.
+const OLD_SLOT_LINE = / (?:one slot free; pick the next issue and start it\.|(?:[a-z]+|[0-9]+) slots free; pick the next issues and start them\.)$/
 
 // Shows report sentences without waking the parent's model: each as a line
 // in the log, the newest in the band from now, and all of them joined in one

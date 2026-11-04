@@ -303,9 +303,9 @@ well within those five minutes, and start no other session for that slot.
    command your brief gives. If you have already begun it, ignore this
    message. If /implement stops because your issue is already done on the
    base branch or already has an open pull request, do not wait for an
-   answer: when the issue is already done but the tracker still shows it not
-   started, comment on the issue with the evidence and move it to the
-   tracker's in-progress state, and then run /cleanup."
+   answer. If the issue is already done but the tracker still shows it not
+   started, first comment on the issue with the evidence and move it to the
+   tracker's in-progress state. In every such case, then run /cleanup."
 3. When no such session is found, tell the person in one line which issue
    waits and that its waiting session could not be found. When its start was
    answered with a proposal card, ask them to start that card instead.

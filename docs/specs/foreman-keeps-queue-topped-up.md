@@ -46,7 +46,11 @@ session per slot, so each freed slot is filled by foreman alone.
    on that turn, so issues the owner names in the same message come out of
    it. Starts beyond the free slots get the existing wait line and join the
    queue in the order they are started. When busy plus waiting already meets
-   the target, foreman adds no line.
+   the target, foreman adds no line. A prompt typed while a turn is already
+   running gets no top-up line, because that turn may already have had one,
+   and two lines on one turn could ask for more starts than the app allows
+   without a permission card; the owner's next prompt that starts a turn
+   tops the queue up.
 3. **Following `Next issue:`.** The wake skill gains a top-up section: the
    parent starts that many issues, each the next one the project's
    `Next issue:` fact picks, skipping any issue that already has a sub

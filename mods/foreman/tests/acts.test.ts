@@ -696,6 +696,33 @@ test('a stored wake line that is only the old slot-free sentence is dropped when
   expect(ledger(w).outbox).toEqual({ logs: [], effects: [], lines: [], reports: [] })
 })
 
+// An earlier build could also join the slot-free sentence after other
+// reasons in one wake line. Carrying such a line out after the upgrade wakes
+// the parent with the other reasons only.
+test('a stored wake line that joins the old slot-free sentence with other reasons goes out without that sentence, in either form', async ($, on) => {
+  const w = world(on)
+  w.folder.put('a.json', record('ABC-1', 'working', { desktopSessionId: 'local_a' }))
+  const lines = [
+    'foreman: ABC-1 is still idle after two nudges. one slot free; pick the next issue and start it.',
+    'foreman: ABC-2 is still idle after two nudges. two slots free; pick the next issues and start them.',
+  ]
+  leftInState(on, {
+    tickets: { ...ticketsIn(w.stored.get(ticketsKey('session-1'))), outbox: { logs: [], effects: [], lines } },
+    parent: { isOn: true, slots: null },
+    nextReadAt: T0 + 20 * SECOND,
+    readAt: T0 - 10 * SECOND,
+  })
+  on('turn.complete', ($, e) => ({ text: e.answer }) as never)
+  await mountBoth($, on)
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as never)
+  await w.clock.settle()
+  expect(w.engine.prompts).toEqual([
+    'foreman: ABC-1 is still idle after two nudges.',
+    'foreman: ABC-2 is still idle after two nudges.',
+  ])
+  expect(ledger(w).outbox).toEqual({ logs: [], effects: [], lines: [], reports: [] })
+})
+
 test('a read that changes nothing writes nothing to the store, and a store write that fails is logged', async ($, on) => {
   const w = world(on)
   const working = record('ABC-1', 'working', { desktopSessionId: 'local_a' })
