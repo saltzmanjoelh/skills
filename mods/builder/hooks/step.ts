@@ -227,24 +227,39 @@ export function labelFor(step: Step): StateLabel | null {
 
 // What the mod does with the label it derived: nothing, record it without
 // writing, or write it and remove the other state labels the live read saw.
-// `record` is the label the mod last set on the pull request, `lastDerived`
-// the label it derived at the job before this one, and `liveLabels` the
-// labels the pull request carries now. While `stuck` is on, the derived label
-// is only recorded when there is no record, as after a restart, or when the
-// derived label is the one derived last time, as after an edit that failed,
-// because the label that follows from the step has not changed since the
-// session could have set that `stuck` by its own judgement. Any other state
-// label beside that `stuck`, such as one an edit put on just before the
-// session set it, still comes off. Only labels the live read saw are
-// removed, because a label on the pull request exists in the repository, so
-// removing it cannot fail for lack of the label.
+// `record` is the label the mod last set on the pull request, `liveLabels`
+// the labels the pull request carries now, and `note` the record's note as it
+// stood before this job: what the first successful read of the labels saw
+// after the step's label last changed, at a job that did not finish. While
+// `stuck` is on, the derived label is only recorded when there is no record,
+// as after a restart, or when the note is for the derived label and its read
+// did not see `stuck`, because then the session set that `stuck` by its own
+// judgement after the step's label changed. In every other case, a missing
+// note included, the `stuck` was on before the change, or the mod cannot
+// tell, so the derived label is written and `stuck` comes off. Any other
+// state label beside a `stuck` that stays, such as one an edit put on just
+// before the session set it, still comes off. Only labels the live read saw
+// are removed, because a label on the pull request exists in the repository,
+// so removing it cannot fail for lack of the label.
 export type LabelAction = { kind: 'none' } | { kind: 'record'; remove: StateLabel[] } | { kind: 'write'; remove: StateLabel[] }
 
-export function labelActionOf(derived: StateLabel | null, record: StateLabel | null, liveLabels: readonly string[], lastDerived: StateLabel | null = null): LabelAction {
+export function labelActionOf(derived: StateLabel | null, record: StateLabel | null, liveLabels: readonly string[], note: LabelNote | null = null): LabelAction {
   if (derived === null || derived === record) return { kind: 'none' }
-  const isStepUnchanged = record === null || lastDerived === derived
-  if (isStepUnchanged && liveLabels.includes('stuck')) return { kind: 'record', remove: otherStateLabelsOf('stuck', liveLabels) }
+  const isStuckJudgement = record === null || (note?.label === derived && !note.sawStuck)
+  if (isStuckJudgement && liveLabels.includes('stuck')) return { kind: 'record', remove: otherStateLabelsOf('stuck', liveLabels) }
   return { kind: 'write', remove: otherStateLabelsOf(derived, liveLabels) }
+}
+
+// The note to save after a successful read of the labels, or null when the
+// record should keep the note it has. There is none without a record, because
+// the rule for a missing record already applies, and none when the record
+// already holds a note for `derived`, because the first successful read after
+// the step's label changed decides: a later read could otherwise turn a
+// `stuck` that was on before the change into one that looks set by judgement.
+// Otherwise the note is `derived` and whether this read saw `stuck`.
+export function noteAfterRead(record: LabelRecord | null, derived: StateLabel, liveLabels: readonly string[]): LabelNote | null {
+  if (record === null || record.note?.label === derived) return null
+  return { label: derived, sawStuck: liveLabels.includes('stuck') }
 }
 
 // The state labels among `liveLabels` other than `kept`.
@@ -263,19 +278,33 @@ export function labelsToRemoveAfterEdit(added: StateLabel, before: readonly stri
 }
 
 // The record of the label the mod last set on a pull request, as it is
-// stored: the label, when it was set, and the label the mod derived at its
-// last job, which differs from the label only after an edit that failed. Any
-// other shape counts as no record, and a derived label of any other shape is
-// left out.
-export type LabelRecord = { label: StateLabel; at: number; derived?: StateLabel }
+// stored: the label, when it was set, and, only while a job for a changed
+// step's label has not finished, a note of what that job's successful read
+// of the labels saw: the label the step gave and whether `stuck` was on. A
+// finished job saves no note, and a return of the step to the recorded label
+// clears it. Any other shape counts as no record, and a note of any other
+// shape is left out. The `derived` field that records written before the
+// note held is never read, so such a record reads as one with no note.
+export type LabelNote = { label: StateLabel; sawStuck: boolean }
+export type LabelRecord = { label: StateLabel; at: number; note?: LabelNote }
 
 export function labelRecordIn(raw: unknown): LabelRecord | null {
   if (typeof raw !== 'object' || raw === null) return null
   const r = raw as Record<string, unknown>
   const label = STATE_LABELS.find(name => name === r.label)
   if (label === undefined || typeof r.at !== 'number' || !Number.isFinite(r.at)) return null
-  const derived = STATE_LABELS.find(name => name === r.derived)
-  return derived === undefined ? { label, at: r.at } : { label, at: r.at, derived }
+  const note = labelNoteIn(r.note)
+  return note === null ? { label, at: r.at } : { label, at: r.at, note }
+}
+
+// The note a stored record holds, or null when it holds none or one of
+// another shape.
+function labelNoteIn(raw: unknown): LabelNote | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const n = raw as Record<string, unknown>
+  const label = STATE_LABELS.find(name => name === n.label)
+  if (label === undefined || typeof n.sawStuck !== 'boolean') return null
+  return { label, sawStuck: n.sawStuck }
 }
 
 // The sections and named paragraphs of skills/implement/SKILL.md that the

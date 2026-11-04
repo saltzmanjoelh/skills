@@ -14804,6 +14804,13 @@ test('a review step and a closed pull request run no listing, and a change in th
 // The state label the mod sets from the step it chose.
 const STATE_LABEL_KEY = 'state-label:o/r#7'
 const labelEdits = (world: { calls: string[] }) => world.calls.filter(call => call.startsWith('gh pr edit 7 ') && !call.includes('needs-decision'))
+// Expects the stored record to be a finished one: the label, the time a look
+// after the start saved it, and no note.
+const expectFinishedRecord = (stored: Map<string, unknown>, label: string) => {
+  const record = stored.get(STATE_LABEL_KEY) as { at?: unknown } | undefined
+  expect(record).toEqual({ label, at: record?.at })
+  expect(record?.at).toBeGreaterThan(0)
+}
 
 test('a first watch sets in-review and records it, and a later look that derives the same label writes nothing', async ($, on) => {
   const clock = mock.clock(on)
@@ -14813,7 +14820,7 @@ test('a first watch sets in-review and records it, and a later look that derives
   await watch($)
   await clock.settle()
   expect(labelEdits(world)).toEqual(['gh pr edit 7 --repo o/r --add-label in-review'])
-  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'in-review', at: clock.now(), derived: 'in-review' })
+  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'in-review', at: clock.now() })
 
   await clock.advance(30 * 60_000)
   expect(labelEdits(world)).toEqual(['gh pr edit 7 --repo o/r --add-label in-review'])
@@ -14878,7 +14885,7 @@ test('a state label put on between the read and the edit is removed by one more 
     'gh pr edit 7 --repo o/r --remove-label waiting-on-author',
   ])
   expect(world.pr.labels).toEqual([{ name: 'in-review' }])
-  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'in-review', at: clock.now(), derived: 'in-review' })
+  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'in-review', at: clock.now() })
 })
 
 test('a stuck the session puts on between the read and the edit stays, the added label comes off, and later looks leave it alone', async ($, on) => {
@@ -14900,7 +14907,7 @@ test('a stuck the session puts on between the read and the edit stays, the added
     'gh pr edit 7 --repo o/r --remove-label in-review',
   ])
   expect(world.pr.labels).toEqual([{ name: 'stuck' }])
-  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'in-review', at: clock.now(), derived: 'in-review' })
+  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'in-review', at: clock.now() })
 
   await clock.advance(30 * 60_000)
   expect(labelEdits(world).length).toBe(2)
@@ -14952,18 +14959,107 @@ test('a stuck the session sets after an edit failed is kept while the label the 
   const stored = memoryStore(on, [[STATE_LABEL_KEY, { label: 'waiting-on-author', at: 0 }]])
   engine(on)
   const world = fakeGitHub(on)
-  // Both tries of the edit that adds in-review fail, so the record keeps
-  // waiting-on-author but notes in-review as the label derived.
+  // One watch runs one state label job, and that job tries the edit twice,
+  // so two failing edits fail exactly that job. The record keeps
+  // waiting-on-author and notes that the read before the edit saw no stuck.
   world.editsToFail = 2
   await watch($)
   await clock.settle()
-  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'waiting-on-author', at: 0, derived: 'in-review' })
+  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'waiting-on-author', at: 0, note: { label: 'in-review', sawStuck: false } })
 
   world.pr.labels = [{ name: 'stuck' }]
   await clock.advance(30 * 60_000)
   expect(labelEdits(world).filter(edit => edit.includes('stuck'))).toEqual([])
   expect(world.pr.labels).toEqual([{ name: 'stuck' }])
-  expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ label: 'in-review', derived: 'in-review' })
+  expectFinishedRecord(stored, 'in-review')
+})
+
+test('a stuck that was on before the step changed comes off at the next look after the edit failed', async ($, on) => {
+  const clock = mock.clock(on)
+  const stored = memoryStore(on, [[STATE_LABEL_KEY, { label: 'ready-to-merge', at: 0 }]])
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr.labels = [{ name: 'stuck' }]
+  // One watch runs one state label job, and that job tries the edit twice,
+  // so two failing edits fail exactly that job.
+  world.editsToFail = 2
+  await watch($)
+  await clock.settle()
+  expect(world.pr.labels).toEqual([{ name: 'stuck' }])
+  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'ready-to-merge', at: 0, note: { label: 'in-review', sawStuck: true } })
+
+  await clock.advance(30 * 60_000)
+  expect(labelEdits(world).at(-1)).toBe('gh pr edit 7 --repo o/r --add-label in-review --remove-label stuck')
+  expect(world.pr.labels).toEqual([{ name: 'in-review' }])
+  expectFinishedRecord(stored, 'in-review')
+})
+
+test('a stuck that was on before the step changed comes off at the next look after the read of the labels failed', async ($, on) => {
+  const clock = mock.clock(on)
+  const stored = memoryStore(on, [[STATE_LABEL_KEY, { label: 'ready-to-merge', at: 0 }]])
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr.labels = [{ name: 'stuck' }]
+  world.labelsAnswer = 'not a list'
+  await watch($)
+  await clock.settle()
+  expect(labelEdits(world)).toEqual([])
+  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'ready-to-merge', at: 0 })
+
+  world.labelsAnswer = null
+  await clock.advance(30 * 60_000)
+  expect(labelEdits(world)).toEqual(['gh pr edit 7 --repo o/r --add-label in-review --remove-label stuck'])
+  expect(world.pr.labels).toEqual([{ name: 'in-review' }])
+  expectFinishedRecord(stored, 'in-review')
+})
+
+test('the note is cleared when the step goes back to the recorded label, so a later change still removes an older stuck', async ($, on) => {
+  const clock = mock.clock(on)
+  const stored = memoryStore(on, [[STATE_LABEL_KEY, { label: 'in-review', at: 0 }]])
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr = openPullRequest({ reviews: [verdictReview(C, 'REQUEST_CHANGES', 'APPROVE')], labels: [{ name: 'in-review' }] })
+  // One watch runs one state label job, and that job tries the edit twice,
+  // so two failing edits fail exactly that job.
+  world.editsToFail = 2
+  await watch($)
+  await clock.settle()
+  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'in-review', at: 0, note: { label: 'waiting-on-author', sawStuck: false } })
+
+  world.pr = openPullRequest({ labels: [{ name: 'in-review' }] })
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await clock.settle()
+  expect(labelEdits(world).length).toBe(2)
+  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'in-review', at: 0 })
+
+  // The session puts stuck on while the step gives in-review, and the step
+  // then changes again. That stuck was on before the change, so it comes off.
+  world.pr = openPullRequest({ reviews: [verdictReview(C, 'REQUEST_CHANGES', 'APPROVE')], labels: [{ name: 'in-review' }, { name: 'stuck' }] })
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await clock.settle()
+  expect(labelEdits(world).at(-1)).toBe('gh pr edit 7 --repo o/r --add-label waiting-on-author --remove-label in-review,stuck')
+  expect(world.pr.labels).toEqual([{ name: 'waiting-on-author' }])
+  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'waiting-on-author', at: clock.now() })
+})
+
+test('a store that refuses to write the note still lets the edit remove an older stuck, and the record is saved once it writes again', async ($, on) => {
+  const clock = mock.clock(on)
+  const stored = memoryStore(on, [[STATE_LABEL_KEY, { label: 'ready-to-merge', at: 0 }]])
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr.labels = [{ name: 'stuck' }]
+  stored.hold.setsRefused = 'state-label:'
+  await watch($)
+  await clock.settle()
+  expect(labelEdits(world)).toEqual(['gh pr edit 7 --repo o/r --add-label in-review --remove-label stuck'])
+  expect(world.pr.labels).toEqual([{ name: 'in-review' }])
+  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'ready-to-merge', at: 0 })
+
+  stored.hold.setsRefused = null
+  await clock.advance(30 * 60_000)
+  expect(labelEdits(world).at(-1)).toBe('gh pr edit 7 --repo o/r --add-label in-review')
+  expect(world.pr.labels).toEqual([{ name: 'in-review' }])
+  expectFinishedRecord(stored, 'in-review')
 })
 
 test('a failed read of the labels after the edit, or a failed removal after it, saves no record', async ($, on) => {

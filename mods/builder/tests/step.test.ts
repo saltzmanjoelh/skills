@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { countingRuns, failedRunsOf, hasFailed, isReplaced, isUnfinished, needsJobs, snapshotOf, type GhPullRequest } from '../hooks/github'
-import { baseFactsOf, chooseStep, CLEANUP_SECTIONS, DEFAULT_MERGE_COMMAND, labelActionOf, LINKED_KEPT, linkedIn, labelFor, labelRecordIn, labelsToRemoveAfterEdit, needsListing, SKILL_POINTS, SKILL_SECTIONS, stepFor, stepLines, unpushedIn, type Step } from '../hooks/step'
+import { baseFactsOf, chooseStep, CLEANUP_SECTIONS, DEFAULT_MERGE_COMMAND, labelActionOf, LINKED_KEPT, linkedIn, labelFor, labelRecordIn, labelsToRemoveAfterEdit, needsListing, noteAfterRead, SKILL_POINTS, SKILL_SECTIONS, stepFor, stepLines, unpushedIn, type Step } from '../hooks/step'
 import type { BaseFacts, HeadRun, Snapshot, Unpushed } from '../types'
 
 const ME = 'owner'
@@ -586,13 +586,33 @@ test('with no record while stuck is on, the derived label is recorded without a 
   expect(labelActionOf('in-review', null, ['in-review', 'stuck', 'ready-to-merge'])).toEqual({ kind: 'record', remove: ['in-review', 'ready-to-merge'] })
 })
 
-test('with stuck on and the derived label unchanged since the last job, as after a failed edit, the label is only recorded', () => {
-  expect(labelActionOf('ready-to-merge', 'in-review', ['in-review', 'stuck'], 'ready-to-merge')).toEqual({ kind: 'record', remove: ['in-review'] })
-  // A derived label that changed since the last job removes that stuck.
-  expect(labelActionOf('ready-to-merge', 'in-review', ['stuck'], 'in-review')).toEqual({ kind: 'write', remove: ['stuck'] })
+test('with stuck on, a note for the derived label whose read did not see stuck only records the label, and any other note writes it', () => {
+  // The first successful read after the step's label changed saw no stuck, so the stuck on now is the session's judgement.
+  expect(labelActionOf('ready-to-merge', 'in-review', ['in-review', 'stuck'], { label: 'ready-to-merge', sawStuck: false })).toEqual({ kind: 'record', remove: ['in-review'] })
+  // That read already saw stuck, so the stuck was on before the step's label changed and comes off.
+  expect(labelActionOf('ready-to-merge', 'in-review', ['in-review', 'stuck'], { label: 'ready-to-merge', sawStuck: true })).toEqual({ kind: 'write', remove: ['in-review', 'stuck'] })
+  // A note for another label, or no note, says nothing about this label, so the label is written.
+  expect(labelActionOf('ready-to-merge', 'in-review', ['stuck'], { label: 'waiting-on-author', sawStuck: false })).toEqual({ kind: 'write', remove: ['stuck'] })
   expect(labelActionOf('ready-to-merge', 'in-review', ['stuck'])).toEqual({ kind: 'write', remove: ['stuck'] })
-  // Without stuck on, an unchanged derived label is written again.
-  expect(labelActionOf('ready-to-merge', 'in-review', ['in-review'], 'ready-to-merge')).toEqual({ kind: 'write', remove: ['in-review'] })
+  expect(labelActionOf('ready-to-merge', 'in-review', ['stuck'], null)).toEqual({ kind: 'write', remove: ['stuck'] })
+  // Without stuck on, the derived label is written whatever the note says.
+  expect(labelActionOf('ready-to-merge', 'in-review', ['in-review'], { label: 'ready-to-merge', sawStuck: false })).toEqual({ kind: 'write', remove: ['in-review'] })
+})
+
+test('a note is made only when a record exists and holds no note for the derived label, so the first successful read decides', () => {
+  const record = { label: 'in-review' as const, at: 5 }
+  // With no record at all, the rule for a missing record applies and no note is made.
+  expect(noteAfterRead(null, 'ready-to-merge', [])).toBeNull()
+  expect(noteAfterRead(null, 'ready-to-merge', ['stuck'])).toBeNull()
+  // A note already for the derived label is kept as it is.
+  expect(noteAfterRead({ ...record, note: { label: 'ready-to-merge', sawStuck: false } }, 'ready-to-merge', [])).toBeNull()
+  expect(noteAfterRead({ ...record, note: { label: 'ready-to-merge', sawStuck: false } }, 'ready-to-merge', ['stuck'])).toBeNull()
+  // A note for another label is replaced by what this read saw.
+  expect(noteAfterRead({ ...record, note: { label: 'waiting-on-author', sawStuck: true } }, 'ready-to-merge', [])).toEqual({ label: 'ready-to-merge', sawStuck: false })
+  expect(noteAfterRead({ ...record, note: { label: 'waiting-on-author', sawStuck: false } }, 'ready-to-merge', ['bug', 'stuck'])).toEqual({ label: 'ready-to-merge', sawStuck: true })
+  // A record with no note gets one.
+  expect(noteAfterRead(record, 'ready-to-merge', ['in-review'])).toEqual({ label: 'ready-to-merge', sawStuck: false })
+  expect(noteAfterRead(record, 'ready-to-merge', ['in-review', 'stuck'])).toEqual({ label: 'ready-to-merge', sawStuck: true })
 })
 
 test('otherwise the derived label is written, removing only the other state labels the live read saw', () => {
@@ -615,8 +635,15 @@ test('after the edit, every other state label comes off, unless a stuck appeared
 
 test('a stored label record reads back only in the shape the mod writes', () => {
   expect(labelRecordIn({ label: 'stuck', at: 5 })).toEqual({ label: 'stuck', at: 5 })
-  expect(labelRecordIn({ label: 'stuck', at: 5, derived: 'in-review' })).toEqual({ label: 'stuck', at: 5, derived: 'in-review' })
-  expect(labelRecordIn({ label: 'stuck', at: 5, derived: 'bug' })).toEqual({ label: 'stuck', at: 5 })
+  expect(labelRecordIn({ label: 'stuck', at: 5, note: { label: 'in-review', sawStuck: true } })).toEqual({ label: 'stuck', at: 5, note: { label: 'in-review', sawStuck: true } })
+  expect(labelRecordIn({ label: 'stuck', at: 5, note: { label: 'in-review', sawStuck: false } })).toEqual({ label: 'stuck', at: 5, note: { label: 'in-review', sawStuck: false } })
+  // A note of any other shape is left out.
+  for (const note of [null, 'in-review', { label: 'bug', sawStuck: true }, { label: 'in-review' }, { label: 'in-review', sawStuck: 'yes' }, { sawStuck: true }]) {
+    expect(labelRecordIn({ label: 'stuck', at: 5, note })).toEqual({ label: 'stuck', at: 5 })
+  }
+  // The derived field that records written before the note held is ignored, alone or beside a note.
+  expect(labelRecordIn({ label: 'stuck', at: 5, derived: 'in-review' })).toEqual({ label: 'stuck', at: 5 })
+  expect(labelRecordIn({ label: 'stuck', at: 5, derived: 'in-review', note: { label: 'ready-to-merge', sawStuck: false } })).toEqual({ label: 'stuck', at: 5, note: { label: 'ready-to-merge', sawStuck: false } })
   for (const raw of [null, undefined, 'stuck', { label: 'bug', at: 5 }, { label: 'stuck' }, { label: 'stuck', at: Number.NaN }, { label: 'needs-decision', at: 1 }]) {
     expect(labelRecordIn(raw)).toBeNull()
   }
