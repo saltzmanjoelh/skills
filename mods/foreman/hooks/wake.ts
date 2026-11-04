@@ -11,7 +11,8 @@
 // REASON_WORDS is pinned by tests/wake.test.ts, listed in the README and
 // quoted in that skill. Change all four together.
 
-import type { RecordVerdicts } from './record'
+import type { BuildState, RecordVerdicts } from './record'
+import { STATE_LOOK } from './subs'
 import { listOf, plural, printable } from './text'
 
 // Why foreman wakes the parent. `who` is already safe to put in the line, as
@@ -27,13 +28,17 @@ import { listOf, plural, printable } from './text'
 // that still waits after foreman's nudge. `slot-kept` is a freed slot that
 // foreman keeps for the sub sessions waiting unclaimed in its queue, which it
 // could not find in the desktop app's list, with the names of the waiting
-// issues that a wake line may carry, or none.
+// issues that a wake line may carry, or none. `frozen` is a sub session whose
+// status file has not changed for FROZEN_MS, with the state the file last
+// showed. That state is one of builder's checked names, not text a sub
+// session wrote, so its sentence quotes nothing.
 export type Reason =
   | { kind: 'idle'; who: string; nudged: boolean; minutes: number }
   | { kind: 'unseen'; who: string; minutes: number; mismatch: boolean }
   | { kind: 'background'; who: string; nudged: boolean; minutes: number; task: string | null }
   | { kind: 'cleanup'; who: string; minutes: number; failedCalls: number; lastError: string }
   | { kind: 'gone'; who: string; minutes: number }
+  | { kind: 'frozen'; who: string; minutes: number; state: BuildState }
   | { kind: 'opened'; who: string; number: number }
   | ({ kind: 'verdicts'; who: string; number: number } & RecordVerdicts)
   | { kind: 'merged'; who: string; number: number }
@@ -134,6 +139,7 @@ export const REASON_WORDS: { [K in Reason['kind']]: (r: Extract<Reason, { kind: 
     return quotesText(r) ? `${head}; its record's last error, quoted: ${quoted(r.lastError)}.` : `${head}.`
   },
   'gone': r => `${r.who} has not updated its status file for ${r.minutes} minutes and its session is not running, so restart it or release the issue.`,
+  'frozen': r => `${r.who}'s status file has not changed for ${r.minutes} minutes and still shows the state ${STATE_LOOK[r.state].words}.`,
   'opened': r => `${r.who} opened pull request #${r.number}.`,
   'verdicts': r => `${r.who}'s pull request #${r.number} has verdicts at ${r.sha.slice(0, 7)}: spec ${verdictWord(r.spec)}, adversarial ${verdictWord(r.adversarial)}.`,
   'merged': r => `${r.who}'s pull request #${r.number} merged.`,

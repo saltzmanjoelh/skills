@@ -368,7 +368,7 @@ test('a sub session whose file stopped and whose session is not running wakes th
   expect(w.engine.prompts).toHaveLength(1)
 })
 
-test('a sub session whose file stopped saying working while its session is not running is nudged as idle, and no gone wake comes', async ($, on) => {
+test('a sub session whose file stopped saying working while its session is not running is nudged as idle, no gone wake comes, and the frozen wake stands as its wake', async ($, on) => {
   const w = world(on)
   w.folder.put('a.json', record('ABC-1', 'working', { desktopSessionId: 'local_a', stateSince: T0 - 60 * MINUTE }))
   w.desktop.sessions = [{ sessionId: 'local_a', cwd: '/w', isArchived: false, isRunning: false }]
@@ -380,13 +380,39 @@ test('a sub session whose file stopped saying working while its session is not r
   await minutesPass(w, 1)
   expect(w.desktop.sent).toEqual([['local_a', NUDGE]])
   expect(w.engine.prompts).toEqual([])
+  // The second nudge and the frozen wake come on the same read, once the file
+  // is more than ten minutes old, and the frozen wake counts as the stall's
+  // wake, so no idle wake follows.
   await minutesPass(w, 5)
   expect(w.desktop.sent).toHaveLength(2)
-  await minutesPass(w, 5)
-  expect(w.engine.prompts).toEqual(['foreman: ABC-1 is still idle after two nudges.'])
-  await minutesPass(w, 10)
+  expect(w.engine.prompts).toEqual(['foreman: ABC-1\'s status file has not changed for 10 minutes and still shows the state working.'])
+  await minutesPass(w, 15)
   expect(w.desktop.sent).toHaveLength(2)
   expect(w.engine.prompts).toHaveLength(1)
+})
+
+test('after a gap of more than five minutes between listings of the folder, the frozen wake waits two minutes from the first listing that works again', async ($, on) => {
+  // The listings fail from one minute to twenty, as they would if the
+  // machine slept, so the first one that works again comes long after the one
+  // before it. A file whose builder has not yet rewritten it then looks old,
+  // and foreman waits before judging it frozen.
+  const w = world(on)
+  w.folder.put('a.json', record('ABC-1', 'working', { desktopSessionId: 'local_a' }))
+  w.desktop.sessions = [{ sessionId: 'local_a', cwd: '/w', isArchived: false, isRunning: true }]
+  await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await minutesPass(w, 1)
+  w.folder.listFails = 'EIO: i/o error, scandir'
+  await minutesPass(w, 19)
+  w.folder.listFails = null
+  await minutesPass(w, 1)
+  expect(w.engine.prompts).toEqual([])
+  await minutesPass(w, 1)
+  expect(w.engine.prompts).toEqual([])
+  await minutesPass(w, 2)
+  expect(w.engine.prompts).toHaveLength(1)
+  expect(w.engine.prompts[0]).toMatch(/^foreman: ABC-1's status file has not changed for \d+ minutes and still shows the state working\.$/)
 })
 
 test('several reasons found in one read go in one line', async ($, on) => {

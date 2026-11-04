@@ -24,6 +24,40 @@ export type Limits = { idleMs: number; cleanupMs: number }
 // rewrites its file every minute while the session lives.
 export const GONE_MS = 5 * 60_000
 
+// How old a file may grow before foreman tells the parent it has frozen,
+// whatever the desktop app's list shows. It is twice GONE_MS, so the gone rule
+// has had its chance to wake first.
+export const FROZEN_MS = 2 * GONE_MS
+
+// How long foreman must have been reading the folder without a long gap
+// before a file's age may wake the parent through the frozen rule. It is
+// twice builder's one-minute rewrite interval, so every live builder has
+// rewritten its file at least once since foreman began watching again. After
+// the machine sleeps, foreman's first read can come before the builders'
+// rewrites, and every live file then looks as old as the sleep.
+export const SETTLE_MS = 2 * 60_000
+
+// The longest gap between two successful folder listings that still counts
+// as watching without a break. Reads come at most READ_LATER_MS, two
+// minutes, apart, so a gap of more than five minutes means the machine slept,
+// the listings failed, or foreman was not running. It is its own value rather
+// than GONE_MS, so tuning the gone rule does not change how a sleep is
+// noticed. It must stay between two bounds, which a test pins. It must stay
+// above READ_LATER_MS, or every quiet read would start a new watch and the
+// frozen rule would never run. And it must stay well below FROZEN_MS, because
+// a live file can look as old as this gap plus builder's one-minute rewrite
+// interval without starting a new watch.
+export const READ_GAP_MS = 5 * 60_000
+
+// When foreman began watching the folder without a break, given the previous
+// successful listing's time and the start it kept then: this listing starts
+// a new watch after a gap longer than READ_GAP_MS, or when there was no
+// earlier listing, and otherwise the watch goes on from where it began.
+export function watchingFrom(lastReadAt: number | null, since: number | null, now: number): number {
+  if (lastReadAt === null || since === null || now - lastReadAt > READ_GAP_MS) return now
+  return since
+}
+
 // How many failed calls in cleanup wake the parent before the threshold.
 export const CLEANUP_FAILED_CALLS = 3
 
@@ -101,6 +135,9 @@ export type DecideInput = {
   // is freed or forgotten for a file that seems to have left.
   folderExists: boolean
   listed: boolean
+  // When foreman began watching the folder without a break, as watchingFrom
+  // gives it. The frozen rule waits until SETTLE_MS has passed since then.
+  watchingSince: number
   slots: number
 }
 
@@ -196,11 +233,14 @@ const STATE_RULES: Record<BuildState, (s: Step) => void> = {
     // A stalled record, whose session stopped mid-turn and left its file
     // saying working, goes through the idle rule, counted from the file's
     // last change. A stretch from before the stall is cleared first, so an
-    // old idle stretch that already woke the parent cannot silence it.
+    // old idle stretch that already woke the parent cannot silence it. When
+    // the gone wake or the frozen wake has already gone for this file, the
+    // parent knows of the stall, so the idle rule still nudges but counts its
+    // own wake as given rather than waking the parent a second time.
     if (isStalled(s)) {
       const old = s.p.acts.stretch
       if (old !== null && staleStretch(old, s.row.mtimeMs)) setActs(s, { stretch: null })
-      idleRule(s, s.row.mtimeMs, null)
+      idleRule(s, s.row.mtimeMs, null, s.p.acts.goneWokeFor === s.row.mtimeMs)
       return
     }
     const { stretch } = s.p.acts
@@ -318,8 +358,14 @@ function turnEndRestarts(stretch: NonNullable<ForemanActs['stretch']>, wait: num
 // task when there is one. A record with no desktop session wakes the
 // parent at two thresholds instead. A record whose pull request was closed
 // without merging has stopped on purpose, so the rule ends any stretch and
-// neither nudges nor wakes until the pull request opens again.
-function idleRule(s: Step, since: number, background: { task: string | null } | null) {
+// neither nudges nor wakes until the pull request opens again. `told` says
+// the parent has already been woken for this stretch by another rule, so at
+// either point where the rule would wake the parent it only marks the
+// stretch as woken. The nudges still go. The stall passes it, and the
+// stretch cannot instead be marked woken when the other wake goes, because
+// staleStretch takes a stretch that woke without nudging for one from before
+// the stall and starts it afresh.
+function idleRule(s: Step, since: number, background: { task: string | null } | null, told = false) {
   if (prStateOf(s.row.record.pr) === 'CLOSED') {
     setActs(s, { stretch: null })
     return
@@ -343,7 +389,7 @@ function idleRule(s: Step, since: number, background: { task: string | null } | 
       s.due.push(due)
       return
     }
-    s.reasons.push(background !== null ? { kind: 'background', who, nudged: false, minutes, task: background.task } : { kind: 'idle', who, nudged: false, minutes })
+    if (!told) s.reasons.push(background !== null ? { kind: 'background', who, nudged: false, minutes, task: background.task } : { kind: 'idle', who, nudged: false, minutes })
     setActs(s, { stretch: { ...stretch, woke: true } })
     return
   }
@@ -358,16 +404,17 @@ function idleRule(s: Step, since: number, background: { task: string | null } | 
     s.due.push(s.now + s.limits.idleMs)
     return
   }
-  s.reasons.push(background !== null ? { kind: 'background', who, nudged: true, minutes, task: background.task } : { kind: 'idle', who, nudged: true, minutes })
+  if (!told) s.reasons.push(background !== null ? { kind: 'background', who, nudged: true, minutes, task: background.task } : { kind: 'idle', who, nudged: true, minutes })
   setActs(s, { stretch: { ...stretch, woke: true } })
 }
 
 // Whether a record may be gone: it is not done, its file has not changed
-// for GONE_MS, its pull request has not merged, and the gone wake has not
-// already gone for this file. The gone rule asks it, and slotsNeedList asks
-// for the list on every read while it holds. The list is also read, less
-// often, for a stale record that this rules out, as slotsNeedList says,
-// because the over rule can act on such a record.
+// for GONE_MS, its pull request has not merged, and neither the gone wake nor
+// the frozen wake has already gone for this file, since both set goneWokeFor.
+// The gone rule asks it, and slotsNeedList asks for the list on every read
+// while it holds. The list is also read, less often, for a stale record that
+// this rules out, as slotsNeedList says, because the over rule can act on
+// such a record.
 function mayBeGone(p: ForemanPairing, row: SubRow, now: number): boolean {
   return row.record.state !== 'done'
     && now - row.mtimeMs > GONE_MS
@@ -430,7 +477,9 @@ function stallHandled(p: ForemanPairing, row: SubRow, now: number): boolean {
 // session, may never come. Without the mark stallsNeedList would ask for the
 // list on every read until the file changes. The same holds for a stall whose
 // gone wake went before its first nudge and that drops out again: the parent
-// already knows of it, so the stretch is marked without a second wake.
+// already knows of it, so the stretch is marked without a second wake. A
+// frozen wake for the same file sets goneWokeFor too, so after it the gone
+// rule does not wake either.
 function goneRule(s: Step) {
   if (s.look === null || s.p.standing !== 'active' || isStalled(s)) return
   if (endedIn(s.look.byId, desktopOf(s.p, s.row)) === null) return
@@ -442,6 +491,47 @@ function goneRule(s: Step) {
     return
   }
   s.reasons.push({ kind: 'gone', who: whoOf(s.row.record.issueKey, s.p.ticket), minutes: minutesOf(s.now - s.row.mtimeMs) })
+  setActs(s, { goneWokeFor: s.row.mtimeMs, ...woken })
+}
+
+// Frozen, in any state, done included: the file has not changed for more
+// than FROZEN_MS and its pull request has not merged. Builder rewrites the
+// file once a minute while the session runs, so a file this old means
+// something stopped, even when the list shows the session running or cannot
+// be read at all, and those are the cases no other rule wakes for. One
+// stretch is one unchanged modification time, as for the gone rule. The rule
+// stays quiet when the parent has already been woken for the stretch: the
+// gone wake or an earlier frozen wake set goneWokeFor to the file's
+// modification time, or the idle stretch counts idleness, has nudged for this
+// stall, as stallsOwn says, and has woken. A stall that has only been nudged
+// has not woken the parent, so it does not silence the rule. When the wake
+// goes it sets goneWokeFor, and, for a record with the shape of a stall as
+// the gone rule checks it, it marks such a nudged stretch as woken, so
+// neither the gone rule nor the stall wakes the parent again until the file
+// changes. A record that is not a stall, such as an idle one, keeps its
+// stretch as it was, so the idle rule's own nudges and wake still come. Its
+// idle wake silences this rule only when the stretch's last nudge came more
+// than GONE_MS after the file last changed, as stallsOwn judges, so with a
+// short idle limit both the idle wake and this one can come. The caller runs
+// it last, after the state rule and the gone rule, so a gone wake
+// on the same read goes instead of this one, and a pairing that the done rule
+// freed on this read is no longer active. It runs only on a read whose
+// folder listing succeeded: after a failed listing the kept rows still carry
+// their old modification times, so every file would seem to age and the rule
+// would wake for each active sub session. It also runs only once foreman has
+// watched the folder without a break for SETTLE_MS, so a read just after the
+// machine wakes from sleep does not find every live file old. A file rewritten with
+// text that does not parse keeps its last good record and that record's old
+// modification time, so it gets this wake once, which is fair, since foreman
+// cannot read it.
+function frozenRule(s: Step) {
+  if (s.p.standing !== 'active' || prStateOf(s.row.record.pr) === 'MERGED') return
+  if (s.now - s.row.mtimeMs <= FROZEN_MS || s.p.acts.goneWokeFor === s.row.mtimeMs) return
+  const { stretch } = s.p.acts
+  const nudged = stretch !== null && stretch.wait === null && stallsOwn(stretch, s.row.mtimeMs) ? stretch : null
+  if (nudged?.woke === true) return
+  const woken = nudged !== null && stalledShape(s.p, s.row, s.now) ? { stretch: { ...nudged, woke: true } } : {}
+  s.reasons.push({ kind: 'frozen', who: whoOf(s.row.record.issueKey, s.p.ticket), minutes: minutesOf(s.now - s.row.mtimeMs), state: s.row.record.state })
   setActs(s, { goneWokeFor: s.row.mtimeMs, ...woken })
 }
 
@@ -638,9 +728,10 @@ export function stallsNeedList(t: ForemanTickets, rows: readonly SubRow[], now: 
 // list checks, which listCheckedAt starts, has run out. A handled stall is left
 // out of the second case because the gone rule never wakes for a stall, so
 // goneWokeFor never ends that case for it. The last case covers a record whose
-// gone wake went, whose pull request merged, or whose stall is handled,
-// because the over rule frees its slot once its session is archived, and with
-// no queue nothing else would read the list for it. It asks at most once
+// gone wake or frozen wake went, either of which ends the second case, whose
+// pull request merged, or whose stall is handled, because the over rule frees
+// its slot once its session is archived, and with no queue nothing else would
+// read the list for it. It asks at most once
 // every GONE_MS, a failed ask included, so such a record does not make every
 // read wait on the list while another sub session works or while the list
 // keeps failing, and an archived session still frees its slot within about
@@ -794,7 +885,9 @@ function queueStep(
 // it, or in the whole list read beside it as `holders`, shows started.
 // An active pairing whose session the list shows over is freed by the over
 // rule before its state rules, but after its milestones, so a merge on the
-// same read is still reported.
+// same read is still reported. The frozen rule runs after the state rule and
+// the gone rule, and only on a read whose listing succeeded, as frozenRule
+// says.
 // When this read freed a slot and a freed slot is left that no claim of
 // queueStep filled, the parent is woken with the number of slots free, unless
 // none is free once the claims are counted. Each claim counts against one
@@ -823,7 +916,7 @@ function queueStep(
 // A read that asked for the list, whether or not it got one, records its time
 // in each active pairing it looked at, which slotsNeedList reads.
 export function decide(input: DecideInput): Decision {
-  const { rows, now, limits, sessions, folderExists, listed } = input
+  const { rows, now, limits, sessions, folderExists, listed, watchingSince } = input
   const look: ListLook | null = sessions.kind === 'read'
     ? { byId: new Map(sessions.sessions.map(x => [x.sessionId, x])), complete: sessions.complete === true, known: sessions.known === undefined ? null : new Set(sessions.known) }
     : null
@@ -875,6 +968,7 @@ export function decide(input: DecideInput): Decision {
     if (!overRule(s)) {
       STATE_RULES[row.record.state](s)
       goneRule(s)
+      if (listed && now - watchingSince >= SETTLE_MS) frozenRule(s)
     }
     reasons.push(...milestones)
     freed += s.freed

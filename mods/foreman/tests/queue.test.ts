@@ -44,16 +44,17 @@ const list = (sessions: Listed[], complete = false, known?: string[]): SessionsL
 // One read: the rows joined to the ledger, then the decision, with one slot.
 function read(tickets: ForemanTickets, rows: SubRow[], now: number, over: Partial<DecideInput> = {}): Decision {
   const joined = joinOwners(tickets, rows).tickets
-  return decide({ tickets: joined, rows, now, limits: LIMITS, sessions: { kind: 'unread' }, folderExists: true, listed: true, slots: 1, ...over })
+  return decide({ tickets: joined, rows, now, limits: LIMITS, sessions: { kind: 'unread' }, folderExists: true, listed: true, watchingSince: 0, slots: 1, ...over })
 }
 
 const begins = (d: Decision) => d.effects.flatMap(e => (e.kind === 'begin' ? [[e.to, e.key, e.by]] : []))
 
 test('a waiting sub session whose file shows it idle with no issue is never nudged and never wakes the parent', () => {
   let t = ledger(ahead('ft-a', 'ABC-1'), waiting('ft-b', 'ABC-2', 1))
-  const rows = [busyRow('ft-a', 'ABC-1'), row('ft-b')]
+  // Both sessions run, so builder rewrites both files at each read.
+  const rows = (now: number) => [busyRow('ft-a', 'ABC-1'), row('ft-b')].map(r => ({ ...r, mtimeMs: now }))
   for (let now = T0; now <= T0 + 4 * T; now += MINUTE) {
-    const d = read(t, rows, now, { sessions: list([listed('local_ft-a'), listed('local_ft-b')]) })
+    const d = read(t, rows(now), now, { sessions: list([listed('local_ft-a'), listed('local_ft-b')]) })
     expect([now, d.effects, d.reasons]).toEqual([now, [], []])
     t = d.tickets
   }

@@ -49,8 +49,9 @@ export type ForemanActs = {
   // the cleanup wake were last given for, or null.
   notifiedFor: string | null
   cleanupWokeFor: string | null
-  // The file modification time that the gone wake was last given for, or
-  // null.
+  // The file modification time that the parent was last woken for by the
+  // gone wake or the frozen wake, which both set it, or null. Either wake
+  // stays quiet while it equals the file's modification time.
   goneWokeFor: number | null
   // When the current gone wait of list checks began: the time of a read that
   // asked for the desktop app's list, whether or not it got one, after the
@@ -236,6 +237,10 @@ declare module 'claude-code' {
       // When the last read that could list the folder ran, or null before
       // the first. Whether a file is stale is judged against it.
       readAt: number | null
+      // When foreman began watching the folder without a break between
+      // listings, or null before the first listing. The frozen rule waits
+      // until two minutes have passed since then.
+      watchingSince: number | null
       // When the next read is due, or null when none is scheduled because the
       // role is off.
       nextReadAt: number | null
