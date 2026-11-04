@@ -394,6 +394,35 @@ test('a start that waits arms the dry report again, even when its session is arc
   expect(w.engine.prompts).toEqual([])
 })
 
+test('a start that would wait but is refused keeps the dry report from repeating when the next slot frees with the queue still empty', async ($, on) => {
+  const { w } = await parent($, on, 2)
+  w.engine.startAnswers = [answer(1), answer(2), answer(3), AUTOMATED_REFUSAL]
+  await startSession($, keyed('ABC-1'))
+  await startSession($, keyed('ABC-2'))
+  const a = busyFile('ABC-1', ticketOf(w, 0), 'local_new1')
+  const b = busyFile('ABC-2', ticketOf(w, 1), 'local_new2')
+  w.desktop.sessions = [listed('local_new1', 'ABC-1'), listed('local_new2', 'ABC-2')]
+  await minutesPass(w, 1, { 'a.json': a, 'b.json': b })
+  w.desktop.sessions[0] = listed('local_new1', 'ABC-1', { isArchived: true, isRunning: false })
+  await minutesPass(w, 2, { 'a.json': busyFile('ABC-1', ticketOf(w, 0), 'local_new1', { state: 'done' }), 'b.json': b })
+  expect(dryNotices(w)).toBe(1)
+  expect(ledger(w).dryNotified).toBe(true)
+  // ABC-3 goes ahead in the free slot, and ABC-4 would wait behind it, but
+  // the app refuses to start ABC-4, so nothing joins the queue.
+  await startSession($, keyed('ABC-3'))
+  await startSession($, keyed('ABC-4'))
+  expect(ledger(w).pairings.some(p => p.queue !== null)).toBe(false)
+  expect(ledger(w).dryNotified).toBe(true)
+  const c = busyFile('ABC-3', ticketOf(w, 2), 'local_new3')
+  w.desktop.sessions = [listed('local_new2', 'ABC-2'), listed('local_new3', 'ABC-3')]
+  await minutesPass(w, 1, { 'b.json': b, 'c.json': c })
+  w.desktop.sessions[0] = listed('local_new2', 'ABC-2', { isArchived: true, isRunning: false })
+  await minutesPass(w, 2, { 'b.json': busyFile('ABC-2', ticketOf(w, 1), 'local_new2', { state: 'done' }), 'c.json': c })
+  expect(ledger(w).pairings.find(p => p.issueKey === 'ABC-2')!.standing).toBe('freed')
+  expect(dryNotices(w)).toBe(1)
+  expect(w.engine.prompts).toEqual([])
+})
+
 test('a waiting start answered with a proposal card holds back no slot once its call is long over, and begins once its session starts', async ($, on) => {
   const { w } = await parent($, on, 1)
   w.engine.startAnswers = [answer(1), 'Proposed the session as a card for the person to start.']

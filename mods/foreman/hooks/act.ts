@@ -789,12 +789,19 @@ export function slotsNeedList(t: ForemanTickets, rows: readonly SubRow[], now: n
 // that slot. A reserved pairing has no claim and has a queue, so it is never
 // also counted as claimed or as a start with no status file.
 export function freeSlots(t: ForemanTickets, rows: readonly SubRow[], now: number, slots: number): number {
-  const shown = busyCount(shownRows(rows, t))
+  return freeSlotsOfShown(t, shownRows(rows, t), now, slots)
+}
+
+// The count freeSlots gives, from the rows the band shows, which shownRows
+// already picked from every row, so a caller that holds them does not pick
+// them a second time.
+export function freeSlotsOfShown(t: ForemanTickets, shown: readonly SubRow[], now: number, slots: number): number {
+  const busy = busyCount(shown)
   const active = t.pairings.filter(p => p.standing === 'active')
   const unseen = active.filter(p => p.queue === null && p.owner === null && now - p.pairedAt <= GONE_MS).length
   const claimed = active.filter(p => p.queue?.claim != null).length
   const reserved = active.filter(p => isReserved(p, now, GONE_MS)).length
-  return slots - shown - unseen - claimed - reserved
+  return slots - busy - unseen - claimed - reserved
 }
 
 // Whether a keyed start made now waits in the queue: no slot is free once

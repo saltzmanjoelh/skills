@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PromptSubmitInput, Register, ResolveInput, ToolCallResult } from 'claude-code'
 
 import { checkOutcome, clampedDue, endsOf, isClaimed, soonestDue, withNote, withoutPaired, type CheckDone } from './checks'
-import { CALL_TIMEOUT_MS, decide, desktopOf, freedSlotIn, freeSlots, GONE_MS, keptByUnreadList, needsList, NO_ANSWER, releasedIn, startWaits, topUpCount, watchingFrom, type Decision, type Limits, type SessionsLook } from './act'
+import { CALL_TIMEOUT_MS, decide, desktopOf, freedSlotIn, freeSlotsOfShown, GONE_MS, keptByUnreadList, needsList, NO_ANSWER, releasedIn, startWaits, topUpCount, watchingFrom, type Decision, type Limits, type SessionsLook } from './act'
 import { isSvgSurface } from './art'
 import { becameParentAnswer, COMMAND, commandOf, isCommandText, PASSED_ON, PASTED_LINE, pastedCommandIn, slotsAnswer, START_FOREMAN_FALLBACK, START_FOREMAN_OFF, startForemanText, type Command } from './commands'
 import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, everySession, failureLine, linkedFamily, listSessions, NUDGE_TEXT, openSession, readHeader, REASONS, sendMessage, WHOLE_LOCAL_ID, type DesktopCall, type Listed, type OpenResult, type SavedCopies, type SendResult } from './desktop'
@@ -783,8 +783,7 @@ async function view($: $, isPane: boolean): Promise<View> {
   const lines = await read($, log)
   const ledger = settings.isOn ? ticketsIn(await read($, tickets)) : null
   const isPaneInParent = isPane && ledger !== null
-  const allRows = ledger === null ? [] : await rowsNow($)
-  const rows = ledger === null ? [] : shownRows(allRows, ledger)
+  const rows = ledger === null ? [] : shownRows(await rowsNow($), ledger)
   const now = await $.clock.now()
   const slots = slotsOf(settings, currentOptions.slots)
   return {
@@ -804,11 +803,10 @@ async function view($: $, isPane: boolean): Promise<View> {
     queued: ledger === null ? [] : queuedShown(ledger, now, GONE_MS).map((p, i) => ({
       ticket: p.ticket,
       issueKey: p.issueKey !== null && isWholeKey(p.issueKey) ? p.issueKey : null,
-      localId: p.localId,
       waitedMs: now - p.pairedAt,
       place: i + 1,
     })),
-    isSlotFree: ledger !== null && freeSlots(ledger, allRows, now, slots) > 0,
+    isSlotFree: ledger !== null && freeSlotsOfShown(ledger, rows, now, slots) > 0,
   }
 }
 
@@ -974,13 +972,9 @@ async function startSession<E extends Record<string, unknown>>($: $, e: E, next:
     const now = await $.clock.now()
     const rows = await rowsNow($)
     const slots = slotsOf(parentIn(await read($, parent)), currentOptions.slots)
-    // A start that waits clears the dry-queue mark in the same update, so
-    // the queue's next dry spell is reported again even when this session is
-    // archived before any read sees it.
     await writeTickets($, t => {
       waits = key !== null && startWaits(t, rows, now, slots)
-      const pairings = [...t.pairings, newPairing(ticket, null, now, key, waits ? { place: nextPlace(t), claim: null } : null)]
-      return waits ? { ...t, pairings, dryNotified: false } : { ...t, pairings }
+      return { ...t, pairings: [...t.pairings, newPairing(ticket, null, now, key, waits ? { place: nextPlace(t), claim: null } : null)] }
     })
   }
   let sent: E = e
@@ -1072,8 +1066,9 @@ const withNoTicket = (out: Extract<ToolCallResult, { result: unknown }>): ToolCa
 // deny and not an error is accepted: its reservation takes the desktop session
 // id it names, or none for a proposal card, or is added again when it is gone,
 // so a hot reload in between loses nothing, and its key is released. A start
-// that waits gets the sentence that says its issue is queued. Every other
-// answer takes the reservation out and goes back as it came.
+// that waits gets the sentence that says its issue is queued and clears the
+// dry-queue mark. Every other answer takes the reservation out and goes back
+// as it came.
 async function afterStart($: $, key: string | null, title: unknown, ticket: string | null, waits: boolean, out: ToolCallResult): Promise<ToolCallResult> {
   const unreserved = (t: ForemanTickets) => (ticket === null ? t : withoutPairing(t, ticket))
   if (out.deny === undefined && isHeldRefusal(out, title)) {
@@ -1097,7 +1092,13 @@ async function afterStart($: $, key: string | null, title: unknown, ticket: stri
   const localId = localIdOf(out)
   const at = await $.clock.now()
   await writeTickets($, t => {
-    const paired = ticket === null ? t : withAnswer(t, ticket, localId, at, key, waits)
+    // An accepted start that waits clears the dry-queue mark in the same
+    // update that pairs it, so the queue's next dry spell is reported again
+    // even when this session is archived before any read sees it. A start
+    // that is refused, held or fails leaves the mark as it was, because
+    // nothing joined the queue.
+    const answered = ticket === null ? t : withAnswer(t, ticket, localId, at, key, waits)
+    const paired = waits ? { ...answered, dryNotified: false } : answered
     if (key === null || !paired.held.includes(key)) return paired
     return { ...paired, held: paired.held.filter(k => k !== key), outbox: addWork(paired.outbox, { logs: [acceptedLog(key)], effects: [], lines: [] }) }
   })
@@ -1142,7 +1143,7 @@ const isPlain = (e: PromptSubmitInput) => e.command === undefined && (e.attachme
 // goes on with the checked line, which names the checked ids and asks for a
 // brief reply to the rest of the prompt, because only the model reports the
 // other sessions' outcomes then, and every other prompt goes on as it came,
-// which withPasted or withHeld may give a line.
+// which withPasted or withForemanLines may give a line.
 // The text is checked before any state is read, so a prompt the person typed
 // waits here on no read, and the ledger is read only for a prompt that holds
 // a turn-end note. A prompt the person typed that goes on does wait for
@@ -1199,11 +1200,11 @@ async function withPasted($: $, e: PromptSubmitInput): Promise<PromptSubmitInput
 }
 
 // How many issues the parent should start now to keep one waiting sub
-// session per slot, as topUpCount in act.ts counts, from the live ledger, the
-// rows of the last read and the slot count.
-async function topUpNow($: $): Promise<number> {
-  const slots = slotsOf(parentIn(await read($, parent)), currentOptions.slots)
-  return topUpCount(ticketsIn(await read($, tickets)), await rowsNow($), await $.clock.now(), slots)
+// session per slot, as topUpCount in act.ts counts, from the parent setting
+// and the ledger the caller has already read, the rows of the last read and
+// the clock.
+async function topUpFrom($: $, settings: ForemanParent, ledger: ForemanTickets): Promise<number> {
+  return topUpCount(ledger, await rowsNow($), await $.clock.now(), slotsOf(settings, currentOptions.slots))
 }
 
 // Whether a prompt is a typed /start-foreman, by the command the engine set on
@@ -1220,12 +1221,15 @@ const isStartForeman = (e: PromptSubmitInput) => e.command?.name === COMMAND || 
 // typed /start-foreman too, because the text that replaces the skill gives
 // the count on that turn. A failed count leaves the line out and keeps the
 // held line. Whose prompt it is is checked first, so a plugin's prompt,
-// foreman's own wake among them, reads no state here.
-async function withHeld($: $, e: PromptSubmitInput): Promise<PromptSubmitInput> {
-  if (!isPersonPrompt(e) || !(await isOn($))) return e
-  const held = ticketsIn(await read($, tickets)).held
-  const lines = held.length === 0 ? [] : [heldLine(held)]
-  const count = e.turnId !== undefined || isStartForeman(e) ? 0 : await topUpNow($).catch(() => 0)
+// foreman's own wake among them, reads no state here. The parent setting and
+// the ledger are each read once, for both lines.
+async function withForemanLines($: $, e: PromptSubmitInput): Promise<PromptSubmitInput> {
+  if (!isPersonPrompt(e)) return e
+  const settings = parentIn(await read($, parent))
+  if (!settings.isOn) return e
+  const ledger = ticketsIn(await read($, tickets))
+  const lines = ledger.held.length === 0 ? [] : [heldLine(ledger.held)]
+  const count = e.turnId !== undefined || isStartForeman(e) ? 0 : await topUpFrom($, settings, ledger).catch(() => 0)
   if (count > 0) lines.push(topUpLine(count))
   return lines.length === 0 ? e : { ...e, context: [...(e.context ?? []), ...lines] }
 }
@@ -1299,17 +1303,14 @@ async function takeReply($: $): Promise<boolean> {
 // cannot silence every later wake.
 let wordsPending: Promise<void> | null = null
 
-// What /start-foreman answers once it is done. When the person typed words
-// after the command and the count, they go to the parent's model as the
-// person's own prompt, after the role is on. They are submitted from a timer,
-// because the engine refuses a prompt submitted from inside the command's
-// hook. Wakes are held back from before the role turns on, because turning it
-// on makes the first read, which may find a wake to send.
-async function runCommand($: $, args: string): Promise<string> {
-  const command = commandOf(args)
-  if (command.kind === 'refused') return command.text
-  const prompt = command.prompt
-  if (prompt === null) return applyCommand($, command)
+// What /start-foreman answers once it is done, for a command that the person
+// typed words after, past the command and the count. The words go to the
+// parent's model as the person's own prompt, after the role is on. They are
+// submitted from a timer, because the engine refuses a prompt submitted from
+// inside the command's hook. Wakes are held back from before the role turns
+// on, because turning it on makes the first read, which may find a wake to
+// send.
+async function applyWithWords($: $, command: Exclude<Command, { kind: 'refused' }>, prompt: string): Promise<string> {
   let release = () => {}
   const pending = new Promise<void>(resolve => {
     release = resolve
@@ -1547,7 +1548,8 @@ export const register: Register = (on, options) => {
   // replaces the skill's own text, which says that the mod is not loaded, and
   // this hook gives the command's output as foreman's answer. A command with
   // words after it, or with a refused count, is answered here without next,
-  // as runCommand says, so the skill never runs for it.
+  // so the skill never runs for it: a refused count gets the refusal alone,
+  // and words after the command go on as applyWithWords says.
   // The host already puts the mod's name in front of a command's output.
   // Every /start-foreman also arms the timers again when a hot reload has
   // dropped them, as the hooks below do. Arming does nothing while the role
@@ -1556,12 +1558,16 @@ export const register: Register = (on, options) => {
   on('command.run', { command: COMMAND }, async ($, e, next) => {
     const args = typeof e.args === 'string' ? e.args : ''
     const command = commandOf(args)
-    if (command.kind !== 'refused' && command.prompt === null) {
+    if (command.kind === 'refused') {
+      await ensureArmed($).catch(() => undefined)
+      return { text: command.text }
+    }
+    if (command.prompt === null) {
       const text = await applyCommand($, command)
       await ensureArmed($).catch(() => undefined)
       return { ...(await next(e)), text }
     }
-    const text = await runCommand($, args)
+    const text = await applyWithWords($, command, command.prompt)
     await ensureArmed($).catch(() => undefined)
     return { text }
   })
@@ -1573,8 +1579,9 @@ export const register: Register = (on, options) => {
   // so the body catches every failure and the hook has a catch of its own.
   on('skill.prompt', { skill: COMMAND }, async $ => {
     try {
-      if (!(await isOn($))) return { text: START_FOREMAN_OFF }
-      return { text: startForemanText(await topUpNow($)) }
+      const settings = parentIn(await read($, parent))
+      if (!settings.isOn) return { text: START_FOREMAN_OFF }
+      return { text: startForemanText(await topUpFrom($, settings, ticketsIn(await read($, tickets)))) }
     } catch {
       return { text: START_FOREMAN_FALLBACK }
     }
@@ -1594,7 +1601,7 @@ export const register: Register = (on, options) => {
   // as context, as choiceFor says, its text unchanged, and every other prompt
   // goes on as it came, except that the person's own prompt carries the held
   // line as context while a key whose start the app refused is held, and the
-  // top-up line while foreman's queue is short, as withHeld says. A note
+  // top-up line while foreman's queue is short, as withForemanLines says. A note
   // about a sub session foreman checks is recorded in the ledger before the
   // prompt goes on, so its check falls due an idle period after the note. The
   // marker is set before the line is written, and a hook that throws, a failed
@@ -1608,7 +1615,7 @@ export const register: Register = (on, options) => {
     const choice = await choiceFor($, e)
     if (choice.kind === 'pass') {
       void ensureOffRoleWork($).catch(() => undefined)
-      return next(await withHeld($, await withPasted($, e)))
+      return next(await withForemanLines($, await withPasted($, e)))
     }
     await noteChecks($, choice.checks)
     void ensureOffRoleWork($).catch(() => undefined)

@@ -20,10 +20,10 @@ import { whoOf } from './wake'
 export const PANE = 'foreman'
 
 // A sub session that waits in foreman's queue, as the band and the pane show
-// it: its ticket, its issue key only when the key is whole, else null, its
-// desktop session id or null, how long ago it was paired, and its place in
-// the order the queue begins, counted from 1.
-export type QueuedEntry = { ticket: string; issueKey: string | null; localId: string | null; waitedMs: number; place: number }
+// it: its ticket, its issue key only when the key is whole, else null, how
+// long ago it was paired, and its place in the order the queue begins,
+// counted from 1.
+export type QueuedEntry = { ticket: string; issueKey: string | null; waitedMs: number; place: number }
 
 // What the band and the pane draw from, read by the hooks.
 export type View = {
