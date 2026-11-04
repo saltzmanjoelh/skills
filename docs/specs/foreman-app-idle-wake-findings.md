@@ -59,8 +59,10 @@ What was found, question by question:
    - every turn since the person last typed was the app's own wake;
    - the start is in the same project;
    - the parent is not in a Remote Control lineage;
-   - the always-ask policy on the start tools was in place before the turn,
-     which in auto mode counts as approval;
+   - the app's own permission rule for its session-start tools, which is set
+     to ask the person every time, was already in place when the turn began.
+     The app treats that rule as approval on such a turn in auto mode, so it
+     shows no prompt;
    - fewer than ten sessions were started this way since the person typed, and
      fewer than five of them are still working.
 
@@ -80,9 +82,12 @@ minutes, not the hours the backstop was meant to cover.
 
 - A sub session that ends turns every few seconds spends the ten wakes within
   minutes, as in the parent watched here.
-- A parent whose last turn was cut short gets no wake while it is idle.
+- A parent whose last turn was cut short gets no wake while it is idle. This
+  was read from the app's code and from the wording of its held-wake log line;
+  it was not observed.
 - A wake that comes while the parent's own turn runs is not lost: the app
-  tries again when that turn ends, as long as the note is still queued.
+  tries again when that turn ends, as long as the note is still queued. This
+  was read from the app's code only; it was not observed.
 
 ## Non-goals
 
@@ -94,9 +99,8 @@ minutes, not the hours the backstop was meant to cover.
   would slip around the app's rule that a person stands behind each chain of
   starts.
 - Telling the owner that the queue ran dry and that their next message starts
-  more. A separate change that keeps foreman's queue of waiting sub sessions
-  topped up is to add that report, and until it merges the owner is told
-  nothing beyond foreman's slot-free line.
+  more. That report belongs to the separate waiting-queue change that the
+  Behavior section names.
 - A live test of the second answer.
 
 ## Failure modes
@@ -116,8 +120,10 @@ the app's wake, they should test again against the version they run.
   log line, answered by foreman.
 - The code reading covers where the app adds to the wake count, the one place
   that resets it and the check on the person's origin there, the origin a
-  mod's prompt carries, the rule that marks a turn as a wake, and the check
-  that allows or refuses a start on that turn.
+  mod's prompt carries, the rule that marks a turn as a wake, the check
+  that allows or refuses a start on that turn, and where the app holds a wake
+  for a parent whose last turn was cut short or retries one that came while a
+  turn was running.
 
 ## Decided by the counsel
 
