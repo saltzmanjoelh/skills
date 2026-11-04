@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { BEGIN_TEXT } from '../hooks/desktop'
-import { afterTyped, keptOf, REPORT_SHOWN_MS, shownReport, withNotice } from '../hooks/pane'
+import { afterTyped, keptOf, noticeArrived, noticeFailed, REPORT_SHOWN_MS, shownReport } from '../hooks/pane'
 import { ticketsIn, ticketsKey } from '../hooks/tickets'
 import type { Engine } from 'claude-code/testing'
 
@@ -422,6 +422,61 @@ test('a message the person types while foreman is off still lets go of a kept no
   expect(await ui.bandText()).not.toContain(OPENED)
 })
 
+// Moves the clock a second at a time until foreman next reads the status
+// folder, so a test can look at the band before a call that hangs runs out
+// of time.
+async function untilRead(w: ReturnType<typeof world>) {
+  const lists = w.folder.lists
+  for (let i = 0; i < 300 && w.folder.lists === lists; i++) {
+    await w.clock.advance(SECOND)
+    await w.clock.settle()
+  }
+  expect(w.folder.lists).toBeGreaterThan(lists)
+}
+
+test('a report reaches the band while its notification has not answered, and stays kept once the call runs out of time', async ($, on) => {
+  const w = world(on)
+  w.engine.notify = 'hang'
+  const before = working('ABC-1')
+  w.folder.put('a.json', before)
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await minutesPass(w, 1, { 'a.json': before })
+  const opened = working('ABC-1', { pr: pr(7, 'OPEN') })
+  w.folder.put('a.json', opened)
+  await untilRead(w)
+  expect(await ui.bandText()).toContain(OPENED)
+  await w.clock.advance(31 * SECOND)
+  await w.clock.settle()
+  expect(await ui.bandText()).toContain(OPENED)
+  await w.clock.advance(11 * MINUTE)
+  await w.clock.settle()
+  expect(await ui.bandText()).toContain('(1 more since you')
+})
+
+test('a surfaces read that never answers holds up only the reason line, which names the surfaces as unknown', async ($, on) => {
+  const w = world(on)
+  w.engine.notify = 'off'
+  w.engine.notifyReason = 'no-surface'
+  w.engine.surfaces = 'hang'
+  const before = working('ABC-1')
+  w.folder.put('a.json', before)
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await minutesPass(w, 1, { 'a.json': before })
+  const opened = working('ABC-1', { pr: pr(7, 'OPEN') })
+  w.folder.put('a.json', opened)
+  await untilRead(w)
+  expect(await ui.bandText()).toContain(OPENED)
+  expect((await ui.logLines()).filter(line => line.startsWith('Could not raise'))).toEqual([])
+  await w.clock.advance(31 * SECOND)
+  await w.clock.settle()
+  expect((await ui.logLines()).filter(line => line.startsWith('Could not raise'))).toEqual([reasonLine('no-surface', 'unknown')])
+  expect(await ui.bandText()).toContain(OPENED)
+})
+
 test('a band write that is refused loses the report from the band only, and the log still holds its sentence and the reason line', async ($, on) => {
   const w = world(on)
   on('state.set', ($, e, next) => (e.plugin === 'foreman' && e.key === 'report' ? { deny: 'refused' } as never : next(e)))
@@ -458,14 +513,18 @@ test('the band\'s value: a failure or a kept value adds to the count, typing rel
   expect(keptOf({ text: OPENED, at, kept: -1 })).toBe(0)
   expect(keptOf({ text: OPENED, at, kept: 1.5 })).toBe(0)
   expect(keptOf({ text: OPENED, at, kept: 2 })).toBe(2)
-  expect(withNotice(null, report, false, at)).toEqual({ text: OPENED, at, kept: 0 })
-  expect(withNotice(null, report, true, at)).toEqual({ text: OPENED, at, kept: 1 })
-  expect(withNotice(null, { newest: MERGED, count: 2, isReport: true }, true, at)).toEqual({ text: MERGED, at, kept: 2 })
-  expect(withNotice({ text: OPENED, at, kept: 1 }, { newest: MERGED, count: 1, isReport: true }, false, at + 1)).toEqual({ text: MERGED, at: at + 1, kept: 2 })
+  expect(noticeArrived(null, report, at)).toEqual({ value: { text: OPENED, at, kept: 0 }, counted: false })
+  expect(noticeFailed({ text: OPENED, at, kept: 0 }, report, at)).toEqual({ text: OPENED, at, kept: 1 })
+  expect(noticeFailed(null, { newest: MERGED, count: 2, isReport: true }, at)).toEqual({ text: MERGED, at, kept: 2 })
+  expect(noticeArrived({ text: OPENED, at, kept: 1 }, { newest: MERGED, count: 1, isReport: true }, at + 1)).toEqual({ value: { text: MERGED, at: at + 1, kept: 2 }, counted: true })
   const needs = { newest: 'ABC-1 needs you.', count: 1, isReport: false }
   const shown = { text: OPENED, at }
-  expect(withNotice(shown, needs, false, at + 1)).toBe(shown)
-  expect(withNotice(shown, needs, true, at + 1)).toEqual({ text: 'ABC-1 needs you.', at: at + 1, kept: 1 })
+  expect(noticeArrived(shown, needs, at + 1)).toEqual({ value: shown, counted: false })
+  expect(noticeFailed(shown, needs, at + 1)).toEqual({ text: 'ABC-1 needs you.', at: at + 1, kept: 1 })
+  // A call that answers after a later notice reached the band leaves the
+  // later one as the newest, and counts both.
+  expect(noticeFailed({ text: MERGED, at: at + 5, kept: 0 }, report, at)).toEqual({ text: MERGED, at: at + 5, kept: 2 })
+  expect(noticeFailed({ text: MERGED, at: at + 5, kept: 2 }, report, at)).toEqual({ text: MERGED, at: at + 5, kept: 3 })
   expect(afterTyped({ text: OPENED, at, kept: 3 }, at + 5)).toEqual({ text: OPENED, at: at + 5, kept: 0 })
   expect(afterTyped(shown, at + 5)).toBe(shown)
   expect(shownReport({ text: OPENED, at, kept: 1 }, at + 100 * REPORT_SHOWN_MS)).toBe(OPENED)

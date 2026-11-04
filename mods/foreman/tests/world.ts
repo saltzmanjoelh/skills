@@ -224,8 +224,9 @@ export function engine(on: On, now: () => number = () => T0) {
     notify: 'sent' as 'sent' | 'off' | 'throws' | 'hang' | 'malformed',
     // The reason a notification that is 'off' answers with.
     notifyReason: 'disabled',
-    // The surfaces $.session.surfaces() answers, or 'throws' to make it throw.
-    surfaces: [] as readonly string[] | 'throws',
+    // The surfaces $.session.surfaces() answers, 'throws' to make it throw,
+    // or 'hang' to make it never answer.
+    surfaces: [] as readonly string[] | 'throws' | 'hang',
     submit: 'ok' as 'ok' | 'dropped' | 'hang',
     // How a pane open fares: placed, not placed with the engine's reason, or
     // refused, which rejects the mod's call with the text as its message.
@@ -262,6 +263,7 @@ export function engine(on: On, now: () => number = () => T0) {
   })
   on('session.surfaces', () => {
     if (answers.surfaces === 'throws') throw new Error('no surfaces')
+    if (answers.surfaces === 'hang') return new Promise<never>(() => {})
     return { value: answers.surfaces } as never
   })
   on('prompt.submit', ($, e) => {

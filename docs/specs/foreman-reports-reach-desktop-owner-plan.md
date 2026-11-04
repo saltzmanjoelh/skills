@@ -34,14 +34,18 @@ It adds no new files and no dependencies.
 - **The new `notify`.** It takes
   `{ quiet?: boolean; band?: { newest: string; count: number; isReport: boolean } }`
   and does these steps in order:
-  1. It reads `at` from the clock, then calls `within($, $.ui.notify(...))`
-     inside a try block. Only `isSent === true` counts as sent. Any other
-     answer is a failure with the key `reason:<reason>`, where a reason that
-     is not a string reads `unknown`. A timeout has the key `timed-out` and
-     a throw has the key `threw`.
-  2. When `band` is given, it writes the band with
-     `update($, report, raw => withNotice(raw, band, failed, at))`, inside a
-     catch of its own, so a failed state write loses only the band entry.
+  1. It reads `at` from the clock. When `band` is given, it tells the band
+     that the notice arrived, with
+     `update($, report, raw => noticeArrived(raw, band, at).value)`, inside a
+     catch of its own, before the call, so the band never waits on the call.
+  2. It calls `within($, $.ui.notify(...))` inside a try block. Only
+     `isSent === true` counts as sent. Any other answer is a failure with
+     the key `reason:<reason>`, where a reason that is not a string reads
+     `unknown`. A timeout has the key `timed-out` and a throw has the key
+     `threw`. When the call failed and the first write did not count the
+     notice already, it writes the band again with
+     `update($, report, raw => noticeFailed(raw, band, at))`, also inside a
+     catch, so a failed state write loses only the band entry.
   3. On a failure whose key the load has not logged yet, it adds the key to
      the set synchronously, before any await, then reads
      `within($, $.session.surfaces())` and logs the reason line:
@@ -56,8 +60,9 @@ It adds no new files and no dependencies.
   The reason line is written before the notice's own line, so the notice's
   line stays the newest, and the band is written before the surfaces are
   read, so a hanging read never delays the band.
-- **The set of logged reasons** is created inside `register()`, not at module
-  level, so each load starts empty and tests stay isolated.
+- **The set of logged reasons** lives at the top level of `register.tsx`,
+  whose hooks are registered at the top level too. The engine evaluates the
+  module afresh on every load, so each load and each test starts empty.
 - **`showReports`** keeps `addLogs`, drops its own write of the band, and calls
   `notify($, sentences.join(' '), { quiet: true, band: { newest: last, count: sentences.length, isReport: true } })`.
 - **`carryOut`** passes `band: { newest: text, count: 1, isReport: false }`
@@ -73,13 +78,19 @@ It adds no new files and no dependencies.
 
 - `keptOf(raw)` returns `kept` when it is a positive whole number, and 0
   otherwise.
-- `withNotice(raw, band, failed, at)`:
-  - when the notice failed, or something is already kept, it returns
-    `{ text: newest, at, kept: keptOf(raw) + count }`;
+- `noticeArrived(raw, band, at)` runs before the call:
+  - when something is already kept, it returns
+    `{ text: newest, at, kept: keptOf(raw) + count }` and says the notice is
+    counted;
   - otherwise, for a report, it returns `{ text: newest, at, kept: 0 }`,
     which is today's behaviour;
   - otherwise it returns `raw` unchanged, so a delivered needs-you or held
     notice never touches the band.
+- `noticeFailed(raw, band, at)` runs after a failed call that was not
+  counted. It returns `{ text: newest, at, kept: keptOf(raw) + count }`,
+  except that when the band already holds a notice that arrived later, that
+  one stays the newest and both are counted, so a call that answers last
+  never puts an older sentence above a newer one.
 - `afterTyped(raw, now)` turns a kept value into `{ text, at: now, kept: 0 }`,
   and returns any other value unchanged.
 - `shownReport(raw, now)` shows a kept value whatever its age, followed by
@@ -115,7 +126,11 @@ count from one" reads the same way.
   seconds, and in that case the simple rule still never loses a kept notice:
   every failure adds to the count. The extra fields made more edge cases on a
   reload and with two copies running, and the plan still admitted an
-  undercount of its own.
+  undercount of its own. A review found that writing the band only after the
+  call answered made a report late, lost on a reload during the call, or
+  shown under an older sentence, so the band is now told before the call and
+  again on a failure, using the arrival time already stored, with no new
+  field.
 - **Logging the reason line without waiting for it** (the robust plan). It
   makes the order of log lines a race, so the test that reads the newest line
   after a failed needs-you notice would have to change, and tests would lose
@@ -136,7 +151,7 @@ count from one" reads the same way.
 2. Write the failing tests below, and see them fail.
 3. Add `keep` to `ForemanEffect` and to the report type in
    `mods/foreman/types/index.d.ts`, and parse it in `effectIn`.
-4. Add `keptOf`, `withNotice` and `afterTyped`, and change `shownReport`, in
+4. Add `keptOf`, `noticeArrived`, `noticeFailed` and `afterTyped`, and change `shownReport`, in
    `pane.tsx`.
 5. Rewrite `notify`, then change `showReports`, `carryOut`, `beginOne`,
    `afterStart` and the `prompt.submit` hook in `register.tsx`, and the
@@ -161,7 +176,7 @@ Each item maps to a bullet of the spec's Verification section.
    "(2 more since your last message.)". A single one shows the sentence
    alone. Two sentences in one failed notification count as two. A delivered
    report while one is kept adds one. After typing, the sentence shows alone.
-   Unit tests cover `withNotice`, `afterTyped` and `shownReport`, including
+   Unit tests cover `noticeArrived`, `noticeFailed`, `afterTyped` and `shownReport`, including
    the old `{ text, at }` shape and damaged values.
 4. **Which notices are kept.** A failed needs-you notice and a failed held
    notice stay in the band (`tests/acts.test.ts`). A failed begin-held notice

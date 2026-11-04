@@ -93,15 +93,30 @@ export type BandNotice = { newest: string; count: number; isReport: boolean }
 // contract in types/index.d.ts, so the two cannot drift apart.
 type StoredReport = PluginState['foreman']['report']
 
-// The band's value after a notice whose notification `failed` or went,
-// arriving at `at`. A failed notice is kept, and so is any notice that
-// arrives while another is kept, so a delivered one never pushes a kept one
-// out of the count. A delivered report shows for its ten minutes, as it
-// always has, and any other delivered notice leaves the band as it was.
-export function withNotice(raw: StoredReport, notice: BandNotice, failed: boolean, at: number): StoredReport {
+// The band's value when a notice arrives at `at`, before its notification
+// is raised, so the band never waits on that call. A notice that arrives while
+// another is kept becomes the newest and is counted now, whether its own
+// notification goes or not, so a delivered one never pushes a kept one out of
+// the count. Otherwise a report shows for its ten minutes, as it always has,
+// and any other notice leaves the band as it was until its notification
+// fails. `counted` says whether the notice is in the count already.
+export function noticeArrived(raw: StoredReport, notice: BandNotice, at: number): { value: StoredReport; counted: boolean } {
   const kept = keptOf(raw)
-  if (failed || kept > 0) return { text: notice.newest, at, kept: kept + notice.count }
-  return notice.isReport ? { text: notice.newest, at, kept: 0 } : raw
+  if (kept > 0) return { value: { text: notice.newest, at, kept: kept + notice.count }, counted: true }
+  return { value: notice.isReport ? { text: notice.newest, at, kept: 0 } : raw, counted: false }
+}
+
+// The band's value once the notification of a notice that arrived at `at`
+// and was not counted yet has failed: the notice is kept. When a later notice
+// is in the band already, as when this call answered last, that one stays the
+// newest and this one joins the count, and the later one counts too, so
+// neither is lost.
+export function noticeFailed(raw: StoredReport, notice: BandNotice, at: number): StoredReport {
+  const kept = keptOf(raw)
+  if (raw !== null && typeof raw.text === 'string' && typeof raw.at === 'number' && raw.at > at) {
+    return { text: raw.text, at: raw.at, kept: Math.max(kept, 1) + notice.count }
+  }
+  return { text: notice.newest, at, kept: kept + notice.count }
 }
 
 // The band's value once the person types: a kept notice shows for

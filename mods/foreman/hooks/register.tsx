@@ -10,7 +10,7 @@ import { acceptedLog, beginFailedNotice, heldLine, heldLog, heldNotice, heldSent
 import { ignoredLine, readIssueLink } from './links'
 import { afterConsumed, emptyMarkers, FIRST_MARKER_LOG, MARKERS_KEPT_MS, MARKERS_PREFIX, markersIn, markersKey, markersNewest, type MarkersRecord } from './markers'
 import { checkedLine, isAppParts, isNotedReply, isStatusChanged, keptLine, keptNames, NOTED, NOTED_REPLY, notesIn } from './notes'
-import { afterTyped, bandTree, keptOf, PANE, paneTree, shownReport, withNotice, type BandNotice, type Elements, type View } from './pane'
+import { afterTyped, bandTree, keptOf, noticeArrived, noticeFailed, PANE, paneTree, shownReport, type BandNotice, type Elements, type View } from './pane'
 import type { ForemanCheck, ForemanEffect, ForemanParent, ForemanTickets } from '../types'
 import { PARENT_OFF, parentIn, slotsOf, storeKey } from './parent'
 import { usageIn } from './record'
@@ -41,7 +41,7 @@ const turnRuns = atom({ plugin: 'foreman', key: 'turnRuns' } as const, false)
 const quietLine = atom({ plugin: 'foreman', key: 'quietLine' } as const, null)
 const quietReply = atom({ plugin: 'foreman', key: 'quietReply' } as const, false)
 // The newest report sentence foreman showed and when, for the band, with the
-// count of notices kept since the person last typed (see withNotice in
+// count of notices kept since the person last typed (see noticeArrived in
 // pane.tsx). It is never stored in the ledger, so a restart drops it.
 const report = atom({ plugin: 'foreman', key: 'report' } as const, null)
 
@@ -480,15 +480,25 @@ type NotifyFailure = { key: string; words: string; line: string }
 // Raises one native notification and records how it went. The engine raises
 // one only by writing a terminal's own notification sequence, so it can never
 // raise one in the desktop app, which has no terminal, and answers no-surface
-// there. When `band` is given, the band is told first (see withNotice in
-// pane.tsx), so a notice whose notification failed stays in the band until
-// the person next types; a failed write of the band loses only that. The
+// there. When `band` is given, the band is told before the call (see
+// noticeArrived in pane.tsx), so it never waits on the call, and again when
+// the call fails (see noticeFailed), so a notice whose notification failed
+// stays in the band until the person next types; a failed write of the band
+// loses only that. The
 // first failure for each reason in this load then logs one line naming the
 // reason and the surfaces attached. Last, a notice that is not `quiet`, whose
 // text no other log line holds, logs its own line, so every notice gives one
 // line in the log.
 async function notify($: $, text: string, { quiet = false, band }: { quiet?: boolean; band?: BandNotice } = {}) {
   const at = await $.clock.now()
+  let counted = false
+  if (band !== undefined) {
+    await update($, report, raw => {
+      const arrived = noticeArrived(raw, band, at)
+      counted = arrived.counted
+      return arrived.value
+    }).catch(() => undefined)
+  }
   let failure: NotifyFailure | null
   try {
     const sent = await within($, $.ui.notify(text, { title: 'foreman' }))
@@ -507,7 +517,7 @@ async function notify($: $, text: string, { quiet = false, band }: { quiet?: boo
   } catch {
     failure = { key: 'threw', words: 'the call failed', line: `Could not raise a notification: ${text}` }
   }
-  if (band !== undefined) await update($, report, raw => withNotice(raw, band, failure !== null, at)).catch(() => undefined)
+  if (band !== undefined && failure !== null && !counted) await update($, report, raw => noticeFailed(raw, band, at)).catch(() => undefined)
   if (failure !== null && !reasonsLogged.has(failure.key)) {
     reasonsLogged.add(failure.key)
     await addLog($, `Could not raise notifications (${failure.words}; surfaces attached: ${await surfacesWords($)}), so the band keeps each report until your next message.`)
