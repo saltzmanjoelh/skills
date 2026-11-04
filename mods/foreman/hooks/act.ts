@@ -1036,7 +1036,12 @@ export function decide(input: DecideInput): Decision {
     freed += s.freed
     return [s.p]
   })
-  let tickets: ForemanTickets = folded(capped({ ...withReadings(input.tickets, rows), pairings, keptSlots: [] }))
+  // The mark for a raised slot count is decided by this read, and cleared
+  // whatever it decides, unless the list failed. A read that did not ask for
+  // the list clears it too, because needsList asks whenever the queue holds
+  // anyone, so nobody waits then.
+  const raised = input.tickets.slotsRaised && sessions.kind === 'read'
+  let tickets: ForemanTickets = folded(capped({ ...withReadings(input.tickets, rows), pairings, keptSlots: [], slotsRaised: sessions.kind === 'failed' && input.tickets.slotsRaised }))
   if (!folderExists && !tickets.folderMissing) logs.push('The status folder is missing, so foreman frees no slot until it is back.')
   tickets = { ...tickets, folderMissing: !folderExists }
   if (sessions.kind === 'read' && tickets.held.length > 0) {
@@ -1075,9 +1080,11 @@ export function decide(input: DecideInput): Decision {
   // are taken first, and only then are names a wake line may not carry and
   // repeated names dropped. A damaged or repeated entry among those first
   // ones therefore makes the sentence name fewer issues, never more than the
-  // slots allow.
+  // slots allow. A slot that a raised count added has no name, so a raise
+  // runs the same block on the first read that gets the list, but only while
+  // someone waits unclaimed: a raise never reports the dry queue.
   tickets = dryRearmed(tickets, now)
-  if (freed > 0 && left.length > 0) {
+  if ((freed > 0 && left.length > 0) || (raised && unclaimed.length > 0)) {
     const free = freeSlots(tickets, rows, now, input.slots)
     const firstInQueue = unclaimed.slice(0, Math.max(free, 0))
     const names = [...new Set(firstInQueue.map(p => whoOf(p.issueKey, p.ticket)).filter(isWhoName))]

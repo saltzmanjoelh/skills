@@ -6,9 +6,9 @@ import { slotsAnswer } from '../hooks/commands'
 import { AUTOMATED_REFUSAL } from '../hooks/held'
 import { ticketTimes } from '../hooks/spend'
 import { BEGIN_TEXT, REASONS } from '../hooks/desktop'
-import { newPairing, ticketsIn, ticketsKey, WAIT_LINE, WAITING_SENTENCE } from '../hooks/tickets'
+import { newPairing, OFF_REFUSAL, ticketsIn, ticketsKey, TICKETS_EMPTY, WAIT_LINE, WAITING_SENTENCE } from '../hooks/tickets'
 import type { ForemanTickets } from '../types'
-import { foreman, MINUTE, mountBoth, record, SAVED_PATH, SECOND, start, T0, world } from './world'
+import { foreman, leftInState, MINUTE, mountBoth, record, SAVED_PATH, SECOND, start, T0, world } from './world'
 
 // The queue as the person meets it: starts beyond the free slots wait, and
 // foreman begins them itself, through the fake desktop app in tests/world.ts.
@@ -673,4 +673,109 @@ test('a restart keeps the queue, and a claim whose begin never went is sent on t
   await w.clock.advance(30 * SECOND)
   await w.clock.settle()
   expect(begins(w)).toEqual(['local_b'])
+})
+
+// A raised count's new slot that no waiting session can take wakes the
+// parent once with the kept sentence, as a freed slot does. The raise leaves
+// a mark in the ledger, and the first read that gets the desktop app's list
+// decides it and clears it.
+const keptFor = (key: string) => `foreman: a slot is free, but foreman keeps it for ${key}, whose waiting session it could not find in the desktop app's list; send that session foreman's begin message by hand or release the issue, and do not start a new issue.`
+
+test('raising the slot count while the desktop app\'s list does not show the waiting sessions surely open wakes the parent once with the kept sentence', async ($, on) => {
+  const { w, live } = await queueOfTwo($, on)
+  w.desktop.sessions = [listed('local_new1', 'ABC-1'), doubtful('local_new2', 'ABC-2'), doubtful('local_new3', 'ABC-3')]
+  await minutesPass(w, 1, live)
+  expect(w.engine.prompts).toEqual([])
+  await foreman($, '2')
+  await w.clock.settle()
+  expect(begins(w)).toEqual([])
+  expect(w.engine.prompts).toEqual([keptFor('ABC-2')])
+  const queueOf = (key: string) => ledger(w).pairings.find(p => p.issueKey === key)!.queue
+  expect(typeof queueOf('ABC-2')?.keptAt).toBe('number')
+  expect(queueOf('ABC-2')!.keptAt!).toBeLessThanOrEqual(w.clock.now())
+  expect(queueOf('ABC-3')?.keptAt).toBeUndefined()
+  expect(ledger(w).slotsRaised).toBe(false)
+  await minutesPass(w, 3, live)
+  expect(w.engine.prompts).toEqual([keptFor('ABC-2')])
+})
+
+test('raising the slot count while the only waiting entry is a proposal card started less than five minutes ago wakes the parent with the kept sentence', async ($, on) => {
+  const { w } = await parent($, on, 1)
+  w.engine.startAnswers = [answer(1), 'Proposed the session as a card for the person to start.']
+  await startSession($, keyed('ABC-1'))
+  await startSession($, keyed('ABC-2'))
+  w.desktop.sessions = [listed('local_new1', 'ABC-1')]
+  await minutesPass(w, 1, { 'a.json': busyFile('ABC-1', ticketOf(w, 0), 'local_new1') })
+  expect(w.engine.prompts).toEqual([])
+  await foreman($, '2')
+  await w.clock.settle()
+  expect(w.engine.prompts).toEqual([keptFor('ABC-2')])
+  expect(typeof ledger(w).pairings.find(p => p.ticket === ticketOf(w, 1))!.queue?.keptAt).toBe('number')
+})
+
+test('a raise while the desktop app\'s list fails keeps its mark, and the first read that gets the list sends the kept sentence once', async ($, on) => {
+  const { w, live } = await queueOfTwo($, on)
+  w.desktop.sessions = [listed('local_new1', 'ABC-1'), doubtful('local_new2', 'ABC-2'), doubtful('local_new3', 'ABC-3')]
+  w.desktop.list = 'error'
+  await foreman($, '2')
+  await w.clock.settle()
+  await minutesPass(w, 1, live)
+  expect(w.engine.prompts).toEqual([])
+  expect(ledger(w).slotsRaised).toBe(true)
+  expect(w.engine.notices).toEqual([listFailedNotice(REASONS.listRefused)])
+  w.desktop.list = 'ok'
+  await minutesPass(w, 1, live)
+  expect(w.engine.prompts).toEqual([keptFor('ABC-2')])
+  expect(ledger(w).slotsRaised).toBe(false)
+  await minutesPass(w, 2, live)
+  expect(w.engine.prompts).toEqual([keptFor('ABC-2')])
+})
+
+test('a raise lowered again before the read wakes nobody and leaves no mark', async ($, on) => {
+  const { w, live } = await queueOfTwo($, on)
+  w.desktop.sessions = [listed('local_new1', 'ABC-1'), doubtful('local_new2', 'ABC-2'), doubtful('local_new3', 'ABC-3')]
+  await foreman($, '2')
+  await foreman($, '1')
+  await w.clock.settle()
+  await minutesPass(w, 1, live)
+  expect(w.engine.prompts).toEqual([])
+  expect(ledger(w).slotsRaised).toBe(false)
+})
+
+test('a raise while nobody waits wakes nobody, reports no dry queue and leaves no mark', async ($, on) => {
+  const { w } = await parent($, on, 1)
+  await foreman($, '3')
+  await w.clock.settle()
+  expect(w.engine.prompts).toEqual([])
+  expect(dryNotices(w)).toBe(0)
+  expect(ledger(w).slotsRaised).toBe(false)
+})
+
+test('a slot count given to a session that is not yet a parent sets no mark and wakes nobody', async ($, on) => {
+  const waiting = newPairing('ft-b', 'local_b', T0 - MINUTE, 'ABC-2', { place: 1, claim: null })
+  const w = world(on, { store: { 'parent:session-1': { isOn: false, slots: 1 }, [ticketsKey('session-1')]: { ...TICKETS_EMPTY, pairings: [waiting] } } })
+  w.desktop.sessions = [doubtful('local_b', 'ABC-2')]
+  await mountBoth($, on)
+  await start($)
+  await w.clock.settle()
+  await foreman($, '3')
+  expect(ledger(w).slotsRaised).toBe(false)
+  await w.clock.settle()
+  expect(w.engine.prompts).toEqual([])
+  expect(ledger(w).slotsRaised).toBe(false)
+})
+
+test('a ledger left in $.state that holds only the raised-slot mark outweighs an older stored one', async ($, on) => {
+  const w = world(on, { store: { [ticketsKey('session-1')]: { ...TICKETS_EMPTY, offRefusedFor: 'session-1' } } })
+  leftInState(on, { tickets: { ...TICKETS_EMPTY, slotsRaised: true } })
+  await start($)
+  expect((await startSession($, keyed('ABC-1'))).deny).toBe(OFF_REFUSAL)
+  expect(ledger(w).slotsRaised).toBe(true)
+})
+
+test('a stored ledger that holds only the raised-slot mark keeps it across a restart', async ($, on) => {
+  const w = world(on, { store: { [ticketsKey('session-1')]: { slotsRaised: true } } })
+  await start($)
+  await startSession($, keyed('ABC-1'))
+  expect(ledger(w).slotsRaised).toBe(true)
 })

@@ -214,7 +214,9 @@ export type ForemanEarlier = ForemanSpend & { times: ForemanTimes }
 // has got the list since, so a run of failed reads raises it only once.
 // `dryNotified` says that foreman reported its queue running dry and that no
 // sub session has waited in the queue since, so a dry queue is reported only
-// once each time it runs dry.
+// once each time it runs dry. `slotsRaised` says that the person raised the
+// slot count on a parent that was on, and that no read which got the desktop
+// app's list, or needed none, has decided the raised slots since.
 export type ForemanTickets = {
   pairings: ForemanPairing[]
   folderMissing: boolean
@@ -228,6 +230,7 @@ export type ForemanTickets = {
   checks: ForemanCheck[]
   listFailNotified: boolean
   dryNotified: boolean
+  slotsRaised: boolean
 }
 
 // What the pane shows unfolded: the Log row, the Token details row, and the
