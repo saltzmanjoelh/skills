@@ -26,8 +26,9 @@ chooses the **Merged** step for a pull request with a merge commit.
 ### When it runs
 
 - On the first look that chooses the Merged step, before the step is handed
-  over, the mod runs the update once for that pull request's merge commit,
-  read from `gh pr view <n> --json mergeCommit,baseRefName`.
+  over, the mod runs the update once for that pull request's merge commit
+  and base branch, read by the same `gh pr view` that reports the pull
+  request merged, with `mergeCommit` added to the fields it asks for.
 - Before it runs any git command, the mod records, in a store keyed by
   repository and number and persisted like its other stores, that the update
   for that merge commit has started. A second look that finds that record,
