@@ -136,7 +136,7 @@ export function desktopApp(on: On, saved = new Map<string, string>()) {
     sessions: [] as { sessionId: string; cwd: string; title?: string; isArchived?: boolean; isRunning?: boolean; outside?: boolean }[],
     list: 'ok' as 'ok' | 'error' | 'garbage' | 'not-connected' | 'hang' | 'saved',
     // How the whole list answers, in place of `list`, when it is set.
-    wholeList: undefined as undefined | 'error',
+    wholeList: undefined as undefined | 'error' | 'hang',
     linkedIds: null as string[] | null,
     send: 'ok' as 'ok' | 'error' | 'not-connected' | 'hang',
     open: 'ok' as 'ok' | 'error' | 'error-empty' | 'not-connected',

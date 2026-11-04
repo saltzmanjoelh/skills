@@ -375,10 +375,12 @@ function later($: $, work: () => Promise<unknown>) {
 // decision, so the caller schedules the checks without reading it again. A
 // list that could not be read is logged with what it kept from happening: a
 // freed slot when a slot rule needed it, else a released hold when a key is
-// held, and otherwise a queued issue begun or dropped. While a key is held,
+// held, and otherwise a queued issue begun or dropped. Its fixed reason goes
+// to decide too, which raises the notification for it. While a key is held,
 // the desktop app's whole list is read too, because a session the person
-// started by hand for a held issue is outside the family. Its fixed reason goes
-// to decide too, which raises the notification for it.
+// started by hand for a held issue is outside the family. A whole list that
+// cannot be read is only logged, by holdersIn, and changes nothing that
+// decide sees but the holds it would have released.
 async function decideNow($: $, folderExists: boolean, listed: boolean, now: number): Promise<{ decision: Decision; rows: SubRow[]; written: ForemanTickets }> {
   const rows = await rowsNow($)
   const before = joinOwners(ticketsIn(await read($, tickets)), rows).tickets
