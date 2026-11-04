@@ -406,6 +406,16 @@ test('a notification that does not answer in time, and one that throws, each log
   expect(await ui.bandText()).toContain(`${MERGED} (2 more since your last message.)`)
 })
 
+test('an answer whose isSent is not exactly true counts as a failure, and a reason that is not text reads as unknown', async ($, on) => {
+  const { w, ui } = await openedUnseen($, on, [])
+  w.engine.notify = 'malformed'
+  const verdicts = working('ABC-1', { pr: pr(7, 'OPEN', PAIR) })
+  await minutesPass(w, 1, { 'a.json': verdicts })
+  const reasons = (await ui.logLines()).filter(line => line.startsWith('Could not raise'))
+  expect(reasons).toEqual([reasonLine('no-surface', 'none'), reasonLine('unknown', 'none')])
+  expect(await ui.bandText()).toContain(`${VERDICTS} (1 more since your last message.)`)
+})
+
 test('the band\'s value: a failure or a kept value adds to the count, typing releases it, and old or damaged values read as not kept', () => {
   const at = T0
   const report = { newest: OPENED, count: 1, isReport: true }

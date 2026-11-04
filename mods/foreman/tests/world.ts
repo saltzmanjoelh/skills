@@ -219,7 +219,9 @@ export function engine(on: On, now: () => number = () => T0) {
     contexts: [] as (readonly string[] | undefined)[],
     appended: [] as string[],
     started: [] as Record<string, unknown>[],
-    notify: 'sent' as 'sent' | 'off' | 'throws' | 'hang',
+    // 'malformed' answers with an isSent that is not true and a reason that
+    // is not a string, as an engine that changes its answer might.
+    notify: 'sent' as 'sent' | 'off' | 'throws' | 'hang' | 'malformed',
     // The reason a notification that is 'off' answers with.
     notifyReason: 'disabled',
     // The surfaces $.session.surfaces() answers, or 'throws' to make it throw.
@@ -255,6 +257,7 @@ export function engine(on: On, now: () => number = () => T0) {
     if (answers.notify === 'hang') return new Promise<never>(() => {})
     answers.notices.push(e.text)
     answers.raised.push({ title: e.title, at: now() })
+    if (answers.notify === 'malformed') return { value: { isSent: 'yes', reason: 42 } } as never
     return { value: answers.notify === 'sent' ? { isSent: true, channel: 'terminal' } : { isSent: false, reason: answers.notifyReason } } as never
   })
   on('session.surfaces', () => {

@@ -610,9 +610,12 @@ test('a failed begin and a failed list read whose notifications fail are logged 
   const band = await ui.bandText()
   expect(band).not.toContain(failed)
   expect(band).not.toContain(listFailedNotice(REASONS.listRefused))
+  expect(w.engine.notices).toContain(failed)
+  expect(w.engine.notices).toContain(listFailedNotice(REASONS.listRefused))
   const lines = await ui.logLines()
   expect(lines.filter(line => line.includes(failed))).toEqual([])
   expect(lines.filter(line => line.startsWith('Could not begin ABC-2'))).toHaveLength(1)
+  expect(lines.filter(line => line.startsWith('Could not read the desktop app\'s list of sessions, so no queued issue was begun or dropped:'))).toHaveLength(1)
 })
 
 test('a restart keeps the queue, and a claim whose begin never went is sent on the first read', async ($, on) => {

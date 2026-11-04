@@ -1659,9 +1659,10 @@ export const register: Register = (on, options) => {
   // again. Neither waits for the arming, as builder's do not, because arming
   // may read the whole status folder and the person's prompt or the turn's end
   // should not wait for that read.
-  // A prompt the person typed first lets go of a notice the band keeps, as
-  // releaseKept says, whatever the role, so a prompt made only of the app's
-  // notes, which arrives with the same origin, does not count.
+  // A prompt the person typed first lets go of a notice the band keeps,
+  // whatever the role, as releaseKept says. A prompt made only of the app's
+  // notes arrives with the same origin as a typed one, so isAppParts leaves
+  // it out.
   // A prompt made only of turn-end notes about sub sessions this parent tracks
   // or foreman checks goes on with its text replaced by its line in the log,
   // because the pane already shows the tracked ones and foreman checks the
