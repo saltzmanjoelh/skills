@@ -3338,7 +3338,8 @@ let isStateLabelQueued = false
 // whose new note the store refused. The job reads such a record as holding
 // no note until a later write replaces it, so a stale note never decides a
 // later change. The set lives in memory only, so after a restart a note
-// that it hid counts again, and that is the risk that remains.
+// that it hid counts again, which is one of the two risks that the comment
+// on settleStateLabel names.
 const staleNoteKeys = new Set<string>()
 
 function requestStateLabel($: $) {
@@ -3370,10 +3371,12 @@ function requestStateLabel($: $) {
 // with no note, is saved only once every edit the job needed succeeded: on a
 // write, the edit and the removal that the read after it may call for; when
 // the label is only recorded, the removal of any state label beside `stuck`.
-// So a failed edit, read or removal is tried again at the next look. One
-// risk remains: when that final save fails after a read that saw `stuck`,
+// So a failed edit, read or removal is tried again at the next look. Two
+// risks remain. When that final save fails after a read that saw `stuck`,
 // the note still says it saw `stuck`, so a `stuck` the session puts on
-// afterwards by its own judgement comes off at the next look.
+// afterwards by its own judgement comes off at the next look. And the set
+// of hidden notes lives in memory only, so after a restart a note it hid
+// counts again.
 async function settleStateLabel($: $) {
   const r = await read($, run)
   const s = snapshotIn(await read($, pr))

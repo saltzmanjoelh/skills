@@ -15115,6 +15115,7 @@ test('a note saved after a refused clear counts again, so a stuck the session se
   await clock.advance(30 * 60_000)
   expect(labelEdits(world).slice(editsBefore).filter(edit => edit.includes('stuck'))).toEqual([])
   expect((world.pr.labels ?? []).map(label => label.name)).toContain('stuck')
+  expectFinishedRecord(stored, 'ready-to-merge')
 })
 
 test('a refused note write hides the older note, so a stuck that was on before the step went back comes off', async ($, on) => {
