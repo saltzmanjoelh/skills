@@ -1,6 +1,6 @@
 ---
 name: wake
-description: For the parent's model only; the person starts foreman with /start-foreman. What a parent session does when the foreman mod wakes it. Use whenever a line starting "foreman: " arrives, as a prompt, appended to a running turn or as context with the person's message, to handle each sentence in it, such as a free slot, an idle sub session, a sub session stuck in cleanup, one that is gone, a sub session that writes no status file or waits only on background work, or a sub session that foreman holds no record of and that still waits after foreman's nudge, and whenever foreman refuses a start because it is off. Also use whenever the person asks a parent session, in any words, to pick, start, restart or resume an issue, because every start follows its "Starting a session" section. Also use whenever a desktop app note about a session the parent started, or a message from one, reaches the parent's model.
+description: For the parent's model only; the person starts foreman with /start-foreman. What a parent session does when the foreman mod wakes it. Use whenever a line starting "foreman: " arrives, as a prompt, appended to a running turn or as context with the person's message, to handle each sentence in it, such as a free slot, an idle sub session, a sub session stuck in cleanup, one that is gone, one whose status file has not changed for ten minutes, a sub session that writes no status file or waits only on background work, or a sub session that foreman holds no record of and that still waits after foreman's nudge, and whenever foreman refuses a start because it is off. Also use whenever the person asks a parent session, in any words, to pick, start, restart or resume an issue, because every start follows its "Starting a session" section. Also use whenever a desktop app note about a session the parent started, or a message from one, reaches the parent's model.
 user-invocable: false
 ---
 
@@ -673,12 +673,46 @@ its records makes that worktree read as holding no branch, although it then
 has the branch checked out. That needs someone acting at that moment, and a
 fresh session that tries to check out such a branch is refused by git.
 
+## <who>'s status file has not changed for <n> minutes and still shows the state <state>.
+
+`<state>` is the band's word for the state the file last showed: working,
+waiting on builder, idle, needs you, in cleanup or done. Builder rewrites a
+sub session's status file once a minute for as long as the session runs, in
+every state, so a file this old means something has stopped. Builder may have
+lost track of the session, the session may have hung, or it may have ended
+without the desktop app's list saying so. Foreman sends this line whatever the
+list shows, even when the list cannot be read, and only once for each stretch
+in which the file does not change. It does not send it for a stretch that the
+gone sentence or the idle sentence has already covered.
+
+1. Find the session in `list_sessions` whose title begins with the exact key
+   or ticket, as "Starting a session" says. When several match, or the call
+   fails, tell the person in one line.
+2. If the list shows that session not running or archived, or shows no
+   session for it at all, handle it as "<who> has not updated its status file
+   for <n> minutes and its session is not running, so restart it or release
+   the issue." says.
+3. Otherwise read only that session's last few messages, at most 6, with
+   `list_events` and a small limit.
+4. Send it one specific message with `send_message` that names the step it
+   should take next.
+5. If those messages show it is waiting on the person or on a decision, or if
+   `list_events` fails or returns nothing, tell the person in one line
+   instead.
+
+Never release the issue unless the person asks, and do not send the sub
+session a second message for the same stretch. Foreman sends this line again
+only after the file changes and then stops changing for another ten minutes.
+
 ## A line that names a ticket instead of an issue key
 
-The rules for the idle, cleanup and idle-without-a-session sentences, and for
-the background and no-status-file sentences, still apply. For the sentence
-about a status file that stopped updating, ask the person in one line,
-because a pull request cannot be looked up without an issue key.
+The rules for the idle, cleanup and idle-without-a-session sentences, for the
+background and no-status-file sentences, and for the sentence about a status
+file that has not changed, still apply. For the sentence about a status file
+that stopped updating while its session is not running, ask the person in one
+line, because a pull request cannot be looked up without an issue key. The
+same goes when the sentence about a status file that has not changed leads to
+that case.
 
 ## When the parent speaks
 
