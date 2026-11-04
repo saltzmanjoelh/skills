@@ -131,14 +131,13 @@ function trimmed(batches: Batch[]): Batch[] {
 
 // A member as a released batch keeps it: without its task ids, its last
 // turn-end reading and its mark of an engine wake, so that nothing carries
-// over to a later batch. The batch drops the deadline it had before a turn end
-// ended its last member and the wait saved beside it, which only an engine
-// wake of an open batch reads, and
-// the marks of a wake after a claim and of a claimed completion line, which
-// only an open batch reads.
+// over to a later batch. The batch drops the deadline it had before a turn
+// end ended its last member and the wait saved beside it, which only an
+// engine wake of an open batch reads, and the marks of a wake after a claim
+// and of a claimed completion line, which only an open batch reads.
 const settled = ({ id, type, ended }: BatchMember): BatchMember => ({ id, type, ended })
 function released(b: Batch, now: number): Batch {
-  const { deadlineBeforeSettle: _, retryBeforeSettle: ____, wokenAfterClaim: __, completionClaimed: ___, ...rest } = b
+  const { deadlineBeforeSettle: _savedDeadline, retryBeforeSettle: _savedWait, wokenAfterClaim: _wokenMark, completionClaimed: _claimMark, ...rest } = b
   return { ...rest, members: b.members.map(settled), heldReports: 0, deadline: null, releasedAt: now }
 }
 
