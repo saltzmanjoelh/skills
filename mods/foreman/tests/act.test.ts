@@ -269,6 +269,9 @@ test('a sub session that is not running but still listed unarchived keeps its sl
 
 const notices = (d: Decision) => d.effects.filter(e => e.kind === 'notify')
 const failed = (reason?: string): SessionsLook => ({ kind: 'failed', ...(reason === undefined ? {} : { reason }) })
+// The four reasons a read of the list answers when Claude Code saved the
+// list and foreman could not use the saved copy.
+const SAVED_FAILURES = [REASONS.savedOutside, REASONS.savedMissing, REASONS.savedTooLarge, REASONS.savedNotList]
 
 test('the notice for a failed list read is pinned', () => {
   expect(listFailedNotice(REASONS.notConnected))
@@ -298,9 +301,20 @@ test('a failure reason outside the fixed set, or none, gives the refused reason,
     const d = read(paired(), [row()], T0, { sessions: failed(reason) })
     expect(notices(d)).toEqual([{ kind: 'notify', text: listFailedNotice(REASONS.listRefused), quiet: true }])
   }
-  for (const reason of [REASONS.notConnected, REASONS.listRefused, REASONS.listUnreadable, NO_ANSWER]) {
+  for (const reason of [REASONS.notConnected, REASONS.listRefused, REASONS.listUnreadable, NO_ANSWER, ...SAVED_FAILURES]) {
     expect(notices(read(paired(), [row()], T0, { sessions: failed(reason) }))).toEqual([{ kind: 'notify', text: listFailedNotice(reason), quiet: true }])
   }
+})
+
+test('a list whose saved copy could not be used keeps a done session\'s slot and wakes no one, as a list that could not be read does', () => {
+  const done = [row({ state: 'done' })]
+  const outcome = (reason: string) => {
+    const d = read(paired(), done, T0, { sessions: failed(reason) })
+    return { standing: d.tickets.pairings[0]!.standing, reasons: d.reasons, effects: d.effects.map(e => (e.kind === 'notify' ? { ...e, text: e.text.replace(reason, '<reason>') } : e)) }
+  }
+  const unreadable = outcome(REASONS.listUnreadable)
+  expect(unreadable).toEqual({ standing: 'active', reasons: [], effects: [{ kind: 'notify', text: listFailedNotice('<reason>'), quiet: true }] })
+  for (const reason of SAVED_FAILURES) expect(outcome(reason)).toEqual(unreadable)
 })
 
 test('a pairing that no status file carried for a day is forgotten, and a younger one is kept', () => {

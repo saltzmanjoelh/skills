@@ -45,7 +45,7 @@ export const NO_ANSWER = `the desktop app did not answer within ${CALL_TIMEOUT_M
 // The reasons a failed read of the desktop app's list may show the person.
 // Any other text came from somewhere foreman does not control, so it is
 // shown as the refused reason instead.
-const LIST_FAILURES: ReadonlySet<string> = new Set([REASONS.notConnected, REASONS.listRefused, REASONS.listUnreadable, NO_ANSWER])
+const LIST_FAILURES: ReadonlySet<string> = new Set([REASONS.notConnected, REASONS.listRefused, REASONS.listUnreadable, REASONS.savedOutside, REASONS.savedMissing, REASONS.savedTooLarge, REASONS.savedNotList, NO_ANSWER])
 
 // The notification for reads of the desktop app's list that started failing,
 // with the fixed reason `why`.
