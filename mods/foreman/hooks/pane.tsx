@@ -391,14 +391,23 @@ function lightsRow(ui: Elements, v: View, busy: readonly SubRow[]) {
         : <Box key={`light-${i}`}><Text color={LIGHT_COLOR[light]}>{BUSY_CHAR}</Text></Box>)),
       ...Array.from({ length: lights.free }, (_, i) => <Box key={`light-${lights.lights.length + i}`}><Text dimColor>{FREE_CHAR}</Text></Box>),
     ]
-  const queue = queueWords(v)
   return (
     <Box key="lights" flexDirection="row" alignItems="center" gap={1}>
       {drawn}
       <Box key="busy"><Text bold>{`${busy.length} of ${v.slots} busy`}</Text></Box>
-      {queue === null ? null : queue.tone === 'plain' ? <Box key="badge"><Text>{queue.text}</Text></Box> : <Box key="badge"><Text color={TONE_COLOR[queue.tone]}>{queue.text}</Text></Box>}
+      {badgeElement(ui, queueWords(v))}
     </Box>
   )
+}
+
+// The badge after the lights: what queueWords says, in the plain color or in
+// its tone's color, or nothing when it says nothing. The band draws the same
+// words in its own row (see bandTree).
+function badgeElement(ui: Elements, queue: ReturnType<typeof queueWords>) {
+  const { Box, Text } = ui
+  if (queue === null) return null
+  if (queue.tone === 'plain') return <Box key="badge"><Text>{queue.text}</Text></Box>
+  return <Box key="badge"><Text color={TONE_COLOR[queue.tone]}>{queue.text}</Text></Box>
 }
 
 // A row's key: the issue's link when it has one, else text, in bold on a
