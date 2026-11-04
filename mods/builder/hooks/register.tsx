@@ -3320,8 +3320,8 @@ async function addLabel($: $, r: BuilderRun, name: string, remove: readonly stri
 // The state label the mod last set on each pull request, kept in the store
 // under `state-label:<repo>#<number>` as `{ label, at }`, with a `note` of
 // what a successful read of the labels saw while a job for a changed step's
-// label has not finished, so that it survives a restart. It has no session id, because the label is on the pull
-// request, whichever session set it.
+// label has not finished, so that it survives a restart. It has no session
+// id, because the label is on the pull request, whichever session set it.
 const STATE_LABEL_PREFIX = 'state-label:'
 const stateLabelKey = (target: Pick<BuilderRun, 'repo' | 'number'>) => `${STATE_LABEL_PREFIX}${target.repo}#${target.number}`
 // A record is kept far longer than a told record, because a pull request can
@@ -3356,14 +3356,15 @@ function requestStateLabel($: $) {
 // that after an edit that failed the next job can tell a `stuck` that was on
 // before the step's label changed from one the session set by its own
 // judgement afterwards. A note the store refuses is let go, because the next
-// job then sees no note for this label and writes it, which is the safe side. A new
-// label record, with no note, is saved only once every edit the job needed
-// succeeded: on a write, the edit and the removal that the read after it may
-// call for; when the label is only recorded, the removal of any state label
-// beside `stuck`. So a failed edit, read or removal is tried again at the
-// next look. One risk remains: when that final save fails after a read that
-// saw `stuck`, the note still says it saw `stuck`, so a `stuck` the session
-// puts on afterwards by its own judgement comes off at the next look.
+// job then sees no note for this label and writes it, which is the safe
+// side. A new label record, with no note, is saved only once every edit the
+// job needed succeeded: on a write, the edit and the removal that the read
+// after it may call for; when the label is only recorded, the removal of any
+// state label beside `stuck`. So a failed edit, read or removal is tried
+// again at the next look. One risk remains: when that final save fails
+// after a read that saw `stuck`, the note still says it saw `stuck`, so a
+// `stuck` the session puts on afterwards by its own judgement comes off at
+// the next look.
 async function settleStateLabel($: $) {
   const r = await read($, run)
   const s = snapshotIn(await read($, pr))
