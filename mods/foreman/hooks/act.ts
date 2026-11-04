@@ -377,10 +377,10 @@ function idleRule(s: Step, since: number, background: { task: string | null } | 
 // Whether a record may be gone: it is not done, its file has not changed
 // for GONE_MS, its pull request has not merged, and neither the gone wake nor
 // the frozen wake has already gone for this file, since both set goneWokeFor.
-// The gone rule asks it, and slotsNeedList asks
-// for the list on every read while it holds. The list is also read, less
-// often, for a stale record that this rules out, as slotsNeedList says,
-// because the over rule can act on such a record.
+// The gone rule asks it, and slotsNeedList asks for the list on every read
+// while it holds. The list is also read, less often, for a stale record that
+// this rules out, as slotsNeedList says, because the over rule can act on
+// such a record.
 function mayBeGone(p: ForemanPairing, row: SubRow, now: number): boolean {
   return row.record.state !== 'done'
     && now - row.mtimeMs > GONE_MS
@@ -477,9 +477,10 @@ function goneRule(s: Step) {
 // changes. A record that is not a stall, such as an idle one, keeps its
 // stretch as it was, so the idle rule's own nudges and wake still come. The
 // idle wake that such a record has already had still silences this rule,
-// so one wake line does not carry two sentences about one session. The caller runs it last, after the state rule and the gone rule,
-// so a gone wake on the same read goes instead of this one, and a pairing
-// that the done rule freed on this read is no longer active. It runs only on
+// so one wake line does not carry two sentences about one session. The
+// caller runs it last, after the state rule and the gone rule, so a gone wake
+// on the same read goes instead of this one, and a pairing that the done rule
+// freed on this read is no longer active. It runs only on
 // a read whose folder listing succeeded: after a failed listing the kept rows
 // still carry their old modification times, so every file would seem to age
 // and the rule would wake for each active sub session. A file rewritten with
@@ -492,9 +493,9 @@ function frozenRule(s: Step) {
   const { stretch } = s.p.acts
   const nudged = stretch !== null && stretch.wait === null && stallsOwn(stretch, s.row.mtimeMs) ? stretch : null
   if (nudged?.woke === true) return
-  const stallNudged = nudged !== null && stalledShape(s.p, s.row, s.now)
+  const woken = nudged !== null && stalledShape(s.p, s.row, s.now) ? { stretch: { ...nudged, woke: true } } : {}
   s.reasons.push({ kind: 'frozen', who: whoOf(s.row.record.issueKey, s.p.ticket), minutes: minutesOf(s.now - s.row.mtimeMs), state: s.row.record.state })
-  setActs(s, { goneWokeFor: s.row.mtimeMs, ...(stallNudged ? { stretch: { ...nudged, woke: true } } : {}) })
+  setActs(s, { goneWokeFor: s.row.mtimeMs, ...woken })
 }
 
 // Over, in any state but done: the list shows the session archived, or
@@ -667,10 +668,10 @@ export function stallsNeedList(t: ForemanTickets, rows: readonly SubRow[], now: 
 // list checks, which listCheckedAt starts, has run out. A handled stall is left
 // out of the second case because the gone rule never wakes for a stall, so
 // goneWokeFor never ends that case for it. The last case covers a record whose
-// gone wake or frozen wake went, either of which ends the second case,
-// whose pull request merged, or whose stall is handled,
-// because the over rule frees its slot once its session is archived, and with
-// no queue nothing else would read the list for it. It asks at most once
+// gone wake or frozen wake went, either of which ends the second case, whose
+// pull request merged, or whose stall is handled, because the over rule frees
+// its slot once its session is archived, and with no queue nothing else would
+// read the list for it. It asks at most once
 // every GONE_MS, a failed ask included, so such a record does not make every
 // read wait on the list while another sub session works or while the list
 // keeps failing, and an archived session still frees its slot within about
