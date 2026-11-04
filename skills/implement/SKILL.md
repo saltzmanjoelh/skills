@@ -41,6 +41,7 @@ The project's `CLAUDE.md` holds the facts below. Each fact is one line,
 | `Max rounds:` | 5 |
 | `Merge command:` | `gh pr merge <n> --merge --match-head-commit <sha>`; a project whose merges go through its own gate names that command, with `<n>` and `<sha>` in it |
 | `Checks:` | `expected` when the base branch has files under `.github/workflows`, else `none`; a project whose checks report from an outside service writes `Checks: expected` |
+| `Frontend paths:` | none; no change is frontend |
 | `## Gates` heading, one bullet per gate | detect from the manifests, confirm once, offer to write it |
 | `## Hard rules` heading | none |
 
@@ -152,6 +153,9 @@ Every command started in the background runs under its own time limit (see
 
 ### 7. Open the pull request
 
+First find out whether the change is frontend, as **A frontend change** below
+says. A frontend change opens as that paragraph says, not as the next one.
+
 Check the diff against the base lists only this change's files, check it
 for credentials (see "Rules"), then push and open it with
 `gh pr create --base <base>`. The body says what the change does and what
@@ -164,6 +168,43 @@ session. When the pull request is in a different
 repository from the session's folder, also give the watch tool `repo` and
 `checkout`, a folder inside a checkout of that repository, so the package and
 review tools can find the worktree of its head branch.
+
+**A frontend change.** The project's `Frontend paths:` fact is a
+comma-separated list of path globs, such as
+`Frontend paths: web/src/**, app/screens/**`. A line that is empty, or holds
+only commas and spaces, counts as missing, and with the fact missing no change
+is frontend. Otherwise the change is frontend when
+`git diff --no-renames --name-only origin/<base>...HEAD -- ':(glob)<first glob>' ':(glob)<second glob>'`,
+with one quoted pathspec per glob, prints at least one path. A file the change
+adds, modifies, deletes or renames counts, because each of them changes what a
+person can see. Without `--no-renames`, git reports a rename only under its new
+path, so a file moved out of a frontend path would not count. For a frontend
+change, after checking that the diff lists only this change's files, run
+`/storypr` as its section **When another skill calls it** says. When it
+returns a body file, a commit and the screenshot paths, write at the top of the
+body file any lines that the project's `CLAUDE.md` says the body must begin
+with, and make sure the body says what was measured. Check the diff about to be
+pushed for credentials, the screenshot commit included. That check reads text,
+so `/storypr`'s reading of each screenshot is the only check of what the
+screenshot shows. Then push. Replace `<screenshot sha>` in every image link of
+the body file with the full sha of the screenshot commit, so that each link
+reads `https://github.com/<owner>/<repo>/blob/<full sha>/<path>?raw=true`, and
+open the pull request with
+`gh pr create --base <base> --title "<title>" --body-file <the body file>`.
+Check that every image link resolves, with the full sha as the ref. For a
+public repository, `curl -sL -o /dev/null -w "%{http_code}" "<link>"` prints
+200; the `-L` matters, because GitHub answers such a link with a redirect. For
+a private repository, use
+`gh api "repos/<owner>/<repo>/contents/<path>?ref=<full sha>" --jq .path`.
+Correct the path or the sha with `gh pr edit <n> --body-file <file>` until
+every link resolves. Then call `mcp__builder__watch` and follow the step its
+answer names, as for any pull request.
+
+When `/storypr` returns a reason instead, it has committed nothing. Open the
+pull request the plain way, with `--title` and `--body-file`, and end the body
+with a `## Screenshots` section that says the change is frontend, that its
+screenshots are missing, and the reason. Tell the person the same in one
+sentence, and carry on without waiting for an answer.
 
 ## With the pull request open
 
@@ -190,7 +231,9 @@ time with the pull request open. That turn first checks with `gh` whether
 what the session waits on is real; if the wait is real, the session ends
 the turn, and otherwise it follows the step the prompt names.
 
-**When a turn ends.** After any push, what follows depends on `Checks:`.
+**When a turn ends.** After any push to a frontend pull request, first bring
+its screenshot section up to date, as **Screenshots on a frontend pull
+request** says. After any push, what follows depends on `Checks:`.
 Either way the mod counts the pushes and rounds again from the new state,
 and names the step **Over a limit** when a limit is passed:
 
@@ -387,6 +430,48 @@ when the limit rule makes no commit does the `Retag:` line wait for the next
 commit that is made, and until then the package keeps listing the `Tidied:`
 line as not corrected. There is no line that turns an `Area:` line into a
 `Tidied:` one.
+
+**Screenshots on a frontend pull request.** A pull request was opened as
+frontend when its body has a `## Screenshots` section, which step 7 writes only
+for a frontend change. A pull request that step 7 opened with a plain body
+keeps it, even when a later fix touches a frontend path. On a frontend pull
+request, test every commit before making it: stage the change by path, then
+run `git diff --cached --no-renames --name-only` with the pathspecs of step 7,
+before any screenshot is staged, so that a screenshot never makes its own
+commit frontend. When it prints a path, the commit touches a frontend path.
+That can be a fix at the first half's point 4, the fixes for a blocking verdict
+in the step **The newest verdict at this head requests changes**, or the second
+half's `Fix this round's cheap follow-ups` commit. Before making such a commit,
+retake the screenshots whose screens the change could alter, or all of them
+when that cannot be told, as `/storypr`'s step 2 says, and read each one to
+check it. Write each new screenshot over the file at the path that the body's
+image link names, and stage it by path in the same commit. The retake makes no
+commit and no push of its own. A commit that carries screenshots is never
+inert, because it adds binary files, so it goes to the package tool as the
+second half's point 5 says.
+
+When a retake cannot capture real screenshots, or the opening capture failed
+so that there are none to retake, the commit goes ahead without them. Its
+message then carries, after a blank line and outside the round's lists, the
+line `Screenshots not retaken: <the screenshots, or "never captured">: <the
+reason>`, so that the reason survives a restart before the push. Tell the
+person the same in one sentence, and carry on.
+
+After every push to a frontend pull request, bring its screenshot section up
+to date. It is up to date when each image link names the newest commit on the
+pull request that changed its file, which
+`git log -1 --format=%H <head> -- <path>` prints, and when every commit that
+`git log --format=%H --grep='^Screenshots not retaken:' origin/<base>..<head>`
+lists is named in the section. When it is not, write the body to a file in the
+scratchpad folder with `gh pr view <n> --json body --jq .body`, and rewrite
+only its `## Screenshots` section. Link each image by the full sha that
+`git log` printed for it. For each listed commit the section does not name,
+add one line that names the screenshots that may now be out of date, or the
+change's screens as never captured, the commit's full sha, and the reason from
+its `Screenshots not retaken:` line. Post the body with
+`gh pr edit <n> --body-file <file>`, and check the links again as step 7 says.
+When the push fails, rewrite nothing: "Commits the pull request lacks" applies,
+and the push that does carry the commit brings the section up to date.
 
 **A streak of 3.** When the package tool's first line says an area's
 streak has reached 3, launch no reviewer on that package. The stop always
