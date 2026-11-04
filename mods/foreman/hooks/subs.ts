@@ -91,9 +91,12 @@ export function nextReadDelay(rows: readonly SubRow[]): number {
   return rows.some(row => row.record.state === 'working' && !row.isStale) ? READ_SOON_MS : READ_LATER_MS
 }
 
-// How many slots are busy: every listed sub session that is not released and
-// whose state is not done, stale ones included.
-export const busyCount = (rows: readonly SubRow[]) => rows.filter(row => row.isReleased !== true && row.record.state !== 'done').length
+// Whether a sub session takes a slot: it is not released and its state is not
+// done. A stale one still takes its slot.
+export const isBusy = (row: SubRow) => row.isReleased !== true && row.record.state !== 'done'
+
+// How many slots are busy: every listed sub session that isBusy names.
+export const busyCount = (rows: readonly SubRow[]) => rows.filter(isBusy).length
 
 // How a state is shown: red, amber, or the plain text color.
 export type Tone = 'red' | 'amber' | 'plain'

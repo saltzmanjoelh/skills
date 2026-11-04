@@ -166,6 +166,20 @@ export function spentSum(t: ForemanTickets): ForemanSpend | null {
   return all.reduce<ForemanSpend>((sum, s) => ({ counts: plus(sum.counts, s.counts), usd: plusKnown(sum.usd, s.usd) }), { counts: COUNTS_NONE, usd: null })
 }
 
+// How many issues merged, and what each cost on average: the entries of the
+// spent list whose last timing reading has a merge time, and the summed
+// dollars of those of them that have a dollar figure divided by how many have
+// one, or null when none has. An entry whose cost is unknown is never counted
+// as zero. The entries folded into the earlier total count in neither,
+// because the earlier total keeps no merge times.
+export type Merged = { count: number; average: number | null }
+
+export function mergedOf(t: ForemanTickets): Merged {
+  const merged = t.spent.filter(e => typeof e.timing?.prMergedAt === 'number')
+  const known = merged.flatMap(e => (e.usd === null ? [] : [e.usd]))
+  return { count: merged.length, average: known.length === 0 ? null : known.reduce((sum, usd) => sum + usd, 0) / known.length }
+}
+
 // Four times that are all unknown.
 export const TIMES_UNKNOWN: ForemanTimes = { working: null, needsYou: null, otherWaiting: null, queued: null }
 
