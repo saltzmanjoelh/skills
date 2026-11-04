@@ -933,3 +933,27 @@ test('the last report of a batch whose deadline line was refused carries the com
   await w.clock.settle()
   expect(w.passed.map(p => p.text).filter(t => t.startsWith('builder: the time limit'))).toEqual([])
 })
+
+test('a held report from a second open batch before the release turn\'s first step leaves that turn to the model', async ($, on) => {
+  const w = world(on)
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await step($, { turnId: 't1', index: 0 })
+  await $.agent.spawn(launch('Explore'))
+  await $.agent.spawn(launch('Plan'))
+  await step($, { turnId: 't1', index: 1 })
+  await $.agent.spawn(launch('Explore'))
+  await $.agent.spawn(launch('Plan'))
+  await turnEnds($, 't1')
+  const DELTA = 'agent-4-xxxxxxxxxx'
+  expect(w.state.value?.batches.map(b => b.members.map(m => m.id))).toEqual([[ALPHA, BRAVO], [CHARLIE, DELTA]])
+  expect(await deliver($, report(ALPHA))).toEqual({ text: report(ALPHA) })
+  expect(await deliver($, report(BRAVO))).toEqual({ text: report(BRAVO), context: [completeLine(2)] })
+  expect(w.state.value?.releasing).toBe(true)
+  expect(await deliver($, report(CHARLIE))).toEqual({ text: report(CHARLIE) })
+  w.talk.messages = [assistant('Launched them.'), user(report(BRAVO)), user(report(CHARLIE))]
+  const before = w.asked.calls
+  const { chunks } = await step($, { turnId: 't3', index: 0 })
+  expect(w.asked.calls).toBe(before + 1)
+  expect(texts(chunks)).toEqual(['From the model.', 'stop'])
+  expect(w.state.value?.marker).toBe(0)
+})
