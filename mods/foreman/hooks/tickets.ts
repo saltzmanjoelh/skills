@@ -341,7 +341,7 @@ export const isReserved = (p: ForemanPairing, now: number, goneMs: number) =>
 // proposal card that has no desktop session id more than `goneMs` after it
 // was paired. While its start call may still be out, such a start is shown.
 // After that it most likely never starts, and counting it would hold back a
-// slot, and the slot wake, until it is forgotten a day later. Once its
+// slot, and the dry-queue report, until it is forgotten a day later. Once its
 // session starts, its status file gives it the id, and it shows again at its
 // place. This list feeds the band and the pane. Whether the dry-queue report
 // is armed again is decided by dryRearmed in act.ts through waitingUnclaimed,
