@@ -110,10 +110,12 @@ export function noticeArrived(raw: StoredReport, notice: BandNotice, at: number)
 // and was not counted yet has failed: the notice is kept. When a later notice
 // is in the band already, as when this call answered last, that one stays the
 // newest and this one joins the count, and the later one counts too, so
-// neither is lost.
+// neither is lost. A value the person's typing released is not a later
+// notice, even though typing moved its `at` to the moment they typed: they
+// have seen it, so it keeps its ten minutes and this notice is kept alone.
 export function noticeFailed(raw: StoredReport, notice: BandNotice, at: number): StoredReport {
   const kept = keptOf(raw)
-  if (raw !== null && typeof raw.text === 'string' && typeof raw.at === 'number' && raw.at > at) {
+  if (raw !== null && raw.released !== true && typeof raw.text === 'string' && typeof raw.at === 'number' && raw.at > at) {
     return { text: raw.text, at: raw.at, kept: Math.max(kept, 1) + notice.count }
   }
   return { text: notice.newest, at, kept: kept + notice.count }
@@ -121,9 +123,10 @@ export function noticeFailed(raw: StoredReport, notice: BandNotice, at: number):
 
 // The band's value once the person types: a kept notice shows for
 // REPORT_SHOWN_MS more from `now`, alone, since the count said "since your
-// last message". Any other value is left as it was.
+// last message", and is marked `released` so that noticeFailed does not take
+// it for a notice that arrived at `now`. Any other value is left as it was.
 export function afterTyped(raw: StoredReport, now: number): StoredReport {
-  return raw === null || keptOf(raw) === 0 ? raw : { ...raw, at: now, kept: 0 }
+  return raw === null || keptOf(raw) === 0 ? raw : { text: raw.text, at: now, kept: 0, released: true }
 }
 
 // The report the band shows, from the value foreman keeps in $.state. A kept

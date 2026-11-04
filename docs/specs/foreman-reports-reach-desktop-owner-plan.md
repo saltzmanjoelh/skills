@@ -91,8 +91,12 @@ It adds no new files and no dependencies.
   except that when the band already holds a notice that arrived later, that
   one stays the newest and both are counted, so a call that answers last
   never puts an older sentence above a newer one.
-- `afterTyped(raw, now)` turns a kept value into `{ text, at: now, kept: 0 }`,
-  and returns any other value unchanged.
+- `afterTyped(raw, now)` turns a kept value into
+  `{ text, at: now, kept: 0, released: true }`, and returns any other value
+  unchanged. `noticeFailed` does not take a released value for a later
+  notice, so a call that was still waiting when the person typed, and fails
+  after, keeps its own notice alone rather than keeping the released one
+  again.
 - `shownReport(raw, now)` shows a kept value whatever its age, followed by
   " (<kept − 1> more since your last message.)" when `kept` is above 1. Any
   other value keeps today's ten-minute rule. The band's `printable` already
@@ -114,8 +118,10 @@ count from one" reads the same way.
   malformed answer falls on the safe side.
 - **Read `at` before the call** (from the robust plan), so a delivered report's
   ten minutes start when they start today.
-- **The set of logged reasons lives inside `register()`** (from a risk the
-  extensible plan named), so each load and each test starts empty.
+- **The set of logged reasons starts empty on every load** (from a risk the
+  extensible plan named), so each load and each test starts empty. It lives
+  at the top level of `register.tsx`, which the engine evaluates afresh on
+  every load.
 
 ## Rejected alternatives
 
@@ -129,8 +135,10 @@ count from one" reads the same way.
   undercount of its own. A review found that writing the band only after the
   call answered made a report late, lost on a reload during the call, or
   shown under an older sentence, so the band is now told before the call and
-  again on a failure, using the arrival time already stored, with no new
-  field.
+  again on a failure, using the arrival time already stored. A later review
+  found that typing, by moving the stored time, made a released notice look
+  like a later one to a call that failed after the person typed, so typing
+  now also marks the value as released.
 - **Logging the reason line without waiting for it** (the robust plan). It
   makes the order of log lines a race, so the test that reads the newest line
   after a failed needs-you notice would have to change, and tests would lose

@@ -272,9 +272,11 @@ declare module 'claude-code' {
       // the band can show it for a while, or null before the first. `kept`
       // counts the notices kept since the person last typed: while it is
       // above 0 the band shows the text whatever its age, and when it is 0 or
-      // missing the band shows it for ten minutes from `at`. It is kept in
-      // $.state only, so it outlives a hot reload but not a restart.
-      report: { text: string; at: number; kept?: number } | null
+      // missing the band shows it for ten minutes from `at`. `released` says
+      // that the person's typing let go of a kept notice and moved `at` to
+      // that moment. It is kept in $.state only, so it outlives a hot reload
+      // but not a restart.
+      report: { text: string; at: number; kept?: number; released?: true } | null
     }
   }
 }

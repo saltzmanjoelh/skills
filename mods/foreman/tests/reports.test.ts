@@ -525,7 +525,12 @@ test('the band\'s value: a failure or a kept value adds to the count, typing rel
   // later one as the newest, and counts both.
   expect(noticeFailed({ text: MERGED, at: at + 5, kept: 0 }, report, at)).toEqual({ text: MERGED, at: at + 5, kept: 2 })
   expect(noticeFailed({ text: MERGED, at: at + 5, kept: 2 }, report, at)).toEqual({ text: MERGED, at: at + 5, kept: 3 })
-  expect(afterTyped({ text: OPENED, at, kept: 3 }, at + 5)).toEqual({ text: OPENED, at: at + 5, kept: 0 })
+  expect(afterTyped({ text: OPENED, at, kept: 3 }, at + 5)).toEqual({ text: OPENED, at: at + 5, kept: 0, released: true })
+  // A notice whose call was still waiting when the person typed, and failed
+  // after, is kept alone: the released one is not a later notice, so it is
+  // neither counted again nor kept past its ten minutes.
+  const released = afterTyped({ text: MERGED, at: at + 1, kept: 1 }, at + 9)
+  expect(noticeFailed(released, report, at)).toEqual({ text: OPENED, at, kept: 1 })
   expect(afterTyped(shown, at + 5)).toBe(shown)
   expect(shownReport({ text: OPENED, at, kept: 1 }, at + 100 * REPORT_SHOWN_MS)).toBe(OPENED)
   expect(shownReport({ text: OPENED, at, kept: 3 }, at + 100 * REPORT_SHOWN_MS)).toBe(`${OPENED} (2 more since your last message.)`)

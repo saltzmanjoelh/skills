@@ -484,11 +484,10 @@ type NotifyFailure = { key: string; words: string; line: string }
 // noticeArrived in pane.tsx), so it never waits on the call, and again when
 // the call fails (see noticeFailed), so a notice whose notification failed
 // stays in the band until the person next types; a failed write of the band
-// loses only that. The
-// first failure for each reason in this load then logs one line naming the
-// reason and the surfaces attached. Last, a notice that is not `quiet`, whose
-// text no other log line holds, logs its own line, so every notice gives one
-// line in the log.
+// loses only that. The first failure for each reason in this load then logs
+// one line naming the reason and the surfaces attached. Last, a notice that
+// is not `quiet`, whose text no other log line holds, logs its own line, so
+// every notice gives one line in the log.
 async function notify($: $, text: string, { quiet = false, band }: { quiet?: boolean; band?: BandNotice } = {}) {
   const at = await $.clock.now()
   let counted = false
@@ -1673,9 +1672,9 @@ export const register: Register = (on, options) => {
   // may read the whole status folder and the person's prompt or the turn's end
   // should not wait for that read.
   // A prompt the person typed first lets go of a notice the band keeps,
-  // whatever the role, for the reason releaseKept gives. A prompt made only of the app's
-  // notes arrives with the same origin as a typed one, so isAppParts leaves
-  // it out.
+  // whatever the role, for the reason releaseKept gives. A prompt made only
+  // of the app's notes arrives with the same origin as a typed one, so
+  // isAppParts leaves it out.
   // A prompt made only of turn-end notes about sub sessions this parent tracks
   // or foreman checks goes on with its text replaced by its line in the log,
   // because the pane already shows the tracked ones and foreman checks the
