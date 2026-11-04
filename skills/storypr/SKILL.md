@@ -187,7 +187,11 @@ do only the following, in this order, and leave the push and the pull request
 to that skill.
 
 1. Read the branch as step 1 says, capture real screenshots as step 2 says,
-   and read each one to check that it is the real screen.
+   and read each one to check that it is the real screen and that it shows no
+   credential, token or key and no real person's name, email address or other
+   personal details. Take a screenshot that fails this check again with data
+   that shows none, or leave it out and say in the body which screen is
+   missing and why. A screenshot that fails the check is never committed.
 2. Commit the screenshots in one commit, staging each file by its path, never
    with a glob.
 3. Write the body, laid out as step 4 says, to a file in the session's

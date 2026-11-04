@@ -185,8 +185,8 @@ returns a body file, a commit and the screenshot paths, write at the top of the
 body file any lines that the project's `CLAUDE.md` says the body must begin
 with, and make sure the body says what was measured. Check the diff about to be
 pushed for credentials, the screenshot commit included. That check reads text,
-so `/storypr`'s reading of each screenshot is the only check of what the
-screenshot shows. Then push. Replace `<screenshot sha>` in every image link of
+so `/storypr`'s reading of each screenshot, which looks for credentials and
+personal details, is the only check of what the screenshot shows. Then push. Replace `<screenshot sha>` in every image link of
 the body file with the full sha of the screenshot commit, so that each link
 reads `https://github.com/<owner>/<repo>/blob/<full sha>/<path>?raw=true`, and
 open the pull request with
@@ -434,8 +434,11 @@ line as not corrected. There is no line that turns an `Area:` line into a
 **Screenshots on a frontend pull request.** A pull request was opened as
 frontend when its body has a `## Screenshots` section, which step 7 writes only
 for a frontend change. A pull request that step 7 opened with a plain body
-keeps it, even when a later fix touches a frontend path. On a frontend pull
-request, test every commit before making it: stage the change by path, then
+keeps it, even when a later fix touches a frontend path. The rule applies only
+while the `Frontend paths:` fact names at least one glob, because
+`git diff --cached --name-only` with no pathspec lists every staged file; with
+the fact missing or empty, nothing below applies, whatever the body holds. On a
+frontend pull request, test every commit before making it: stage the change by path, then
 run `git diff --cached --no-renames --name-only` with the pathspecs of step 7,
 before any screenshot is staged, so that a screenshot never makes its own
 commit frontend. When it prints a path, the commit touches a frontend path.
@@ -444,7 +447,8 @@ in the step **The newest verdict at this head requests changes**, or the second
 half's `Fix this round's cheap follow-ups` commit. Before making such a commit,
 retake the screenshots whose screens the change could alter, or all of them
 when that cannot be told, as `/storypr`'s step 2 says, and read each one to
-check it. Write each new screenshot over the file at the path that the body's
+check it as point 1 of `/storypr`'s section **When another skill calls it**
+says. A screenshot that fails that check counts as not retaken. Write each new screenshot over the file at the path that the body's
 image link names, and stage it by path in the same commit. The retake makes no
 commit and no push of its own. A commit that carries screenshots is never
 inert, because it adds binary files, so it goes to the package tool as the
@@ -462,10 +466,14 @@ to date. It is up to date when each image link names the newest commit on the
 pull request that changed its file, which
 `git log -1 --format=%H <head> -- <path>` prints, and when every commit that
 `git log --format=%H --grep='^Screenshots not retaken:' origin/<base>..<head>`
-lists is named in the section. When it is not, write the body to a file in the
+lists and that is not settled is named in the section, and no settled one is.
+A listed commit is settled when every screenshot its line names has a newer
+commit on the pull request, which the same `git log -1` shows; a line for
+screens never captured is never settled. When the section is not up to date, write the body to a file in the
 scratchpad folder with `gh pr view <n> --json body --jq .body`, and rewrite
 only its `## Screenshots` section. Link each image by the full sha that
-`git log` printed for it. For each listed commit the section does not name,
+`git log` printed for it, and drop the line of each settled commit. For each
+listed commit that is not settled and that the section does not name,
 add one line that names the screenshots that may now be out of date, or the
 change's screens as never captured, the commit's full sha, and the reason from
 its `Screenshots not retaken:` line. Post the body with
