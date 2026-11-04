@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PromptSubmitInput, Register, ResolveInput, ToolCallResult } from 'claude-code'
 
 import { checkOutcome, clampedDue, endsOf, isClaimed, soonestDue, withNote, withoutPaired, type CheckDone } from './checks'
-import { CALL_TIMEOUT_MS, decide, desktopOf, freeSlots, GONE_MS, keptByUnreadList, needsList, NO_ANSWER, slotOutcome, startWaits, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
+import { CALL_TIMEOUT_MS, decide, desktopOf, freeSlots, GONE_MS, keptByUnreadList, needsList, NO_ANSWER, releasedIn, slotOutcome, startWaits, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
 import { isSvgSurface } from './art'
 import { becameParentAnswer, COMMAND, commandOf, PASSED_ON, PASTED_LINE, pastedCommandIn, slotsAnswer, type Command } from './commands'
 import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, failureLine, linkedFamily, listSessions, NUDGE_TEXT, openSession, readHeader, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
@@ -19,7 +19,7 @@ import { afterRead, nameOf, nextReadDelay, READ_LATER_MS, rowsOf, type FileRead,
 import { printable } from './text'
 import {
   addWork, briefFor, carriesTicket, fallbackOf, hasWork, isOffRefused, joinOwners, localIdIn, newPairing, nextPlace, NO_TICKET_SENTENCE, OFF_LOG, OFF_REFUSAL, OUTBOX_EMPTY, ownsTicket,
-  runsImplement, shownRows, ticketsIn, ticketsKey, TICKETS_EMPTY, waitingBrief, waitingUnclaimed, WAITING_SENTENCE, withOffRefusal, withUnwatched,
+  runsImplement, shownRows, ticketsIn, ticketsKey, TICKETS_EMPTY, waitingBrief, WAITING_SENTENCE, withOffRefusal, withUnwatched,
 } from './tickets'
 import { REASON_WORDS, splitReasons, wakeLine, whoOf } from './wake'
 
@@ -818,11 +818,26 @@ function withSlotOutcome(t: ForemanTickets, outcome: SlotOutcome): ForemanTicket
   return { ...t, outbox: addWork(t.outbox, { logs: [], effects: [], lines: [wakeLine([outcome.reason])!] }) }
 }
 
-// After Release freed a slot: a read begins the first waiting sub session
-// when one waits unclaimed, and otherwise the parent is woken with the number
-// of slots free. Nothing happens when no slot is free.
-async function slotFreed($: $) {
-  if (waitingUnclaimed(ticketsIn(await read($, tickets)), await $.clock.now(), GONE_MS).length > 0) {
+// After Release freed a slot. When a sub session waited unclaimed in the
+// ledger update that released the pairing, that update also carried the
+// released issue's name in keptSlots, and `waits` is true, so a read is asked
+// for, which decides the slot as if it had freed on that read: a claim takes
+// the name, a list that does not show the waiting session surely open wakes
+// the parent with the kept sentence, a list that cannot be read keeps
+// carrying the name, and once nobody waits unclaimed the name wakes the
+// parent with the slot-free sentence. A read already under way decides on the
+// live ledger inside its own update, so it either takes the name or leaves it
+// stored for the next scheduled read, which is always armed. A name the
+// ledger's reader would drop, from a damaged ticket, is not carried, so no
+// read counts that slot as freed: it ends in neither a claim nor a wake, and
+// stays idle until another slot frees or a kept sentence wakes the parent, as
+// it did before Release carried names. When nobody waited, the parent is
+// woken at once with the number of slots free, and nothing happens when no
+// slot is free. The verdict comes from the release's own write rather than a
+// second look at the ledger, which could find nobody waiting after a read had
+// already claimed with the name and so handle the slot twice.
+async function slotFreed($: $, waits: boolean) {
+  if (waits) {
     later($, () => readNow($))
     return
   }
@@ -833,25 +848,26 @@ async function slotFreed($: $) {
 
 // The Release button: the row's ticket is released, which frees its slot
 // without archiving the session or touching its status file. The row stays
-// in the pane, dimmed, until its file leaves the folder.
+// in the pane, dimmed, until its file leaves the folder. When a sub session
+// waits unclaimed in the queue, the same ledger update keeps the freed slot
+// for it, as slotFreed says.
 async function releaseRow($: $, file: string) {
   const row = (await shownNow($)).find(r => r.file === file && r.isReleased !== true)
   if (row === undefined) return
+  const now = await $.clock.now()
   let released = false
+  let waits = false
   await writeTickets($, t => {
-    released = false
-    return {
-      ...t,
-      pairings: t.pairings.map(p => {
-        if (!ownsTicket(p, row) || p.standing !== 'active') return p
-        released = true
-        return { ...p, standing: 'released' }
-      }),
-    }
+    // The store may run this again when another write got in first, so the
+    // verdict is taken from the last run.
+    const out = releasedIn(t, row, now)
+    released = out.released
+    waits = out.waits
+    return out.tickets
   })
   if (!released) return
   await addLog($, `Released ${nameOf(row)}; its session and its status file are left as they are.`)
-  await slotFreed($)
+  await slotFreed($, waits)
 }
 
 // The tool.call hook on start_session, in a parent: a forked start and a

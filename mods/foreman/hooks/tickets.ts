@@ -375,8 +375,9 @@ const unwatchedIn = (raw: unknown): string[] => [...new Set(strings(raw).filter(
 // The kept slots read tolerantly: only names a wake line may carry, the
 // newest MAX_PAIRINGS, so a ledger from before slots were kept reads as
 // keeping none. A name may repeat, because two sub sessions can carry the
-// same issue key and each freed a slot of its own.
-const keptSlotsIn = (raw: unknown): string[] => strings(raw).filter(isWhoName).slice(-MAX_PAIRINGS)
+// same issue key and each freed a slot of its own. Every write of the list
+// goes through it too, so the ledger never stores a name its reader drops.
+export const keptSlotsIn = (raw: unknown): string[] => strings(raw).filter(isWhoName).slice(-MAX_PAIRINGS)
 
 // Stored spending, or null unless its counts are sound and its dollars are a
 // dollar figure or null.
