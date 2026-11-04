@@ -583,7 +583,13 @@ test('raising the slot count while the desktop app\'s list fails begins nothing 
   expect(ledger(w).keptSlots).toEqual([])
   expect(ledger(w).pairings.filter(p => p.queue !== null).map(p => [p.issueKey, p.queue!.claim])).toEqual([['ABC-2', null], ['ABC-3', null]])
   expect(w.engine.notices).toEqual([listFailedNotice(REASONS.listRefused)])
-  expect(await ui.paneText()).toContain(`Could not read the desktop app's list of sessions, so no queued issue was begun or dropped: ${REASONS.listRefused}.`)
+  // The pane folds a line that repeats into the newest entry with a count.
+  // Foreman reads at least once a minute, so three minutes of failed reads
+  // count the line at least three times.
+  const failedLine = `Could not read the desktop app's list of sessions, so no queued issue was begun or dropped: ${REASONS.listRefused}.`
+  const newest = await ui.newestLog()
+  expect(newest.startsWith(`${failedLine} (`)).toBe(true)
+  expect(Number(newest.match(/\((\d+) times\)$/)?.[1])).toBeGreaterThanOrEqual(3)
   w.desktop.list = 'ok'
   await minutesPass(w, 1, live)
   expect(begins(w)).toEqual(['local_new2', 'local_new3'])

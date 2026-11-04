@@ -80,8 +80,9 @@ No code in `mods/foreman/hooks` changes.
 ## Verification
 
 - A test in `mods/foreman/tests/queued.test.ts`: with one slot, one session
-  busy and two waiting, the list fails, the count is raised to three, and
-  several reads pass. No session is begun, the parent's model gets no
+  busy and two waiting, the list fails, the count is raised to four, which
+  leaves one new slot over once both waiting sessions begin, and several
+  reads pass. No session is begun, the parent's model gets no
   prompt, the ledger keeps no slot name, and the only notification is the
   list-failed one. Then the list comes back, and the next read begins both
   waiting sessions with the "in a free slot." report and no prompt.
