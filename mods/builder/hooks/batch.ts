@@ -292,11 +292,14 @@ export function afterMemberStop(state: BatchState, id: string, listed: string[],
   const endsLastMember = members.every(m => m.ended) && !batch.members.every(m => m.ended)
   if (!endsLastMember) return { ...state, batches: state.batches.map(b => (b === batch ? { ...batch, members } : b)) }
   const deadline = Math.min(batch.deadline ?? Infinity, now + BATCH_SETTLE_MS)
-  const { retryBeforeSettle: _, ...unsaved } = batch
-  const settledBatch: Batch = batch.fired === true
-    ? { ...batch, members, deadline }
-    : { ...unsaved, members, deadline, deadlineBeforeSettle: batch.deadline, ...(batch.retryMs === undefined ? {} : { retryBeforeSettle: batch.retryMs }) }
-  return { ...state, batches: state.batches.map(b => (b === batch ? settledBatch : b)) }
+  const withSettled = (settledBatch: Batch): BatchState => ({ ...state, batches: state.batches.map(b => (b === batch ? settledBatch : b)) })
+  if (batch.fired === true) return withSettled({ ...batch, members, deadline })
+  // A wait saved at an earlier turn end belongs to the deadline saved then, so
+  // it is removed before this turn end saves the current deadline, and only
+  // the batch's current wait, if it has one, is saved beside it.
+  const { retryBeforeSettle: _, ...withoutSavedWait } = batch
+  const savedWait = batch.retryMs === undefined ? {} : { retryBeforeSettle: batch.retryMs }
+  return withSettled({ ...withoutSavedWait, members, deadline, deadlineBeforeSettle: batch.deadline, ...savedWait })
 }
 
 // The summary the engine writes when an agent finished, as the whole text of
