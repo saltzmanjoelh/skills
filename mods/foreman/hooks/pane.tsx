@@ -7,14 +7,14 @@ import type { Elements as EngineElements, PluginState } from 'claude-code'
 import type { ForemanFolds, ForemanLogLine, ForemanSpend, ForemanTimes } from '../types'
 import { hasSvg, svgWidth } from './art'
 import {
-  BUSY_CHAR, FREE_CHAR, LIGHT_OF, lightsOf, lightsSvg, lightsText, lightsWidth, LIGHTS_SVG_HEIGHT, SEGMENT_CHAR, segmentsOf, stageBarOf, stagesSvg, stagesText, STAGES_SVG_HEIGHT,
+  BUSY_CHAR, FREE_CHAR, LIGHT_OF, lightsOf, lightsSvg, lightsText, lightsWidth, LIGHTS_SVG_HEIGHT, SEGMENT_CHAR, segmentsOf, stageBarOf, stagesCount, stagesSvg, stagesText, STAGES_SVG_HEIGHT,
   type Light,
 } from './glance'
 import { linkOf } from './links'
 import { markersLine, type MarkersRecord } from './markers'
 import type { BuildState } from './record'
 import { plusKnown, spendOf, spendWords, TIMES_UNKNOWN, type Merged } from './spend'
-import { STAGES, stageLabel } from './stages'
+import { stageLabel } from './stages'
 import {
   ageWords, busyCount, chipParts, chipText, fitChips, isBusy, isProbablyHung, keyOf, moreWords, SEPARATOR, STATE_LOOK, staleWords, untilWords, waitWords, type SubRow,
   type Tone,
@@ -66,8 +66,13 @@ export type View = {
   // The sub sessions that wait in the queue, in the order they begin, while
   // the session is a parent, else none.
   queued: QueuedEntry[]
-  // Whether foreman counts a slot as free, while the session is a parent.
+  // Whether foreman counts a slot as free, while the session is a parent and
+  // its ledger could be read.
   isSlotFree: boolean
+  // Whether the ledger could be read, while the session is a parent. When it
+  // could not, nothing is known about which slots are busy, so the pane draws
+  // no lights and no count of busy slots.
+  isLedgerRead: boolean
   // Which of the pane's rows the person unfolded. Only the pane's view reads
   // them, so in the band's view every row is folded.
   folds: ForemanFolds
@@ -366,9 +371,17 @@ export const RELEASED = 'released'
 // the band words it. The lights are a drawing on a surface that draws images,
 // whose text alternative is the terminal's characters, and a character each
 // on the terminal: `●` in its light's color, dimmed when muted, and `○`
-// dimmed for a free slot.
+// dimmed for a free slot. When the ledger could not be read, which slots are
+// busy is unknown, so the row says so and draws no lights and no badge.
 function lightsRow(ui: Elements, v: View, busy: readonly SubRow[]) {
   const { Box, Text } = ui
+  if (!v.isLedgerRead) {
+    return (
+      <Box key="lights" flexDirection="row" alignItems="center" gap={1}>
+        <Box key="busy"><Text dimColor>{`busy slots unknown of ${v.slots}`}</Text></Box>
+      </Box>
+    )
+  }
   const lights = lightsOf(busy, v.slots)
   const drawn = hasSvg(ui)
     ? [<Box key="lights-drawing"><ui.Svg source={lightsSvg(lights)} alt={lightsText(lights)} width={lightsWidth(lights)} height={LIGHTS_SVG_HEIGHT} /></Box>]
@@ -410,13 +423,18 @@ function stagesRow(ui: Elements, row: SubRow, columns: number | undefined) {
     const width = drawingWidth(columns)
     return <Box key={`stages-${row.file}`}><ui.Svg source={stagesSvg(bar, width)} alt={stagesText(bar)} width={width} height={STAGES_SVG_HEIGHT} /></Box>
   }
-  const cells = segmentsOf(bar).map(s => SEGMENT_CHAR[s])
   const at = bar.current
+  // With no stage yet nothing is filled or highlighted, so the whole bar is
+  // dimmed.
+  if (at === null) {
+    return <Box key={`stages-${row.file}`} flexDirection="row"><Box key={`stage-after-${row.file}`}><Text dimColor>{stagesText(bar)}</Text></Box></Box>
+  }
+  const cells = segmentsOf(bar).map(s => SEGMENT_CHAR[s])
   return (
     <Box key={`stages-${row.file}`} flexDirection="row">
-      <Box key={`stage-before-${row.file}`}><Text>{at === null ? cells.join('') : cells.slice(0, at).join('')}</Text></Box>
-      {at === null ? null : <Box key={`stage-now-${row.file}`}><Text color={bar.isRed ? 'error' : 'suggestion'}>{cells[at]}</Text></Box>}
-      <Box key={`stage-after-${row.file}`}><Text dimColor>{`${at === null ? '' : cells.slice(at + 1).join('')} ${bar.done} of ${STAGES.length}`}</Text></Box>
+      <Box key={`stage-before-${row.file}`}><Text>{cells.slice(0, at).join('')}</Text></Box>
+      <Box key={`stage-now-${row.file}`}><Text color={bar.isRed ? 'error' : 'suggestion'}>{cells[at]}</Text></Box>
+      <Box key={`stage-after-${row.file}`}><Text dimColor>{`${cells.slice(at + 1).join('')} ${stagesCount(bar)}`}</Text></Box>
     </Box>
   )
 }

@@ -69,9 +69,12 @@ only for the pane.
   for one light for each busy sub session.
 - **A `<title>` holding record text in the stage drawing** (most-robust). It
   puts text in a drawing where none is needed.
-- **Separate `folds.ts` and `log.ts` modules** (most-robust). They add
-  structure without behavior; the pure helpers live in `glance.ts` and
-  `register.tsx` beside their callers.
+- **A separate `folds.ts` module** (most-robust). It adds structure without
+  behavior; the pure helpers for the fold states live in `glance.ts` beside
+  the drawings. The same plan's separate `log.ts` was first rejected too, but
+  review added it: the log's rewrite after a failed notification grew into
+  several pure helpers with their own tests, and keeping them out of
+  `register.tsx` lets those tests import them without the hooks.
 
 ## State and its edge cases
 

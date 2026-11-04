@@ -240,7 +240,7 @@ for (const surface of SURFACES) {
   })
 }
 
-test('the badge after the lights says how many wait, queue empty in the warning color, or nothing, as the band does', async ($, on) => {
+test('the badge after the lights counts the sub sessions that wait, in the plain color', async ($, on) => {
   const waits = newPairing('ft-ABC-2', 'local_ABC-2', T0, 'ABC-2', { place: 1, claim: null })
   const queued = await parent($, on, 1, { 'a.json': busy('ABC-1') }, 'terminal', [waits])
   const badge = await queued.ui.pane.find({ key: 'badge' })
@@ -286,13 +286,22 @@ for (const surface of SURFACES) {
   })
 }
 
-test('a card with no stage yet fills nothing and its line says so', async ($, on) => {
-  const { ui } = await parent($, on, 2, { 'a.json': busy('ABC-1', 'working', { stageDone: 4 }) }, 'desktop')
-  await ui.pane.redraw()
-  const source = String(held(await ui.pane.find({ key: 'stages-a.json' }))?.props?.source)
-  expect([...source.matchAll(/<rect class="(\w+)"/g)].map(m => m[1])).toEqual(Array(9).fill('se'))
-  expect((await ui.pane.find({ key: 'line-a.json' }))?.text).toContain('no stage yet')
-})
+for (const surface of SURFACES) {
+  test(`on the ${surface}, a card with no stage yet fills nothing and its line says so`, async ($, on) => {
+    const { ui } = await parent($, on, 2, { 'a.json': busy('ABC-1', 'working', { stageDone: 4 }) }, surface)
+    await ui.pane.redraw()
+    if (surface === 'desktop') {
+      const source = String(held(await ui.pane.find({ key: 'stages-a.json' }))?.props?.source)
+      expect([...source.matchAll(/<rect class="(\w+)"/g)].map(m => m[1])).toEqual(Array(9).fill('se'))
+    } else {
+      expect(await ui.pane.find({ key: 'stage-now-a.json' })).toBeUndefined()
+      expect(await ui.pane.find({ key: 'stage-before-a.json' })).toBeUndefined()
+      const after = await ui.pane.find({ key: 'stage-after-a.json' })
+      expect([after?.text, held(after)?.props?.dimColor]).toEqual(['░░░░░░░░░ 0 of 9', true])
+    }
+    expect((await ui.pane.find({ key: 'line-a.json' }))?.text).toContain('no stage yet')
+  })
+}
 
 test('a card shows its key, title, state, stage, pull request, time worked and cost, and its open button opens the sub session', async ($, on) => {
   const { w, ui } = await parent($, on, 2, {
@@ -391,6 +400,24 @@ test('a ledger that cannot be read leaves the tiles and the merged count unknown
   expect((await ui.pane.find({ key: 'tile-merged' }))?.text).toContain('unknown')
   expect((await ui.pane.find({ key: 'tile-merged' }))?.text).not.toContain('Merged 0')
   expect((await ui.pane.find({ key: 'tile-spent' }))?.text).toContain('unknown')
+})
+
+test('a ledger that cannot be read draws no slot lights, says the busy slots are unknown and shows no badge', async ($, on) => {
+  const w = world(on, { store: { 'parent:session-1': { isOn: true, slots: 2 }, [ticketsKey('session-1')]: { ...TICKETS_EMPTY, spent: [] } } })
+  let fails = false
+  on('state.get', ($, e, next) => (fails && e.plugin === 'foreman' && e.key === 'tickets' ? { deny: 'the state is gone' } as never : next(e)))
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await w.clock.settle()
+  await ui.pane.redraw()
+  expect((await ui.pane.find({ key: 'busy' }))?.text).toBe('0 of 2 busy')
+  expect((await ui.pane.find({ key: 'badge' }))?.text).toBe('queue empty')
+  fails = true
+  await ui.pane.redraw()
+  expect((await ui.pane.find({ key: 'busy' }))?.text).toBe('busy slots unknown of 2')
+  expect(await ui.pane.find({ key: 'light-0' })).toBeUndefined()
+  expect(await ui.pane.find({ key: 'badge' })).toBeUndefined()
 })
 
 for (const surface of SURFACES) {

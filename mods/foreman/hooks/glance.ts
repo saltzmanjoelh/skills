@@ -117,7 +117,10 @@ export const SEGMENT_CHAR: Record<Segment, string> = { done: 'â–ˆ', current: 'â–
 
 // The bar as text, which is also the drawing's text alternative: a cell for
 // each stage, then how many are done out of nine.
-export const stagesText = (bar: StageBar) => `${segmentsOf(bar).map(s => SEGMENT_CHAR[s]).join('')} ${bar.done} of ${STAGES.length}`
+export const stagesText = (bar: StageBar) => `${segmentsOf(bar).map(s => SEGMENT_CHAR[s]).join('')} ${stagesCount(bar)}`
+
+// How many stages are done out of nine, as the bar's text ends.
+export const stagesCount = (bar: StageBar) => `${bar.done} of ${STAGES.length}`
 
 // The height of the stage bar's drawing, in CSS pixels, and the gap between
 // its segments.

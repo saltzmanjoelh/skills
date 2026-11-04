@@ -881,8 +881,9 @@ async function ownSpend($: $) {
 // parent's pane shows them. The count of status messages is given only in a
 // parent too, and reads no state. The sub sessions that wait and whether a
 // slot is free come from the same ledger read, and only in a parent. A
-// ledger that cannot be read draws no rows and no queue, and leaves the sums
-// and the merged count unknown, rather than failing the pane. The fold
+// ledger that cannot be read draws no rows and no queue, counts no slot as
+// free, and leaves the busy slots, the sums and the merged count unknown,
+// rather than failing the pane. The fold
 // states are read only for the pane, which alone draws them.
 async function view($: $, isPane: boolean): Promise<View> {
   const settings = parentIn(await read($, parent))
@@ -916,7 +917,8 @@ async function view($: $, isPane: boolean): Promise<View> {
       waitedMs: now - p.pairedAt,
       place: i + 1,
     })),
-    isSlotFree: ledger !== null && freeSlotsOfShown(ledger, rows, now, slots) > 0,
+    isSlotFree: ledger !== null && isKnown && freeSlotsOfShown(ledger, rows, now, slots) > 0,
+    isLedgerRead: isKnown,
     folds: isPane ? foldsIn(await read($, folds)) : FOLDS_CLOSED,
     merged: isSummed ? mergedOf(ledger) : null,
   }
