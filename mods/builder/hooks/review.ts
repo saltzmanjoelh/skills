@@ -516,8 +516,9 @@ export function verdictsLine(head: string, spec: Verdict, adversarial: Verdict):
 }
 
 // Shapes of credentials that must never reach a pull request. A false alarm
-// costs one rewrite of the body; a miss publishes a secret.
-const SECRET_SHAPES: [string, RegExp][] = [
+// costs one rewrite of the body; a miss publishes a secret. The update of the
+// linked checkout removes the same shapes from what it quotes.
+export const SECRET_SHAPES: [string, RegExp][] = [
   ['a GitHub token', /\b(gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})\b/],
   ['an API key beginning sk-', /\bsk-[A-Za-z0-9_-]{20,}\b/],
   ['an AWS access key id', /\b(AKIA|ASIA)[A-Z0-9]{16}\b/],

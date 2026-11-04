@@ -5,7 +5,7 @@
 import type { AgentCard, CounselQuestion, CounselTally, CounselVote, Snapshot } from '../types'
 import { CHEAP_FIX_SUBJECT, secretIn } from './review'
 import { OWNERS_ADVOCATE, REVIEWERS } from './state'
-import { normalText, sameText } from './text'
+import { listed, normalText, sameText } from './text'
 
 // The counsel is always seven members, the six reviewers and the owner's
 // advocate, and every one of them votes. Seven is odd, so the votes for two
@@ -599,11 +599,6 @@ function whyAsked(q: CounselQuestion, t: CounselTally): string {
 
 // A member's name without the plugin's prefix, as the decision sentence says it.
 export const shortName = (member: string) => member.replace(/^builder:/, '')
-
-// Names as a sentence lists them: a, a and b, or a, b and c.
-function listed(names: readonly string[]): string {
-  return names.length <= 1 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`
-}
 
 // An option as the decision sentence writes it: as the session wrote it,
 // ending in exactly one terminal mark. An option that already ends in a full

@@ -250,6 +250,11 @@ declare module 'claude-code' {
       // answered without the model only when the conversation ends with this
       // line alone.
       quietLine: string | null
+      // Whether foreman's own Noted. answer is waiting to be stored: true from
+      // that answer until the next stored response row of the session's own
+      // loop, or the next start of a turn of that loop, clears it. The row it
+      // waits for is stored with no content.
+      quietReply: boolean
       // The newest report sentence foreman showed and when it showed it, so
       // the band can show it for a while, or null before the first. It is
       // kept in $.state only, so it outlives a hot reload but not a restart.

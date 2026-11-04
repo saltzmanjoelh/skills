@@ -739,267 +739,53 @@ second half's point 5 says.
 
 ### Updating the linked checkout
 
-The mod's step **Merged** does this first, before anything else. Skills, agents
-and the builder mod load through symlinks under `~/.claude` into a
-repository's main checkout, not from this worktree, so a session started a
-moment after the merge runs whatever that checkout holds. The session
-otherwise never works in a main checkout; here it only fast-forwards one.
-Read the base and the merge commit with
-`gh pr view <n> --json baseRefName,mergeCommit`.
+Skills, agents and the builder mod load through symlinks under `~/.claude`
+into a repository's main checkout, not from this worktree, so a session
+started a moment after the merge runs whatever that checkout holds. The
+builder mod keeps that checkout current itself: on the first look that
+chooses the step **Merged**, it finds the links in `~/.claude/skills`,
+`~/.claude/agents` and `~/.claude/commands`, and fast-forwards the main
+checkout of the merged repository to the merge commit when that is safe. It
+runs the update once for each merged pull request, never forces a checkout,
+and never retries a failed update, except once after a lock. The session
+runs none of this itself and never works in a main checkout.
 
-1. **Find the linked checkouts.** Look in `~/.claude/skills`,
-   `~/.claude/agents` and `~/.claude/commands`, skipping any of them that
-   does not exist. When one of those folders is itself a symlink, as when
-   `~/.claude/skills` links to a checkout's `skills` folder, resolve it
-   with `realpath` and treat its target as one more link. Test for that
-   with `test -L` on the folder's path written without a trailing slash,
-   since a trailing slash follows the link. Then resolve every symlink
-   directly inside each folder with `realpath`, listing them with
-   `find <folder>/ -mindepth 1 -maxdepth 1 -type l`, where the trailing
-   slash makes `find` look inside a folder that is itself a link. Use each
-   target when it is a folder, or the folder holding it when it is a file
-   (the links under `agents` point at files). Run
-   `git -C <folder> rev-parse --path-format=absolute --git-common-dir --show-toplevel`,
-   which prints the shared git folder and then the tree the link actually
-   lies in. The main checkout is the parent of the shared git folder. A
-   target that exists but is not inside a git repository points into no
-   checkout and is skipped. A link whose target does not exist is broken;
-   when that link is one of the three folders, nothing inside it can be
-   listed. Keep the tree each link lies in for step 2, and look at each
-   checkout once, however many links lead into it.
-   - When none of the three folders is a symlink and none holds one, the
-     outcome is **no links found**, and steps 2 to 7 do not run. It is not
-     a failure. A broken link is still a link, so a broken link alone does
-     not make the outcome no links found.
-2. **Match the merged repository.** In each checkout, run
-   `gh repo view --json nameWithOwner --jq .nameWithOwner`. A checkout
-   that prints the pull request's owner and name is one to update. When
-   more than one does (two clones of the same repository), each goes
-   through steps 3 to 7 on its own and gets its own outcome in the report.
-   - When none matches, the outcome is **not linked**, which means that
-     links exist and none of them leads into the merged repository. A
-     broken link or a lookup that failed makes it a failure instead, since
-     the broken link or the failed checkout might have been the match.
-   - When one matched, a broken link or a lookup that failed elsewhere is
-     named in one sentence and does not stop the update.
-   - A link of the merged repository whose tree is not the main checkout
-     lies in a worktree, which sessions load instead of
-     the main checkout. A worktree is someone's branch, so it is never
-     moved. It is not a failure either: the report names it, and says that
-     sessions loading through it still run the worktree's code. The main
-     checkout is still updated when a link leads into it. When every link
-     of the merged repository lies in a worktree, no session loads the main
-     checkout, so it is not moved and the outcome is **only worktrees
-     linked**.
-3. **Check the base, and whether anything needs to move.** Read the
-   merged repository's address and default branch with
-   `gh repo view <owner>/<name> --json url,defaultBranchRef`, naming the
-   repository so that `gh` does not pick one from a checkout's remotes.
-   When the base is not the default branch, the outcome is **nothing to
-   update**: the main checkout stays on the default branch, which the
-   merge did not touch, and someone who has another branch out there must
-   not have it moved. If the checkout is on the base and
-   `git -C <checkout> merge-base --is-ancestor <merge commit> HEAD`
-   already succeeds, nothing needs to move, and the outcome is **updated**
-   whatever steps 4 and 5 then do. They still run, so that the checkout's
-   remote-tracking branch for the base is current even when an earlier
-   update fetched by address, and steps 6 and 7 do not.
-4. **Choose where to fetch from.** List the checkout's remotes with
-   `git -C <checkout> remote`, and read each one's address with
-   `git -C <checkout> remote get-url <remote>`, which applies any
-   `insteadOf` rewrite in git's configuration, so the address is the one
-   git really fetches from. A remote names the merged repository when its
-   address, with any trailing slashes and then a trailing `.git` removed,
-   ends in `/<owner>/<name>` or `:<owner>/<name>`, compared without regard
-   to case. That covers an https address
-   (`https://github.com/owner/name.git`), an ssh address in the short form
-   (`git@github.com:owner/name.git`, including one through a host alias
-   such as `git@github-work:owner/name`) and an `ssh://` address, so a
-   machine that reaches GitHub only over ssh fetches the way it already
-   does. The slash or colon before the owner is part of the match, so that
-   a fork whose owner's name merely ends in the same letters does not
-   match.
-   - When one remote names it, that remote is the source.
-   - When several do, the source is the remote the base tracks, read with
-     `git -C <checkout> config branch.<base>.remote`, if it is one of them;
-     otherwise the one named `origin`, if it is one of them; otherwise the
-     first of them when their names are sorted byte by byte, as
-     `LC_ALL=C sort` sorts them.
-   - When none does, as when the repository was renamed and the remote
-     still names its old name, the source is the address that step 3 read
-     from `gh`.
-5. **Fetch the merge commit, and check it arrived whole.** With a remote
-   as the source, fetch the merge commit and the base in one command,
-   without writing `FETCH_HEAD`, passing the remote's name and the second
-   refspec each as one quoted argument:
-   `git -C <checkout> fetch --no-write-fetch-head "<remote>" <merge commit> "+refs/heads/<base>:refs/remotes/<remote>/<base>"`.
-   The second refspec brings the remote's base into the checkout's
-   remote-tracking branch for it. It is there so that after the update
-   `git status` in the checkout does not say the checkout is ahead of its
-   remote, which reads like work nobody pushed, so do not drop it as
-   noise. When the base has moved on past the merge commit, the checkout
-   shows behind its remote afterwards, which is true. With the address as
-   the source, fetch only the commit,
-   `git -C <checkout> fetch --no-write-fetch-head <url> <merge commit>`,
-   which leaves the remote-tracking branch alone. Fetching from one
-   source means an unreachable extra remote cannot hold the step up, and
-   leaving `FETCH_HEAD` alone means a `git pull` someone runs in the
-   checkout at that moment cannot read and merge this commit.
-   - When step 3 found nothing to move, the outcome is **updated**, and
-     this step only refreshes the remote-tracking branch. With a remote as
-     the source, run the fetch and stop here; if it exited with an error,
-     the report adds one sentence quoting git's message and saying that
-     the checkout may show ahead of its remote until its next fetch. With
-     the address as the source, skip the fetch and stop here, since the
-     address has no remote-tracking branch to bring up to date.
-   - Otherwise, whether the merge commit and everything it points to
-     arrived decides whether the update goes on, not how the fetch
-     exited. Check it in this order:
-     1. `git -C <checkout> cat-file -e <merge commit>^{commit}` must
-        succeed. A fetch can exit with an error after the commit
-        arrived, for example when another fetch in the same checkout
-        holds the lock on the remote-tracking branch. The checks then go
-        on, and the report adds one sentence quoting the fetch's message
-        and saying that the remote-tracking branch may not have moved, so
-        the checkout may show ahead of its remote until its next fetch.
-     2. Read the two snapshots to compare, the merge commit's top folder
-        and the checkout's, with
-        `git -C <checkout> log -1 --format=%T <merge commit>` and
-        `git -C <checkout> log -1 --format=%T HEAD`. They are read from
-        the commits rather than written as `<merge commit>^{tree}`,
-        because a partial clone may not hold the folder itself, and
-        comparing snapshots rather than histories also catches a file
-        the merge takes back to a version an older commit had. Below,
-        the first hash is called `<merge tree>` and the second
-        `<head tree>`.
-     3. In a partial clone, which leaves files or folders on the server
-        until they are needed, the object check below would download each
-        missing one in a fetch of its own, one round trip per file. So,
-        only to save that time, list what is missing without downloading
-        it,
-        `git -C <checkout> rev-list --objects --quiet --missing=print <merge tree> --not <head tree>`,
-        which prints each missing object's hash after a `?`; `--quiet`
-        keeps the objects that are present out of the output, so do not
-        drop it. When it
-        exits successfully and prints nothing, nothing is missing, so
-        the object check in sub-step 4 has passed and need not run;
-        this is always the case in a full clone. When it lists any,
-        fetch them all in one request from the same source, passing the
-        hashes without their `?` on standard input to
-        `git -C <checkout> -c "remote.<source>.partialclonefilter=blob:none" -c fetch.negotiationAlgorithm=noop fetch --no-write-fetch-head --no-tags --stdin "<source>"`,
-        where `<source>` is the remote's name, or the address when the
-        source is the address; git reads the setting under either.
-        Then list again, and repeat the listing and the fetch until the
-        listing prints nothing, three rounds at most.
-        - The fetch passes no `--filter`, because an explicit filter
-          makes git record the source as a partial-clone source in the
-          checkout's settings. The `partialclonefilter` set with `-c`
-          applies to this one fetch and writes nothing to the checkout's
-          settings.
-        - The filter is `blob:none` so that a missing
-          folder arrives with the folders inside it but without their
-          files, and the next listing names only the files the merge
-          needs. Without it, a clone that left its folders on the server
-          downloads the whole snapshot for a small merge (531 objects for
-          a merge of 3 files in review, against 34 with the filter, over
-          2 rounds). A clone that left only files on the server finishes
-          in one round.
-     4. The object check,
-        `git -C <checkout> rev-list --objects --quiet --missing=error <merge tree> --not <head tree>`,
-        runs in every case except the one sub-step 3 names, an empty and
-        successful listing:
-        - when the listing printed hashes, it runs after the batched
-          fetch;
-        - when the listing itself failed, it runs without a batched
-          fetch;
-        - when the batched fetch exits with an error, its message does
-          not decide anything; the object check runs and decides.
+The step's text states the outcome, one sentence for each checkout, which
+begins with one of these:
 
-        It must succeed. It fails when something the merge brings is still
-        missing and cannot be downloaded, before anything is written. It
-        must come before the fast-forward, because a fast-forward that
-        meets a missing file rewrites and deletes files before it fails,
-        leaving the checkout half updated.
+- **Updated:** the checkout's path, the merge commit, its `HEAD` after the
+  update, and the remote the fetch came from, or that no remote named the
+  repository and the https address was used or nothing was fetched.
+- **Not linked:** which repository merged, and which repositories the
+  links point into.
+- **No links found:** the three folders, and that skills or a mod loaded
+  some other way, such as a plugin folder named in settings or with
+  `--plugin-dir`, or a copy, were not updated.
+- **Only worktrees linked:** the worktrees, and that the main checkout was
+  not moved.
+- **Nothing to update:** the branch the merge went into, which is not the
+  default branch.
+- **Left alone:** the checkout's path or the broken link, what stopped it,
+  and that new sessions will run the old code until someone updates it.
+  This includes an update that started and did not finish, because the mod
+  stopped in the middle of it.
 
-   Fetch before the next step, so nothing slow sits between its checks
-   and the fast-forward.
-6. **Check it is safe, and fast-forward, in one shell command.** It must
-   find `git -C <checkout> branch --show-current` printing the base and
-   `git -C <checkout> status --porcelain --untracked-files=no` printing
-   nothing, then run
-   `git -C <checkout> merge --ff-only --no-overwrite-ignore <merge commit>`,
-   and say which check stopped it if one did.
-   - A checkout on another branch, with a detached `HEAD`, or with changes
-     to tracked files is never moved, because someone may have it out.
-   - Untracked and ignored files do not stop it: the fast-forward leaves
-     them alone, and refuses when it would overwrite one
-     (`--no-overwrite-ignore` makes it refuse for an ignored file too,
-     which git otherwise replaces). So the fast-forward destroys nothing,
-     which is why this is looser than `/cleanup`'s rule, written for
-     deleting a worktree.
-   - Name the merge commit rather than running a bare `pull --ff-only`,
-     which moves the branch to whatever it tracks, and that can be a fork
-     or another branch. Never create a merge commit, rebase, reset or
-     force a checkout.
-   - When the fast-forward fails because `index.lock` exists, another
-     session's update is probably running in the same checkout: run this
-     whole step once more, checks included, and treat a second failure as
-     a failure. That is the only retry.
-7. **Confirm.** `git -C <checkout> branch --show-current` still prints the
-   base, and
-   `git -C <checkout> merge-base --is-ancestor <merge commit> HEAD`
-   succeeds. The branch check catches someone checking out a branch in the
-   instant around the fast-forward. The fast-forward may have moved that
-   branch or not, depending on the moment, so the report offers no commit
-   to put it back to: it names the branch and says that
-   `git -C <checkout> reflog -2 <branch>` shows whether a fast-forward
-   moved it and, if so, from where. Nothing is reset.
+The outcome can add sentences of its own: links of the merged repository
+that lie in worktrees, a broken link or a failed lookup elsewhere, with
+only the first few named and the rest counted, a fetch
+that exited with an error after the merge commit arrived, and a branch
+found checked out at the confirmation, with the command that shows whether
+the fast-forward moved it. The mod has already removed anything shaped like
+a credential from what it quotes from git or gh.
 
-**When it fails.** These are the failures:
-
-- a broken link or a failed lookup when no checkout matched (step 2);
-- a merge commit that the fetch did not bring, or that arrived without
-  everything it points to (step 5);
-- a check that stops it, or a fast-forward that refuses, after the one
-  retry for a lock (step 6);
-- a confirmation that fails (step 7).
-
-**No links found** is not a failure, and neither is a fetch that exits
-with an error after the merge commit arrived. On any failure, leave the
-checkout alone. Never force it. Do not retry, except for the one retry
-after a lock that step 6 describes. Then carry on with the issue, the
-follow-up issue and `/cleanup`.
-
-**The report** says one of these, and adds the worktree links that step 2
-names and the sentences that step 5 adds. Every message it quotes from
-git or gh is first checked for credentials, as before a push.
-
-- **Updated,** after step 7, or from step 3 when the checkout already held
-  the merge: the checkout's path, the merge commit, the checkout's `HEAD`
-  after the update, and where the fetch came from. Name the remote, never
-  its address, since an address can hold a token. Naming it keeps a
-  mistake in matching remotes from falling back to the https address
-  unnoticed on a machine where that address works. When no remote named
-  the repository, say so, say that the fetch used the repository's https
-  address or that nothing was fetched because the checkout already held
-  the merge, and say that the checkout may show ahead of its remote until
-  its next fetch.
-- **Not linked,** from step 2: links exist and none of them leads into the
-  merged repository. Say which repository merged, and which repositories
-  the links point into.
-- **No links found,** from step 1: the three folders it looked in. Then,
-  in a sentence of its own, that if the skills or the mod load some other
-  way (a plugin folder named in settings or with `--plugin-dir`, or a
-  copy), this step updated nothing, so new sessions may run old code.
-- **Only worktrees linked,** from step 2: the worktrees, and that no
-  link leads into the main checkout, so it was not moved.
-- **Nothing to update,** from step 3: the branch the merge went into, and
-  that the main checkout stays on the default branch, which it did not
-  touch.
-- **Left alone,** from any failure: the checkout's path, or the broken
-  link when there is no checkout; what stopped it, quoting git's or gh's
-  own message; and that new sessions will run the old code until someone
-  updates it. A failure is never reported as not linked.
+Report the outcome in the session's report, quoting what the step quotes,
+and carry on with the issue, the follow-up issue and `/cleanup` whatever it
+is. When the step says instead that GitHub had not given the merge commit
+yet, call `mcp__builder__watch` once more and follow the step it names, as
+the step says; that is the only case in which the session asks for another
+look. When the step says that the mod has no outcome of the update to state,
+as after an error of the mod's own, say in the report that the linked
+checkout may not have been updated, and carry on without another look.
 
 ## Questions
 

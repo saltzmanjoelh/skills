@@ -9,7 +9,7 @@ import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, failureLine, linkedFamily, listSessi
 import { acceptedLog, beginFailedNotice, heldLine, heldLog, heldNotice, heldSentence, isHeldRefusal, isPersonPrompt, keyOfTitle } from './held'
 import { ignoredLine, readIssueLink } from './links'
 import { afterConsumed, emptyMarkers, FIRST_MARKER_LOG, MARKERS_KEPT_MS, MARKERS_PREFIX, markersIn, markersKey, markersNewest, type MarkersRecord } from './markers'
-import { checkedLine, isAppParts, isStatusChanged, keptLine, keptNames, NOTED, NOTED_REPLY, notesIn } from './notes'
+import { checkedLine, isAppParts, isNotedReply, isStatusChanged, keptLine, keptNames, NOTED, NOTED_REPLY, notesIn } from './notes'
 import { bandTree, PANE, paneTree, shownReport, type Elements, type View } from './pane'
 import type { ForemanCheck, ForemanEffect, ForemanParent, ForemanTickets } from '../types'
 import { PARENT_OFF, parentIn, slotsOf, storeKey } from './parent'
@@ -36,6 +36,7 @@ const log = atom({ plugin: 'foreman', key: 'log' } as const, [])
 const tickets = atom({ plugin: 'foreman', key: 'tickets' } as const, TICKETS_EMPTY)
 const turnRuns = atom({ plugin: 'foreman', key: 'turnRuns' } as const, false)
 const quietLine = atom({ plugin: 'foreman', key: 'quietLine' } as const, null)
+const quietReply = atom({ plugin: 'foreman', key: 'quietReply' } as const, false)
 // The newest report sentence foreman showed and when, for the band. It is
 // never stored in the ledger, so a restart drops it.
 const report = atom({ plugin: 'foreman', key: 'report' } as const, null)
@@ -1135,6 +1136,41 @@ async function answersAlone($: $): Promise<boolean> {
   }
 }
 
+// Sets the reply marker, which says that the next stored response row of the
+// session's own loop is foreman's own Noted. answer. A failure is swallowed,
+// so the answer still goes out and its reply is stored as it came.
+async function markReply($: $) {
+  try {
+    await update($, quietReply, () => true)
+  } catch {
+    // The reply is stored with its text, as it was before the marker existed.
+  }
+}
+
+// Clears a reply marker whose reply was never stored, so it cannot empty a
+// later reply. The marker is read first, so a turn with no marker set writes
+// nothing, and a failure is swallowed.
+async function clearReply($: $) {
+  try {
+    if (await read($, quietReply)) await update($, quietReply, () => false)
+  } catch {
+    // A marker left set is cleared by the next stored reply row.
+  }
+}
+
+// Whether the reply marker was set, clearing it in one swap when it was. It is
+// read first, so a row with no marker set writes nothing. It does not catch,
+// because the session.append hook's catch passes the row on as it came.
+async function takeReply($: $): Promise<boolean> {
+  if (!(await read($, quietReply))) return false
+  const held = { isSet: false }
+  await update($, quietReply, isSet => {
+    held.isSet = isSet
+    return false
+  })
+  return held.isSet
+}
+
 // While the words typed after /start-foreman wait to be sent, the promise
 // that settles once they have been, or null when no words wait. A wake waits
 // for it, so the model reads the person's words before any line of foreman's
@@ -1462,8 +1498,15 @@ export const register: Register = (on, options) => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
+  // The start of a turn of the session's own loop also clears a reply marker
+  // whose reply was never stored. The marker is set during a turn, after its
+  // start, so this never clears the marker for the reply it belongs to.
+  // clearReply cannot throw, so the turnRuns write after it always runs.
   on('turn.start', async ($, e, next) => {
-    if (e.agentId === undefined) await update($, turnRuns, () => true)
+    if (e.agentId === undefined) {
+      await clearReply($)
+      await update($, turnRuns, () => true)
+    }
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -1482,10 +1525,27 @@ export const register: Register = (on, options) => {
   on('turn.step', async function* ($, e, next) {
     if (e.index !== 0 || e.agentId !== undefined) return yield* next(e)
     if (!(await answersAlone($))) return yield* next(e)
+    await markReply($)
     yield { kind: 'text', index: 0, text: NOTED_REPLY }
     yield { kind: 'stop', stopReason: 'end_turn', usage: null }
     return { turnId: e.turnId, index: e.index, answer: NOTED_REPLY, toolUses: [], stopReason: 'end_turn', usage: null }
   })
+
+  // The row the engine stores for foreman's own Noted. answer is stored with
+  // no content, so no later request carries it and the model never reads a
+  // reply it did not write. Only a response row of the session's own loop is
+  // looked at, and only while the reply marker that the turn.step hook sets is
+  // set; a subagent's row leaves the marker for the row it waits for. The
+  // marker is cleared by the first such row, and a row that is not exactly
+  // foreman's reply is stored as it came. The turn.step hook still streams
+  // Noted., because an empty chunk makes the engine add a nudge to the
+  // conversation and ask the model. A hook that throws passes the row on as
+  // it came.
+  on('session.append', { door: 'response' }, async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
+    if (!(await takeReply($)) || !isNotedReply(e.message.content)) return next(e)
+    return next({ ...e, message: { ...e.message, content: [] } })
+  }).catch(($, e, next) => next(e))
 
   // Every start_session call in a parent goes through startSession, which
   // checks its title. In any other session it goes through offStart, which

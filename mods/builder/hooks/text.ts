@@ -22,6 +22,15 @@ export function printable(text: string, max = 80): string {
   return plain.length > max ? `${plain.slice(0, max - 1)}…` : plain
 }
 
+// Names as a sentence lists them: a, a and b, or a, b and c.
+export function listed(names: readonly string[]): string {
+  return names.length <= 1 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`
+}
+
+// Whether a repository is written as a plain owner and name, which is safe
+// to put in a text and to pass to git or gh.
+export const isPlainRepo = (repo: string) => /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)
+
 // How long a foreground call has run, as the line names it: 45s, 1m 7s, 1h 2m.
 export function clockTime(ms: number): string {
   const seconds = Math.floor(ms / 1000)
