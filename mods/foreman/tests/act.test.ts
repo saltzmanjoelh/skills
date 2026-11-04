@@ -355,6 +355,15 @@ test('a held key is released by a session in the whole list read beside the fami
   expect(d.logs).toEqual(['Stopped holding ABC-7, because the desktop app\'s list shows a session for it.'])
   const kept = read(holding, [], T0, { sessions: { kind: 'read', sessions: [], complete: true, holders: [{ ...byHand, title: 'ABC-77: other' }] } })
   expect(kept.tickets.held).toEqual(['ABC-7'])
+  // A done sub session that the family's list shows running keeps its slot,
+  // even when the whole list shows it archived, because only the release of
+  // holds reads the whole list.
+  const running = { sessionId: 'local_a', isArchived: false, isRunning: true, title: null, surelyUnarchived: true }
+  const archived = { ...running, isArchived: true, isRunning: false, surelyUnarchived: false }
+  const done = read({ ...paired(), held: ['ABC-7'] }, [row({ state: 'done' })], T0, { sessions: { kind: 'read', sessions: [running], complete: true, holders: [archived, byHand] } })
+  expect(done.tickets.pairings[0]!.standing).toBe('active')
+  expect(done.reasons).toEqual([])
+  expect(done.tickets.held).toEqual([])
 })
 
 // A pull request in a record, and a verdict pair whose sha is the character
