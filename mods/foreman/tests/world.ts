@@ -425,6 +425,10 @@ export async function mountBoth($: Engine, on: On, surface: 'terminal' | 'deskto
   return {
     band,
     pane,
+    // The mounted pane itself, whose press goes to the buttons of the last
+    // drawing as they are, without drawing the pane again or opening a card's
+    // `⋯` first.
+    drawnPane: mounted,
     bandText: async () => {
       await band.redraw()
       return (await band.find({ key: 'foreman-band' }))?.text ?? ''

@@ -163,16 +163,27 @@ test('a menu press sets the state it was drawn for, and one for a file with no b
 })
 
 test('a done sub session has no card, no menu and cannot be nudged or released through a press its old card left', async ($, on) => {
+  // Once set, the reads of the status files see the sub session as done.
+  let isDoneForHandlers = false
+  on('state.get', async ($, e, next) => {
+    const got = await next(e) as { value?: { value?: unknown } }
+    if (!isDoneForHandlers || e.plugin !== 'foreman' || e.key !== 'files' || !Array.isArray(got?.value?.value)) return got as never
+    const files = (got.value.value as { file: string }[]).map(f => (f.file === 'a.json' ? { ...f, text: busy('ABC-1', 'done') } : f))
+    return { ...got, value: { ...got.value, value: files } } as never
+  })
   const { w, ui } = await parent($, on, 2, { 'a.json': busy('ABC-1', 'idle') })
   await ui.pane.press({ key: 'menu-a.json' })
-  w.folder.put('a.json', busy('ABC-1', 'done'), T0 + 30 * SECOND, false)
-  await w.clock.advance(2 * MINUTE)
-  await w.clock.settle()
+  await ui.pane.redraw()
+  expect(await ui.drawnPane.find({ key: 'nudge-a.json' })).toBeDefined()
+  // From here the press handlers read the sub session as done, while the
+  // drawing still holds the buttons of its busy card, as an older drawing on
+  // another surface would. Reading changes nothing stored, so the pane is not
+  // drawn again, and only the guards in the handlers stand in the way.
+  isDoneForHandlers = true
   const sent = w.desktop.sent.length
-  // The pane is not drawn again before these presses, so they reach the
-  // buttons of the card the done sub session had.
-  await ui.pane.press({ key: 'nudge-a.json' }).catch(() => undefined)
-  await ui.pane.press({ key: 'release-a.json' }).catch(() => undefined)
+  await ui.drawnPane.press({ key: 'nudge-a.json' })
+  await ui.drawnPane.press({ key: 'release-a.json' })
+  isDoneForHandlers = false
   await w.clock.settle()
   expect(w.desktop.sent.length).toBe(sent)
   expect((await ui.logLines()).filter(line => line.startsWith('Nudged') || line.startsWith('Released'))).toEqual([])
@@ -346,7 +357,17 @@ test('the tiles show what was spent, the working time and the merged count with 
   expect((await ui.pane.find({ key: 'tile-merged' }))?.text).toContain('$3.00 per merged issue')
 })
 
-test('with nothing merged the merged tile reads 0 with no small print, and with no known cost it reads cost unknown', async ($, on) => {
+test('with nothing merged the merged tile reads 0 with no small print', async ($, on) => {
+  const w = world(on, { store: { 'parent:session-1': { isOn: true, slots: 2 }, [ticketsKey('session-1')]: { ...TICKETS_EMPTY, spent: [entry('ft-z', 3, null)] } } })
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await w.clock.settle()
+  await ui.pane.redraw()
+  expect((await ui.pane.find({ key: 'tile-merged' }))?.text).toBe('Merged 0')
+})
+
+test('with no known cost among the merged entries the merged tile reads cost unknown', async ($, on) => {
   const w = world(on, { store: { 'parent:session-1': { isOn: true, slots: 2 }, [ticketsKey('session-1')]: { ...TICKETS_EMPTY, spent: [entry('ft-z', null, T0)] } } })
   const ui = await mountBoth($, on)
   await start($)
