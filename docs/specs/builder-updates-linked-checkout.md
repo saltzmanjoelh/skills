@@ -127,7 +127,11 @@ text points at.
 
 - Two looks start at the same moment: the record of the start is written
   before either runs git, with no await between reading the record and
-  writing it, so only one runs the update.
+  writing it, so only one runs the update. This holds only within one
+  process: the store has no compare-and-set, so two sessions that both see
+  the merge before either writes the record can both run the update, and one
+  may report the checkout left alone after a lock, or the update as started
+  and not finished, while the other updated it. Nothing is forced or lost.
 - The mod is stopped or restarted in the middle of the update: the record
   holds no outcome, and the step reports the checkout as left alone because
   the update started and did not finish.
