@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PromptSubmitInput, Register, ResolveInput, ToolCallResult } from 'claude-code'
 
 import { checkOutcome, clampedDue, endsOf, isClaimed, soonestDue, withNote, withoutPaired, type CheckDone } from './checks'
-import { CALL_TIMEOUT_MS, decide, desktopOf, freeSlots, GONE_MS, keptByUnreadList, needsList, NO_ANSWER, slotOutcome, startWaits, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
+import { CALL_TIMEOUT_MS, decide, desktopOf, freeSlots, GONE_MS, keptByUnreadList, needsList, NO_ANSWER, releasedIn, slotOutcome, startWaits, type Decision, type Limits, type SessionsLook, type SlotOutcome } from './act'
 import { isSvgSurface } from './art'
 import { becameParentAnswer, COMMAND, commandOf, PASSED_ON, PASTED_LINE, pastedCommandIn, slotsAnswer, type Command } from './commands'
 import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, failureLine, linkedFamily, listSessions, NUDGE_TEXT, openSession, readHeader, REASONS, sendMessage, type DesktopCall, type SendResult } from './desktop'
@@ -18,10 +18,10 @@ import { spendOf, spentSum, ticketTimes, timeSum, withQueued } from './spend'
 import { afterRead, nameOf, nextReadDelay, READ_LATER_MS, rowsOf, type FileRead, type SubRow } from './subs'
 import { printable } from './text'
 import {
-  addWork, briefFor, carriesTicket, fallbackOf, hasWork, isOffRefused, joinOwners, localIdIn, MAX_PAIRINGS, newPairing, nextPlace, NO_TICKET_SENTENCE, OFF_LOG, OFF_REFUSAL, OUTBOX_EMPTY, ownsTicket,
-  runsImplement, shownRows, ticketsIn, ticketsKey, TICKETS_EMPTY, waitingBrief, waitingUnclaimed, WAITING_SENTENCE, withOffRefusal, withUnwatched,
+  addWork, briefFor, carriesTicket, fallbackOf, hasWork, isOffRefused, joinOwners, localIdIn, newPairing, nextPlace, NO_TICKET_SENTENCE, OFF_LOG, OFF_REFUSAL, OUTBOX_EMPTY, ownsTicket,
+  runsImplement, shownRows, ticketsIn, ticketsKey, TICKETS_EMPTY, waitingBrief, WAITING_SENTENCE, withOffRefusal, withUnwatched,
 } from './tickets'
-import { isWhoName, REASON_WORDS, splitReasons, wakeLine, whoOf } from './wake'
+import { REASON_WORDS, splitReasons, wakeLine, whoOf } from './wake'
 
 type $ = EngineInterface
 
@@ -856,20 +856,12 @@ async function releaseRow($: $, file: string) {
   let released = false
   let waits = false
   await writeTickets($, t => {
-    // The store may run this again when another write got in first.
-    released = false
-    waits = false
-    const names: string[] = []
-    const pairings = t.pairings.map(p => {
-      if (!ownsTicket(p, row) || p.standing !== 'active') return p
-      released = true
-      names.push(whoOf(p.issueKey, p.ticket))
-      return { ...p, standing: 'released' as const }
-    })
-    const next = { ...t, pairings }
-    waits = released && waitingUnclaimed(next, now, GONE_MS).length > 0
-    const carried = waits ? names.filter(isWhoName) : []
-    return carried.length === 0 ? next : { ...next, keptSlots: [...next.keptSlots, ...carried].slice(-MAX_PAIRINGS) }
+    // The store may run this again when another write got in first, so the
+    // verdict is taken from the last run.
+    const out = releasedIn(t, row, now)
+    released = out.released
+    waits = out.waits
+    return out.tickets
   })
   if (!released) return
   await addLog($, `Released ${nameOf(row)}; its session and its status file are left as they are.`)

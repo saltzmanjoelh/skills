@@ -12,7 +12,7 @@ import { prStateOf, type BuildState, type RecordVerdicts } from './record'
 import { folded, withReadings } from './spend'
 import type { ForemanActs, ForemanEffect, ForemanPairing, ForemanTickets } from '../types'
 import { busyCount, nameOf, type SubRow } from './subs'
-import { ANNOUNCED_NONE, capped, isReserved, MAX_PAIRINGS, ownsTicket, queueOf, shownRows, waitingUnclaimed } from './tickets'
+import { ANNOUNCED_NONE, capped, isReserved, keptSlotsIn, ownsTicket, queueOf, shownRows, waitingUnclaimed } from './tickets'
 import { printable } from './text'
 import { byTicket, isWholeKey, isWhoName, whoOf, type Reason } from './wake'
 
@@ -545,6 +545,27 @@ function mergedOnLeaving(p: ForemanPairing): Reason[] {
   return [{ kind: 'merged', who: whoOf(p.issueKey, p.ticket), number: told.number }]
 }
 
+// Release's ledger update for `row`: each active pairing that owns the row's
+// ticket becomes released. Whether anyone still waits unclaimed is decided on
+// the ledger this update writes, and while someone does, the released slots'
+// names are added to the end of keptSlots in the same write, so the next read
+// decides them like any other freed slot. The names go through the ledger
+// reader's own rule, so a name from a damaged ticket is not carried and the
+// list keeps only the newest MAX_PAIRINGS names.
+export function releasedIn(t: ForemanTickets, row: SubRow, now: number): { tickets: ForemanTickets; released: boolean; waits: boolean } {
+  let released = false
+  const names: string[] = []
+  const pairings = t.pairings.map(p => {
+    if (!ownsTicket(p, row) || p.standing !== 'active') return p
+    released = true
+    names.push(whoOf(p.issueKey, p.ticket))
+    return { ...p, standing: 'released' as const }
+  })
+  const next = { ...t, pairings }
+  const waits = released && waitingUnclaimed(next, now, GONE_MS).length > 0
+  return { tickets: waits ? { ...next, keptSlots: keptSlotsIn([...next.keptSlots, ...names]) } : next, released, waits }
+}
+
 // What a freed slot leads to, given how many slots are free now and, when
 // someone still waits unclaimed in the queue, the names of the waiting issues
 // a wake line may carry: nothing when no slot is free, the kept sentence when
@@ -883,7 +904,7 @@ export function decide(input: DecideInput): Decision {
   const left = keeps ? freedBy.filter(who => !isWhoName(who)) : freedBy
   if (keeps) {
     for (const who of freedNow.filter(isWhoName)) logs.push(`Kept the slot of ${who} for the queue, because the desktop app's list of sessions could not be read.`)
-    tickets = { ...tickets, keptSlots: freedBy.filter(isWhoName).slice(-MAX_PAIRINGS) }
+    tickets = { ...tickets, keptSlots: keptSlotsIn(freedBy) }
   }
   // Each claim took the name of a slot this read freed, or of one an earlier
   // read kept, so a name left over is a freed slot that no waiting sub
