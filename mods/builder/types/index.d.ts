@@ -421,6 +421,10 @@ export type BuildStatus = {
   // as builder counted them up to the write. An older record has no such
   // field, and a reader takes a missing one as spending that is unknown.
   usage?: BuildUsage
+  // How long the session's issue has taken, as BuildTiming says, with the
+  // per-state totals as of the write. An older record has no such field, and
+  // a reader takes a missing one as times that are unknown.
+  timing?: BuildTiming
   // Present whenever at least one background task is in flight, whatever the
   // state: the oldest task by its start time. `description` is cleaned and cut
   // short like those in `backgroundOnly`, or the withheld text in place of one
@@ -472,6 +476,42 @@ export type ModelTokens = TokenCounts & { model: string }
 // name, and the dollar total, or null while the engine has given no dollar
 // reading. The foreman type-checks its reader against this type.
 export type BuildUsage = { models: ModelTokens[]; usd: number | null }
+
+// How a review round ended: reviewed when post_review posted the review at
+// its head, superseded when the package tool packaged a different head first,
+// and carried over for a review posted at a head that was never packaged.
+export type BuildRoundEnd = 'reviewed' | 'superseded' | 'carried-over'
+
+// One review round: the head the package tool packaged, the stamp of the
+// first package call for it, and the stamp and manner of its end, both null
+// while it is open.
+export type BuildRound = {
+  head: string
+  startedAt: number
+  endedAt: number | null
+  ended: BuildRoundEnd | null
+}
+
+// The first time a stage of /implement was reached under the current title.
+export type BuildStageStamp = { stage: StageId; at: number }
+
+// The times of the session's issue, as the status file carries them, every
+// one a stamp of the engine's clock in milliseconds since the epoch:
+// `startedAt` when builder first loaded in the session, `stages` in the order
+// first reached, the pull request's opening and merge as first seen by a
+// watch, `states` the milliseconds spent in each status state from the start
+// up to the write or the merge, and the newest 20 rounds with `olderRounds`
+// counting those dropped. The foreman type-checks its reader against this
+// type.
+export type BuildTiming = {
+  startedAt: number
+  stages: BuildStageStamp[]
+  prOpenedAt: number | null
+  prMergedAt: number | null
+  states: Record<BuildState, number>
+  rounds: BuildRound[]
+  olderRounds: number
+}
 
 // One turn whose steps the session counted: the turn's id and the highest
 // step index added for it.
