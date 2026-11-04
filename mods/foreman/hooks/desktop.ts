@@ -162,9 +162,10 @@ async function savedEntries(saved: SavedCopies, path: string): Promise<{ entries
     }
     return { reason: size !== null && size > SAVED_LIMIT ? REASONS.savedTooLarge : REASONS.savedMissing }
   }
-  const entries = typeof text === 'string' ? arrayIn(text) : null
-  const honest = entries !== null && entries.some(entry => typeof (entry as { sessionId?: unknown } | null)?.sessionId === 'string')
-  return honest ? { entries: entries! } : { reason: REASONS.savedNotList }
+  const entries = arrayIn(text)
+  if (entries === null) return { reason: REASONS.savedNotList }
+  if (!entries.some(entry => typeof (entry as { sessionId?: unknown } | null)?.sessionId === 'string')) return { reason: REASONS.savedNotList }
+  return { entries }
 }
 
 // The entries of the list's answer to `args`, or why they could not be read.

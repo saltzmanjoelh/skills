@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import type { McpToolResult } from 'claude-code'
 
 import { EVENTS_TOOL, failureLine, linkedFamily, LIST_LIMIT, listSessions, openSession, readHeader, REASONS, type DesktopCall, type SavedCopies } from '../hooks/desktop'
-import { desktopApp, eventsAnswer } from './world'
+import { desktopApp, eventsAnswer, savedNotice } from './world'
 
 const SECRET = 'SECRET-ERROR-TEXT'
 
@@ -213,13 +213,8 @@ test('all three reads of the list ask for the parent\'s linked family alone, and
 // configuration folder `/cfg` that the reader stand-in answers.
 const SAVED = '/cfg/projects/-work-parent/session-1/tool-results/toolu_01.txt'
 
-// The text Claude Code passes back in place of an answer it saved, in the
-// exact shape it writes, with lines of advice to the model after the first.
-const notice = (path: string, size = '57,997 characters across 1,441 lines') =>
-  `Error: result (${size}) exceeds maximum allowed tokens. Output has been saved to ${path}.\nFormat: JSON array with schema: [{sessionId: string, ...}]\nUse offset and limit parameters to read specific portions of the file.`
-
 // An answer of the list replaced by the notice for `path`.
-const replaced = (path: string) => async () => text(notice(path))
+const replaced = (path: string) => async () => text(savedNotice(path))
 
 // What each of the three reads answers for the list answer `list`, with the
 // reader `saved`: listSessions, linkedFamily, and an open of the folder
@@ -237,7 +232,7 @@ test('a list answer that Claude Code replaced with its notice is read from the s
   for (const path of [SAVED, SAVED.replace('.txt', '.json')]) {
     for (const size of ['57,997 characters across 1,441 lines', '57,997 characters']) {
       const c = copies({ [path]: copy })
-      const d = desktop({ list: async () => text(notice(path, size)) })
+      const d = desktop({ list: async () => text(savedNotice(path, size)) })
       expect(await listSessions(d.call, c.saved)).toEqual({
         sessions: [
           { sessionId: 'local_a', isArchived: true, isRunning: false, title: 'ABC-1: a', surelyUnarchived: false },
@@ -248,11 +243,11 @@ test('a list answer that Claude Code replaced with its notice is read from the s
       expect(c.seen.reads).toEqual([path])
       expect(c.seen.sizes).toEqual([])
       const f = copies({ [path]: copy })
-      expect(await linkedFamily(desktop({ list: async () => text(notice(path, size)) }).call, f.saved)).toEqual({ ids: ['local_a', 'local_b'], complete: true })
+      expect(await linkedFamily(desktop({ list: async () => text(savedNotice(path, size)) }).call, f.saved)).toEqual({ ids: ['local_a', 'local_b'], complete: true })
       expect(f.seen.reads).toEqual([path])
       expect(f.seen.sizes).toEqual([])
       const o = copies({ [path]: copy })
-      const opened = desktop({ list: async () => text(notice(path, size)) })
+      const opened = desktop({ list: async () => text(savedNotice(path, size)) })
       expect(await openSession(opened.call, { cwd: '/work/b' }, o.saved)).toEqual({ opened: 'local_b' })
       expect(opened.calls.map(call => call.tool)).toEqual(['list_sessions', 'open_session_in'])
       expect(opened.calls[1]!.args).toEqual({ session_id: 'local_b', target: 'split' })
@@ -272,11 +267,11 @@ test('a saved copy as long as the limit, with one entry foreman cannot read, is 
 test('text close to the notice but not exact reads as unreadable from all three reads, and no saved copy is looked for', async () => {
   const cut = '[{"sessionId":"local_b","cwd":"/work/b"},{"sessionId":"loc'
   const near: [string, McpToolResult][] = [
-    ['other wording', text(notice(SAVED).replace('exceeds maximum allowed tokens', 'exceeds the maximum allowed tokens'))],
-    ['no final full stop', text(notice(SAVED).replace(`${SAVED}.\n`, `${SAVED}\n`))],
+    ['other wording', text(savedNotice(SAVED).replace('exceeds maximum allowed tokens', 'exceeds the maximum allowed tokens'))],
+    ['no final full stop', text(savedNotice(SAVED).replace(`${SAVED}.\n`, `${SAVED}\n`))],
     ['no newline after the full stop', text(`Error: result (57,997 characters) exceeds maximum allowed tokens. Output has been saved to ${SAVED}.`)],
-    ['a closing parenthesis inside the parentheses', text(notice(SAVED, '57,997 characters (about 14,500 tokens)'))],
-    ['the notice only in a second text block', { content: [{ type: 'text', text: 'Too large.' }, { type: 'text', text: notice(SAVED) }], isError: false }],
+    ['a closing parenthesis inside the parentheses', text(savedNotice(SAVED, '57,997 characters (about 14,500 tokens)'))],
+    ['the notice only in a second text block', { content: [{ type: 'text', text: 'Too large.' }, { type: 'text', text: savedNotice(SAVED) }], isError: false }],
     ['the notice Claude Code gives when it could not save the file', text('Error: result (57,997 characters across 1,441 lines) exceeds maximum allowed tokens. The output could not be saved to a file.\nUse pagination or filtering to reduce the size of the result.')],
     ['a shortened answer of cut JSON', text(`${cut}\n\n[Output truncated: 57,997 characters in all]`)],
   ]
@@ -293,7 +288,7 @@ test('text close to the notice but not exact reads as unreadable from all three 
 
 test('a tool error whose text is the notice reads as refused, and no saved copy is looked for', async () => {
   const c = copies({ [SAVED]: JSON.stringify([{ sessionId: 'local_b', cwd: '/work/b' }]) })
-  const got = await allThree(async () => ({ content: [{ type: 'text', text: notice(SAVED) }], isError: true }), c.saved)
+  const got = await allThree(async () => ({ content: [{ type: 'text', text: savedNotice(SAVED) }], isError: true }), c.saved)
   expect(got).toEqual({ sessions: { reason: REASONS.listRefused }, family: { reason: REASONS.listRefused }, open: { reason: REASONS.listRefused } })
   expect(c.seen).toEqual({ configs: 0, reads: [], sizes: [] })
 })

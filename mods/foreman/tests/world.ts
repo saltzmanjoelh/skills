@@ -101,7 +101,7 @@ export const SAVED_PATH = `${HOME}/.claude/projects/-work-parent/session-1/tool-
 // The text Claude Code passes back in place of an answer it saved at `path`,
 // in the exact shape it writes, with lines of advice to the model after the
 // first.
-export const savedNotice = (path: string) => `Error: result (57,997 characters across 1,441 lines) exceeds maximum allowed tokens. Output has been saved to ${path}.\nFormat: JSON array with schema: [{sessionId: string, ...}]\nUse offset and limit parameters to read specific portions of the file.`
+export const savedNotice = (path: string, size = '57,997 characters across 1,441 lines') => `Error: result (${size}) exceeds maximum allowed tokens. Output has been saved to ${path}.\nFormat: JSON array with schema: [{sessionId: string, ...}]\nUse offset and limit parameters to read specific portions of the file.`
 
 // The desktop app's tools, answered from a script, recording each call.
 // `list`, `send` and `open` say how list_sessions, send_message and
