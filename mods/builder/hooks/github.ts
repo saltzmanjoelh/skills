@@ -461,7 +461,7 @@ export function outsideOf(pr: Pick<GhPullRequest, 'reviews' | 'reviewRequests'>,
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([key, name]) => {
       const review = newest.get(key)
-      const state = stateOf(requested.has(key), review)
+      const state = outsideStateOf(requested.has(key), review)
       const at = review?.submittedAt
       return typeof at === 'string' && at !== '' ? { login: name, state, at } : { login: name, state }
     })
@@ -471,7 +471,7 @@ export function outsideOf(pr: Pick<GhPullRequest, 'reviews' | 'reviewRequests'>,
 // the rules allow: a request first; then a missing or dismissed newest review,
 // which counts as no review, so the reviewer is unrequested; then an
 // approval; and any other newest review is feedback.
-function stateOf(isRequested: boolean, review: GhReview | undefined): OutsideState {
+function outsideStateOf(isRequested: boolean, review: GhReview | undefined): OutsideState {
   if (isRequested) return 'requested'
   if (review === undefined || review.state === 'DISMISSED') return 'unrequested'
   if (review.state === 'APPROVED') return 'approved'

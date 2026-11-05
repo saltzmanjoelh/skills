@@ -362,8 +362,23 @@ test('the feedback text sets stuck when the watch names it again for the same re
   expect(text).toContain('If the watch names this step again for the same reviewers with nothing pushed, set `stuck`')
 })
 
-test('every merge text stops the merge when the fetched CLAUDE.md names a reviewer who has not approved', () => {
-  for (const step of [MERGE, ASK_MERGE] as Step[]) {
-    expect(stepLines(step).join('\n')).toContain('If the fetched file has a `Reviewer:` line that names a login, other than `none` and the session\'s own, whose newest review of the pull request is not an approval, merge nothing and end the turn')
+test('every merge and ask-merge text stops the merge when the fetched CLAUDE.md names a reviewer who has not approved, including one with no review at all', () => {
+  const steps: Step[] = [
+    MERGE,
+    { ...MERGE, checks: 'none' },
+    { ...MERGE, command: 'custom' },
+    { ...MERGE, command: 'unread' },
+    { ...MERGE, others: ['review-app'] },
+    ASK_MERGE,
+    { ...ASK_MERGE, isClaudeRead: false },
+    { ...ASK_MERGE, command: 'unread' },
+  ]
+  for (const step of steps) {
+    const text = stepLines(step).join('\n')
+    // The fetched CLAUDE.md check: a reviewer the mod missed was never asked
+    // and so has no review, which must stop the merge as well.
+    expect(text).toContain('If the fetched file has a `Reviewer:` line that names a login, other than `none` and the session\'s own, who has not approved the pull request, because they have no review of it or their newest review of it is not an approval, merge nothing and end the turn')
+    // The read again before merging covers the same reviewer.
+    expect(text).toContain('or any login that a `Reviewer:` line names, other than the session\'s own, has not approved the pull request, because they have no review of it or their newest review of it is not an approval')
   }
 })

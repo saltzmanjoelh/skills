@@ -433,7 +433,7 @@ test('every merge text reads the reviews and review requests again and merges no
   for (const step of merges) {
     const text = textOf(step)
     expect(text).toContain(`gh pr view ${step.number} --json headRefOid,statusCheckRollup,reviews,reviewRequests`)
-    expect(text).toContain('If any reviewer other than the session is now requested as a user, or has a newest review that is not an approval and either is named by a `Reviewer:` line or carries the association `OWNER`, `MEMBER` or `COLLABORATOR`, merge nothing: call `mcp__builder__watch` and follow the step it names.')
+    expect(text).toContain('If any reviewer other than the session is now requested as a user, or any login that a `Reviewer:` line names, other than the session\'s own, has not approved the pull request, because they have no review of it or their newest review of it is not an approval, or any reviewer whose newest review is not an approval carries the association `OWNER`, `MEMBER` or `COLLABORATOR`, merge nothing: call `mcp__builder__watch` and follow the step it names.')
   }
   const ask = textOf({ kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'default', runs: [], isClaudeRead: true, unpushed: NONE })
   expect(ask).toContain('no new run, and no reviewer other than the session holds the merge as those reads say')
