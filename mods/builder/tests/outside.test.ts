@@ -433,6 +433,9 @@ test('every merge and ask-merge text stops the merge when the fetched CLAUDE.md 
     // and so has no review, which must stop the merge as well.
     expect(text).toContain('If the fetched file has a `Reviewer:` line that names a login, other than `none` and the session\'s own, who has not approved the pull request, because they have no review of it or their newest review of it is not an approval, merge nothing and end the turn')
     // The read again before merging covers the same reviewer.
-    expect(text).toContain('or any login that a `Reviewer:` line names, other than the session\'s own, has not approved the pull request, because they have no review of it or their newest review of it is not an approval')
+    expect(text).toContain('or any login that the `Reviewer:` fact names, other than the session\'s own, has not approved the pull request, because they have no review of it or their newest review of it is not an approval')
+    // The fact is read with the mod's own precedence, so a project that turns
+    // the reviewer off is not held by a reviewer the user's own file names.
+    expect(text).toContain('The `Reviewer:` fact is the fetched base branch\'s `Reviewer:` line when that file has one, and the user\'s own `Reviewer:` line only when it has none. A line that says `none` names nobody, so `Reviewer: none` in the base branch turns the user\'s line off, and the branch\'s own CLAUDE.md never counts here.')
   }
 })
