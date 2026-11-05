@@ -104,8 +104,8 @@ export function baseFactsOf(claude: string, workflowsListed: boolean | null): Ba
 // project turns off a reviewer the user's file names. The value is a list
 // separated by commas. Backticks at either end of each login are dropped,
 // because the fact's own reading strips them only from the two ends of the
-// whole value, a leading `@` is dropped, and anything that is not a GitHub
-// login is left out.
+// whole value. This function also drops a leading `@` from each login and
+// leaves out anything that is not a GitHub login.
 export function reviewersOf(project: string | null, user: string | null): string[] {
   const line = (project === null ? null : factIn(project, 'Reviewer')) ?? (user === null ? null : factIn(user, 'Reviewer'))
   if (line === null || line.trim().toLowerCase() === 'none') return []
