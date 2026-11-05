@@ -66,8 +66,8 @@ merge.
 - **The outside reviewer moves the label by hand.** When they set
   `waiting-on-author` while leaving feedback, the mod's step is the outside
   feedback step, which gives the same label, so nothing changes back. When
-  they set any other state label by hand, the mod replaces it at its next
-  look with the label its step gives, as it does today.
+  they set any other state label by hand, the mod leaves it until the label
+  its step gives changes, and then sets that label, as it does today.
 - **A solo project.** With no `Reviewer:` line and no review from anyone
   else, no step ever gives `waiting-on-reviewer`, the label is never created,
   and the labels behave as they do today.
