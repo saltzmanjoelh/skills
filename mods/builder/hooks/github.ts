@@ -46,6 +46,9 @@ export type GhPullRequest = {
   reviews?: GhReview[]
   // A request for a user carries their login. The mod leaves out by its type
   // any request that is not for a user, such as one for a team or a bot.
+  // A request with no type counts as a request for a user, so that a reply
+  // from an older gh, or one that leaves the type out, still asks the named
+  // person rather than silently dropping a real request.
   reviewRequests?: { __typename?: string; login?: string }[]
   statusCheckRollup?: GhCheck[]
   mergeable?: string
@@ -434,6 +437,9 @@ function newestReviewsOf(pr: Pick<GhPullRequest, 'reviews'>, login: string): New
 // because GitHub removes them from the review requests when they submit. Any
 // request that is not for a user, such as one for a team or a bot, is left
 // out by its type, because the mod cannot tell which person will answer it.
+// A request that carries no type counts as a request for a user, so that a
+// reply from an older gh, or one that leaves the type out, still asks the
+// named person rather than silently dropping a real request.
 // The mod keeps the spelling GitHub gave where it gave one.
 // Each reviewer's state is decided in the order OutsideState lists: a request
 // first, because GitHub clears it when they submit a review and sets it again

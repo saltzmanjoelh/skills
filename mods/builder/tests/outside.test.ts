@@ -279,6 +279,28 @@ test('the association of the newest review that is not pending decides', () => {
   expect(outsideOf(pr, ME, [])).toEqual([])
 })
 
+// Only the four states that GitHub gives a submitted review count, so a newer
+// review in a state GitHub may add later, or one that carries no state at all,
+// leaves the reviewer's approval standing rather than replacing it.
+test('a newer review in an unknown state leaves an approval standing', () => {
+  const pr = pullRequest({ reviews: [approvedBySession, outsideReview('ann', 'APPROVED', T1), outsideReview('ann', 'SOMETHING_NEW', T2)] })
+  expect(outsideOf(pr, ME, [])).toEqual([{ login: 'ann', state: 'approved', at: T1 }])
+})
+
+test('a newer review that has no state leaves an approval standing', () => {
+  const { state: _state, ...stateless } = outsideReview('ann', 'COMMENTED', T2)
+  const pr = pullRequest({ reviews: [approvedBySession, outsideReview('ann', 'APPROVED', T1), stateless] })
+  expect(outsideOf(pr, ME, [])).toEqual([{ login: 'ann', state: 'approved', at: T1 }])
+})
+
+// A request that carries no type counts as a request for a user, so that a
+// reply from an older gh, or one that leaves the type out, still asks the
+// named person rather than silently dropping a real request.
+test('a review request with no type counts as a request for a user', () => {
+  const pr = pullRequest({ reviewRequests: [{ login: 'ann' }] })
+  expect(outsideOf(pr, ME, [])).toEqual([{ login: 'ann', state: 'requested' }])
+})
+
 // Other reviewers: everyone else who reviewed, whose comments the session
 // addresses without waiting for them or asking them again.
 
