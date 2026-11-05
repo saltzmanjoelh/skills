@@ -546,7 +546,7 @@ export const DECISION_LABEL = 'needs-decision'
 // The state labels /implement moves between. The pull request carries one of
 // them at a time: the mod sets the one that follows from the step it chose,
 // and the session sets `stuck` by its own judgement.
-export const STATE_LABELS = ['in-review', 'waiting-on-author', 'ready-to-merge', 'stuck'] as const
+export const STATE_LABELS = ['in-review', 'waiting-on-author', 'waiting-on-reviewer', 'ready-to-merge', 'stuck'] as const
 export type StateLabel = typeof STATE_LABELS[number]
 
 // The labels the workflow sets on the pull request itself: the state labels

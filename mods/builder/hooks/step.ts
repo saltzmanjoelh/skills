@@ -247,12 +247,16 @@ export function linkedIn(raw: unknown): Linked {
 }
 
 // The state label that follows from a step, or null when the step changes
-// nothing. The four outcomes where both verdicts approve give ready-to-merge,
-// but the step for runs that could not be read is not one of them: it exists
-// only because the runs read failed, so a ready-to-merge there would rest on
-// a failed read, and it would also move the poll to the merge interval that
-// waitingOn derives from the label. Merged and An open question change
-// nothing either.
+// nothing. Each label says whose turn it is. The steps that request the
+// outside review and wait on it give waiting-on-reviewer, because an outside
+// reviewer holds the merge there, and waitingOn derives the reviewer interval
+// from that label, so the request step polls at it before the request reaches
+// GitHub. The steps where both verdicts approve and nobody holds the merge
+// give ready-to-merge, from which waitingOn derives the merge interval. The
+// step for runs that could not be read is not one of them: it exists only
+// because the runs read failed, so a ready-to-merge there would rest on a
+// failed read, and it would also move the poll to the merge interval. Merged
+// and An open question change nothing either.
 export function labelFor(step: Step): StateLabel | null {
   switch (step.kind) {
     case 'review': return 'in-review'
@@ -261,7 +265,7 @@ export function labelFor(step: Step): StateLabel | null {
     case 'changes-requested':
     case 'outside-feedback': return 'waiting-on-author'
     case 'request-review':
-    case 'awaiting-review':
+    case 'awaiting-review': return 'waiting-on-reviewer'
     case 'waiting':
     case 'head-unchecked':
     case 'merge':

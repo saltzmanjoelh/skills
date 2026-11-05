@@ -15263,6 +15263,103 @@ test('a state label the repository lacks is created, and the edit is tried again
   expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ label: 'in-review' })
 })
 
+// A pull request where both verdicts approve and the project names ann as its
+// outside reviewer, so the step is the one that requests her review.
+function atRequestStep(world: ReturnType<typeof fakeGitHub>) {
+  world.pr = approvedWithoutChecks()
+  world.baseClaude = 'Checks: none\nReviewer: ann\n'
+}
+
+test('at the step that requests the outside review, a missing waiting-on-reviewer is created and added, and recorded', async ($, on) => {
+  const clock = mock.clock(on)
+  const stored = memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  atRequestStep(world)
+  world.labelMissing = true
+  await watch($)
+  await clock.settle()
+  const created = world.calls.indexOf('gh label create waiting-on-reviewer --repo o/r')
+  expect(created).toBeGreaterThan(-1)
+  expect(world.calls.lastIndexOf('gh pr edit 7 --repo o/r --add-label waiting-on-reviewer')).toBeGreaterThan(created)
+  expect(world.pr.labels).toEqual([{ name: 'waiting-on-reviewer' }])
+  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'waiting-on-reviewer', at: clock.now() })
+})
+
+test('a ready-to-merge from before, while an outside review is requested, is relabelled waiting-on-reviewer with no other action', async ($, on) => {
+  const clock = mock.clock(on)
+  const stored = memoryStore(on, [[STATE_LABEL_KEY, { label: 'ready-to-merge', at: 0 }]])
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr = openPullRequest({
+    statusCheckRollup: [], reviews: [verdictReview(C, 'APPROVE', 'APPROVE')],
+    reviewRequests: [{ __typename: 'User', login: 'ann' }], labels: [{ name: 'ready-to-merge' }],
+  })
+  world.baseClaude = 'Checks: none\n'
+  await watch($)
+  await clock.settle()
+  expect(labelEdits(world)).toEqual(['gh pr edit 7 --repo o/r --add-label waiting-on-reviewer --remove-label ready-to-merge'])
+  expect(world.pr.labels).toEqual([{ name: 'waiting-on-reviewer' }])
+  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'waiting-on-reviewer', at: clock.now() })
+  // Nothing else acts on the pull request: no review request, no label
+  // created, no merge.
+  const acting = world.calls.filter(call => /^gh (pr (edit|merge)|label create)/.test(call))
+  expect(acting).toEqual(['gh pr edit 7 --repo o/r --add-label waiting-on-reviewer --remove-label ready-to-merge'])
+
+  await clock.advance(30 * 60_000)
+  expect(labelEdits(world).length).toBe(1)
+})
+
+test('when the edit fails after creating waiting-on-reviewer, nothing is recorded, the step is unchanged, and the next look tries again', async ($, on) => {
+  const clock = mock.clock(on)
+  const stored = memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  atRequestStep(world)
+  world.labelMissing = true
+  // The add fails, the label is created, and the add after the create fails
+  // too, which is how a failed create looks from outside the label edit.
+  world.editsToFail = 2
+  await startOnly($)
+  const answer = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  await clock.settle()
+  expect(answer).toContain(REQUEST_STEP)
+  expect(world.calls).toContain('gh label create waiting-on-reviewer --repo o/r')
+  expect(labelEdits(world)).toEqual([
+    'gh pr edit 7 --repo o/r --add-label waiting-on-reviewer',
+    'gh pr edit 7 --repo o/r --add-label waiting-on-reviewer',
+  ])
+  expect(stored.get(STATE_LABEL_KEY)).toBeUndefined()
+  expect(world.pr.labels).toEqual([])
+
+  await clock.advance(30 * 60_000)
+  expect(labelEdits(world).length).toBe(3)
+  expect(world.pr.labels).toEqual([{ name: 'waiting-on-reviewer' }])
+  expectFinishedRecord(stored, 'waiting-on-reviewer')
+})
+
+test('a solo project never names waiting-on-reviewer in any gh call', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, { CLAUDE_CONFIG_DIR: '/config', HOME: '/home/me' })
+  engine(on)
+  const world = fakeGitHub(on)
+  fakeFiles(on)
+  world.baseClaude = 'Checks: none\n'
+  await watch($)
+  await clock.settle()
+  world.pr = openPullRequest({ reviews: [verdictReview(C, 'REQUEST_CHANGES', 'APPROVE')], labels: world.pr.labels })
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await clock.settle()
+  world.pr = { ...approvedWithoutChecks(), labels: world.pr.labels }
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await clock.settle()
+  await clock.advance(30 * 60_000)
+  // The labels still move through the steps, so the calls were made.
+  expect(labelEdits(world).at(-1)).toBe('gh pr edit 7 --repo o/r --add-label ready-to-merge --remove-label waiting-on-author')
+  expect(world.calls.filter(call => call.startsWith('gh ') && call.includes('waiting-on-reviewer'))).toEqual([])
+})
+
 test('after a reload with stuck on and no record, the derived label is recorded without a write, and a later change removes stuck', async ($, on) => {
   const clock = mock.clock(on)
   const stored = memoryStore(on)

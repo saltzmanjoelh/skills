@@ -201,10 +201,19 @@ test('outside reviews wait while the session\'s own review is due or requests ch
   expect(kind(snapshot({ reviews: [verdicts('APPROVE', 'REQUEST_CHANGES'), ...comments] }, ['bob']))).toBe('changes-requested')
 })
 
-test('feedback gives waiting-on-author, and requesting and waiting on the review give ready-to-merge', () => {
+test('feedback gives waiting-on-author, and requesting and waiting on the review give waiting-on-reviewer', () => {
   expect(labelFor({ kind: 'outside-feedback', number: 7, reviewers: ['ann'] })).toBe('waiting-on-author')
-  expect(labelFor({ kind: 'request-review', number: 7, reviewers: ['ann'] })).toBe('ready-to-merge')
-  expect(labelFor({ kind: 'awaiting-review', reviewers: ['ann'] })).toBe('ready-to-merge')
+  expect(labelFor({ kind: 'request-review', number: 7, reviewers: ['ann'] })).toBe('waiting-on-reviewer')
+  expect(labelFor({ kind: 'awaiting-review', reviewers: ['ann'] })).toBe('waiting-on-reviewer')
+})
+
+test('a dismissed approval brings back the request step, so the label goes back to waiting-on-reviewer', () => {
+  const approved = chooseStep(snapshot({ reviews: [approvedBySession, outsideReview('ann', 'APPROVED')] }, ['ann']), false)
+  expect(approved.kind).toBe('merge')
+  expect(labelFor(approved)).toBe('ready-to-merge')
+  const dismissed = chooseStep(snapshot({ reviews: [approvedBySession, outsideReview('ann', 'DISMISSED')] }, ['ann']), false)
+  expect(dismissed.kind).toBe('request-review')
+  expect(labelFor(dismissed)).toBe('waiting-on-reviewer')
 })
 
 test('the step texts name the reviewers and the command that asks for their review', () => {
@@ -226,6 +235,23 @@ test('a requested outside review is waited on at the reviewer interval, after fa
   const running = snapshot({ reviewRequests: [{ __typename: 'User', login: 'ann' }], statusCheckRollup: [{ __typename: 'CheckRun', name: 'tests', status: 'IN_PROGRESS' }] })
   expect(waitingOn(running, [], [])).toBe('ci')
   const failed = snapshot({ reviewRequests: [{ __typename: 'User', login: 'ann' }], statusCheckRollup: [{ __typename: 'CheckRun', name: 'tests', status: 'COMPLETED', conclusion: 'FAILURE' }] })
+  expect(waitingOn(failed, [], [])).toBe('fix')
+})
+
+test('waiting-on-reviewer is waited on at the reviewer interval, even before any review is requested', () => {
+  const atRequest = snapshot({ labels: [{ name: 'waiting-on-reviewer' }] }, ['ann'])
+  expect(chooseStep(atRequest, false).kind).toBe('request-review')
+  expect(waitingOn(atRequest, [], [])).toBe('reviewer')
+  expect(pollFor(atRequest, C, [], [], null).ms).toBe(POLL_MS.reviewer)
+  // ready-to-merge alone still waits on the merge.
+  const ready = snapshot({ labels: [{ name: 'ready-to-merge' }] })
+  expect(waitingOn(ready, [], [])).toBe('merge')
+  expect(pollFor(ready, C, [], [], null).ms).toBe(POLL_MS.merge)
+  // With both labels on, the reviewer wins.
+  const both = snapshot({ labels: [{ name: 'waiting-on-reviewer' }, { name: 'ready-to-merge' }] })
+  expect(waitingOn(both, [], [])).toBe('reviewer')
+  // A failed check is still waited on first.
+  const failed = snapshot({ labels: [{ name: 'waiting-on-reviewer' }], statusCheckRollup: [{ __typename: 'CheckRun', name: 'tests', status: 'COMPLETED', conclusion: 'FAILURE' }] })
   expect(waitingOn(failed, [], [])).toBe('fix')
 })
 

@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { carriedHeadRuns, carriedRuns, changesBetween, checkOf, ciOf, failedCheckNames, headRunsOf, isCiMonitorEvent, isSameState, plainName, pullRequestStateIn, realWorkOf, roundInProgress, snapshotIn, snapshotOf, unfinishedOf, WORKFLOW_LABELS, type GhPullRequest, type HeadRun, type Snapshot, type WorkflowRun } from '../hooks/github'
+import { carriedHeadRuns, carriedRuns, changesBetween, checkOf, ciOf, failedCheckNames, headRunsOf, isCiMonitorEvent, isSameState, plainName, pullRequestStateIn, realWorkOf, roundInProgress, snapshotIn, snapshotOf, STATE_LABELS, unfinishedOf, WORKFLOW_LABELS, type GhPullRequest, type HeadRun, type Snapshot, type WorkflowRun } from '../hooks/github'
 import { changePrompt, ciEventContext, reloadLead, RELOAD_LINE, REREAD_CLOSING, stateLines } from '../hooks/prompts'
 import { stepFor } from '../hooks/step'
 
@@ -144,7 +144,7 @@ test('the changes name what moved in plain sentences', () => {
 
 test('the workflow\'s own labels leave the fingerprint unchanged and any other label moves it', () => {
   const bare = snapshotOf('o/r', pullRequest({ labels: [] }), ME)
-  for (const name of ['in-review', 'waiting-on-author', 'ready-to-merge', 'stuck', 'needs-decision']) {
+  for (const name of ['in-review', 'waiting-on-author', 'waiting-on-reviewer', 'ready-to-merge', 'stuck', 'needs-decision']) {
     const labelled = snapshotOf('o/r', pullRequest({ labels: [{ name }] }), ME)
     expect(labelled.fingerprint).toBe(bare.fingerprint)
     // The snapshot itself keeps the label, for the poll interval and the pane.
@@ -156,7 +156,15 @@ test('the workflow\'s own labels leave the fingerprint unchanged and any other l
   // A real change that comes with a workflow label is named without the label.
   const moved = snapshotOf('o/r', pullRequest({ headRefOid: A, labels: [{ name: 'in-review' }] }), ME)
   expect(changesBetween(bare, moved)).toEqual([`The head moved from ${C.slice(0, 8)} to ${A.slice(0, 8)}.`])
-  expect([...WORKFLOW_LABELS].sort()).toEqual(['in-review', 'needs-decision', 'ready-to-merge', 'stuck', 'waiting-on-author'])
+  expect([...WORKFLOW_LABELS].sort()).toEqual(['in-review', 'needs-decision', 'ready-to-merge', 'stuck', 'waiting-on-author', 'waiting-on-reviewer'])
+})
+
+test('waiting-on-reviewer is a state label, between waiting-on-author and ready-to-merge', () => {
+  expect([...STATE_LABELS]).toEqual(['in-review', 'waiting-on-author', 'waiting-on-reviewer', 'ready-to-merge', 'stuck'])
+  // A change to the new label alone, from or to another state label, leaves the fingerprint unchanged.
+  const ready = snapshotOf('o/r', pullRequest({ labels: [{ name: 'ready-to-merge' }] }), ME)
+  const reviewer = snapshotOf('o/r', pullRequest({ labels: [{ name: 'waiting-on-reviewer' }] }), ME)
+  expect(reviewer.fingerprint).toBe(ready.fingerprint)
 })
 
 test('the desktop app\'s CI event is recognised by its tag', () => {
