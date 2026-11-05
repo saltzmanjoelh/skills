@@ -3,15 +3,16 @@
 // JSON gh printed, so the tests can feed it fixtures and the hooks can call it
 // without touching the network.
 
-import type { BaseFacts, BuildStatus, Check, CheckState, HeadRun, Snapshot, Unpushed, Verdict, Verdicts, WorkflowRun } from '../types'
+import type { BaseFacts, BuildStatus, Check, CheckState, HeadRun, OutsideReviewer, OutsideState, Snapshot, Unpushed, Verdict, Verdicts, WorkflowRun } from '../types'
 
-export type { BaseFacts, Check, CheckState, HeadRun, Snapshot, Unpushed, Verdict, Verdicts, WorkflowRun }
+export type { BaseFacts, Check, CheckState, HeadRun, OutsideReviewer, OutsideState, Snapshot, Unpushed, Verdict, Verdicts, WorkflowRun }
 
 // The JSON fields the snapshot reads, in the order gh is asked for them. The
 // merge commit is read by the same request that reports the pull request
 // merged, for the update of the linked checkout, and is never part of the
-// snapshot or its fingerprint.
-export const PR_FIELDS = 'number,url,state,headRefOid,labels,reviews,statusCheckRollup,mergeable,commits,baseRefName,headRefName,createdAt,mergeCommit'
+// snapshot or its fingerprint. The review requests tell an outside reviewer
+// whose review is asked for now.
+export const PR_FIELDS = 'number,url,state,headRefOid,labels,reviews,reviewRequests,statusCheckRollup,mergeable,commits,baseRefName,headRefName,createdAt,mergeCommit'
 
 type GhCheck = {
   __typename?: string
@@ -40,6 +41,9 @@ export type GhPullRequest = {
   headRefOid: string
   labels?: { name: string }[]
   reviews?: GhReview[]
+  // A request for a person carries their login; one for a team carries its
+  // name and slug instead, and the mod leaves it out.
+  reviewRequests?: { __typename?: string; login?: string }[]
   statusCheckRollup?: GhCheck[]
   mergeable?: string
   commits?: { oid: string; committedDate?: string }[]
@@ -369,7 +373,67 @@ export function snapshotOf(repo: string, pr: GhPullRequest, login: string, runs:
     runs,
     ...extras,
   }
+  const outside = outsideOf(pr, login, extras.facts?.reviewers ?? [])
+  if (outside.length > 0) snapshot.outside = outside
   return { ...snapshot, fingerprint: fingerprintOf(snapshot) }
+}
+
+// A GitHub login: letters, digits and single hyphens, at most 39 characters,
+// not starting or ending with a hyphen. A bot's login, which ends in `[bot]`,
+// is not one, so bots are never outside reviewers. Only a login that passes
+// is ever put into a step text.
+const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/
+
+export function isLogin(value: unknown): value is string {
+  return typeof value === 'string' && LOGIN.test(value)
+}
+
+// The reviewers other than the session's own login, sorted by login: every
+// person whose review is requested now, who submitted a review, or whom the
+// `Reviewer:` fact names. GitHub compares logins without regard to case, so
+// the mod does too, and keeps the spelling GitHub gave where it gave one.
+// Each reviewer's state is decided in the order OutsideState lists: a request
+// first, because GitHub clears it when they submit a review and sets it again
+// when someone asks for their review again; then their newest review that is
+// not pending. A newest review that was dismissed, as GitHub does to a stale
+// approval when the repository asks it to, counts as no review, so the
+// reviewer is asked again rather than dropped or sent back to comments the
+// session already answered.
+export function outsideOf(pr: Pick<GhPullRequest, 'reviews' | 'reviewRequests'>, login: string, named: readonly string[]): OutsideReviewer[] {
+  const self = login.toLowerCase()
+  const isOutside = (name: unknown): name is string => isLogin(name) && name.toLowerCase() !== self
+  const spelled = new Map<string, string>()
+  const newest = new Map<string, GhReview>()
+  for (const review of pr.reviews ?? []) {
+    const author = review.author?.login
+    if (!isOutside(author)) continue
+    if (review.state !== 'APPROVED' && review.state !== 'COMMENTED' && review.state !== 'CHANGES_REQUESTED' && review.state !== 'DISMISSED') continue
+    const key = author.toLowerCase()
+    spelled.set(key, author)
+    const seen = newest.get(key)
+    if (seen === undefined || (seen.submittedAt ?? '') <= (review.submittedAt ?? '')) newest.set(key, review)
+  }
+  const requested = new Set<string>()
+  for (const request of pr.reviewRequests ?? []) {
+    if (request.__typename !== undefined && request.__typename !== 'User') continue
+    if (!isOutside(request.login)) continue
+    const key = request.login.toLowerCase()
+    requested.add(key)
+    if (!spelled.has(key)) spelled.set(key, request.login)
+  }
+  for (const name of named) {
+    if (isOutside(name) && !spelled.has(name.toLowerCase())) spelled.set(name.toLowerCase(), name)
+  }
+  return [...spelled.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([key, name]) => {
+      const review = newest.get(key)
+      const state: OutsideState = requested.has(key)
+        ? 'requested'
+        : review === undefined || review.state === 'DISMISSED' ? 'unrequested' : review.state === 'APPROVED' ? 'approved' : 'feedback'
+      const at = review?.submittedAt
+      return typeof at === 'string' && at !== '' ? { login: name, state, at } : { login: name, state }
+    })
 }
 
 function pushesAfter(sha: string, commits: readonly string[]): number {
@@ -454,6 +518,12 @@ export function fingerprintOf(s: Omit<Snapshot, 'fingerprint'>): string {
   if (s.runsCarriedOver === true && s.verdicts !== null && !isChangesRequested(s.verdicts)) parts.push('runs-unread')
   const failed = failedRunsOf(headRunsIn(s) ?? [])
   if (failed.length > 0) parts.push(`failed-runs:${failed.map(run => `${run.id}.${run.attempt}`).join(',')}`)
+  // The outside reviewers, added only when there are any, so a solo project's
+  // snapshot fingerprints as it did before they were read. A review
+  // submitted, a request made or withdrawn, and a newer review in the same
+  // state are all news.
+  const outside = outsideIn(s.outside)
+  if (outside.length > 0) parts.push(`outside:${outside.map(r => `${r.login.toLowerCase()}=${r.state}@${r.at ?? ''}`).join(',')}`)
   return parts.join('|')
 }
 
@@ -561,6 +631,7 @@ export function changesBetween(before: Snapshot | null, after: Snapshot): string
   const removed = labelsBefore.filter(label => !hasAfter.has(label))
   if (added.length > 0) changes.push(`Labels added: ${quoted(added)}.`)
   if (removed.length > 0) changes.push(`Labels removed: ${quoted(removed)}.`)
+  changes.push(...outsideSentences(outsideIn(before.outside), outsideIn(after.outside)))
   if (JSON.stringify(before.verdicts) !== JSON.stringify(after.verdicts)) {
     changes.push(after.verdicts
       ? `A verdict review is posted at the head: spec ${after.verdicts.spec}, adversarial ${after.verdicts.adversarial}.`
@@ -570,6 +641,39 @@ export function changesBetween(before: Snapshot | null, after: Snapshot): string
   // above; never hand over a change with nothing in it.
   if (changes.length === 0) changes.push('The pull request changed in a way the lines below show.')
   return changes
+}
+
+// The outside reviewers a stored snapshot holds, keeping only entries of the
+// right shape, with a login that passes isLogin, so a value an older build
+// saved or a damaged one never reaches a step text.
+export function outsideIn(raw: unknown): OutsideReviewer[] {
+  if (!Array.isArray(raw)) return []
+  const states: readonly string[] = ['requested', 'approved', 'feedback', 'unrequested']
+  return raw.flatMap((entry: unknown) => {
+    if (typeof entry !== 'object' || entry === null) return []
+    const r = entry as Record<string, unknown>
+    if (!isLogin(r.login) || typeof r.state !== 'string' || !states.includes(r.state)) return []
+    const reviewer: OutsideReviewer = { login: r.login, state: r.state as OutsideState }
+    return typeof r.at === 'string' && r.at !== '' ? [{ ...reviewer, at: r.at }] : [reviewer]
+  })
+}
+
+// One sentence per outside reviewer whose state or newest review moved.
+function outsideSentences(before: readonly OutsideReviewer[], after: readonly OutsideReviewer[]): string[] {
+  const was = new Map(before.map(r => [r.login.toLowerCase(), r]))
+  const sentences: string[] = []
+  for (const r of after) {
+    const old = was.get(r.login.toLowerCase())
+    if (old !== undefined && old.state === r.state && old.at === r.at) continue
+    const isNewReview = r.at !== undefined && r.at !== old?.at
+    switch (r.state) {
+      case 'requested': sentences.push(`A review is requested from ${r.login}.`); break
+      case 'approved': sentences.push(`${r.login} approved the pull request.`); break
+      case 'feedback': sentences.push(isNewReview ? `${r.login} submitted a review with comments or requested changes.` : `${r.login}'s review request was withdrawn, and their newest review has comments.`); break
+      case 'unrequested': sentences.push(`${r.login} has no review and no review request.`); break
+    }
+  }
+  return sentences
 }
 
 // Names others wrote are quoted, so the session reads them as names.

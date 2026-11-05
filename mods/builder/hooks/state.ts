@@ -3,7 +3,7 @@
 import type { PromptOrigin, SessionRateLimit, UserMessageTask } from 'claude-code'
 
 import type { AgentCard, AgentStatus, BackgroundTask, Question, UsageHold, WaitingOn } from '../types'
-import { ciOf, isCiMonitorEvent, type Snapshot } from './github'
+import { ciOf, isCiMonitorEvent, outsideIn, type Snapshot } from './github'
 
 // The verdict and lens reviewers, the agents a pull request's review rounds
 // launch. The read-only fence uses READ_ONLY_AGENTS below, not this set. The
@@ -210,6 +210,9 @@ export function waitingOn(s: Snapshot | null, cards: readonly AgentCard[], asked
   const ci = ciOf(s.checks)
   if (ci === 'failed') return 'fix'
   if (ci === 'pending' || (s.runs ?? []).length > 0) return 'ci'
+  // A review asked of someone other than the session can take minutes or
+  // hours, and only a look sees it arrive.
+  if (outsideIn(s.outside).some(r => r.state === 'requested')) return 'reviewer'
   if (s.labels.includes('ready-to-merge')) return 'merge'
   return 'nothing'
 }
@@ -228,6 +231,7 @@ export function waitingOn(s: Snapshot | null, cards: readonly AgentCard[], asked
 export const POLL_MS: Record<WaitingOn, number> = {
   ci: 90_000,
   fix: 90_000,
+  reviewer: 5 * 60_000,
   merge: 90_000,
   agents: 10 * 60_000,
   owner: 10 * 60_000,

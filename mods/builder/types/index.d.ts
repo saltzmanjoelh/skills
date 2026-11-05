@@ -33,7 +33,20 @@ export type HeadRun = {
 // read, in which case the other facts are the defaults. `isClaudeRead` says
 // whether the file was read at all, so a text that has to say so does not
 // infer it from another fact.
-export type BaseFacts = { maxPushes: number; maxRounds: number; checks: 'none' | 'expected'; merge: 'default' | 'custom' | 'unread'; isClaudeRead: boolean }
+// `reviewers` holds the logins the `Reviewer:` fact names, from the base
+// branch's CLAUDE.md or else the user's own. Only snapshotOf reads it, at the
+// look that read it, so a snapshot an older build stored, which has none,
+// loses nothing.
+export type BaseFacts = { maxPushes: number; maxRounds: number; checks: 'none' | 'expected'; merge: 'default' | 'custom' | 'unread'; isClaudeRead: boolean; reviewers?: string[] }
+
+// The state of a reviewer other than the session's own login, decided in this
+// order: their review is requested now, their newest review approves, their
+// newest review comments or requests changes, or they have neither a request
+// nor a review that stands, because the `Reviewer:` fact names them and they
+// were never asked, or their newest review was dismissed.
+export type OutsideState = 'requested' | 'approved' | 'feedback' | 'unrequested'
+// `at` is when their newest review was submitted, absent when they have none.
+export type OutsideReviewer = { login: string; state: OutsideState; at?: string }
 export type Verdict = 'APPROVE' | 'REQUEST_CHANGES'
 export type Verdicts = { sha: string; spec: Verdict; adversarial: Verdict }
 
@@ -84,6 +97,10 @@ export type Snapshot = {
   // `unread` when that look found no merge commit and no record of the
   // update. Every other snapshot has none, and the fingerprint never reads it.
   linked?: string[] | 'unread'
+  // The reviewers other than the session's own login, sorted by login. A
+  // snapshot with none has no field, so it fingerprints as it did before
+  // outside reviewers were read.
+  outside?: OutsideReviewer[]
   fingerprint: string
 }
 
@@ -165,7 +182,7 @@ export type Question = {
 // 'resume' the one look at the end of a usage-limit hold.
 export type Wake = { at: number; source: 'poll' | 'turn-end' | 'after-command' | 'ci-monitor' | 'watch' | 'command' | 'review' | 'session-start' | 'resume'; changed: boolean }
 
-export type WaitingOn = 'agents' | 'ci' | 'fix' | 'owner' | 'merge' | 'nothing'
+export type WaitingOn = 'agents' | 'ci' | 'fix' | 'owner' | 'reviewer' | 'merge' | 'nothing'
 
 // When the mod's next look at the pull request is due, in milliseconds since
 // the epoch, and whether that look was brought forward because the pull
