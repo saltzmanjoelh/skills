@@ -331,6 +331,12 @@ const EVERY_STEP: Step[] = [
   { kind: 'merged', unpushed: UNLISTED, linked: null },
   { kind: 'merged', unpushed: NONE, linked: 'unread' },
   { kind: 'merged', unpushed: { kind: 'some', commits: ['abcdef012345', '0123456789ab'], total: 2, isAncestor: false }, linked: UPDATED },
+  { kind: 'outside-feedback', number: 7, reviewers: ['ann', 'ben'], others: ['review-app'] },
+  { kind: 'outside-feedback', number: 7, reviewers: ['ann'] },
+  { kind: 'request-review', number: 7, reviewers: ['dan'], others: ['review-app'] },
+  { kind: 'request-review', number: 7, reviewers: ['dan', 'eve'] },
+  { kind: 'awaiting-review', reviewers: ['cat'], others: ['review-app', 'passerby'] },
+  { kind: 'awaiting-review', reviewers: ['cat'] },
 ]
 
 const textOf = (step: Step) => stepLines(step).join('\n')
@@ -566,6 +572,9 @@ test('each step gives the state label that follows from it, and Merged, An open 
     failed: 'waiting-on-author',
     review: 'in-review',
     'changes-requested': 'waiting-on-author',
+    'outside-feedback': 'waiting-on-author',
+    'request-review': 'ready-to-merge',
+    'awaiting-review': 'ready-to-merge',
     'runs-unread': null,
     waiting: 'ready-to-merge',
     'head-unchecked': 'ready-to-merge',
@@ -757,4 +766,44 @@ test('an outcome a snapshot holds is kept only in its own shape, and made printa
   expect(linkedIn(['a\nb\u001b[31m'])).toEqual(['a b'])
   expect(linkedIn('unread')).toBe('unread')
   for (const raw of [undefined, null, 'a', [], [1], Array.from({ length: LINKED_KEPT + 1 }, () => 'a')]) expect(linkedIn(raw)).toBe(null)
+})
+
+// A solo project, with no reviewer other than the session, behaves exactly as
+// before outside reviewers were read: every fixture of the chooser's table
+// above chooses the step it chose then, written out here in full.
+test('every chooser fixture with no outside reviewer chooses what it did before', () => {
+  const pending = [{ __typename: 'CheckRun', name: 'tests', status: 'IN_PROGRESS', conclusion: null }]
+  const failing = [{ __typename: 'CheckRun', name: 'tests', status: 'COMPLETED', conclusion: 'FAILURE' }]
+  const unread: BaseFacts = { maxPushes: 8, maxRounds: 5, checks: 'expected', merge: 'unread', isClaudeRead: false }
+  const none = { reviews: approved, statusCheckRollup: [] }
+  const { headRuns: _runs, ...noRuns } = snapshot({ reviews: approved })
+  const { facts: _facts, ...noFacts } = snapshot(none)
+  const table: [Snapshot, boolean, Step][] = [
+    [snapshot({ state: 'MERGED' }), true, { kind: 'merged', unpushed: UNLISTED, linked: null }],
+    [snapshot({ state: 'CLOSED' }), true, { kind: 'closed' }],
+    [snapshot({ reviews: approved }), true, { kind: 'question' }],
+    [snapshot({ mergeable: 'CONFLICTING', reviews: approved }), false, { kind: 'conflicting' }],
+    [snapshot({ statusCheckRollup: failing, reviews: approved }), false, { kind: 'failed', runs: [] }],
+    [snapshot(), false, { kind: 'review', head: C }],
+    [snapshot({ reviews: [review(C, 'REQUEST_CHANGES', 'APPROVE')] }), false, { kind: 'changes-requested' }],
+    [snapshot({ reviews: approved }, [headRun()], FACTS, true), false, { kind: 'runs-unread' }],
+    [noRuns as Snapshot, false, { kind: 'runs-unread' }],
+    [snapshot({ reviews: approved, statusCheckRollup: pending }), false, { kind: 'waiting' }],
+    [snapshot({ reviews: [review('abcdef0123456789', 'APPROVE', 'APPROVE')], headRefOid: 'abcdef0123456789', commits: [{ oid: 'abcdef0123456789' }] }, [headRun()]), false, { kind: 'head-unchecked' }],
+    [snapshot({ reviews: approved }, [headRun()]), false, { kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'passed', runs: [{ id: 1, attempt: 1 }], unpushed: UNLISTED }],
+    [snapshot(none, [], { ...FACTS, checks: 'none' }), false, { kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'none', runs: [], unpushed: UNLISTED }],
+    [snapshot(none, [headRun({ id: 5 })], FACTS), false, { kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'default', runs: [{ id: 5, attempt: 1 }], isClaudeRead: true, unpushed: UNLISTED }],
+    [snapshot(none, [], unread), false, { kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'unread', runs: [], isClaudeRead: false, unpushed: UNLISTED }],
+    [noFacts as Snapshot, false, { kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'unread', runs: [], isClaudeRead: false, unpushed: UNLISTED }],
+  ]
+  for (const [s, isAsking, step] of table) {
+    expect('outside' in s).toBe(false)
+    expect('others' in s).toBe(false)
+    expect(chooseStep(s, isAsking)).toEqual(step)
+  }
+})
+
+test('a solo snapshot fingerprints exactly as it did before outside reviewers were read', () => {
+  const s = snapshot({ reviews: approved, labels: [{ name: 'docs' }] }, [headRun()])
+  expect(s.fingerprint).toBe(`OPEN|cccccccccccc|docs|APPROVE/APPROVE@cccccccc|tests:passed|no-conflict|`)
 })

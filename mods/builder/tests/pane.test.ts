@@ -85,6 +85,15 @@ test('the next step names the first thing that applies, in the order the spec gi
   expect(nextStep(view())).toBe('nothing to hand over · next look in 7m')
 })
 
+test('a review requested of someone other than the session reads as waiting on the reviewer, in the next step and the line above the prompt', () => {
+  const requested = { ...pullRequest(passed, ['ready-to-merge']), outside: [{ login: 'ann', state: 'requested' as const }] }
+  expect(nextStep(view({ pr: requested }))).toBe('waiting on the reviewer · next look in 7m')
+  expect(abovePromptLine(view({ pr: requested }))).toContain('waiting on the reviewer')
+  // Running checks come first, as they do for the merge.
+  const checksRunning = { ...pullRequest(running, ['ready-to-merge']), outside: [{ login: 'ann', state: 'requested' as const }] }
+  expect(nextStep(view({ pr: checksRunning }))).toBe('waiting on checks · next look in 7m')
+})
+
 test('a failed check reads as waiting on a fix, in the next step and the line above the prompt', () => {
   expect(nextStep(view({ pr: pullRequest(failed) }))).toBe('waiting on a fix · next look in 7m')
   expect(abovePromptLine(view({ pr: pullRequest(failed) }))).toBe('builder: #7 open · checks failed · waiting on a fix · next look in 7m')
