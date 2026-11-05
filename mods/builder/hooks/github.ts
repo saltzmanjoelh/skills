@@ -44,8 +44,8 @@ export type GhPullRequest = {
   headRefOid: string
   labels?: { name: string }[]
   reviews?: GhReview[]
-  // A request for a person carries their login; one for a team carries its
-  // name and slug instead, and the mod leaves it out.
+  // A request for a user carries their login. The mod leaves out by its type
+  // any request that is not for a user, such as one for a team or a bot.
   reviewRequests?: { __typename?: string; login?: string }[]
   statusCheckRollup?: GhCheck[]
   mergeable?: string
@@ -427,9 +427,10 @@ function newestReviewsOf(pr: Pick<GhPullRequest, 'reviews'>, login: string): New
 // fact names, whose review is requested now as a user, or whose newest
 // review that is not pending carries OWNER, MEMBER or COLLABORATOR. The last
 // rule keeps a requested reviewer holding the merge after they review,
-// because GitHub removes them from the review requests when they submit. A
-// request for a team is left out, because the mod cannot tell which person
-// will answer it. The mod keeps the spelling GitHub gave where it gave one.
+// because GitHub removes them from the review requests when they submit. Any
+// request that is not for a user, such as one for a team or a bot, is left
+// out by its type, because the mod cannot tell which person will answer it.
+// The mod keeps the spelling GitHub gave where it gave one.
 // Each reviewer's state is decided in the order OutsideState lists: a request
 // first, because GitHub clears it when they submit a review and sets it again
 // when someone asks for their review again; then their newest review that is
@@ -466,6 +467,12 @@ export function outsideOf(pr: Pick<GhPullRequest, 'reviews' | 'reviewRequests'>,
       return typeof at === 'string' && at !== '' ? { login: name, state, at } : { login: name, state }
     })
 }
+
+// Every state an outside reviewer can be in, in the order OutsideState lists
+// them. The type check fails if a state is added to OutsideState and not here,
+// and the `satisfies` fails if a state here is not one of OutsideState.
+const OUTSIDE_STATES = ['requested', 'approved', 'feedback', 'unrequested'] as const satisfies readonly OutsideState[]
+const outsideStatesComplete: [Exclude<OutsideState, (typeof OUTSIDE_STATES)[number]>] extends [never] ? true : never = true
 
 // An outside reviewer's state, decided in the order OutsideState lists where
 // the rules allow: a request first; then a missing or dismissed newest review,
@@ -720,12 +727,12 @@ export function changesBetween(before: Snapshot | null, after: Snapshot): string
 // saved or a damaged one never reaches a step text.
 export function outsideIn(raw: unknown): OutsideReviewer[] {
   if (!Array.isArray(raw)) return []
-  const states: readonly string[] = ['requested', 'approved', 'feedback', 'unrequested']
   return raw.flatMap((entry: unknown) => {
     if (typeof entry !== 'object' || entry === null) return []
     const r = entry as Record<string, unknown>
-    if (!isLogin(r.login) || typeof r.state !== 'string' || !states.includes(r.state)) return []
-    const reviewer: OutsideReviewer = { login: r.login, state: r.state as OutsideState }
+    const state = OUTSIDE_STATES.find(s => s === r.state)
+    if (!isLogin(r.login) || state === undefined) return []
+    const reviewer: OutsideReviewer = { login: r.login, state }
     return typeof r.at === 'string' && r.at !== '' ? [{ ...reviewer, at: r.at }] : [reviewer]
   })
 }

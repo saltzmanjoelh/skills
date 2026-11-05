@@ -433,10 +433,24 @@ test('every merge text reads the reviews and review requests again and merges no
   for (const step of merges) {
     const text = textOf(step)
     expect(text).toContain(`gh pr view ${step.number} --json headRefOid,statusCheckRollup,reviews,reviewRequests`)
-    expect(text).toContain('If any reviewer other than the session is now requested as a user, or any login that a `Reviewer:` line names, other than the session\'s own, has not approved the pull request, because they have no review of it or their newest review of it is not an approval, or any reviewer whose newest review is not an approval carries the association `OWNER`, `MEMBER` or `COLLABORATOR`, merge nothing: call `mcp__builder__watch` and follow the step it names.')
+    expect(text).toContain('If any reviewer other than the session is now requested as a user, or any login that a `Reviewer:` line names, other than the session\'s own, has not approved the pull request, because they have no review of it or their newest review of it is not an approval, or any reviewer other than the session\'s own login whose newest review is not an approval carries the association `OWNER`, `MEMBER` or `COLLABORATOR`, merge nothing: call `mcp__builder__watch` and follow the step it names. The session\'s own verdict reviews, which are comment reviews, never hold the merge under any of these rules.')
   }
   const ask = textOf({ kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'default', runs: [], isClaudeRead: true, unpushed: NONE })
   expect(ask).toContain('no new run, and no reviewer other than the session holds the merge as those reads say')
+})
+
+// The session posts its own verdict reviews as comment reviews, so its newest
+// review is never an approval, and its login usually carries OWNER or
+// COLLABORATOR. A rule on the association that did not leave the session out
+// would hold every merge, and the watch would name the merge again.
+test('every merge text leaves the session out of the association rule, and says its own verdict reviews never hold the merge', () => {
+  const merges = EVERY_STEP.filter(step => step.kind === 'merge' || step.kind === 'ask-merge')
+  expect(merges.length).toBe(5)
+  for (const step of merges) {
+    const text = textOf(step)
+    expect(text).toContain('or any reviewer other than the session\'s own login whose newest review is not an approval carries the association `OWNER`, `MEMBER` or `COLLABORATOR`')
+    expect(text).toContain('The session\'s own verdict reviews, which are comment reviews, never hold the merge under any of these rules.')
+  }
 })
 
 test('the question for a merge without checks covers this head and these runs, and keeps the read again before merging on a yes', () => {
