@@ -166,7 +166,7 @@ test('the change prompt says when a reviewer has no review and no request, as af
 })
 
 test('a stored outside list keeps only entries of the right shape', () => {
-  expect(outsideIn([{ login: 'ann', state: 'approved', at: T1 }, { login: 'bad name', state: 'approved' }, { login: 'ben', state: 'other' }, null, 'x'])).toEqual([{ login: 'ann', state: 'approved', at: T1 }])
+  expect(outsideIn([{ login: 'ann', state: 'approved', at: T1 }, { login: 'bad name', state: 'approved' }, { login: 'ben', state: 'other' }, { login: 'x', state: 'approved', at: 7 }, null, 'x'])).toEqual([{ login: 'ann', state: 'approved', at: T1 }, { login: 'x', state: 'approved' }])
   expect(outsideIn(undefined)).toEqual([])
 })
 
@@ -314,7 +314,7 @@ test('an other reviewer\'s review arriving, and a newer one, each change the fin
 })
 
 test('a stored list of other reviewers keeps only entries of the right shape', () => {
-  expect(othersIn([{ login: 'app', at: T1 }, { login: 'bare' }, { login: 'bad name', at: T1 }, { login: 'x', at: 7 }, null, 'x'])).toEqual([{ login: 'app', at: T1 }, { login: 'bare' }])
+  expect(othersIn([{ login: 'app', at: T1 }, { login: 'bare' }, { login: 'bad name', at: T1 }, { login: 'x', at: 7 }, null, 'x'])).toEqual([{ login: 'app', at: T1 }, { login: 'bare' }, { login: 'x' }])
   expect(othersIn(undefined)).toEqual([])
 })
 

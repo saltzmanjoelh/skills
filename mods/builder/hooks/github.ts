@@ -402,10 +402,14 @@ export function isLogin(value: unknown): value is string {
 // hold the merge.
 const HOLDING = new Set(['OWNER', 'MEMBER', 'COLLABORATOR'])
 
-// The newest review that is not pending of each reviewer other than the
-// session's own login whose login passes isLogin, keyed by the login in lower
-// case, because GitHub compares logins without regard to case. A pending
-// review is a draft nobody else can see yet.
+// The review states that count as a submitted review. Only these four count,
+// so a pending review, which is a draft nobody else can see yet, and any state
+// GitHub may add later are both left out.
+const STANDING = new Set(['APPROVED', 'COMMENTED', 'CHANGES_REQUESTED', 'DISMISSED'])
+
+// The newest review whose state is in STANDING of each reviewer other than
+// the session's own login whose login passes isLogin, keyed by the login in
+// lower case, because GitHub compares logins without regard to case.
 type NewestReviews = Map<string, GhReview & { author: { login: string } }>
 
 function newestReviewsOf(pr: Pick<GhPullRequest, 'reviews'>, login: string): NewestReviews {
@@ -414,7 +418,7 @@ function newestReviewsOf(pr: Pick<GhPullRequest, 'reviews'>, login: string): New
   for (const review of pr.reviews ?? []) {
     const author = review.author?.login
     if (!isLogin(author) || author.toLowerCase() === self) continue
-    if (review.state !== 'APPROVED' && review.state !== 'COMMENTED' && review.state !== 'CHANGES_REQUESTED' && review.state !== 'DISMISSED') continue
+    if (!STANDING.has(review.state ?? '')) continue
     const key = author.toLowerCase()
     const seen = newest.get(key)
     if (seen === undefined || (seen.submittedAt ?? '') <= (review.submittedAt ?? '')) newest.set(key, { ...review, author: { login: author } })
@@ -738,13 +742,16 @@ export function outsideIn(raw: unknown): OutsideReviewer[] {
   })
 }
 
-// The other reviewers a stored snapshot holds, under the same rule.
+// The other reviewers a stored snapshot holds, under the same rule as
+// outsideIn: an entry whose time is missing, empty or not a string is kept
+// without it, because the time only feeds the fingerprint, and dropping the
+// entry would remove a reviewer from the step texts.
 export function othersIn(raw: unknown): OtherReviewer[] {
   if (!Array.isArray(raw)) return []
   return raw.flatMap((entry: unknown) => {
     if (typeof entry !== 'object' || entry === null) return []
     const r = entry as Record<string, unknown>
-    if (!isLogin(r.login) || (r.at !== undefined && typeof r.at !== 'string')) return []
+    if (!isLogin(r.login)) return []
     return typeof r.at === 'string' && r.at !== '' ? [{ login: r.login, at: r.at }] : [{ login: r.login }]
   })
 }
