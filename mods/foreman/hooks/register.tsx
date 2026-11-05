@@ -437,8 +437,12 @@ async function decideNow($: $, folderExists: boolean, listed: boolean, watching:
   // The slot count was read before the ledger update, so a raise that
   // landed in between was decided with the old count, which may have
   // cleared its mark with no slot free. The mark is then set again, so the
-  // next read decides the raise with the new count.
-  if (slotsOf(parentIn(await read($, parent)), currentOptions.slots) > input.slots) await writeTickets($, withSlotsRaised).catch(() => undefined)
+  // next read decides the raise with the new count. This setter follows the
+  // same rule as the one in applyCommand: the mark is set only on a parent
+  // that is on, and only for a higher count. A change to one setter is made
+  // to the other too.
+  const settingsAfter = parentIn(await read($, parent))
+  if (settingsAfter.isOn && slotsOf(settingsAfter, currentOptions.slots) > input.slots) await writeTickets($, withSlotsRaised).catch(() => undefined)
   return { decision, rows, written }
 }
 
@@ -1526,6 +1530,10 @@ async function applyCommand($: $, command: Exclude<Command, { kind: 'refused' }>
     // app's list, so that a new slot no waiting session can take wakes the
     // parent with the kept sentence, as a freed slot does. A failed store
     // write is logged where it fails, and the raise then gets no wake.
+    // decideNow sets the mark a second time, for a raise that lands while a
+    // read is under way, by the same rule as here: only on a parent that is
+    // on, and only for a higher count. A change to one setter is made to the
+    // other too.
     if (wasOn) {
       if (raised) await writeTickets($, withSlotsRaised).catch(() => undefined)
       later($, () => readNow($))

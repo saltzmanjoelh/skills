@@ -39,6 +39,15 @@ new slot.
    count is higher is decided from the old count that `writeParent`'s change
    function sees. A count equal to or lower than the stored one sets no mark,
    and a count given to a session that is not yet a parent sets none.
+   A second setter covers a raise that lands while a read is under way:
+   `decideNow` in `register.tsx` reads the slot count before its ledger
+   update, so such a read decides the raise with the old count and clears
+   the mark. After that update it reads the parent settings again and sets
+   the mark again when that parent is on and its count is higher than the
+   count the read used, so the next read decides the raise with the new
+   count. Both setters follow one rule, the mark is set only on a parent
+   that is on and only for a higher count, and each names the other in a
+   comment (see `docs/specs/foreman-raised-slot-read-setter-needs-parent-on.md`).
 2. **The first read that gets the list decides the mark.** That read makes its
    claims as today. If slots are then still free and an issue waits
    unclaimed, the read runs the existing wake block as a freed slot does: it
@@ -72,6 +81,11 @@ new slot.
 - The read that the raise schedules fails to get the list, and several reads
   after it fail too: the mark is kept across them, and only the first read
   that does not fail decides and clears it.
+- The person raises the count while a read is under way, after it took the
+  slot count and before its ledger update: that read clears the mark with
+  the old count, then sets it again, because the parent is on and its count
+  rose, so the next read decides the raise. A parent whose settings read as
+  off at that point gets no mark.
 - A sub session frees a slot on the same read that decides the mark: the
   read runs the wake block once, and the kept sentence names no more keys
   than there are free slots.
@@ -124,6 +138,12 @@ fail against today's code where it describes new behaviour:
   mark is written only when the parent was already on before the command,
   so that check, rather than the comparison of counts, is what this test
   guards.
+- 'a raise that lands while a read is under way is decided by a later
+  read, which sends the kept sentence': the read's setter marks a parent
+  that is on again, and the next read sends one kept sentence.
+- 'a raise that lands while a read is under way leaves no mark when the
+  parent reads as off after the read's ledger update': the read's setter
+  checks that the parent is on.
 - A ledger that holds only the mark survives a `session.start` reload.
 - Every gate in the project's `CLAUDE.md` passes for builder and foreman.
 
