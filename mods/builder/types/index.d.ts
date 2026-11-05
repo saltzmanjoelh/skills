@@ -47,6 +47,11 @@ export type BaseFacts = { maxPushes: number; maxRounds: number; checks: 'none' |
 export type OutsideState = 'requested' | 'approved' | 'feedback' | 'unrequested'
 // `at` is when their newest review was submitted, absent when they have none.
 export type OutsideReviewer = { login: string; state: OutsideState; at?: string }
+// A reviewer other than the session's own login who is not an outside
+// reviewer, such as a GitHub app's automatic review or a stranger on a public
+// repository, whose newest review comments or requests changes. `at` is when
+// that review was submitted, absent when GitHub gave no time.
+export type OtherReviewer = { login: string; at?: string }
 export type Verdict = 'APPROVE' | 'REQUEST_CHANGES'
 export type Verdicts = { sha: string; spec: Verdict; adversarial: Verdict }
 
@@ -101,6 +106,10 @@ export type Snapshot = {
   // snapshot with none has no field, so it fingerprints as it did before
   // outside reviewers were read.
   outside?: OutsideReviewer[]
+  // The other reviewers whose newest review comments or requests changes,
+  // sorted by login. Their review wakes the session, and the merge does not
+  // wait for them. A snapshot with none has no field.
+  others?: OtherReviewer[]
   fingerprint: string
 }
 

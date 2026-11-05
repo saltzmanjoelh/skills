@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { changesBetween, isLogin, outsideIn, outsideOf, PR_FIELDS, snapshotOf, type GhPullRequest } from '../hooks/github'
+import { changesBetween, isLogin, othersIn, othersOf, outsideIn, outsideOf, PR_FIELDS, snapshotOf, type GhPullRequest } from '../hooks/github'
 import { pollFor, POLL_MS, waitingOn } from '../hooks/state'
 import { chooseStep, labelFor, reviewersOf, stepLines } from '../hooks/step'
 import type { BaseFacts, HeadRun, Snapshot } from '../types'
@@ -23,8 +23,11 @@ function verdicts(spec: string, adversarial: string) {
 
 const approvedBySession = verdicts('APPROVE', 'APPROVE')
 
-function outsideReview(login: string, state: string, submittedAt = T1) {
-  return { author: { login }, state, body: '', commit: { oid: C }, submittedAt }
+// A review by someone other than the session. The association is the one
+// GitHub sets from the author's relation to the repository, and a
+// collaborator's unless a test says otherwise.
+function outsideReview(login: string, state: string, submittedAt = T1, authorAssociation = 'COLLABORATOR') {
+  return { author: { login }, state, body: '', commit: { oid: C }, submittedAt, authorAssociation }
 }
 
 function pullRequest(over: Partial<GhPullRequest> = {}): GhPullRequest {
@@ -65,7 +68,7 @@ test('the fact takes several logins, drops a leading @ and a repeat, and leaves 
   expect(reviewersOf('Reviewer: `carol`', null)).toEqual(['carol'])
 })
 
-test('an outside reviewer is anyone but the session who is requested, has reviewed, or is named, sorted by login', () => {
+test('an outside reviewer is anyone but the session who is requested, has reviewed as a collaborator, or is named, sorted by login', () => {
   const pr = pullRequest({
     reviews: [approvedBySession, outsideReview('zed', 'COMMENTED')],
     reviewRequests: [{ __typename: 'User', login: 'mia' }],
@@ -186,3 +189,102 @@ test('a requested outside review is waited on at the reviewer interval, after fa
   const running = snapshot({ reviewRequests: [{ __typename: 'User', login: 'ann' }], statusCheckRollup: [{ __typename: 'CheckRun', name: 'tests', status: 'IN_PROGRESS' }] })
   expect(waitingOn(running, [], [])).toBe('ci')
 })
+
+// Who holds the merge: the association GitHub sets on a review decides for a
+// reviewer who is neither named nor requested now.
+
+test('an app\'s automatic review and a stranger\'s review do not make them outside reviewers', () => {
+  const pr = pullRequest({
+    reviews: [approvedBySession, outsideReview('review-app', 'COMMENTED', T1, 'CONTRIBUTOR'), outsideReview('passerby', 'CHANGES_REQUESTED', T1, 'NONE')],
+  })
+  expect(outsideOf(pr, ME, [])).toEqual([])
+})
+
+test('a collaborator, a member or an owner who reviews without being named or asked is an outside reviewer', () => {
+  const pr = pullRequest({
+    reviews: [
+      approvedBySession,
+      outsideReview('col', 'COMMENTED', T1, 'COLLABORATOR'),
+      outsideReview('mem', 'APPROVED', T1, 'MEMBER'),
+      outsideReview('own', 'CHANGES_REQUESTED', T1, 'OWNER'),
+    ],
+  })
+  expect(outsideOf(pr, ME, [])).toEqual([
+    { login: 'col', state: 'feedback', at: T1 },
+    { login: 'mem', state: 'approved', at: T1 },
+    { login: 'own', state: 'feedback', at: T1 },
+  ])
+})
+
+test('a requested reviewer who has reviewed, and so left the review requests, still holds the merge', () => {
+  const requested = pullRequest({ reviewRequests: [{ __typename: 'User', login: 'ann' }] })
+  expect(outsideOf(requested, ME, [])).toEqual([{ login: 'ann', state: 'requested' }])
+  const reviewed = pullRequest({ reviews: [approvedBySession, outsideReview('ann', 'COMMENTED', T2, 'MEMBER')] })
+  expect(outsideOf(reviewed, ME, [])).toEqual([{ login: 'ann', state: 'feedback', at: T2 }])
+})
+
+test('a named or requested reviewer holds the merge whatever the association of their review', () => {
+  const named = pullRequest({ reviews: [approvedBySession, outsideReview('ann', 'COMMENTED', T1, 'NONE')] })
+  expect(outsideOf(named, ME, ['ann'])).toEqual([{ login: 'ann', state: 'feedback', at: T1 }])
+  const requested = pullRequest({ reviews: [approvedBySession, outsideReview('ann', 'COMMENTED', T1, 'CONTRIBUTOR')], reviewRequests: [{ __typename: 'User', login: 'ann' }] })
+  expect(outsideOf(requested, ME, [])).toEqual([{ login: 'ann', state: 'requested', at: T1 }])
+})
+
+test('the association of the newest review that is not pending decides', () => {
+  const pr = pullRequest({ reviews: [approvedBySession, outsideReview('ann', 'COMMENTED', T1, 'COLLABORATOR'), outsideReview('ann', 'COMMENTED', T2, 'CONTRIBUTOR'), outsideReview('ann', 'PENDING', '', 'COLLABORATOR')] })
+  expect(outsideOf(pr, ME, [])).toEqual([])
+})
+
+// Other reviewers: everyone else who reviewed, whose comments the session
+// addresses without waiting for them or asking them again.
+
+test('other reviewers are those whose newest review comments or requests changes, with its time, and who are not outside reviewers', () => {
+  const pr = pullRequest({
+    reviews: [
+      approvedBySession,
+      outsideReview('review-app', 'COMMENTED', T1, 'CONTRIBUTOR'),
+      outsideReview('passerby', 'CHANGES_REQUESTED', T2, 'NONE'),
+      outsideReview('happy', 'COMMENTED', T1, 'NONE'), outsideReview('happy', 'APPROVED', T2, 'NONE'),
+      outsideReview('gone', 'DISMISSED', T1, 'NONE'),
+      outsideReview('col', 'COMMENTED', T1, 'COLLABORATOR'),
+      outsideReview('helper[bot]', 'COMMENTED', T1, 'NONE'),
+      outsideReview('named', 'COMMENTED', T1, 'NONE'),
+      { ...outsideReview(ME, 'COMMENTED', T2, 'NONE') },
+    ],
+  })
+  expect(othersOf(pr, ME, ['named'])).toEqual([{ login: 'passerby', at: T2 }, { login: 'review-app', at: T1 }])
+})
+
+test('a snapshot keeps the other reviewers only when there are any', () => {
+  const s = snapshot({ reviews: [approvedBySession, outsideReview('review-app', 'COMMENTED', T1, 'CONTRIBUTOR')] })
+  expect(s.others).toEqual([{ login: 'review-app', at: T1 }])
+  expect('outside' in s).toBe(false)
+  expect('others' in snapshot()).toBe(false)
+})
+
+test('an other reviewer\'s review arriving, and a newer one, each change the fingerprint', () => {
+  const once = snapshot({ reviews: [approvedBySession, outsideReview('review-app', 'COMMENTED', T1, 'CONTRIBUTOR')] })
+  const twice = snapshot({ reviews: [approvedBySession, outsideReview('review-app', 'COMMENTED', T1, 'CONTRIBUTOR'), outsideReview('review-app', 'COMMENTED', T2, 'CONTRIBUTOR')] })
+  expect(new Set([snapshot(), once, twice].map(s => s.fingerprint)).size).toBe(3)
+  expect(once.fingerprint).toBe(`${snapshot().fingerprint}|others:review-app@${T1}`)
+})
+
+test('a stored list of other reviewers keeps only entries of the right shape', () => {
+  expect(othersIn([{ login: 'app', at: T1 }, { login: 'bare' }, { login: 'bad name', at: T1 }, { login: 'x', at: 7 }, null, 'x'])).toEqual([{ login: 'app', at: T1 }, { login: 'bare' }])
+  expect(othersIn(undefined)).toEqual([])
+})
+
+test('the change prompt names an other reviewer\'s review with comments', () => {
+  const once = snapshot({ reviews: [approvedBySession, outsideReview('review-app', 'COMMENTED', T1, 'CONTRIBUTOR')] })
+  const twice = snapshot({ reviews: [approvedBySession, outsideReview('review-app', 'COMMENTED', T2, 'CONTRIBUTOR')] })
+  const sentence = 'review-app has a review with comments or requested changes, which the merge does not wait for.'
+  expect(changesBetween(snapshot(), once)).toContain(sentence)
+  expect(changesBetween(once, twice)).toContain(sentence)
+  expect(changesBetween(once, once)).not.toContain(sentence)
+})
+
+test('the change prompt says when a reviewer leaves the outside reviewers', () => {
+  const requested = snapshot({ reviewRequests: [{ __typename: 'User', login: 'ann' }] })
+  expect(changesBetween(requested, snapshot())).toContain('ann is no longer an outside reviewer, so the merge does not wait for them.')
+})
+
