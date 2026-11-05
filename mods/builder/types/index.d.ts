@@ -102,7 +102,8 @@ export type Snapshot = {
   // `unread` when that look found no merge commit and no record of the
   // update. Every other snapshot has none, and the fingerprint never reads it.
   linked?: string[] | 'unread'
-  // The reviewers other than the session's own login, sorted by login. A
+  // The outside reviewers, who hold the merge until they approve, sorted by
+  // login. Strangers and app reviewers are kept in others instead. A
   // snapshot with none has no field, so it fingerprints as it did before
   // outside reviewers were read.
   outside?: OutsideReviewer[]
