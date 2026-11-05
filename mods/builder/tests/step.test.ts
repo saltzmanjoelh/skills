@@ -367,7 +367,7 @@ test('the default merge text holds the merge command with the number and the ful
   // The mod sets the label and reports the merge stage itself.
   expect(text).not.toContain('mcp__builder__progress')
   expect(text).not.toContain('ready-to-merge')
-  expect(text).toContain(`gh pr view 7 --json headRefOid,statusCheckRollup`)
+  expect(text).toContain(`gh pr view 7 --json headRefOid,statusCheckRollup,reviews,reviewRequests`)
   expect(text).toContain('Never merge any other way')
   expect(text).toContain('If the command refuses, say why and wait.')
   // The facts that govern the merge must not have been changed by the branch.
@@ -425,6 +425,18 @@ test('every merge text reads the head\'s runs again and calls the watch tool for
   expect(textOf({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'none', runs: [], unpushed: NONE })).toContain('The mod saw no workflow runs at this head')
   // A repository left out is named by a placeholder the text explains.
   expect(textOf({ kind: 'merge', number: 7, head: C, repo: null, command: 'unread', checks: 'none', runs: [], unpushed: NONE })).toContain('<repo> as the pull request\'s repository')
+})
+
+test('every merge text reads the reviews and review requests again and merges nothing while a reviewer other than the session holds the merge', () => {
+  const merges = EVERY_STEP.filter(step => step.kind === 'merge' || step.kind === 'ask-merge')
+  expect(merges.length).toBe(5)
+  for (const step of merges) {
+    const text = textOf(step)
+    expect(text).toContain(`gh pr view ${step.number} --json headRefOid,statusCheckRollup,reviews,reviewRequests`)
+    expect(text).toContain('If any reviewer other than the session is now requested as a user, or has a newest review that is not an approval and either is named by a `Reviewer:` line or carries the association `OWNER`, `MEMBER` or `COLLABORATOR`, merge nothing: call `mcp__builder__watch` and follow the step it names.')
+  }
+  const ask = textOf({ kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'default', runs: [], isClaudeRead: true, unpushed: NONE })
+  expect(ask).toContain('no new run, and no reviewer other than the session holds the merge as those reads say')
 })
 
 test('the question for a merge without checks covers this head and these runs, and keeps the read again before merging on a yes', () => {

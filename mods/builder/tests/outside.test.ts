@@ -132,6 +132,24 @@ test('the change prompt names who reviewed and whose review was requested', () =
   expect(changesBetween(commented, approved)).toContain('ann approved the pull request.')
 })
 
+test('the change prompt says when a request is withdrawn from a reviewer whose earlier comments still stand', () => {
+  const commented = [approvedBySession, outsideReview('ann', 'COMMENTED', T1)]
+  const askedAgain = snapshot({ reviews: commented, reviewRequests: [{ __typename: 'User', login: 'ann' }] })
+  const withdrawn = snapshot({ reviews: commented })
+  expect(withdrawn.outside).toEqual([{ login: 'ann', state: 'feedback', at: T1 }])
+  expect(changesBetween(askedAgain, withdrawn)).toContain('ann\'s review request was withdrawn, and their newest review has comments.')
+  expect(changesBetween(askedAgain, withdrawn)).not.toContain('ann submitted a review with comments or requested changes.')
+})
+
+test('the change prompt says when a reviewer has no review and no request, as after a dismissed approval', () => {
+  // GitHub keeps a dismissed review's submission time and changes only its
+  // state, so the reviewer moves from approved to unrequested at the same time.
+  const approved = snapshot({ reviews: [approvedBySession, outsideReview('ann', 'APPROVED', T1)] })
+  const dismissed = snapshot({ reviews: [approvedBySession, outsideReview('ann', 'DISMISSED', T1)] })
+  expect(dismissed.outside).toEqual([{ login: 'ann', state: 'unrequested', at: T1 }])
+  expect(changesBetween(approved, dismissed)).toContain('ann has no review and no review request.')
+})
+
 test('a stored outside list keeps only entries of the right shape', () => {
   expect(outsideIn([{ login: 'ann', state: 'approved', at: T1 }, { login: 'bad name', state: 'approved' }, { login: 'ben', state: 'other' }, null, 'x'])).toEqual([{ login: 'ann', state: 'approved', at: T1 }])
   expect(outsideIn(undefined)).toEqual([])

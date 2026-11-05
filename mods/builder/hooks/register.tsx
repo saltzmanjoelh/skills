@@ -493,12 +493,18 @@ function baseFolderOf(r: SnapshotTarget): string | null {
 // is no folder or base to read it from, the facts are the unread defaults.
 // The reviewers the `Reviewer:` fact names come from that file, or else from
 // the CLAUDE.md in the user's configuration folder, which is read even when
-// the base branch's file is not.
+// the base branch's file is not; reviewersOf decides which line wins.
 async function readBaseFacts($: $, dir: string | null, base: string | null): Promise<BaseFacts> {
   const claude = dir === null || base === null ? null : await git($, dir, ['show', `origin/${base}:CLAUDE.md`])
-  const user = claude !== null && factIn(claude, 'Reviewer') !== null ? null : await readUserClaude($)
-  const reviewers = reviewersOf(claude, user)
-  const facts = claude === null ? UNREAD_FACTS : await factsOfBase($, dir!, base!, claude)
+  const reviewers = reviewersOf(claude, await readUserClaude($))
+  if (dir === null || base === null || claude === null) return withReviewers(UNREAD_FACTS, reviewers)
+  return withReviewers(await factsOfBase($, dir, base, claude), reviewers)
+}
+
+// The facts with the reviewers the `Reviewer:` fact names, which are left
+// out when there are none, so a project without a reviewer stores the facts
+// it stored before.
+function withReviewers(facts: BaseFacts, reviewers: string[]): BaseFacts {
   return reviewers.length === 0 ? facts : { ...facts, reviewers }
 }
 

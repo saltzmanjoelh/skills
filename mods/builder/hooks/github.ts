@@ -377,9 +377,10 @@ export function snapshotOf(repo: string, pr: GhPullRequest, login: string, runs:
     ...extras,
   }
   const named = extras.facts?.reviewers ?? []
-  const outside = outsideOf(pr, login, named)
+  const newest = newestReviewsOf(pr, login)
+  const outside = outsideOf(pr, login, named, newest)
   if (outside.length > 0) snapshot.outside = outside
-  const others = othersOf(pr, login, named)
+  const others = othersOf(pr, login, named, newest, outside)
   if (others.length > 0) snapshot.others = others
   return { ...snapshot, fingerprint: fingerprintOf(snapshot) }
 }
@@ -405,9 +406,11 @@ const HOLDING = new Set(['OWNER', 'MEMBER', 'COLLABORATOR'])
 // session's own login whose login passes isLogin, keyed by the login in lower
 // case, because GitHub compares logins without regard to case. A pending
 // review is a draft nobody else can see yet.
-function newestReviewsOf(pr: Pick<GhPullRequest, 'reviews'>, login: string): Map<string, GhReview & { author: { login: string } }> {
+type NewestReviews = Map<string, GhReview & { author: { login: string } }>
+
+function newestReviewsOf(pr: Pick<GhPullRequest, 'reviews'>, login: string): NewestReviews {
   const self = login.toLowerCase()
-  const newest = new Map<string, GhReview & { author: { login: string } }>()
+  const newest: NewestReviews = new Map()
   for (const review of pr.reviews ?? []) {
     const author = review.author?.login
     if (!isLogin(author) || author.toLowerCase() === self) continue
@@ -433,11 +436,11 @@ function newestReviewsOf(pr: Pick<GhPullRequest, 'reviews'>, login: string): Map
 // not pending. A newest review that was dismissed, as GitHub does to a stale
 // approval when the repository asks it to, counts as no review, so the
 // reviewer is asked again rather than dropped or sent back to comments the
-// session already answered.
-export function outsideOf(pr: Pick<GhPullRequest, 'reviews' | 'reviewRequests'>, login: string, named: readonly string[]): OutsideReviewer[] {
+// session already answered. The caller may pass the newest reviews it has
+// already read from the same pull request, so they are read only once.
+export function outsideOf(pr: Pick<GhPullRequest, 'reviews' | 'reviewRequests'>, login: string, named: readonly string[], newest: NewestReviews = newestReviewsOf(pr, login)): OutsideReviewer[] {
   const self = login.toLowerCase()
   const isOutside = (name: unknown): name is string => isLogin(name) && name.toLowerCase() !== self
-  const newest = newestReviewsOf(pr, login)
   const spelled = new Map<string, string>()
   for (const [key, review] of newest) {
     if (HOLDING.has(review.authorAssociation ?? '')) spelled.set(key, review.author.login)
@@ -458,12 +461,21 @@ export function outsideOf(pr: Pick<GhPullRequest, 'reviews' | 'reviewRequests'>,
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([key, name]) => {
       const review = newest.get(key)
-      const state: OutsideState = requested.has(key)
-        ? 'requested'
-        : review === undefined || review.state === 'DISMISSED' ? 'unrequested' : review.state === 'APPROVED' ? 'approved' : 'feedback'
+      const state = stateOf(requested.has(key), review)
       const at = review?.submittedAt
       return typeof at === 'string' && at !== '' ? { login: name, state, at } : { login: name, state }
     })
+}
+
+// An outside reviewer's state, decided in the order OutsideState lists where
+// the rules allow: a request first; then a missing or dismissed newest review,
+// which counts as no review, so the reviewer is unrequested; then an
+// approval; and any other newest review is feedback.
+function stateOf(isRequested: boolean, review: GhReview | undefined): OutsideState {
+  if (isRequested) return 'requested'
+  if (review === undefined || review.state === 'DISMISSED') return 'unrequested'
+  if (review.state === 'APPROVED') return 'approved'
+  return 'feedback'
 }
 
 // The other reviewers, sorted by login: everyone other than the session's own
@@ -471,10 +483,18 @@ export function outsideOf(pr: Pick<GhPullRequest, 'reviews' | 'reviewRequests'>,
 // is not pending comments or requests changes, with that review's time. The
 // merge never waits for them and nobody asks them again, because a review
 // request to them fails, but their review wakes the session and the steps
-// send it to their comments before it merges.
-export function othersOf(pr: Pick<GhPullRequest, 'reviews' | 'reviewRequests'>, login: string, named: readonly string[]): OtherReviewer[] {
-  const outside = new Set(outsideOf(pr, login, named).map(r => r.login.toLowerCase()))
-  return [...newestReviewsOf(pr, login).entries()]
+// send it to their comments before it merges. snapshotOf passes the newest
+// reviews and the outside reviewers it has already worked out, so this only
+// filters them; a caller that passes neither has them worked out here.
+export function othersOf(
+  pr: Pick<GhPullRequest, 'reviews' | 'reviewRequests'>,
+  login: string,
+  named: readonly string[],
+  newest: NewestReviews = newestReviewsOf(pr, login),
+  outsideReviewers: readonly OutsideReviewer[] = outsideOf(pr, login, named, newest),
+): OtherReviewer[] {
+  const outside = new Set(outsideReviewers.map(r => r.login.toLowerCase()))
+  return [...newest.entries()]
     .filter(([key, review]) => !outside.has(key) && (review.state === 'COMMENTED' || review.state === 'CHANGES_REQUESTED'))
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([, review]) => {
