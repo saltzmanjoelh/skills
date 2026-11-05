@@ -309,14 +309,17 @@ apply without a listing.
 ### State labels
 
 The pull request carries exactly one of `in-review`, `waiting-on-author`,
-`ready-to-merge` and `stuck` at a time. The mod sets the label that follows
-from the step it chooses, removes the other state labels as it does, and
-remembers the label it set, so the session does not set those. **Review this
-head** gives `in-review`; the failed, conflicting and changes-requested steps,
-and the step where an outside review has feedback to address, give
-`waiting-on-author`; the other steps where both verdicts approve, the steps
-that request the outside review and wait on it among them, give
-`ready-to-merge`; **Over a limit** and **Closed** give `stuck`. The session
+`waiting-on-reviewer`, `ready-to-merge` and `stuck` at a time. Each says whose
+turn it is. The mod sets the label that follows from the step it chooses,
+removes the other state labels as it does, creates the label first when the
+repository lacks it, and remembers the label it set, so the session does not
+set those. **Review this head** gives `in-review`; the failed, conflicting and
+changes-requested steps, and the step where an outside review has feedback to
+address, give `waiting-on-author`; the steps that request the outside review
+and wait on it give `waiting-on-reviewer`, because an outside reviewer holds
+the merge there; the other steps where both verdicts approve, where nobody
+holds the merge, give `ready-to-merge`; **Over a limit** and **Closed** give
+`stuck`. The session
 sets `stuck` itself only when a step's text asks for its judgement, such as a
 failure outside the code or a person declining to merge without checks. It
 reads the labels the pull request carries now with
@@ -396,14 +399,15 @@ waiting on checks, merging, or asking whether to merge without checks:
   session's own review round reviews the new head. With nothing pushed, call
   `mcp__builder__watch` and follow the step it names.
 - **Both verdicts approve at this head, request the outside review**, when any
-  outside reviewer is in the Unrequested state. It gives `ready-to-merge`. Run
+  outside reviewer is in the Unrequested state. It gives `waiting-on-reviewer`. Run
   `gh pr edit <n> --add-reviewer <logins>`, and then call
   `mcp__builder__watch` and follow the step it names.
 - **Both verdicts approve at this head, waiting on the outside review**, when
-  any outside reviewer is in the Requested state. It gives `ready-to-merge`.
+  any outside reviewer is in the Requested state. It gives `waiting-on-reviewer`.
   Say whose review the session waits on and end the turn. While a review is
-  requested, the mod looks at the pull request every 5 minutes, and it starts
-  a turn when the review arrives.
+  requested, or the pull request carries `waiting-on-reviewer`, the mod looks
+  at the pull request every 5 minutes, and it starts a turn when the review
+  arrives.
 
 Only when every outside reviewer approves, or there are none, does the mod go
 on to the other steps where both verdicts approve.
@@ -437,7 +441,8 @@ it names them again.
 The mod sets the state label for each of these steps, as "State labels" says.
 So when an outside review arrives the label becomes `waiting-on-author`,
 whether or not the reviewer moved it by hand, and once the session has
-answered and asked again the label goes back to `ready-to-merge`. The session
+answered and asked again the label goes back to `waiting-on-reviewer`. It
+becomes `ready-to-merge` only once every outside reviewer approves. The session
 sets no state label for any of this, except `stuck` in three cases, where it
 sets it as "State labels" says and asks the person, so that it never asks for
 a review in a loop:
