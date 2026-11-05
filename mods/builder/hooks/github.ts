@@ -3,15 +3,16 @@
 // JSON gh printed, so the tests can feed it fixtures and the hooks can call it
 // without touching the network.
 
-import type { BaseFacts, BuildStatus, Check, CheckState, HeadRun, Snapshot, Unpushed, Verdict, Verdicts, WorkflowRun } from '../types'
+import type { BaseFacts, BuildStatus, Check, CheckState, HeadRun, OtherReviewer, OutsideReviewer, OutsideState, Snapshot, Unpushed, Verdict, Verdicts, WorkflowRun } from '../types'
 
-export type { BaseFacts, Check, CheckState, HeadRun, Snapshot, Unpushed, Verdict, Verdicts, WorkflowRun }
+export type { BaseFacts, Check, CheckState, HeadRun, OtherReviewer, OutsideReviewer, OutsideState, Snapshot, Unpushed, Verdict, Verdicts, WorkflowRun }
 
 // The JSON fields the snapshot reads, in the order gh is asked for them. The
 // merge commit is read by the same request that reports the pull request
 // merged, for the update of the linked checkout, and is never part of the
-// snapshot or its fingerprint.
-export const PR_FIELDS = 'number,url,state,headRefOid,labels,reviews,statusCheckRollup,mergeable,commits,baseRefName,headRefName,createdAt,mergeCommit'
+// snapshot or its fingerprint. The review requests tell an outside reviewer
+// whose review is asked for now.
+export const PR_FIELDS = 'number,url,state,headRefOid,labels,reviews,reviewRequests,statusCheckRollup,mergeable,commits,baseRefName,headRefName,createdAt,mergeCommit'
 
 type GhCheck = {
   __typename?: string
@@ -31,6 +32,9 @@ type GhReview = {
   body?: string
   commit?: { oid?: string } | null
   submittedAt?: string
+  // The author's relation to the repository, which GitHub sets on its own
+  // servers: OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE and others.
+  authorAssociation?: string
 }
 
 export type GhPullRequest = {
@@ -40,6 +44,12 @@ export type GhPullRequest = {
   headRefOid: string
   labels?: { name: string }[]
   reviews?: GhReview[]
+  // A request for a user carries their login. The mod leaves out by its type
+  // any request that is not for a user, such as one for a team or a bot.
+  // A request with no type counts as a request for a user, so that a reply
+  // from an older gh, or one that leaves the type out, still asks the named
+  // person rather than silently dropping a real request.
+  reviewRequests?: { __typename?: string; login?: string }[]
   statusCheckRollup?: GhCheck[]
   mergeable?: string
   commits?: { oid: string; committedDate?: string }[]
@@ -369,7 +379,141 @@ export function snapshotOf(repo: string, pr: GhPullRequest, login: string, runs:
     runs,
     ...extras,
   }
+  const named = extras.facts?.reviewers ?? []
+  const newest = newestReviewsOf(pr, login)
+  const outside = outsideOf(pr, login, named, newest)
+  if (outside.length > 0) snapshot.outside = outside
+  const others = othersOf(pr, login, named, newest, outside)
+  if (others.length > 0) snapshot.others = others
   return { ...snapshot, fingerprint: fingerprintOf(snapshot) }
+}
+
+// A GitHub login: letters, digits and single hyphens, at most 39 characters,
+// not starting or ending with a hyphen. A bot's login, which ends in `[bot]`,
+// is not one, so bots are never outside reviewers. Only a login that passes
+// is ever put into a step text.
+const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/
+
+export function isLogin(value: unknown): value is string {
+  return typeof value === 'string' && LOGIN.test(value)
+}
+
+// The associations that make a reviewer who is neither named nor requested
+// an outside reviewer. GitHub sets them from the author's relation to the
+// repository, so a GitHub app's automatic review, which carries CONTRIBUTOR,
+// and a stranger's review on a public repository, which carries NONE, never
+// hold the merge.
+const HOLDING = new Set(['OWNER', 'MEMBER', 'COLLABORATOR'])
+
+// The review states that count as a submitted review. Only these four count,
+// so a pending review, which is a draft nobody else can see yet, and any state
+// GitHub may add later are both left out.
+const STANDING = new Set(['APPROVED', 'COMMENTED', 'CHANGES_REQUESTED', 'DISMISSED'])
+
+// The newest review whose state is in STANDING of each reviewer other than
+// the session's own login whose login passes isLogin, keyed by the login in
+// lower case, because GitHub compares logins without regard to case.
+type NewestReviews = Map<string, GhReview & { author: { login: string } }>
+
+function newestReviewsOf(pr: Pick<GhPullRequest, 'reviews'>, login: string): NewestReviews {
+  const self = login.toLowerCase()
+  const newest: NewestReviews = new Map()
+  for (const review of pr.reviews ?? []) {
+    const author = review.author?.login
+    if (!isLogin(author) || author.toLowerCase() === self) continue
+    if (!STANDING.has(review.state ?? '')) continue
+    const key = author.toLowerCase()
+    const seen = newest.get(key)
+    if (seen === undefined || (seen.submittedAt ?? '') <= (review.submittedAt ?? '')) newest.set(key, { ...review, author: { login: author } })
+  }
+  return newest
+}
+
+// The outside reviewers, who hold the merge until they approve, sorted by
+// login: everyone other than the session's own login whom the `Reviewer:`
+// fact names, whose review is requested now as a user, or whose newest
+// review that is not pending carries OWNER, MEMBER or COLLABORATOR. The last
+// rule keeps a requested reviewer holding the merge after they review,
+// because GitHub removes them from the review requests when they submit.
+// Which review requests count as requests for a user is said in the comment
+// on GhPullRequest.reviewRequests, and how each reviewer's state is decided
+// is said in the comment on outsideStateOf. The mod keeps the spelling GitHub
+// gave where it gave one.
+//
+// The caller may pass the newest reviews it has already read from the same
+// pull request, so they are read only once.
+export function outsideOf(pr: Pick<GhPullRequest, 'reviews' | 'reviewRequests'>, login: string, named: readonly string[], newest: NewestReviews = newestReviewsOf(pr, login)): OutsideReviewer[] {
+  const self = login.toLowerCase()
+  const isOutside = (name: unknown): name is string => isLogin(name) && name.toLowerCase() !== self
+  const spelled = new Map<string, string>()
+  for (const [key, review] of newest) {
+    if (HOLDING.has(review.authorAssociation ?? '')) spelled.set(key, review.author.login)
+  }
+  const requested = new Set<string>()
+  for (const request of pr.reviewRequests ?? []) {
+    if (request.__typename !== undefined && request.__typename !== 'User') continue
+    if (!isOutside(request.login)) continue
+    const key = request.login.toLowerCase()
+    requested.add(key)
+    if (!spelled.has(key)) spelled.set(key, newest.get(key)?.author.login ?? request.login)
+  }
+  for (const name of named) {
+    const key = name.toLowerCase()
+    if (isOutside(name) && !spelled.has(key)) spelled.set(key, newest.get(key)?.author.login ?? name)
+  }
+  return [...spelled.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([key, name]) => {
+      const review = newest.get(key)
+      const state = outsideStateOf(requested.has(key), review)
+      const at = review?.submittedAt
+      return typeof at === 'string' && at !== '' ? { login: name, state, at } : { login: name, state }
+    })
+}
+
+// Every state an outside reviewer can be in, in the order OutsideState lists
+// them. The line after the list stops the type check when the list and
+// OutsideState differ in either direction.
+const OUTSIDE_STATES = ['requested', 'approved', 'feedback', 'unrequested'] as const
+const OUTSIDE_STATES_MATCH_THE_TYPE: [(typeof OUTSIDE_STATES)[number], OutsideState] extends [OutsideState, (typeof OUTSIDE_STATES)[number]] ? true : never = true
+void OUTSIDE_STATES_MATCH_THE_TYPE
+
+// An outside reviewer's state, decided in the order OutsideState lists where
+// the rules allow: a request first, because GitHub clears a request when the
+// reviewer submits and sets it again when they are asked again; then a
+// missing or dismissed newest review, which counts as no review, so the
+// reviewer is unrequested and is asked again; then an approval; and any
+// other newest review is feedback.
+function outsideStateOf(isRequested: boolean, review: GhReview | undefined): OutsideState {
+  if (isRequested) return 'requested'
+  if (review === undefined || review.state === 'DISMISSED') return 'unrequested'
+  if (review.state === 'APPROVED') return 'approved'
+  return 'feedback'
+}
+
+// The other reviewers, sorted by login: everyone other than the session's own
+// login who reviewed and is not an outside reviewer, whose newest review that
+// is not pending comments or requests changes, with that review's time. The
+// merge never waits for them and nobody asks them again, because a review
+// request to them fails, but their review wakes the session and the steps
+// send it to their comments before it merges. snapshotOf passes the newest
+// reviews and the outside reviewers it has already worked out, so this only
+// filters them; a caller that passes neither has them worked out here.
+export function othersOf(
+  pr: Pick<GhPullRequest, 'reviews' | 'reviewRequests'>,
+  login: string,
+  named: readonly string[],
+  newest: NewestReviews = newestReviewsOf(pr, login),
+  outsideReviewers: readonly OutsideReviewer[] = outsideOf(pr, login, named, newest),
+): OtherReviewer[] {
+  const outside = new Set(outsideReviewers.map(r => r.login.toLowerCase()))
+  return [...newest.entries()]
+    .filter(([key, review]) => !outside.has(key) && (review.state === 'COMMENTED' || review.state === 'CHANGES_REQUESTED'))
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([, review]) => {
+      const at = review.submittedAt
+      return typeof at === 'string' && at !== '' ? { login: review.author.login, at } : { login: review.author.login }
+    })
 }
 
 function pushesAfter(sha: string, commits: readonly string[]): number {
@@ -454,6 +598,16 @@ export function fingerprintOf(s: Omit<Snapshot, 'fingerprint'>): string {
   if (s.runsCarriedOver === true && s.verdicts !== null && !isChangesRequested(s.verdicts)) parts.push('runs-unread')
   const failed = failedRunsOf(headRunsIn(s) ?? [])
   if (failed.length > 0) parts.push(`failed-runs:${failed.map(run => `${run.id}.${run.attempt}`).join(',')}`)
+  // The outside reviewers, added only when there are any, so a solo project's
+  // snapshot fingerprints as it did before they were read. A review
+  // submitted, a request made or withdrawn, and a newer review in the same
+  // state are all news.
+  const outside = outsideIn(s.outside)
+  if (outside.length > 0) parts.push(`outside:${outside.map(r => `${r.login.toLowerCase()}=${r.state}@${r.at ?? ''}`).join(',')}`)
+  // The other reviewers with comments, under the same rule: a review of
+  // theirs arriving, or a newer one, is news.
+  const others = othersIn(s.others)
+  if (others.length > 0) parts.push(`others:${others.map(r => `${r.login.toLowerCase()}@${r.at ?? ''}`).join(',')}`)
   return parts.join('|')
 }
 
@@ -561,6 +715,8 @@ export function changesBetween(before: Snapshot | null, after: Snapshot): string
   const removed = labelsBefore.filter(label => !hasAfter.has(label))
   if (added.length > 0) changes.push(`Labels added: ${quoted(added)}.`)
   if (removed.length > 0) changes.push(`Labels removed: ${quoted(removed)}.`)
+  changes.push(...outsideSentences(outsideIn(before.outside), outsideIn(after.outside)))
+  changes.push(...otherSentences(othersIn(before.others), othersIn(after.others)))
   if (JSON.stringify(before.verdicts) !== JSON.stringify(after.verdicts)) {
     changes.push(after.verdicts
       ? `A verdict review is posted at the head: spec ${after.verdicts.spec}, adversarial ${after.verdicts.adversarial}.`
@@ -570,6 +726,68 @@ export function changesBetween(before: Snapshot | null, after: Snapshot): string
   // above; never hand over a change with nothing in it.
   if (changes.length === 0) changes.push('The pull request changed in a way the lines below show.')
   return changes
+}
+
+// The outside reviewers a stored snapshot holds, keeping only entries of the
+// right shape, with a login that passes isLogin, so a value an older build
+// saved or a damaged one never reaches a step text.
+export function outsideIn(raw: unknown): OutsideReviewer[] {
+  if (!Array.isArray(raw)) return []
+  return raw.flatMap((entry: unknown) => {
+    if (typeof entry !== 'object' || entry === null) return []
+    const r = entry as Record<string, unknown>
+    const state = OUTSIDE_STATES.find(s => s === r.state)
+    if (!isLogin(r.login) || state === undefined) return []
+    const reviewer: OutsideReviewer = { login: r.login, state }
+    return typeof r.at === 'string' && r.at !== '' ? [{ ...reviewer, at: r.at }] : [reviewer]
+  })
+}
+
+// The other reviewers a stored snapshot holds, under the same rule as
+// outsideIn: an entry whose time is missing, empty or not a string is kept
+// without it, because the time only feeds the fingerprint, and dropping the
+// entry would remove a reviewer from the step texts.
+export function othersIn(raw: unknown): OtherReviewer[] {
+  if (!Array.isArray(raw)) return []
+  return raw.flatMap((entry: unknown) => {
+    if (typeof entry !== 'object' || entry === null) return []
+    const r = entry as Record<string, unknown>
+    if (!isLogin(r.login)) return []
+    return typeof r.at === 'string' && r.at !== '' ? [{ login: r.login, at: r.at }] : [{ login: r.login }]
+  })
+}
+
+// One sentence per outside reviewer whose state or newest review moved, and
+// one per reviewer who left the list: a request withdrawn from someone the
+// fact does not name and who has no review that keeps them on it.
+function outsideSentences(before: readonly OutsideReviewer[], after: readonly OutsideReviewer[]): string[] {
+  const was = new Map(before.map(r => [r.login.toLowerCase(), r]))
+  const still = new Set(after.map(r => r.login.toLowerCase()))
+  const sentences: string[] = []
+  for (const r of before) {
+    if (!still.has(r.login.toLowerCase())) sentences.push(`${r.login} is no longer an outside reviewer, so the merge does not wait for them.`)
+  }
+  for (const r of after) {
+    const old = was.get(r.login.toLowerCase())
+    if (old !== undefined && old.state === r.state && old.at === r.at) continue
+    const isNewReview = r.at !== undefined && r.at !== old?.at
+    switch (r.state) {
+      case 'requested': sentences.push(`A review is requested from ${r.login}.`); break
+      case 'approved': sentences.push(`${r.login} approved the pull request.`); break
+      case 'feedback': sentences.push(isNewReview ? `${r.login} submitted a review with comments or requested changes.` : `${r.login}'s review request was withdrawn, and their newest review has comments.`); break
+      case 'unrequested': sentences.push(`${r.login} has no review and no review request.`); break
+    }
+  }
+  return sentences
+}
+
+// One sentence per other reviewer whose review with comments is new, or
+// newer than before.
+function otherSentences(before: readonly OtherReviewer[], after: readonly OtherReviewer[]): string[] {
+  const was = new Map(before.map(r => [r.login.toLowerCase(), r]))
+  return after
+    .filter(r => { const old = was.get(r.login.toLowerCase()); return old === undefined || old.at !== r.at })
+    .map(r => `${r.login} has a review with comments or requested changes, which the merge does not wait for.`)
 }
 
 // Names others wrote are quoted, so the session reads them as names.

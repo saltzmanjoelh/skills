@@ -194,6 +194,7 @@ export function nextStep(v: View, isOnLine = false): string {
     agents: runningAgents(v),
     ci: 'waiting on checks',
     fix: 'waiting on a fix',
+    reviewer: 'waiting on the reviewer',
     merge: 'waiting on the merge',
     nothing: isBackgroundRunning ? `waiting on its ${backgroundWords(v.background)}` : 'nothing to hand over',
   }

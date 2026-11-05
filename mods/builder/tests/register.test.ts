@@ -10601,6 +10601,59 @@ test('the base facts come from the session folder\'s base branch when the watch 
   expect(String(ran.result)).toContain(`gh pr merge 7 --merge --match-head-commit ${C}`)
 })
 
+// The `Reviewer:` fact, read through the register: the base branch's
+// CLAUDE.md, or else the CLAUDE.md in the user's configuration folder.
+async function reviewerStep($: Engine, on: On, project: string | null, user: string | null): Promise<string> {
+  mock.clock(on)
+  mock.store(on)
+  mock.env(on, { CLAUDE_CONFIG_DIR: '/config', HOME: '/home/me' })
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  if (user !== null) files.set('/config/CLAUDE.md', user)
+  world.pr = approvedWithoutChecks()
+  world.baseClaude = project
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  return String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+}
+
+const REQUEST_STEP = 'The step that applies: Both verdicts approve at this head, request the outside review.'
+
+test('a Reviewer: line in the base branch\'s CLAUDE.md asks for that reviewer before the merge', async ($, on) => {
+  const answer = await reviewerStep($, on, 'Checks: none\nReviewer: ann\n', null)
+  expect(answer).toContain(REQUEST_STEP)
+  expect(answer).toContain('`gh pr edit 7 --add-reviewer ann`')
+})
+
+test('a Reviewer: line in the user\'s own CLAUDE.md, read from CLAUDE_CONFIG_DIR, applies when the project names none', async ($, on) => {
+  const answer = await reviewerStep($, on, 'Checks: none\n', 'Reviewer: bob\n')
+  expect(answer).toContain(REQUEST_STEP)
+  expect(answer).toContain('`gh pr edit 7 --add-reviewer bob`')
+})
+
+test('the project\'s Reviewer: line overrides the user\'s', async ($, on) => {
+  const answer = await reviewerStep($, on, 'Checks: none\nReviewer: ann\n', 'Reviewer: bob\n')
+  expect(answer).toContain('`gh pr edit 7 --add-reviewer ann`')
+  expect(answer).not.toContain('bob')
+})
+
+test('Reviewer: none in the project turns off the user\'s reviewer, and the pull request merges as before', async ($, on) => {
+  const answer = await reviewerStep($, on, 'Checks: none\nReviewer: none\n', 'Reviewer: bob\n')
+  expect(answer).toContain('The step that applies: Both verdicts approve at this head, merge.')
+  expect(answer).not.toContain('bob')
+})
+
+test('when the base branch\'s CLAUDE.md cannot be read, the user\'s Reviewer: line still applies', async ($, on) => {
+  const answer = await reviewerStep($, on, null, 'Reviewer: bob\n')
+  expect(answer).toContain(REQUEST_STEP)
+  expect(answer).toContain('`gh pr edit 7 --add-reviewer bob`')
+})
+
+test('with no Reviewer: line anywhere and no user file, the pull request merges as before', async ($, on) => {
+  const answer = await reviewerStep($, on, 'Checks: none\n', null)
+  expect(answer).toContain('The step that applies: Both verdicts approve at this head, merge.')
+})
+
 test('a base CLAUDE.md without a Checks: line asks whether the base has workflow files', async ($, on) => {
   mock.clock(on)
   mock.store(on)

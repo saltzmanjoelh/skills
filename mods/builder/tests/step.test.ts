@@ -331,6 +331,12 @@ const EVERY_STEP: Step[] = [
   { kind: 'merged', unpushed: UNLISTED, linked: null },
   { kind: 'merged', unpushed: NONE, linked: 'unread' },
   { kind: 'merged', unpushed: { kind: 'some', commits: ['abcdef012345', '0123456789ab'], total: 2, isAncestor: false }, linked: UPDATED },
+  { kind: 'outside-feedback', number: 7, reviewers: ['ann', 'ben'], others: ['review-app'] },
+  { kind: 'outside-feedback', number: 7, reviewers: ['ann'] },
+  { kind: 'request-review', number: 7, reviewers: ['dan'], others: ['review-app'] },
+  { kind: 'request-review', number: 7, reviewers: ['dan', 'eve'] },
+  { kind: 'awaiting-review', reviewers: ['cat'], others: ['review-app', 'passerby'] },
+  { kind: 'awaiting-review', reviewers: ['cat'] },
 ]
 
 const textOf = (step: Step) => stepLines(step).join('\n')
@@ -361,7 +367,7 @@ test('the default merge text holds the merge command with the number and the ful
   // The mod sets the label and reports the merge stage itself.
   expect(text).not.toContain('mcp__builder__progress')
   expect(text).not.toContain('ready-to-merge')
-  expect(text).toContain(`gh pr view 7 --json headRefOid,statusCheckRollup`)
+  expect(text).toContain(`gh pr view 7 --json headRefOid,statusCheckRollup,reviews,reviewRequests`)
   expect(text).toContain('Never merge any other way')
   expect(text).toContain('If the command refuses, say why and wait.')
   // The facts that govern the merge must not have been changed by the branch.
@@ -419,6 +425,32 @@ test('every merge text reads the head\'s runs again and calls the watch tool for
   expect(textOf({ kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'none', runs: [], unpushed: NONE })).toContain('The mod saw no workflow runs at this head')
   // A repository left out is named by a placeholder the text explains.
   expect(textOf({ kind: 'merge', number: 7, head: C, repo: null, command: 'unread', checks: 'none', runs: [], unpushed: NONE })).toContain('<repo> as the pull request\'s repository')
+})
+
+// The `Reviewer:` line decides who holds the merge, so a branch that adds
+// `Reviewer: none` or changes the line must not merge without the person.
+test('every merge text asks the person before merging when the branch changes the Reviewer: line or any other line that governs the merge', () => {
+  const merges = EVERY_STEP.filter(step => step.kind === 'merge' || step.kind === 'ask-merge')
+  expect(merges.length).toBe(5)
+  for (const step of merges) {
+    expect(textOf(step)).toContain('- If the branch changes any of the `Merge command:`, `Checks:`, `Max pushes per round:`, `Max rounds:`, `Reviewer:` or `Base branch:` lines of CLAUDE.md, ask the person before merging, because those lines govern the merge and are read from the base branch.')
+  }
+})
+
+// The session posts its own verdict reviews as comment reviews, so its newest
+// review is never an approval, and its login usually carries OWNER or
+// COLLABORATOR. A rule on the association that did not leave the session out
+// would hold every merge, and the watch would name the merge again.
+test('every merge text reads the reviews and review requests again and merges nothing while a reviewer other than the session holds the merge', () => {
+  const merges = EVERY_STEP.filter(step => step.kind === 'merge' || step.kind === 'ask-merge')
+  expect(merges.length).toBe(5)
+  for (const step of merges) {
+    const text = textOf(step)
+    expect(text).toContain(`gh pr view ${step.number} --json headRefOid,statusCheckRollup,reviews,reviewRequests`)
+    expect(text).toContain('If any reviewer other than the session is now requested as a user, or any login that the `Reviewer:` fact names, other than the session\'s own, has not approved the pull request, because they have no review of it or their newest review of it is not an approval, or any reviewer other than the session\'s own login whose newest review is not an approval carries the association `OWNER`, `MEMBER` or `COLLABORATOR`, merge nothing: call `mcp__builder__watch` and follow the step it names. The `Reviewer:` fact is the fetched base branch\'s `Reviewer:` line when that file has one, and the user\'s own `Reviewer:` line only when it has none. A line that says `none` names nobody, so `Reviewer: none` in the base branch turns the user\'s line off, and the branch\'s own CLAUDE.md never counts here. The session\'s own verdict reviews, which are comment reviews, never hold the merge under any of these rules.')
+  }
+  const ask = textOf({ kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'default', runs: [], isClaudeRead: true, unpushed: NONE })
+  expect(ask).toContain('no new run, and no reviewer other than the session holds the merge as those reads say')
 })
 
 test('the question for a merge without checks covers this head and these runs, and keeps the read again before merging on a yes', () => {
@@ -566,6 +598,9 @@ test('each step gives the state label that follows from it, and Merged, An open 
     failed: 'waiting-on-author',
     review: 'in-review',
     'changes-requested': 'waiting-on-author',
+    'outside-feedback': 'waiting-on-author',
+    'request-review': 'ready-to-merge',
+    'awaiting-review': 'ready-to-merge',
     'runs-unread': null,
     waiting: 'ready-to-merge',
     'head-unchecked': 'ready-to-merge',
@@ -757,4 +792,44 @@ test('an outcome a snapshot holds is kept only in its own shape, and made printa
   expect(linkedIn(['a\nb\u001b[31m'])).toEqual(['a b'])
   expect(linkedIn('unread')).toBe('unread')
   for (const raw of [undefined, null, 'a', [], [1], Array.from({ length: LINKED_KEPT + 1 }, () => 'a')]) expect(linkedIn(raw)).toBe(null)
+})
+
+// A solo project, with no reviewer other than the session, behaves exactly as
+// before outside reviewers were read: every fixture of the chooser's table
+// above chooses the step it chose then, written out here in full.
+test('every chooser fixture with no outside reviewer chooses what it did before', () => {
+  const pending = [{ __typename: 'CheckRun', name: 'tests', status: 'IN_PROGRESS', conclusion: null }]
+  const failing = [{ __typename: 'CheckRun', name: 'tests', status: 'COMPLETED', conclusion: 'FAILURE' }]
+  const unread: BaseFacts = { maxPushes: 8, maxRounds: 5, checks: 'expected', merge: 'unread', isClaudeRead: false }
+  const none = { reviews: approved, statusCheckRollup: [] }
+  const { headRuns: _runs, ...noRuns } = snapshot({ reviews: approved })
+  const { facts: _facts, ...noFacts } = snapshot(none)
+  const table: [Snapshot, boolean, Step][] = [
+    [snapshot({ state: 'MERGED' }), true, { kind: 'merged', unpushed: UNLISTED, linked: null }],
+    [snapshot({ state: 'CLOSED' }), true, { kind: 'closed' }],
+    [snapshot({ reviews: approved }), true, { kind: 'question' }],
+    [snapshot({ mergeable: 'CONFLICTING', reviews: approved }), false, { kind: 'conflicting' }],
+    [snapshot({ statusCheckRollup: failing, reviews: approved }), false, { kind: 'failed', runs: [] }],
+    [snapshot(), false, { kind: 'review', head: C }],
+    [snapshot({ reviews: [review(C, 'REQUEST_CHANGES', 'APPROVE')] }), false, { kind: 'changes-requested' }],
+    [snapshot({ reviews: approved }, [headRun()], FACTS, true), false, { kind: 'runs-unread' }],
+    [noRuns as Snapshot, false, { kind: 'runs-unread' }],
+    [snapshot({ reviews: approved, statusCheckRollup: pending }), false, { kind: 'waiting' }],
+    [snapshot({ reviews: [review('abcdef0123456789', 'APPROVE', 'APPROVE')], headRefOid: 'abcdef0123456789', commits: [{ oid: 'abcdef0123456789' }] }, [headRun()]), false, { kind: 'head-unchecked' }],
+    [snapshot({ reviews: approved }, [headRun()]), false, { kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'passed', runs: [{ id: 1, attempt: 1 }], unpushed: UNLISTED }],
+    [snapshot(none, [], { ...FACTS, checks: 'none' }), false, { kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'none', runs: [], unpushed: UNLISTED }],
+    [snapshot(none, [headRun({ id: 5 })], FACTS), false, { kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'default', runs: [{ id: 5, attempt: 1 }], isClaudeRead: true, unpushed: UNLISTED }],
+    [snapshot(none, [], unread), false, { kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'unread', runs: [], isClaudeRead: false, unpushed: UNLISTED }],
+    [noFacts as Snapshot, false, { kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'unread', runs: [], isClaudeRead: false, unpushed: UNLISTED }],
+  ]
+  for (const [s, isAsking, step] of table) {
+    expect('outside' in s).toBe(false)
+    expect('others' in s).toBe(false)
+    expect(chooseStep(s, isAsking)).toEqual(step)
+  }
+})
+
+test('a solo snapshot fingerprints exactly as it did before outside reviewers were read', () => {
+  const s = snapshot({ reviews: approved, labels: [{ name: 'docs' }] }, [headRun()])
+  expect(s.fingerprint).toBe(`OPEN|cccccccccccc|docs|APPROVE/APPROVE@cccccccc|tests:passed|no-conflict|`)
 })

@@ -21,7 +21,7 @@ import { changedKinds, commitRecordsOf, decidedItems, factIn, INSTRUCTION_PATHSP
 import { AGENTS_KEPT, backgroundOf, backgroundTaskIdOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isMerge, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
 import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isForemanNudge, keptTicketIn, keptTicketOf, memoOfKeptTicket, newMemo, parentIn, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, STATUS_CHANGED_TEXT, stateOf, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type KeptTicket, type Starts, type StatusFacts } from './status'
 import { afterSend, emptySends, sendOutcomeOf, sendsIn, sendsKey, sendsNewest, SENDS_KEPT_MS, SENDS_PREFIX, type SendOutcome, type SendSettled, type SendsRecord } from './sends'
-import { baseFactsOf, chooseStep, labelActionOf, labelFor, labelRecordIn, labelsToRemoveAfterEdit, needsListing, noteAfterRead, SHORT_HASH, stepFor, UNPUSHED_KEPT, UNREAD_FACTS } from './step'
+import { baseFactsOf, chooseStep, labelActionOf, labelFor, labelRecordIn, labelsToRemoveAfterEdit, needsListing, noteAfterRead, reviewersOf, SHORT_HASH, stepFor, UNPUSHED_KEPT, UNREAD_FACTS } from './step'
 import { timeOfDay } from './text'
 import { afterPackage, afterPr, afterReview, afterStage, afterState, emptyTiming, timingIn, type PullRequestSeen } from './timing'
 import { afterCost, afterStep, emptyUsage, usageIn } from './usage'
@@ -491,10 +491,24 @@ function baseFolderOf(r: SnapshotTarget): string | null {
 // cache: it is one local read per look. A file without a `Checks:` line asks
 // whether the base has workflow files. When the file cannot be read, or there
 // is no folder or base to read it from, the facts are the unread defaults.
+// The reviewers the `Reviewer:` fact names come from that file, or else from
+// the CLAUDE.md in the user's configuration folder, which is read even when
+// the base branch's file is not; reviewersOf decides which line wins.
 async function readBaseFacts($: $, dir: string | null, base: string | null): Promise<BaseFacts> {
-  if (dir === null || base === null) return UNREAD_FACTS
-  const claude = await git($, dir, ['show', `origin/${base}:CLAUDE.md`])
-  if (claude === null) return UNREAD_FACTS
+  const claude = dir === null || base === null ? null : await git($, dir, ['show', `origin/${base}:CLAUDE.md`])
+  const reviewers = reviewersOf(claude, await readUserClaude($))
+  if (dir === null || base === null || claude === null) return withReviewers(UNREAD_FACTS, reviewers)
+  return withReviewers(await factsOfBase($, dir, base, claude), reviewers)
+}
+
+// The facts with the reviewers the `Reviewer:` fact names, which are left
+// out when there are none, so a project without a reviewer stores the facts
+// it stored before.
+function withReviewers(facts: BaseFacts, reviewers: string[]): BaseFacts {
+  return reviewers.length === 0 ? facts : { ...facts, reviewers }
+}
+
+async function factsOfBase($: $, dir: string, base: string, claude: string): Promise<BaseFacts> {
   // The file's own `Checks:` line decides, so no listing is made, and
   // baseFactsOf ignores the listing argument, here null.
   if (factIn(claude, 'Checks') !== null) return baseFactsOf(claude, null)
@@ -504,6 +518,17 @@ async function readBaseFacts($: $, dir: string | null, base: string | null): Pro
   // checks.
   const tree = await git($, dir, ['ls-tree', '--full-tree', `origin/${base}`, '.github/workflows'])
   return baseFactsOf(claude, tree === null ? null : tree.trim() !== '')
+}
+
+// The text of the CLAUDE.md in the user's configuration folder, or null when
+// there is no such folder or the file cannot be read.
+async function readUserClaude($: $): Promise<string | null> {
+  try {
+    const dir = configDirOf(await $.env.get('CLAUDE_CONFIG_DIR'), await $.env.get('HOME'))
+    return dir === null ? null : await $.fs.read(`${dir}/CLAUDE.md`)
+  } catch {
+    return null
+  }
 }
 
 // The state GitHub gives now for a pull request, or null when it could not be
