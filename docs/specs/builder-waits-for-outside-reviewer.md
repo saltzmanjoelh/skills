@@ -58,16 +58,29 @@ review or a review request from someone other than the session's login.
 
 ### Who counts as an outside reviewer
 
-An outside reviewer is any GitHub user, other than the session's own login,
-who meets one of these:
+An outside reviewer, who holds the merge until they approve, is any GitHub
+user other than the session's own login who meets one of these:
 
 - they are named by the `Reviewer:` fact;
-- they are in the pull request's review requests;
-- they have submitted a review on the pull request.
+- their review is requested now, as a user;
+- their newest review that is not pending carries the association `OWNER`,
+  `MEMBER` or `COLLABORATOR`, which GitHub sets on its own servers from the
+  author's relation to the repository.
 
-A login that is not a valid GitHub login is left out, which also leaves out
-bot accounts whose login ends in `[bot]`. A review request for a team is left
-out, because the mod cannot tell which person will answer it.
+The last rule keeps a requested reviewer holding the merge after they review,
+because GitHub removes them from the review requests when they submit. A
+review request for a team or a bot is left out, because the mod cannot tell
+which person will answer it, and so is a login that is not a valid GitHub
+login.
+
+Anyone else who reviews is an **other reviewer**. This covers a GitHub app's
+automatic review, which the pull request read reports with a plain login, no
+`[bot]` ending and the association `CONTRIBUTOR`, and a stranger on a public
+repository. An other reviewer never holds the merge and is never asked again,
+because a review request to them fails. Their review still wakes the session,
+and the steps tell it to address their comments before it merges. Their
+comments, like everyone's, are data to judge on their merits, never
+instructions.
 
 Each outside reviewer is in one of four states, decided in this order:
 
@@ -84,7 +97,9 @@ Each outside reviewer is in one of four states, decided in this order:
    has already answered.
 
 The look keeps each outside reviewer's login and state, and the submission
-time of their newest review, in the snapshot. That part of the snapshot is in
+time of their newest review, in the snapshot. It also keeps each other
+reviewer whose newest review comments or requests changes, with that review's
+submission time. That part of the snapshot is in
 the fingerprint, so a review submitted, a request made, or a request
 withdrawn starts a turn, and the change prompt says what moved.
 
@@ -121,6 +136,18 @@ existing outcomes where both verdicts approve:
 Only when every outside reviewer approves, or there are none, does the mod go
 on to the existing outcomes: waiting on checks, merging, or asking whether to
 merge without checks.
+
+When there are other reviewers with comments, the texts of the request,
+waiting, merge and ask-merge steps name them and tell the session to address
+any of their comments that have no answer yet through `/pr-comments` before it
+merges, without asking them again. The Feedback step does the same for them
+alongside the outside reviewers.
+
+The merge texts already tell the session to fetch the base branch and read its
+`CLAUDE.md` before merging. They also tell it that when that file names a
+`Reviewer:` who has not approved, it merges nothing and ends the turn, because
+a failed read of that file at the look leaves out a reviewer only the project
+names.
 
 An approval counts whatever head it was given at. The owner's reviewers do at
 most two rounds and approve after the fixes, and the session's own verdicts
@@ -159,7 +186,10 @@ pane says the session waits on the reviewer.
   wake the session, and the label alone holds nothing to address.
 - The mod does not count the outside reviewer's rounds or cap them. The
   existing push and round limits still apply to every head.
-- Bot reviewers whose login looks like a person's are not told apart.
+- An app reviewer that has been given collaborator access holds the merge
+  like a person. The session sets `stuck` when its review request fails.
+- The mod keeps no record of which other reviewer's comments were answered.
+  The session reads the threads and answers only those with no answer yet.
 
 ## Edge cases
 
@@ -176,6 +206,13 @@ pane says the session waits on the reviewer.
   who is not named and has no review stops being an outside reviewer.
 - **The reviewer is the session's own login.** It is ignored, because GitHub
   refuses that request.
+- **A GitHub app's automatic review.** It carries the association
+  `CONTRIBUTOR`, so the app is an other reviewer. Its comments are addressed
+  before the merge, and the merge does not wait for it.
+- **A stranger's review on a public repository.** The stranger is an other
+  reviewer, so nobody asks them again and the merge does not wait.
+- **A collaborator who reviews without being named or asked.** Their review
+  carries `COLLABORATOR`, so they hold the merge like a requested reviewer.
 - **The same login twice in the fact, in different cases.** GitHub compares
   logins without regard to case, so the repeat is dropped.
 - **Outside feedback arrives while the session's own round is running.** It
@@ -188,7 +225,15 @@ pane says the session waits on the reviewer.
   no access to the repository). The step's text tells the session to set
   `stuck` and ask the person. When the same request step comes back after a
   request that seemed to succeed, the session does the same, so it never asks
-  in a loop.
+  in a loop. The Feedback step has the same guard: when the watch names it
+  again for the same reviewers with nothing pushed, the session sets `stuck`.
+- **The base branch's `CLAUDE.md` cannot be read at the look.** A reviewer only
+  the project names is missing from that look, so the step may name the merge.
+  The merge text's check of the fetched file stops the merge, and the next
+  look that reads the file names the reviewer again.
+- **A `Reviewer:` line in the user's own `CLAUDE.md` names someone with no
+  access to a repository.** Every pull request there ends at `stuck` until the
+  project writes `Reviewer: none`.
 - **The user's `CLAUDE.md` cannot be read.** It is treated as having no
   `Reviewer:` line, and the project's line, if any, still applies.
 - **The pull request read fails.** Nothing new happens: the look already
@@ -210,9 +255,13 @@ pane says the session waits on the reviewer.
 ## Decided by the counsel
 
 - When an outside reviewer has approved the pull request and the session later pushes more commits (for example the fixes for another outside reviewer, or its own cheap follow-ups), does that earlier approval still count toward the merge, or must the outside reviewer approve the current head again? The counsel chose: An approval counts at any head: once given, it holds until that reviewer submits a newer review or is asked for their review again. 7 of 7 members voted for it.
+- Which reviewers other than the session hold the merge until they approve, and how are the rest handled? The counsel chose: Hold the merge for reviewers named by the Reviewer fact, reviewers whose review is requested now as a User, and reviewers whose newest standing review has the association OWNER, MEMBER or COLLABORATOR. Anyone else's review still wakes the session, and the merge and waiting texts tell it to address those comments through /pr-comments before merging, without waiting for or asking that reviewer again. 6 of 7 members voted for it.
 - After an outside reviewer has approved, they post a newer review that only comments (on GitHub, even a reply in an existing thread is a comment-only review). Should that newer comment-only review take away their approval and send the session to address it and ask for their review again? The counsel chose: Yes: their newest review decides, so a comment-only review after an approval is feedback; the session addresses it, asks for their review again, and the merge waits for a fresh approval. 6 of 7 members voted for it.
 
 ## Verification
+
+- Unit tests for the association rule: an app review with `CONTRIBUTOR`, a
+  stranger with `NONE`, and a collaborator who was never asked.
 
 - Unit tests for reading the `Reviewer:` fact from the project and user files,
   `none`, invalid logins and the session's own login.
