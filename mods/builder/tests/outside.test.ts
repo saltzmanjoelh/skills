@@ -84,6 +84,21 @@ test('the session\'s own login, a bot, a team request and a pending review are l
   expect(outsideOf(pr, ME, ['OWNER'])).toEqual([])
 })
 
+// The team request above has no login, so it would be dropped by the login
+// check alone. These requests carry logins that pass that check, so only the
+// check on the request's type leaves them out.
+test('a review request for a bot is left out even when it carries a valid login', () => {
+  expect(isLogin('review-app')).toBe(true)
+  const pr = pullRequest({ reviewRequests: [{ __typename: 'Bot', login: 'review-app' }] })
+  expect(outsideOf(pr, ME, [])).toEqual([])
+})
+
+test('a review request for a team is left out even when it carries a valid login', () => {
+  expect(isLogin('core-team')).toBe(true)
+  const pr = pullRequest({ reviewRequests: [{ __typename: 'Team', login: 'core-team' }] })
+  expect(outsideOf(pr, ME, [])).toEqual([])
+})
+
 test('a reviewer whose newest review was dismissed is asked again, not dropped or sent back to old comments', () => {
   const onlyDismissed = pullRequest({ reviews: [approvedBySession, outsideReview('dee', 'DISMISSED', T1)] })
   expect(outsideOf(onlyDismissed, ME, [])).toEqual([{ login: 'dee', state: 'unrequested', at: T1 }])
