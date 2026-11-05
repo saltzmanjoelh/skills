@@ -757,6 +757,47 @@ test('a raise that lands while a read is under way is decided by a later read, w
   expect(ledger(w).slotsRaised).toBe(false)
 })
 
+// The read's setter of the mark follows the same rule as the setter in
+// applyCommand, so a parent whose settings read as off after the read's
+// ledger update gets no mark, whatever its count. Every read of the parent
+// answers off from the read's ledger update until the read writes
+// nextReadAt, so the setter's read is answered off whichever part of the mod
+// reads the parent first.
+test('a raise that lands while a read is under way leaves no mark when the parent reads as off after the read\'s ledger update', async ($, on) => {
+  let raiseDuringRead = false
+  let raising: Promise<unknown> | null = null
+  let readsAsOff = false
+  let offReads = 0
+  let markedWhileOff = false
+  on('state.set', async (_hook, e, next) => {
+    if (e.plugin === 'foreman' && e.key === 'nextReadAt') readsAsOff = false
+    if (raiseDuringRead && e.plugin === 'foreman' && e.key === 'tickets') {
+      raiseDuringRead = false
+      raising = foreman($, '2')
+      await raising
+      readsAsOff = true
+    }
+    if (readsAsOff && e.plugin === 'foreman' && e.key === 'tickets' && (e.value as { slotsRaised?: boolean } | undefined)?.slotsRaised === true) markedWhileOff = true
+    return next(e)
+  })
+  on('state.get', (_hook, e, next) => {
+    if (!readsAsOff || e.plugin !== 'foreman' || e.key !== 'parent') return next(e)
+    offReads += 1
+    return { value: { value: { isOn: false, slots: 2 }, version: 0 } } as never
+  })
+  const { w, live } = await queueOfTwo($, on)
+  w.desktop.sessions = [listed('local_new1', 'ABC-1'), doubtful('local_new2', 'ABC-2'), doubtful('local_new3', 'ABC-3')]
+  await minutesPass(w, 1, live)
+  raiseDuringRead = true
+  await minutesPass(w, 1, live)
+  expect(raising).not.toBeNull()
+  expect(offReads).toBeGreaterThan(0)
+  expect(readsAsOff).toBe(false)
+  expect(markedWhileOff).toBe(false)
+  expect(w.stored.get('parent:session-1')).toEqual({ isOn: true, slots: 2 })
+  expect(ledger(w).slotsRaised).toBe(false)
+})
+
 test('a raise lowered again before the read wakes nobody and leaves no mark', async ($, on) => {
   const { w, live } = await queueOfTwo($, on)
   w.desktop.sessions = [listed('local_new1', 'ABC-1'), doubtful('local_new2', 'ABC-2'), doubtful('local_new3', 'ABC-3')]
