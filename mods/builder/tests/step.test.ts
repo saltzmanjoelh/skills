@@ -427,6 +427,20 @@ test('every merge text reads the head\'s runs again and calls the watch tool for
   expect(textOf({ kind: 'merge', number: 7, head: C, repo: null, command: 'unread', checks: 'none', runs: [], unpushed: NONE })).toContain('<repo> as the pull request\'s repository')
 })
 
+// The `Reviewer:` line decides who holds the merge, so a branch that adds
+// `Reviewer: none` or changes the line must not merge without the person.
+test('every merge text asks the person before merging when the branch changes the Reviewer: line or any other line that governs the merge', () => {
+  const merges = EVERY_STEP.filter(step => step.kind === 'merge' || step.kind === 'ask-merge')
+  expect(merges.length).toBe(5)
+  for (const step of merges) {
+    expect(textOf(step)).toContain('- If the branch changes any of the `Merge command:`, `Checks:`, `Max pushes per round:`, `Max rounds:`, `Reviewer:` or `Base branch:` lines of CLAUDE.md, ask the person before merging, because those lines govern the merge and are read from the base branch.')
+  }
+})
+
+// The session posts its own verdict reviews as comment reviews, so its newest
+// review is never an approval, and its login usually carries OWNER or
+// COLLABORATOR. A rule on the association that did not leave the session out
+// would hold every merge, and the watch would name the merge again.
 test('every merge text reads the reviews and review requests again and merges nothing while a reviewer other than the session holds the merge', () => {
   const merges = EVERY_STEP.filter(step => step.kind === 'merge' || step.kind === 'ask-merge')
   expect(merges.length).toBe(5)
@@ -437,20 +451,6 @@ test('every merge text reads the reviews and review requests again and merges no
   }
   const ask = textOf({ kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'default', runs: [], isClaudeRead: true, unpushed: NONE })
   expect(ask).toContain('no new run, and no reviewer other than the session holds the merge as those reads say')
-})
-
-// The session posts its own verdict reviews as comment reviews, so its newest
-// review is never an approval, and its login usually carries OWNER or
-// COLLABORATOR. A rule on the association that did not leave the session out
-// would hold every merge, and the watch would name the merge again.
-test('every merge text leaves the session out of the association rule, and says its own verdict reviews never hold the merge', () => {
-  const merges = EVERY_STEP.filter(step => step.kind === 'merge' || step.kind === 'ask-merge')
-  expect(merges.length).toBe(5)
-  for (const step of merges) {
-    const text = textOf(step)
-    expect(text).toContain('or any reviewer other than the session\'s own login whose newest review is not an approval carries the association `OWNER`, `MEMBER` or `COLLABORATOR`')
-    expect(text).toContain('The session\'s own verdict reviews, which are comment reviews, never hold the merge under any of these rules.')
-  }
 })
 
 test('the question for a merge without checks covers this head and these runs, and keeps the read again before merging on a yes', () => {

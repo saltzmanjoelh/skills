@@ -256,6 +256,17 @@ test('a requested reviewer who has reviewed, and so left the review requests, st
   expect(outsideOf(reviewed, ME, [])).toEqual([{ login: 'ann', state: 'feedback', at: T2 }])
 })
 
+// GitHub logins ignore case, so the `Reviewer:` fact, a review request and a
+// review that spell one login differently are one reviewer, spelled as their
+// review spells it. The second case spells the request differently from the
+// review, so that a request whose login is not lower-cased cannot pass.
+test('a login spelled in different cases by the Reviewer: fact, a request and a review is one outside reviewer', () => {
+  const sameRequest = pullRequest({ reviews: [approvedBySession, outsideReview('ann', 'COMMENTED', T1, 'NONE')], reviewRequests: [{ __typename: 'User', login: 'ann' }] })
+  expect(outsideOf(sameRequest, ME, ['Ann'])).toEqual([{ login: 'ann', state: 'requested', at: T1 }])
+  const otherRequest = pullRequest({ reviews: [approvedBySession, outsideReview('ann', 'COMMENTED', T1, 'NONE')], reviewRequests: [{ __typename: 'User', login: 'ANN' }] })
+  expect(outsideOf(otherRequest, ME, ['Ann'])).toEqual([{ login: 'ann', state: 'requested', at: T1 }])
+})
+
 test('a named or requested reviewer holds the merge whatever the association of their review', () => {
   const named = pullRequest({ reviews: [approvedBySession, outsideReview('ann', 'COMMENTED', T1, 'NONE')] })
   expect(outsideOf(named, ME, ['ann'])).toEqual([{ login: 'ann', state: 'feedback', at: T1 }])

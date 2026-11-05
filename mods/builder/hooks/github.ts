@@ -469,10 +469,11 @@ export function outsideOf(pr: Pick<GhPullRequest, 'reviews' | 'reviewRequests'>,
 }
 
 // Every state an outside reviewer can be in, in the order OutsideState lists
-// them. The type check fails if a state is added to OutsideState and not here,
-// and the `satisfies` fails if a state here is not one of OutsideState.
-const OUTSIDE_STATES = ['requested', 'approved', 'feedback', 'unrequested'] as const satisfies readonly OutsideState[]
-const outsideStatesComplete: [Exclude<OutsideState, (typeof OUTSIDE_STATES)[number]>] extends [never] ? true : never = true
+// them. The line after the list stops the type check when the list and
+// OutsideState differ in either direction.
+const OUTSIDE_STATES = ['requested', 'approved', 'feedback', 'unrequested'] as const
+const OUTSIDE_STATES_MATCH_THE_TYPE: [(typeof OUTSIDE_STATES)[number], OutsideState] extends [OutsideState, (typeof OUTSIDE_STATES)[number]] ? true : never = true
+void OUTSIDE_STATES_MATCH_THE_TYPE
 
 // An outside reviewer's state, decided in the order OutsideState lists where
 // the rules allow: a request first; then a missing or dismissed newest review,
