@@ -434,21 +434,14 @@ function newestReviewsOf(pr: Pick<GhPullRequest, 'reviews'>, login: string): New
 // fact names, whose review is requested now as a user, or whose newest
 // review that is not pending carries OWNER, MEMBER or COLLABORATOR. The last
 // rule keeps a requested reviewer holding the merge after they review,
-// because GitHub removes them from the review requests when they submit. Any
-// request that is not for a user, such as one for a team or a bot, is left
-// out by its type, because the mod cannot tell which person will answer it.
-// A request that carries no type counts as a request for a user, so that a
-// reply from an older gh, or one that leaves the type out, still asks the
-// named person rather than silently dropping a real request.
-// The mod keeps the spelling GitHub gave where it gave one.
-// Each reviewer's state is decided in the order OutsideState lists: a request
-// first, because GitHub clears it when they submit a review and sets it again
-// when someone asks for their review again; then their newest review that is
-// not pending. A newest review that was dismissed, as GitHub does to a stale
-// approval when the repository asks it to, counts as no review, so the
-// reviewer is asked again rather than dropped or sent back to comments the
-// session already answered. The caller may pass the newest reviews it has
-// already read from the same pull request, so they are read only once.
+// because GitHub removes them from the review requests when they submit.
+// Which review requests count as requests for a user is said in the comment
+// on GhPullRequest.reviewRequests, and how each reviewer's state is decided
+// is said in the comment on outsideStateOf. The mod keeps the spelling GitHub
+// gave where it gave one.
+//
+// The caller may pass the newest reviews it has already read from the same
+// pull request, so they are read only once.
 export function outsideOf(pr: Pick<GhPullRequest, 'reviews' | 'reviewRequests'>, login: string, named: readonly string[], newest: NewestReviews = newestReviewsOf(pr, login)): OutsideReviewer[] {
   const self = login.toLowerCase()
   const isOutside = (name: unknown): name is string => isLogin(name) && name.toLowerCase() !== self

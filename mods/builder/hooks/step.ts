@@ -6,10 +6,10 @@
 // that data into the step's name and its fixed text. The only values put
 // into a text are checked ones: the pull request's number, the head when it
 // is a full commit sha, the repository when it is a plain owner and name,
-// logins that passed isLogin, counts and workflow run ids and attempts. Names written on GitHub, such as check and
-// label names, stay in the quoted state lines. Every step that needs
-// judgement is the session's: a text says what to do, and the mod never does
-// it.
+// logins that passed isLogin, counts and workflow run ids and attempts.
+// Names written on GitHub, such as check and label names, stay in the quoted
+// state lines. Every step that needs judgement is the session's: a text says
+// what to do, and the mod never does it.
 
 import type { BaseFacts, OutsideState, Snapshot, Unpushed } from '../types'
 import { ciOf, countingRuns, failedCheckNames, failedRunsOf, headRunsIn, isChangesRequested, isLogin, isUnfinished, othersIn, outsideIn, roundInProgress, STATE_LABELS, type StateLabel } from './github'
@@ -102,12 +102,14 @@ export function baseFactsOf(claude: string, workflowsListed: boolean | null): Ba
 // and `user` that of the CLAUDE.md in the user's configuration folder, each
 // null when it could not be read. `none` names nobody, which is how a
 // project turns off a reviewer the user's file names. The value is a list
-// separated by commas, a leading `@` is dropped, and anything that is not a
-// GitHub login is left out.
+// separated by commas. Backticks at either end of each login are dropped,
+// because the fact's own reading strips them only from the two ends of the
+// whole value, a leading `@` is dropped, and anything that is not a GitHub
+// login is left out.
 export function reviewersOf(project: string | null, user: string | null): string[] {
   const line = (project === null ? null : factIn(project, 'Reviewer')) ?? (user === null ? null : factIn(user, 'Reviewer'))
   if (line === null || line.trim().toLowerCase() === 'none') return []
-  const logins = line.split(',').map(part => part.trim().replace(/^@/, '')).filter(isLogin)
+  const logins = line.split(',').map(part => part.trim().replace(/^`+|`+$/g, '').replace(/^@/, '')).filter(isLogin)
   // GitHub compares logins without regard to case, so a repeat in another
   // case is dropped and the first spelling is kept.
   const kept = new Map<string, string>()

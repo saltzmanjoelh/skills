@@ -68,6 +68,10 @@ test('the fact takes several logins, drops a leading @ and a repeat, and leaves 
   expect(reviewersOf('Reviewer: `carol`', null)).toEqual(['carol'])
 })
 
+test('the fact takes several logins that are each written in their own backticks', () => {
+  expect(reviewersOf('Reviewer: `alice`, `bob`', null)).toEqual(['alice', 'bob'])
+})
+
 test('an outside reviewer is anyone but the session who is requested, has reviewed as a collaborator, or is named, sorted by login', () => {
   const pr = pullRequest({
     reviews: [approvedBySession, outsideReview('zed', 'COMMENTED')],
@@ -221,6 +225,8 @@ test('a requested outside review is waited on at the reviewer interval, after fa
   expect(POLL_MS.reviewer).toBe(5 * 60_000)
   const running = snapshot({ reviewRequests: [{ __typename: 'User', login: 'ann' }], statusCheckRollup: [{ __typename: 'CheckRun', name: 'tests', status: 'IN_PROGRESS' }] })
   expect(waitingOn(running, [], [])).toBe('ci')
+  const failed = snapshot({ reviewRequests: [{ __typename: 'User', login: 'ann' }], statusCheckRollup: [{ __typename: 'CheckRun', name: 'tests', status: 'COMPLETED', conclusion: 'FAILURE' }] })
+  expect(waitingOn(failed, [], [])).toBe('fix')
 })
 
 // Who holds the merge: the association GitHub sets on a review decides for a
