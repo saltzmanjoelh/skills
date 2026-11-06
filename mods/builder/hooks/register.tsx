@@ -3399,16 +3399,18 @@ function requestStateLabel($: $) {
   })
 }
 
-// What a state label job did about a judgement `stuck`, which the set_stuck
-// tool answers from: `stuck-on` when the job left `stuck` on by a judgement,
-// `failed` when a read or an edit failed while a judgement still holds, so a
-// later look tries again, `ended` when the step's label changed and the job
-// ended the judgement by writing the new label, `merged` when the job
-// changed nothing because the pull request is merged, so any judgement stays
-// recorded, `unjudged` when the record held no judgement, so the job had
-// none to end, and `moved` when the watch is not the one the job was asked
-// about. A job that throws, as on a refused read of the store, resolves to
-// undefined in the label queue.
+// What a state label job did, which the set_stuck tool answers from. Each
+// outcome says what the job did to the labels, not whether a judgement was
+// recorded: `stuck-on` when the job kept a judgement and left `stuck` on,
+// `failed` when the read of the labels or the edit that adds a label failed,
+// so nothing changed on the pull request and a later look tries again,
+// `ended` when the job put the step's label on, or only recorded it beside a
+// `stuck`, which ends any judgement there was, even when a removal or the save
+// after it failed, `merged` when the job changed nothing because the pull
+// request is merged, so any judgement stays recorded, `unjudged` when the
+// record held no judgement and the job had nothing to do, and `moved` when the
+// watch is not the one the job was asked about. A job that throws, as on a
+// refused read of the store, resolves to undefined in the label queue.
 type StateLabelOutcome = 'stuck-on' | 'failed' | 'ended' | 'merged' | 'unjudged' | 'moved'
 
 // Sets the state label that follows from the step the stored snapshot calls
