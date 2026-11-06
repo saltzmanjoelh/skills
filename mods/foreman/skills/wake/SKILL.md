@@ -376,7 +376,9 @@ person never sees it.
 
 1. Find the record in foreman's status folder whose issue key or ticket
    matches `<who>`. The folder is `$CLAUDE_CONFIG_DIR/foreman/builds/` when
-   that variable is set, and `$HOME/.claude/foreman/builds/` otherwise.
+   that variable is set, and `$HOME/.claude/foreman/builds/` otherwise. On
+   Windows, where `HOME` is often not set, the folder is
+   `%USERPROFILE%\.claude\foreman\builds\`.
 2. Look the session up once with `list_sessions` by the record's working
    folder. The record has no branch field, so a record without a folder goes
    to the person in one line.
