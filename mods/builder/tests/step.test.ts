@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { countingRuns, failedRunsOf, hasFailed, isReplaced, isUnfinished, needsJobs, snapshotOf, type GhPullRequest } from '../hooks/github'
-import { baseFactsOf, chooseStep, CLEANUP_SECTIONS, DEFAULT_MERGE_COMMAND, isJudgementKept, labelActionOf, LINKED_KEPT, linkedIn, labelFor, labelRecordIn, needsListing, otherStateLabelsOf, reviewerFactOf, SKILL_POINTS, SKILL_SECTIONS, stepFor, stepLines, UNREAD_FACTS, unpushedIn, type Step } from '../hooks/step'
+import { baseFactsOf, chooseStep, CLEANUP_SECTIONS, DEFAULT_MERGE_COMMAND, FRONTEND_FILE, FRONTEND_SECTIONS, isJudgementKept, labelActionOf, LINKED_KEPT, linkedIn, labelFor, labelRecordIn, needsListing, otherStateLabelsOf, reviewerFactOf, SKILL_POINTS, SKILL_SECTIONS, stepFor, stepLines, UNREAD_FACTS, unpushedIn, type Step } from '../hooks/step'
 import type { BaseFacts, HeadRun, Snapshot, Unpushed } from '../types'
 
 const ME = 'owner'
@@ -748,6 +748,25 @@ test('every section of /cleanup that a step text names is one of the pinned head
   }
   expect(named.size).toBeGreaterThan(0)
   for (const name of named) expect(CLEANUP_SECTIONS).toContain(name)
+})
+
+// The same holds for skills/implement/frontend.md and the sections of it that
+// the texts name, pinned in FRONTEND_FILE and FRONTEND_SECTIONS. A text may
+// mention the file only in the pinned form, so a mention written any other way
+// fails here. The path is written out in the regex rather than built from the
+// constant, so that a stale old path in a text is still caught after a rename,
+// and the last assertion ties the two together.
+test('every mention of frontend.md in a step text names a pinned section of the pinned file', () => {
+  const form = /"([^"\n]+)" in `skills\/implement\/frontend\.md`/g
+  const named = new Set<string>()
+  for (const step of EVERY_STEP) {
+    const text = textOf(step)
+    for (const match of text.matchAll(form)) named.add(match[1]!)
+    expect(text.replace(form, '\u0000')).not.toContain('frontend.md')
+  }
+  expect(named.size).toBeGreaterThan(0)
+  for (const name of named) expect(FRONTEND_SECTIONS).toContain(name)
+  expect(FRONTEND_FILE).toBe('skills/implement/frontend.md')
 })
 
 // A text points to a numbered point of a skill only where the skill gives the
