@@ -10,7 +10,7 @@ import { checkoutSentence, otherRepositorySentence, worktreeWithBranch, type Che
 // handed to the session.
 import { afterCompaction, afterFailure, checkoutIn, compactionFacts, compactionsIn, isDue, measureIn, measureOf, owing, told as afterReloadTold, withFacts, type UsageRead } from './context'
 import { afterAskAgain, afterTally, askAgainAnswer, briefAnswer, briefFactsOf, briefRefusal, briefText, counselAnswer, decisionLine, destinationOf, endedDecisionLines, FOLLOW_UP_OPTIONS, followUpAnswer, followUpAskAgainAnswer, followUpsInput, followUpsRefusal, followUpStepOf, followUpVotesOf, keepCounsel, MAX_BRIEF_OPTIONS, MAX_FOLLOW_UPS, MIN_OPTIONS, neverStartedCandidatesOf, neverStartedOf, type PullRequestRef, reviewParagraph, stepOf, type UnreadableVote, votesOf } from './counsel'
-import { carriedHeadRuns, carriedRuns, changesBetween, DECISION_LABEL, headRunsOf, isCiMonitorEvent, isSameState, JOBS_JQ, needsJobs, PR_FIELDS, pullRequestStateIn, realWorkOf, roundInProgress, RUNS_JQ, snapshotIn, snapshotOf, unfinishedOf, verdictsOf, type BaseFacts, type GhPullRequest, type HeadRun, type Snapshot, type SnapshotExtras, type StateLabel, type Unpushed, type Verdict } from './github'
+import { carriedHeadRuns, carriedRuns, changesBetween, DECISION_LABEL, headRunsOf, isChangesRequested, isCiMonitorEvent, isSameState, JOBS_JQ, needsJobs, PR_FIELDS, pullRequestStateIn, realWorkOf, roundInProgress, RUNS_JQ, snapshotIn, snapshotOf, unfinishedOf, verdictsOf, type BaseFacts, type GhPullRequest, type HeadRun, type Snapshot, type SnapshotExtras, type StateLabel, type Unpushed, type Verdict } from './github'
 import { isLinkedStale, LINKED_PREFIX, linkedCheckout, linkedKey, recordedLinked } from './linked'
 import { ignoredLine, readIssueLink } from './links'
 import { afterComparison, afterLoad, dueComparisons, isStale, LOADED_PATHS, loadBegunAs, loadBegunIn, loadedIn, type Found } from './loaded'
@@ -3092,6 +3092,12 @@ async function serveReview($: $, input: ReviewInput): Promise<string> {
   }
   if (record !== null && atHead.verdicts === null) {
     return `Refused: ${input.head.slice(0, 8)} has no verdict review yet, so a record of the /code-review pass cannot stand in for its round. Run the round first.`
+  }
+  // A record is the newest verdict review at the head, so the snapshot reads
+  // its verdicts as the head's. Posting one after a round that requested
+  // changes would turn that request into an approval, so it is refused.
+  if (record !== null && atHead.verdicts !== null && isChangesRequested(atHead.verdicts)) {
+    return `Refused: the round at ${input.head.slice(0, 8)} requested changes, so a record of the /code-review pass or a waiver cannot be posted there. Fix the round's findings first.`
   }
   if (record !== null && atHead.codeReviewed === true) {
     return `Refused: a record of the /code-review pass or a waiver is already posted at ${input.head.slice(0, 8)}. One per head.`

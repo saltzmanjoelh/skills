@@ -1770,6 +1770,14 @@ test('the review tool refuses a record of the /code-review pass under a verdict 
   world.pr = openPullRequest()
   expect(await post({ code_review: { since: 'base' } })).toContain('no verdict review')
 
+  // A round that requested changes at the head stays final: a record or a
+  // waiver posted with approving verdicts never turns it into an approval.
+  for (const [spec, adversarial] of [['REQUEST_CHANGES', 'APPROVE'], ['APPROVE', 'REQUEST_CHANGES']] as const) {
+    world.pr = openPullRequest({ reviews: [verdictReview(C, spec, adversarial)] })
+    expect(await post({ code_review: { since: 'base' } })).toContain('requested changes')
+    expect(await post({ code_review: { waived: true } })).toContain('requested changes')
+  }
+
   world.pr = openPullRequest({ reviews: [verdictReview(C, 'APPROVE', 'APPROVE'), recordReview(C, 'since=base')] })
   expect(await post({ code_review: { waived: true } })).toContain('already')
   // A second review without the record is still refused, as before.
