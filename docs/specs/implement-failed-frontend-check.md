@@ -47,8 +47,8 @@ list may hold a glob that git refuses.
    Because `git show` exits nonzero both when the file is missing and when the
    base reference cannot be read, step 7 tells the two apart with a command
    that succeeds when the file is merely missing, such as
-   `git ls-tree --name-only origin/<base> -- CLAUDE.md`, which exits zero and
-   prints nothing when the file is absent. Only a successful command that
+   `git ls-tree --full-tree --name-only origin/<base> -- CLAUDE.md`, which exits
+   zero and prints nothing when the file is absent. Only a successful command that
    shows the file is missing counts as "no `CLAUDE.md`".
 4. **One more try.** When a read in step 7 gives no answer, the session runs
    `git fetch origin <base>` again and repeats that read once.
@@ -101,6 +101,14 @@ list may hold a glob that git refuses.
 - A malformed project glob on a frontend pull request fails the per-commit
   check on every commit, so every such commit retakes the screenshots and the
   person is told each time, until the project fixes its line.
+- The session's shell is in a subfolder of the worktree: `git diff` and
+  `git ls-tree` read their pathspecs relative to the current folder, so
+  `git ls-tree --name-only origin/<base> -- CLAUDE.md` exits zero and prints
+  nothing although the file exists, and the step 7 diff exits zero and prints
+  nothing although a frontend file changed. Neither is a failure, so the exit
+  status cannot catch it. Step 7 therefore runs its commands from the
+  worktree's top folder, as `frontend.md` already does, and its `git ls-tree`
+  passes `--full-tree`. This was measured on 2026-11-06 during planning.
 - The person answers "open it the plain way": the body says nothing about
   screenshots, as for any plain pull request, because the person chose it
   knowing the check did not run.
