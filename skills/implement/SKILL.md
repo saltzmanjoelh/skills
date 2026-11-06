@@ -340,7 +340,8 @@ for the edit, and answers with one of these:
 - `stuck` already follows from the step, as on **Over a limit**, so nothing
   was recorded.
 - A refusal that says why: nothing is watched, the stored snapshot is of
-  another pull request, or the pull request is merged or closed. So on
+  another pull request, the pull request is merged or closed, or the step
+  gives no state label and the mod has recorded none. So on
   **Merged**, where the skill asks for `stuck` when the commits could not be
   listed, the tool refuses, and the session still asks the person.
 - An error, when the store refused to save the judgement. The session reports

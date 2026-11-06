@@ -831,7 +831,7 @@ async function told($: $, r: BuilderRun): Promise<Snapshot | null> {
 
 // Makes a queue that runs the work given to it one at a time, in the order it
 // was queued. Work that fails never stops the queue: the next piece runs
-// either way. The two queues below differ only in what the caller of a
+// either way. The queues made with it differ only in what the caller of a
 // failed piece sees. With `passesErrors`, the caller's promise rejects with
 // that failure; without it, the caller's promise resolves without an error
 // and the failure goes no further.
@@ -3463,12 +3463,15 @@ async function settleStateLabel($: $, expected?: BuilderRun): Promise<StateLabel
 // lost, by these rules:
 //
 // - When the newer judgement's label is `replaced` or the label of `before`,
-//   the tool made it while the step gave no label, under the label the job
-//   has just replaced. It is carried under the new record's label, because
-//   carried under the old label it would end at the next look where the step
-//   gives the new label, while the session is still asking the person. When
-//   the new label is `stuck` itself, stuck follows from the step, so no
-//   judgement is carried.
+//   the tool may have made it while the step gave no label, under the label
+//   the job has just replaced. It is carried under the new record's label,
+//   because carried under the old label it would end at the next look where
+//   the step gives the new label, while the session is still asking the
+//   person. When the new label is `stuck` itself, a judgement is never made
+//   under `stuck`, so the judgement is carried unchanged instead. Dropping it
+//   would be wrong, because the tool may have made it from a newer snapshot
+//   whose step gives that label again, and the next look would then take
+//   `stuck` off while the session is still asking the person.
 // - A newer judgement under any other label was made from a newer snapshot,
 //   whose step gives that label, so it is carried unchanged, even onto a
 //   record of `stuck`, because the next look keeps stuck only while it holds.
@@ -3483,11 +3486,11 @@ async function saveLabelRecord($: $, key: string, replaced: StateLabel | undefin
       return
     }
     const isUnderReplacedLabel = stored.label === replaced || stored.label === before?.label
-    if (!isUnderReplacedLabel) {
+    if (!isUnderReplacedLabel || next.label === 'stuck') {
       await $.store.set(key, { ...next, judgement: stored })
       return
     }
-    await $.store.set(key, next.label === 'stuck' ? next : { ...next, judgement: { label: next.label, at: stored.at } })
+    await $.store.set(key, { ...next, judgement: { label: next.label, at: stored.at } })
   })
 }
 

@@ -16021,6 +16021,56 @@ test('a judgement made from a newer snapshot under another label, while a job th
   expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ judgement: { label: 'waiting-on-author', at: judgedAt } })
 })
 
+test('a judgement made under the record label a job is replacing with stuck is carried unchanged, so stuck stays on while the step gives that label', async ($, on) => {
+  const clock = mock.clock(on)
+  const stored = memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  await watch($)
+  await clock.settle()
+  expect(world.pr.labels).toEqual([{ name: 'in-review' }])
+
+  // Round 1 is now past a limit of none, so the step is Over a limit, and
+  // the job the watch queues writes stuck and then waits on the read of the
+  // labels after that edit, before its save.
+  let release = () => {}
+  world.baseClaude = 'Max rounds: 0\n'
+  world.labelAnswers = [JSON.stringify(['in-review'])]
+  world.labelsHold = new Promise(resolve => { release = resolve })
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await clock.settle()
+  expect(world.pr.labels).toEqual([{ name: 'stuck' }])
+
+  // The limit is lifted, so a poll's look stores a step that gives in-review
+  // again, the label the job is replacing, and the tool judges under it.
+  world.baseClaude = null
+  await clock.advance(30 * 60_000)
+  const answer = setStuck($)
+  await clock.settle()
+  expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ label: 'in-review', judgement: { label: 'in-review', at: clock.now() } })
+  const judgedAt = clock.now()
+
+  // The job saves a record of stuck. A judgement is never made under stuck,
+  // so the judgement is carried unchanged, and the jobs after it keep stuck
+  // on because the step gives in-review, the judged label.
+  release()
+  const ran = await answer
+  await clock.settle()
+  expect(String(ran.result)).toContain('stuck is on o/r#7')
+  expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ label: 'stuck', judgement: { label: 'in-review', at: judgedAt } })
+  expect(world.pr.labels).toEqual([{ name: 'stuck' }])
+  await clock.advance(30 * 60_000)
+  expect(world.pr.labels).toEqual([{ name: 'stuck' }])
+
+  // The limit is back, so the step gives stuck, which differs from the
+  // judged label: the judgement ends and stuck stays on, now from the step.
+  world.baseClaude = 'Max rounds: 0\n'
+  await clock.advance(30 * 60_000)
+  expect(world.pr.labels).toEqual([{ name: 'stuck' }])
+  expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ label: 'stuck' })
+  expect(stored.get(STATE_LABEL_KEY)).not.toHaveProperty('judgement')
+})
+
 test('a session start prunes label records older than they are kept, and records of another shape', async ($, on) => {
   const clock = mock.clock(on, { now: 200 * 24 * 60 * 60_000 })
   const stored = memoryStore(on, [
