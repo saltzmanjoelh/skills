@@ -1,6 +1,7 @@
 # Frontend rules for /implement
 
 Read this file only when step 7 of `SKILL.md` finds the change frontend, or
+when its check gave no answer and the person chose "Open as frontend", or
 when a pull request's body has a `## Screenshots` section and the base branch's
 `CLAUDE.md` does not say `Frontend paths: none`. The steps, points and sections
 it names, such as step 7, "Rules", "A review round", "Commits the pull request
@@ -14,7 +15,8 @@ below from the worktree's top folder.
 
 ## A frontend change
 
-**A frontend change.** For a change that step 7 found frontend, after
+**A frontend change.** For a change that step 7 found frontend, or that
+the person chose to open as frontend after step 7's check gave no answer, after
 checking that the diff lists only this change's files, run
 `/storypr` as its section **When another skill calls it** says. When it
 returns a body file, a commit and the screenshot paths, write at the top of the
@@ -59,7 +61,7 @@ the project's `Frontend paths:` line could not be read, so the section was
 written as if the built-in list applied. Otherwise, when step 7 found the
 change frontend, this read succeeded, and the reading is the one where the
 built-in list applies, the note says that the built-in list of frontend paths
-matched the change. Each note also says that the project can write its own
+matched the change, and that the project can write its own
 `Frontend paths:` list, or `Frontend paths: none`, in its `CLAUDE.md` to
 change that. The note names no path that matched. Tell the person the same,
 including the note when there is one, in one sentence, and carry on without

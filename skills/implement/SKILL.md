@@ -242,8 +242,8 @@ standard error. Its options, in this order, are:
 
 - "Wait, then check again", the recommended one: when the person says the
   cause is fixed, run step 7 again from its first fetch.
-- "Open as frontend": read the section **A frontend change** of
-  `skills/implement/frontend.md` and open the pull request as it says.
+- "Open as frontend": treat the change as frontend and go on as the
+  paragraph that begins "When the change is frontend" says.
 - "Open the plain way": its description says that this skips the frontend
   check. Open the pull request as the paragraph that begins "Check the
   diff against the base" says, with nothing about screenshots in the body.
