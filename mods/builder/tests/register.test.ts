@@ -10670,6 +10670,30 @@ test('a base CLAUDE.md without a Checks: line asks whether the base has workflow
   expect(String(listed.result)).toContain('The step that applies: Both verdicts approve at this head, with no checks.')
 })
 
+test('both merge texts bring a frontend pull request\'s screenshot section up to date before reading the pull request again', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr = approvedWithoutChecks()
+  world.baseClaude = 'Base branch: main\n'
+  world.workflows = ''
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  const merge = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  world.workflows = '100644 blob 0123 .github/workflows/test.yml\n'
+  const ask = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  expect(merge).toContain('The step that applies: Both verdicts approve at this head, merge.')
+  expect(ask).toContain('The step that applies: Both verdicts approve at this head, with no checks.')
+  for (const text of [merge, ask]) {
+    const at = text.indexOf('- On a frontend pull request, ')
+    expect(at).toBeGreaterThan(text.indexOf('Before merging:'))
+    expect(at).toBeLessThan(text.indexOf('- Read the pull request again with'))
+    for (const part of ['`## Screenshots`', '`Frontend paths:`', '`skills/implement/frontend.md`', 'A pull request whose body has no such section skips this bullet.']) {
+      expect(text).toContain(part)
+    }
+  }
+})
+
 test('a session that started in a subfolder of the checkout still finds the base\'s workflow files', async ($, on) => {
   mock.clock(on)
   mock.store(on)
