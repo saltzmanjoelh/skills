@@ -815,10 +815,11 @@ export function startWaits(t: ForemanTickets, rows: readonly SubRow[], now: numb
   return freeSlots(t, rows, now, slots) - owed <= 0
 }
 
-// The most issues the top-up line asks the parent to start on one typed turn.
-// The desktop app asks the person with a permission card from the eleventh
-// start on one turn, so five keeps a turn well below it, with room for issues
-// the person names in the same message.
+// The most issues one top-up line asks the parent to start. The desktop app
+// asks the person with a permission card from the eleventh start since the
+// person's last typed message, a count that each typed message starts again,
+// so five keeps each message well below it, with room for issues the person
+// names in the same message.
 export const TOP_UP_MAX = 5
 
 // How many issues the parent should start now so that foreman keeps one
