@@ -376,6 +376,7 @@ test('a drive-letter saved path is accepted with either slash and a drive letter
     ['a lowercase drive letter in the configuration folder', 'C:\\Users\\me\\.claude\\projects\\p\\s\\tool-results\\x.json', 'c:\\Users\\me\\.claude', true],
     ['forward slashes throughout', 'C:/Users/me/.claude/projects/p/s/tool-results/x.json', WIN_CONFIG, true],
     ['both slashes mixed', 'C:\\Users\\me/.claude\\projects/-work-parent\\session-1/tool-results\\toolu_01.txt', 'C:/Users/me/.claude', true],
+    ['a configuration folder that is a bare drive', 'c:\\projects\\p\\s\\tool-results\\x.json', 'C:', true],
   ])
   expect(got).toEqual(want)
 })

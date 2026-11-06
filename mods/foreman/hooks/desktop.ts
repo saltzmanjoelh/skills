@@ -138,7 +138,11 @@ export function savedPathIn(text: string): string | null {
 const DRIVE_PATH = /^[A-Za-z]:[\\/]/
 
 // A Windows path written with `/` alone and with its drive letter in lower
-// case, so that two ways of writing the same path compare equal.
+// case, so that two ways of writing the same path compare equal. Its test for
+// a drive letter needs no slash after the colon, unlike DRIVE_PATH, because
+// it is also given the configuration folder, which is a bare `C:` when
+// CLAUDE_CONFIG_DIR is the root of a drive. The saved path it is given has
+// already passed DRIVE_PATH.
 function windowsForm(text: string): string {
   const slashed = text.replace(/\\/g, '/')
   return /^[A-Za-z]:/.test(slashed) ? slashed.charAt(0).toLowerCase() + slashed.slice(1) : slashed
