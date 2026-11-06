@@ -282,7 +282,7 @@ listing of its own. The result is one of three: none, a list of the commits
 with whether the pull request's head is an ancestor of the worktree's
 `HEAD`, or that they could not be listed. When they could not be listed,
 treat the worktree as holding commits the pull request lacks: do not
-merge, set `stuck`, ask the person, and never run `/cleanup`. When a push
+merge, set `stuck` with `mcp__builder__set_stuck`, ask the person, and never run `/cleanup`. When a push
 fails in a review round, the commits are known to exist, so the rules below
 apply without a listing.
 
@@ -299,8 +299,8 @@ apply without a listing.
   so the next round reviews both together.
 - Otherwise, while the pull request is open, do not merge, and push the
   commits when the head is an ancestor of the worktree's `HEAD`, checking
-  for credentials as before any push. When it is not, or the push fails, set `stuck` and
-  ask the person. Never force a push.
+  for credentials as before any push. When it is not, or the push fails, set `stuck` with
+  `mcp__builder__set_stuck` and ask the person. Never force a push.
 - Once the pull request is merged or closed, push nothing and do not run
   `/cleanup`: name the commits in the report, so a person can move them.
 - The next review repeats the lists of a cheap-fix commit that no review
@@ -320,17 +320,33 @@ and wait on it give `waiting-on-reviewer`, because an outside reviewer holds
 the merge there; the other steps where both verdicts approve, where nobody
 holds the merge, give `ready-to-merge`; **Over a limit** and **Closed** give
 `stuck`. The session
-sets `stuck` itself only when a step's text asks for its judgement, such as a
-failure outside the code or a person declining to merge without checks. It
-reads the labels the pull request carries now with
-`gh pr view <n> --json labels --jq '[.labels[].name]'`, because the state
-lines may show a label from before the mod's last edit, and removes every
-other state label among them in the same edit:
-`gh pr edit <n> --add-label stuck --remove-label <those labels, comma-separated>`,
-leaving out `--remove-label` when there are none, and creating the label first
-with `gh label create stuck` when the repository lacks it. The mod
-leaves that `stuck` alone until the label that follows from the step
-changes. The mod manages `needs-decision` itself; it is not a state label. The mod cannot
+puts `stuck` on by its own judgement only when a step's text asks for it, such
+as a failure outside the code or a person declining to merge without checks,
+and then only by calling `mcp__builder__set_stuck`. It never edits a state
+label itself, with `gh pr edit` or any other way. The tool takes no input and
+works on the pull request the session watches. It records the judgement before
+it edits anything, then puts `stuck` on through the mod's label queue, waits
+for the edit, and answers with one of these:
+
+- `stuck` is on.
+- The judgement is recorded but the edit failed, and the mod puts `stuck` on
+  at its next look.
+- The label that follows from the step changed before the edit, so the
+  judgement ended and `stuck` is not on.
+- The watch moved to another pull request before the edit, and the judgement
+  stays recorded for the pull request it was made on.
+- `stuck` already follows from the step, as on **Over a limit**, so nothing
+  was recorded.
+- A refusal that says why: nothing is watched, the stored snapshot is of
+  another pull request, or the pull request is merged or closed. So on
+  **Merged**, where the skill asks for `stuck` when the commits could not be
+  listed, the tool refuses, and the session still asks the person.
+- An error, when the store refused to save the judgement. The session reports
+  that error to the person.
+
+In every case the session carries on with asking the person. The mod keeps
+that `stuck`, and puts it back when someone takes it off, until the label that
+follows from the step changes. The mod manages `needs-decision` itself; it is not a state label. The mod cannot
 tell who put that label on, so a `needs-decision` label that a person or
 another tool put on also comes off once the session's question is
 answered.
@@ -444,7 +460,7 @@ whether or not the reviewer moved it by hand, and once the session has
 answered and asked again the label goes back to `waiting-on-reviewer`. It
 becomes `ready-to-merge` only once every outside reviewer approves. The session
 sets no state label for any of this, except `stuck` in three cases, where it
-sets it as "State labels" says and asks the person, so that it never asks for
+sets it with `mcp__builder__set_stuck` as "State labels" says and asks the person, so that it never asks for
 a review in a loop:
 
 - a review request fails, because the login does not exist or the person has
