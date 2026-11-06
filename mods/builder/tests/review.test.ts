@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { verdictsOf } from '../hooks/github'
-import { CHEAP_FIX_SUBJECT, changedKinds, commitRecordsOf, DECIDED_HEADINGS, DECIDED_ITEM_CHARS, decidedItems, decidedSection, DEFAULT_SPEC_DIR, factIn, INSTRUCTION_PATHSPECS, instructionFileImportsMarkdown, instructionFileIsLink, isFullSha, isUpForCheck, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pathKind, pluginRootsOf, recordItems, reviewedHeadOf, secretIn, specDirOf, STREAK_STOP, trendOf, trendSection, trendStopLine, underRoot, verdictHeadOf, verdictsLine } from '../hooks/review'
+import { CHEAP_FIX_SUBJECT, changedKinds, codeReviewLine, commitRecordsOf, DECIDED_HEADINGS, DECIDED_ITEM_CHARS, decidedItems, decidedSection, DEFAULT_SPEC_DIR, factIn, INSTRUCTION_PATHSPECS, instructionFileImportsMarkdown, instructionFileIsLink, isFullSha, isUpForCheck, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pathKind, pluginRootsOf, recordItems, reviewedHeadOf, secretIn, specDirOf, STREAK_STOP, trendOf, trendSection, trendStopLine, underRoot, verdictHeadOf, verdictsLine } from '../hooks/review'
 
 const facts = {
   repo: 'o/r',
@@ -712,6 +712,32 @@ test('the verdict head skips a review carried over to its head, and none is left
   }
   expect(verdictHeadOf([carried('d', 'a')], head)).toBe(null)
   expect(verdictHeadOf([carried('d', 'a'), carried('c', 'd')], head)).toBe(null)
+})
+
+test('the marker line of a /code-review pass names the head and the start, the whole pull request, or a waiver', () => {
+  expect(codeReviewLine(sha('c'), { since: sha('a') })).toBe('CODE-REVIEW cccccccc since=aaaaaaaa')
+  expect(codeReviewLine(sha('c'), { since: 'base' })).toBe('CODE-REVIEW cccccccc since=base')
+  expect(codeReviewLine(sha('c'), { waived: true })).toBe('CODE-REVIEW cccccccc waived')
+})
+
+// The record review of a /code-review pass at `c`, as the mod writes it.
+const recorded = (c: string, marker = 'since=base') => ({
+  sha: sha(c),
+  body: `VERDICTS ${sha(c).slice(0, 8)} spec=APPROVE adversarial=APPROVE\nCODE-REVIEW ${sha(c).slice(0, 8)} ${marker}\n\nThe pass ran.`,
+})
+
+test('the verdict head skips a record review of the /code-review pass, so a pass at a carried-over head never stands in for a round', () => {
+  const head = sha('e')
+  // The check after approval carried the verdicts of a over to the cheap-fix
+  // head d, and the pass ran at d. The spec reviewer never read d.
+  expect(verdictHeadOf([review('a', 'APPROVE', 'APPROVE'), carried('d', 'a'), recorded('d')], head)).toBe(sha('a'))
+  expect(verdictHeadOf([review('a', 'APPROVE', 'APPROVE'), carried('d', 'a'), recorded('d', 'waived')], head)).toBe(sha('a'))
+  // At a normally reviewed head the round's own review has the same sha.
+  expect(verdictHeadOf([review('a', 'APPROVE', 'APPROVE'), recorded('a')], head)).toBe(sha('a'))
+  expect(verdictHeadOf([review('a', 'APPROVE', 'APPROVE')], head)).toBe(sha('a'))
+  // A marker that is not a valid one leaves the review a normal one.
+  const offLine = { sha: sha('d'), body: `VERDICTS dddddddd spec=APPROVE adversarial=APPROVE\n\nCODE-REVIEW dddddddd since=base` }
+  expect(verdictHeadOf([review('a', 'APPROVE', 'APPROVE'), offLine], head)).toBe(sha('d'))
 })
 
 test('a full sha is 40 lowercase hexadecimal characters', () => {

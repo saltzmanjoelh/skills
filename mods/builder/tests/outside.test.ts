@@ -21,7 +21,10 @@ function verdicts(spec: string, adversarial: string) {
   return { author: { login: ME }, state: 'COMMENTED', body: `VERDICTS ${C.slice(0, 8)} spec=${spec} adversarial=${adversarial}\n\nfindings`, commit: { oid: C }, submittedAt: T1 }
 }
 
-const approvedBySession = verdicts('APPROVE', 'APPROVE')
+// The session's review where both verdicts approve and the /code-review pass
+// ran, so the steps after the pass are chosen. Its second line is the marker
+// the mod writes for the pass.
+const approvedBySession = { ...verdicts('APPROVE', 'APPROVE'), body: `VERDICTS ${C.slice(0, 8)} spec=APPROVE adversarial=APPROVE\nCODE-REVIEW ${C.slice(0, 8)} since=base\n\nfindings` }
 
 // A review by someone other than the session. The association is the one
 // GitHub sets from the author's relation to the repository, and a

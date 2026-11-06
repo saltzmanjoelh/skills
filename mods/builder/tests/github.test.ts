@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { carriedHeadRuns, carriedRuns, changesBetween, checkOf, ciOf, failedCheckNames, headRunsOf, isCiMonitorEvent, isSameState, plainName, pullRequestStateIn, realWorkOf, roundInProgress, snapshotIn, snapshotOf, STATE_LABELS, unfinishedOf, WORKFLOW_LABELS, type GhPullRequest, type HeadRun, type Snapshot, type WorkflowRun } from '../hooks/github'
+import { carriedHeadRuns, carriedRuns, changesBetween, checkOf, ciOf, codeReviewOf, failedCheckNames, headRunsOf, isCiMonitorEvent, isSameState, plainName, pullRequestStateIn, realWorkOf, roundInProgress, snapshotIn, snapshotOf, STATE_LABELS, unfinishedOf, WORKFLOW_LABELS, type GhPullRequest, type HeadRun, type Snapshot, type WorkflowRun } from '../hooks/github'
 import { changePrompt, ciEventContext, reloadLead, RELOAD_LINE, REREAD_CLOSING, stateLines } from '../hooks/prompts'
 import { stepFor } from '../hooks/step'
 
@@ -140,6 +140,53 @@ test('the changes name what moved in plain sentences', () => {
     'Check "tests" went from pending to failed.',
     'Labels added: "do-not-merge".',
   ])
+})
+
+// A review whose second line is a /code-review marker, as the mod writes it.
+function recordReview(sha: string, marker: string, over: { login?: string; commit?: string; verdicts?: string } = {}) {
+  return {
+    author: { login: over.login ?? ME },
+    state: 'COMMENTED',
+    body: `VERDICTS ${sha.slice(0, 8)} ${over.verdicts ?? 'spec=APPROVE adversarial=APPROVE'}\n${marker}\n\nThe pass ran.`,
+    commit: { oid: over.commit ?? sha },
+  }
+}
+
+test('a /code-review marker is read only from the second line, under a verdicts line that approves, at the review\'s own commit', () => {
+  expect(codeReviewOf(recordReview(C, `CODE-REVIEW ${C.slice(0, 8)} since=${A.slice(0, 8)}`))).toEqual({ sha: C, isWaiver: false })
+  expect(codeReviewOf(recordReview(C, `CODE-REVIEW ${C.slice(0, 8)} since=base`))).toEqual({ sha: C, isWaiver: false })
+  expect(codeReviewOf(recordReview(C, `CODE-REVIEW ${C.slice(0, 8)} waived`))).toEqual({ sha: C, isWaiver: true })
+  const crlf = recordReview(C, `CODE-REVIEW ${C.slice(0, 8)} since=base`)
+  expect(codeReviewOf({ ...crlf, body: crlf.body.replace(/\n/g, '\r\n') })).toEqual({ sha: C, isWaiver: false })
+  // The marker names another head than the review's commit.
+  expect(codeReviewOf(recordReview(C, `CODE-REVIEW ${A.slice(0, 8)} since=base`))).toBe(null)
+  // A verdict that requests changes, or no verdicts line at all.
+  expect(codeReviewOf(recordReview(C, `CODE-REVIEW ${C.slice(0, 8)} since=base`, { verdicts: 'spec=APPROVE adversarial=REQUEST_CHANGES' }))).toBe(null)
+  expect(codeReviewOf({ ...crlf, body: `CODE-REVIEW ${C.slice(0, 8)} since=base\n\nx` })).toBe(null)
+  // Off the second line, or not exactly the marker.
+  expect(codeReviewOf({ ...crlf, body: `VERDICTS ${C.slice(0, 8)} spec=APPROVE adversarial=APPROVE\n\nCODE-REVIEW ${C.slice(0, 8)} since=base` })).toBe(null)
+  for (const line of [`CODE-REVIEW ${C.slice(0, 8)} since=nothing`, `CODE-REVIEW ${C.slice(0, 8)}`, `CODE-REVIEW ${C} since=base`, `- CODE-REVIEW ${C.slice(0, 8)} waived`, `CODE-REVIEW ${C.slice(0, 8)} waived and more`]) {
+    expect(codeReviewOf(recordReview(C, line))).toBe(null)
+  }
+})
+
+test('the fingerprint is unchanged without a /code-review marker, changes when one appears at the head, and the change is named', () => {
+  const approved = review(C, 'APPROVE', 'APPROVE')
+  const before = snapshotOf('o/r', pullRequest({ reviews: [approved] }), ME)
+  expect('codeReviewed' in before).toBe(false)
+  expect('codeReviewSince' in before).toBe(false)
+  expect(before.fingerprint).toBe('OPEN|cccccccccccc||APPROVE/APPROVE@cccccccc|tests:passed|no-conflict|')
+  // A pass at an earlier head is the start, but nothing the session decides on.
+  const earlier = snapshotOf('o/r', pullRequest({ reviews: [review(A, 'APPROVE', 'APPROVE'), recordReview(A, `CODE-REVIEW ${A.slice(0, 8)} since=base`), approved] }), ME)
+  expect(earlier.codeReviewSince).toBe(A)
+  expect(earlier.fingerprint).toBe(before.fingerprint)
+  for (const marker of [`CODE-REVIEW ${C.slice(0, 8)} since=base`, `CODE-REVIEW ${C.slice(0, 8)} waived`]) {
+    const after = snapshotOf('o/r', pullRequest({ reviews: [approved, recordReview(C, marker)] }), ME)
+    expect(after.codeReviewed).toBe(true)
+    expect(after.fingerprint).not.toBe(before.fingerprint)
+    expect(isSameState(before, after)).toBe(false)
+    expect(changesBetween(before, after)).toEqual(['A record of the /code-review pass, or of the person\'s waiver of it, is posted at the head.'])
+  }
 })
 
 test('the workflow\'s own labels leave the fingerprint unchanged and any other label moves it', () => {

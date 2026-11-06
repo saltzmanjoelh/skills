@@ -46,8 +46,28 @@ function review(sha: string, spec: string, adversarial: string) {
 const UNLISTED: Unpushed = { kind: 'unlisted' }
 const NONE: Unpushed = { kind: 'none' }
 
+// A record review the session posts once the /code-review pass ran at `sha`,
+// as the mod writes it: the verdicts line that approves with both verdicts,
+// then the marker line, then the body. Each test names only what it is about.
+function recordReview(sha: string, marker: string, over: { login?: string; commit?: string; verdicts?: string } = {}) {
+  return {
+    author: { login: over.login ?? ME },
+    state: 'COMMENTED',
+    body: `VERDICTS ${sha.slice(0, 8)} ${over.verdicts ?? 'spec=APPROVE adversarial=APPROVE'}\n${marker}\n\nThe /code-review pass ran.`,
+    commit: { oid: over.commit ?? sha },
+  }
+}
+
+// The record of a pass at `sha` that started from `since`, and of a waiver.
+const passAt = (sha: string, since = 'base') => recordReview(sha, `CODE-REVIEW ${sha.slice(0, 8)} since=${since === 'base' ? 'base' : since.slice(0, 8)}`)
+const waiverAt = (sha: string) => recordReview(sha, `CODE-REVIEW ${sha.slice(0, 8)} waived`)
+
 const FACTS: BaseFacts = { maxPushes: 8, maxRounds: 5, checks: 'expected', merge: 'default', isClaudeRead: true }
-const approved = [review(C, 'APPROVE', 'APPROVE')]
+// Both verdicts approve at the head, and the /code-review pass ran there, so
+// the steps after the pass are chosen.
+const approved = [review(C, 'APPROVE', 'APPROVE'), passAt(C)]
+// Both verdicts approve at the head, and no pass ran there yet.
+const approvedOnly = [review(C, 'APPROVE', 'APPROVE')]
 
 // A snapshot of #7 at head C as a look stores it: the pull request, every
 // run at the head, and the base branch's facts.
@@ -232,6 +252,92 @@ test('a verdict at the head that requests changes chooses changes requested, fro
   expect(kind(snapshot({ reviews: [review(C, 'APPROVE', 'REQUEST_CHANGES')] }))).toBe('changes-requested')
 })
 
+const A = 'a'.repeat(40)
+const B = 'b'.repeat(40)
+
+test('both verdicts approving with no record of a /code-review pass at the head chooses the pass, reading the whole pull request', () => {
+  const s = snapshot({ reviews: approvedOnly }, [headRun()])
+  expect(chooseStep(s, false)).toEqual({ kind: 'code-review', head: C, since: null })
+  expect(labelFor(chooseStep(s, false))).toBe('in-review')
+})
+
+test('a pass or a waiver at the head moves on to the outside reviewer and merge steps', () => {
+  for (const marker of [passAt(C), passAt(C, A), waiverAt(C)]) {
+    const reviews = [review(C, 'APPROVE', 'APPROVE'), marker]
+    const commits = [{ oid: A }, { oid: C }]
+    expect(snapshot({ reviews, commits }).codeReviewed).toBe(true)
+    expect(kind(snapshot({ reviews, commits }, [headRun()]))).toBe('merge')
+    expect(kind(snapshot({ reviews, commits, reviewRequests: [{ __typename: 'User', login: 'ann' }] }, [headRun()]))).toBe('awaiting-review')
+  }
+})
+
+test('a marker from another login, one whose head is not the review\'s commit, one off the second line, and one under a verdict that requests changes are ignored', () => {
+  const ignored = [
+    recordReview(C, `CODE-REVIEW ${C.slice(0, 8)} since=base`, { login: 'someone-else' }),
+    recordReview(C, `CODE-REVIEW ${D.slice(0, 8)} since=base`),
+    { author: { login: ME }, state: 'COMMENTED', body: `CODE-REVIEW ${C.slice(0, 8)} since=base\n\nThe pass ran.`, commit: { oid: C } },
+    { author: { login: ME }, state: 'COMMENTED', body: `VERDICTS ${C.slice(0, 8)} spec=APPROVE adversarial=APPROVE\n\nCODE-REVIEW ${C.slice(0, 8)} since=base`, commit: { oid: C } },
+  ]
+  for (const marker of ignored) {
+    const s = snapshot({ reviews: [review(C, 'APPROVE', 'APPROVE'), marker] }, [headRun()])
+    expect(s.codeReviewed).toBeUndefined()
+    expect(s.codeReviewSince).toBeUndefined()
+    expect(kind(s)).toBe('code-review')
+  }
+  const underChanges = snapshot({ reviews: [review(C, 'APPROVE', 'APPROVE'), recordReview(C, `CODE-REVIEW ${C.slice(0, 8)} since=base`, { verdicts: 'spec=REQUEST_CHANGES adversarial=APPROVE' })] })
+  expect(underChanges.codeReviewed).toBeUndefined()
+  expect(underChanges.codeReviewSince).toBeUndefined()
+})
+
+test('the next pass starts from the newest pass marker among the pull request\'s commits, and never from a waiver', () => {
+  const commits = [{ oid: A }, { oid: B }, { oid: C }]
+  const passes = snapshot({ commits, reviews: [review(A, 'APPROVE', 'APPROVE'), passAt(A), review(B, 'APPROVE', 'APPROVE'), passAt(B, A), review(C, 'APPROVE', 'APPROVE')] })
+  expect(passes.codeReviewSince).toBe(B)
+  expect(chooseStep(passes, false)).toEqual({ kind: 'code-review', head: C, since: B })
+  const waived = snapshot({ commits, reviews: [review(A, 'APPROVE', 'APPROVE'), passAt(A), review(B, 'APPROVE', 'APPROVE'), waiverAt(B), review(C, 'APPROVE', 'APPROVE')] })
+  expect(waived.codeReviewSince).toBe(A)
+  expect(chooseStep(waived, false)).toEqual({ kind: 'code-review', head: C, since: A })
+  const onlyWaived = snapshot({ commits, reviews: [review(B, 'APPROVE', 'APPROVE'), waiverAt(B), review(C, 'APPROVE', 'APPROVE')] })
+  expect(chooseStep(onlyWaived, false)).toEqual({ kind: 'code-review', head: C, since: null })
+})
+
+test('a marked head that is no longer among the pull request\'s commits gives a pass over the whole pull request', () => {
+  const s = snapshot({ commits: [{ oid: B }, { oid: C }], reviews: [review(A, 'APPROVE', 'APPROVE'), passAt(A), review(C, 'APPROVE', 'APPROVE')] })
+  expect(s.codeReviewSince).toBeUndefined()
+  expect(chooseStep(s, false)).toEqual({ kind: 'code-review', head: C, since: null })
+})
+
+test('changes requested and a failed check still come before the /code-review pass', () => {
+  const failing = [{ __typename: 'CheckRun', name: 'tests', status: 'COMPLETED', conclusion: 'FAILURE' }]
+  expect(kind(snapshot({ reviews: [review(C, 'APPROVE', 'APPROVE'), review(C, 'REQUEST_CHANGES', 'APPROVE')] }))).toBe('changes-requested')
+  expect(kind(snapshot({ reviews: approvedOnly, statusCheckRollup: failing }))).toBe('failed')
+  expect(kind(snapshot({ reviews: approvedOnly, mergeable: 'CONFLICTING' }))).toBe('conflicting')
+})
+
+test('a snapshot an older build stored, with neither fact of the pass, counts as no pass at the head', () => {
+  const { codeReviewed: _reviewed, codeReviewSince: _since, ...older } = snapshot({ reviews: approved }, [headRun()])
+  expect(kind(older as Snapshot)).toBe('code-review')
+})
+
+test('a start that is not a full commit sha is never put into the step', () => {
+  const s = { ...snapshot({ reviews: approvedOnly }), codeReviewSince: 'abcdef01' }
+  expect(chooseStep(s, false)).toEqual({ kind: 'code-review', head: C, since: null })
+})
+
+test('the /code-review pass text names the head and the start, or the whole pull request, and points to the skill\'s paragraph', () => {
+  const later = textOf({ kind: 'code-review', head: C, since: A })
+  expect(later).toContain('The step that applies: Run the /code-review pass at this head.')
+  expect(later).toContain(C)
+  expect(later).toContain(`${A}..${C}`)
+  expect(later).toContain('"The /code-review pass" in /implement')
+  expect(later).toContain(`since: "${A}"`)
+  expect(later).not.toContain('--fix')
+  const first = textOf({ kind: 'code-review', head: C, since: null })
+  expect(first).toContain('whole pull request')
+  expect(first).toContain(`git merge-base origin/<base> ${C}`)
+  expect(first).toContain('since: "base"')
+})
+
 test('both verdicts approving with the runs carried over holds the merge', () => {
   expect(kind(snapshot({ reviews: approved }, [headRun()], FACTS, true))).toBe('runs-unread')
 })
@@ -256,7 +362,7 @@ test('both verdicts approving with the reviewers unknown holds the merge, in pla
   expect(kind(snapshot(none, [], { ...UNKNOWN, checks: 'none' }))).toBe('user-claude-unread')
   expect(kind(snapshot(none, [headRun({ id: 5 })], UNKNOWN))).toBe('user-claude-unread')
   const sha = 'abcdef0123456789'
-  expect(kind(snapshot({ reviews: [review(sha, 'APPROVE', 'APPROVE')], headRefOid: sha, commits: [{ oid: sha }] }, [headRun()], UNKNOWN))).toBe('user-claude-unread')
+  expect(kind(snapshot({ reviews: [review(sha, 'APPROVE', 'APPROVE'), passAt(sha)], headRefOid: sha, commits: [{ oid: sha }] }, [headRun()], UNKNOWN))).toBe('user-claude-unread')
   // The base branch's file unread too: factsOf would answer the unread facts,
   // which have no mark, so the chooser reads the mark from the snapshot.
   expect(kind(snapshot(none, [], { ...UNREAD_FACTS, reviewersUnknown: true }))).toBe('user-claude-unread')
@@ -376,6 +482,9 @@ const EVERY_STEP: Step[] = [
   { kind: 'failed', runs: [123456, 789] },
   { kind: 'review', head: C },
   { kind: 'changes-requested' },
+  { kind: 'code-review', head: C, since: null },
+  { kind: 'code-review', head: C, since: D },
+  { kind: 'code-review', head: null, since: null },
   { kind: 'user-claude-unread' },
   { kind: 'runs-unread' },
   { kind: 'waiting' },
@@ -408,7 +517,7 @@ test('every step text begins with a line naming the step', () => {
 
 test('a head that is not a full commit sha never reaches a step text, and never leads to a merge', () => {
   const bad = 'abcdef0123456789'
-  const approvedAt = [review(bad, 'APPROVE', 'APPROVE')]
+  const approvedAt = [review(bad, 'APPROVE', 'APPROVE'), passAt(bad)]
   const passed = snapshot({ headRefOid: bad, commits: [{ oid: bad }], reviews: approvedAt }, [headRun()])
   expect(kind(passed)).toBe('head-unchecked')
   const none = snapshot({ headRefOid: bad, commits: [{ oid: bad }], reviews: approvedAt, statusCheckRollup: [] }, [], { ...FACTS, checks: 'none' })
@@ -668,6 +777,7 @@ test('each step gives the state label that follows from it, and Merged, An open 
     failed: 'waiting-on-author',
     review: 'in-review',
     'changes-requested': 'waiting-on-author',
+    'code-review': 'in-review',
     'outside-feedback': 'waiting-on-author',
     'request-review': 'waiting-on-reviewer',
     'awaiting-review': 'waiting-on-reviewer',
@@ -901,7 +1011,7 @@ test('every chooser fixture with no outside reviewer chooses what it did before'
     [snapshot({ reviews: approved }, [headRun()], FACTS, true), false, { kind: 'runs-unread' }],
     [noRuns as Snapshot, false, { kind: 'runs-unread' }],
     [snapshot({ reviews: approved, statusCheckRollup: pending }), false, { kind: 'waiting' }],
-    [snapshot({ reviews: [review('abcdef0123456789', 'APPROVE', 'APPROVE')], headRefOid: 'abcdef0123456789', commits: [{ oid: 'abcdef0123456789' }] }, [headRun()]), false, { kind: 'head-unchecked' }],
+    [snapshot({ reviews: [review('abcdef0123456789', 'APPROVE', 'APPROVE'), passAt('abcdef0123456789')], headRefOid: 'abcdef0123456789', commits: [{ oid: 'abcdef0123456789' }] }, [headRun()]), false, { kind: 'head-unchecked' }],
     [snapshot({ reviews: approved }, [headRun()]), false, { kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'passed', runs: [{ id: 1, attempt: 1 }], unpushed: UNLISTED }],
     [snapshot(none, [], { ...FACTS, checks: 'none' }), false, { kind: 'merge', number: 7, head: C, repo: 'o/r', command: 'default', checks: 'none', runs: [], unpushed: UNLISTED }],
     [snapshot(none, [headRun({ id: 5 })], FACTS), false, { kind: 'ask-merge', number: 7, head: C, repo: 'o/r', command: 'default', runs: [{ id: 5, attempt: 1 }], isClaudeRead: true, unpushed: UNLISTED }],
@@ -916,6 +1026,6 @@ test('every chooser fixture with no outside reviewer chooses what it did before'
 })
 
 test('a solo snapshot fingerprints exactly as it did before outside reviewers were read', () => {
-  const s = snapshot({ reviews: approved, labels: [{ name: 'docs' }] }, [headRun()])
+  const s = snapshot({ reviews: approvedOnly, labels: [{ name: 'docs' }] }, [headRun()])
   expect(s.fingerprint).toBe(`OPEN|cccccccccccc|docs|APPROVE/APPROVE@cccccccc|tests:passed|no-conflict|`)
 })

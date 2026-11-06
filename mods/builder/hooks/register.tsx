@@ -10,14 +10,14 @@ import { checkoutSentence, otherRepositorySentence, worktreeWithBranch, type Che
 // handed to the session.
 import { afterCompaction, afterFailure, checkoutIn, compactionFacts, compactionsIn, isDue, measureIn, measureOf, owing, told as afterReloadTold, withFacts, type UsageRead } from './context'
 import { afterAskAgain, afterTally, askAgainAnswer, briefAnswer, briefFactsOf, briefRefusal, briefText, counselAnswer, decisionLine, destinationOf, endedDecisionLines, FOLLOW_UP_OPTIONS, followUpAnswer, followUpAskAgainAnswer, followUpsInput, followUpsRefusal, followUpStepOf, followUpVotesOf, keepCounsel, MAX_BRIEF_OPTIONS, MAX_FOLLOW_UPS, MIN_OPTIONS, neverStartedCandidatesOf, neverStartedOf, type PullRequestRef, reviewParagraph, stepOf, type UnreadableVote, votesOf } from './counsel'
-import { carriedHeadRuns, carriedRuns, changesBetween, DECISION_LABEL, headRunsOf, isCiMonitorEvent, isSameState, JOBS_JQ, needsJobs, PR_FIELDS, pullRequestStateIn, realWorkOf, roundInProgress, RUNS_JQ, snapshotIn, snapshotOf, unfinishedOf, verdictsOf, type BaseFacts, type GhPullRequest, type HeadRun, type Snapshot, type SnapshotExtras, type StateLabel, type Unpushed, type Verdict } from './github'
+import { carriedHeadRuns, carriedRuns, changesBetween, DECISION_LABEL, headRunsOf, isChangesRequested, isCiMonitorEvent, isSameState, JOBS_JQ, needsJobs, PR_FIELDS, pullRequestStateIn, realWorkOf, roundInProgress, RUNS_JQ, snapshotIn, snapshotOf, unfinishedOf, verdictsOf, type BaseFacts, type GhPullRequest, type HeadRun, type Snapshot, type SnapshotExtras, type StateLabel, type Unpushed, type Verdict } from './github'
 import { isLinkedStale, LINKED_PREFIX, linkedCheckout, linkedKey, recordedLinked } from './linked'
 import { ignoredLine, readIssueLink } from './links'
 import { afterComparison, afterLoad, dueComparisons, isStale, LOADED_PATHS, loadBegunAs, loadBegunIn, loadedIn, type Found } from './loaded'
 import { AGENT_PANE, agentPaneTree, bandTree, isDrawable, messagesReadOf, NAMED_AFTER_MS, PANE, paneTree, secondRow, type Elements, type MessagesRead, type View } from './pane'
 import { ADVERSARIAL_REVIEWER, afterReport, afterSeen, endedOf, FOCUSED_REVIEWERS, focusedReviewersFor, plannedOf, progressIn, reportAnswer, reportOf, stageLabel, STAGES, type ReportInput, type StageId } from './progress'
 import { changePrompt, ciEventContext, GITHUB_NAMES_LINE, resumePrompt, stateLines, stuckPrompt } from './prompts'
-import { changedKinds, commitRecordsOf, decidedItems, factIn, INSTRUCTION_PATHSPECS, instructionFileIsLink, isFullSha, isUpForCheck, LATER_CONTEXT_LINES, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pluginRootsOf, reviewedHeadOf, secretIn, specDirOf, trendOf, trendStopLine, underRoot, verdictHeadOf, verdictsLine, type CommitRecord, type EarlierRound, type FileKind, type PackageInput } from './review'
+import { changedKinds, codeReviewLine, commitRecordsOf, decidedItems, factIn, INSTRUCTION_PATHSPECS, instructionFileIsLink, isFullSha, isUpForCheck, LATER_CONTEXT_LINES, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pluginRootsOf, reviewedHeadOf, secretIn, specDirOf, trendOf, trendStopLine, underRoot, verdictHeadOf, verdictsLine, type CodeReviewRecord, type CommitRecord, type EarlierRound, type FileKind, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, backgroundTaskIdOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isMerge, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
 import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isFolderless, isForemanNudge, keptTicketIn, keptTicketOf, memoOfKeptTicket, newMemo, parentIn, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, STATUS_CHANGED_TEXT, stateOf, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type KeptTicket, type Starts, type StatusFacts } from './status'
 import { afterSend, emptySends, sendOutcomeOf, sendsIn, sendsKey, sendsNewest, SENDS_KEPT_MS, SENDS_PREFIX, type SendOutcome, type SendSettled, type SendsRecord } from './sends'
@@ -3037,7 +3037,24 @@ async function servePackage($: $, input: PackageInput): Promise<string> {
 
 const isVerdict = (value: unknown): value is Verdict => value === 'APPROVE' || value === 'REQUEST_CHANGES'
 
-type ReviewInput = { head: string; spec: Verdict; adversarial: Verdict; body: string }
+type ReviewInput = { head: string; spec: Verdict; adversarial: Verdict; body: string; code_review?: unknown }
+
+// The record of the /code-review pass a review input gives, a refusal when the
+// input is malformed, or null when the input gives none. It is either a start,
+// `base` or a full commit sha, or a waiver, and never both or neither.
+function codeReviewInputOf(raw: unknown): CodeReviewRecord | { refused: string } | null {
+  if (raw === undefined) return null
+  const shape = 'Refused: code_review must be either { since: "base" or the full sha the pass started from } or { waived: true }, and never both.'
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return { refused: shape }
+  const r = raw as Record<string, unknown>
+  const keys = Object.keys(r)
+  if (keys.length !== 1) return { refused: shape }
+  if (keys[0] === 'waived') return r.waived === true ? { waived: true } : { refused: shape }
+  if (keys[0] !== 'since') return { refused: shape }
+  const since = r.since
+  if (since === 'base' || (typeof since === 'string' && isFullSha(since))) return { since }
+  return { refused: 'Refused: code_review.since must be `base` or a full commit sha, 40 lowercase hexadecimal characters.' }
+}
 
 // GitHub refuses an approval or a change request on one's own pull request,
 // and the session posts under the same login that opened it, so every review
@@ -3055,13 +3072,35 @@ async function serveReview($: $, input: ReviewInput): Promise<string> {
   // leaves out any decision line that looks like it holds a secret.
   const secret = secretIn(input.body)
   if (secret !== null) return `Refused: the body looks like it holds ${secret}. Remove it and post again.`
+  // A record review of the /code-review pass runs only at a head where both
+  // verdicts approve, so either verdict requesting changes refuses it.
+  const record = codeReviewInputOf(input.code_review)
+  if (record !== null && 'refused' in record) return record.refused
+  if (record !== null && (input.spec === 'REQUEST_CHANGES' || input.adversarial === 'REQUEST_CHANGES')) {
+    return 'Refused: a record of the /code-review pass is posted only where both verdicts approve, and a verdict given here requests changes.'
+  }
   const live = await livePullRequest($, r)
   if (live === null) return `gh could not read ${r.repo}#${r.number}.`
   if (live.headRefOid !== input.head) {
     return `Refused: the pull request's head is ${live.headRefOid.slice(0, 8)}, not the reviewed ${input.head.slice(0, 8)}. Review the new head.`
   }
-  if (snapshotOf(r.repo, live, r.login).verdicts !== null) {
+  const atHead = snapshotOf(r.repo, live, r.login)
+  // A round's review is one per head. A record review comes after it, so a
+  // record cannot stand in for a round, and it is one per head too.
+  if (record === null && atHead.verdicts !== null) {
     return `Refused: a verdict review is already posted at ${input.head.slice(0, 8)}. One review per round.`
+  }
+  if (record !== null && atHead.verdicts === null) {
+    return `Refused: ${input.head.slice(0, 8)} has no verdict review yet, so a record of the /code-review pass cannot stand in for its round. Run the round first.`
+  }
+  // A record is the newest verdict review at the head, so the snapshot reads
+  // its verdicts as the head's. Posting one after a round that requested
+  // changes would turn that request into an approval, so it is refused.
+  if (record !== null && atHead.verdicts !== null && isChangesRequested(atHead.verdicts)) {
+    return `Refused: the round at ${input.head.slice(0, 8)} requested changes, so a record of the /code-review pass or a waiver cannot be posted there. Fix the round's findings first.`
+  }
+  if (record !== null && atHead.codeReviewed === true) {
+    return `Refused: a record of the /code-review pass or a waiver is already posted at ${input.head.slice(0, 8)}. One per head.`
   }
   // The body is staged beside the package, in the git folder of the checkout
   // found as the package tool finds it. The post itself works from any
@@ -3075,14 +3114,21 @@ async function serveReview($: $, input: ReviewInput): Promise<string> {
   const paragraph = reviewParagraph(owed.map(d => d.line))
   const body = paragraph === null ? input.body.trim() : `${input.body.trim()}\n\n${paragraph}`
   const file = `${dir}/review.md`
-  await $.fs.write(file, `${verdictsLine(input.head, input.spec, input.adversarial)}\n\n${body}\n`)
+  // The mod writes the marker line of a record review itself, under the
+  // verdicts line, so the session never writes it in the body.
+  const marker = record === null ? '' : `${codeReviewLine(input.head, record)}\n`
+  await $.fs.write(file, `${verdictsLine(input.head, input.spec, input.adversarial)}\n${marker}\n${body}\n`)
   const posted = await gh($, r.cwd, [
     'api', `repos/${r.repo}/pulls/${r.number}/reviews`,
     '-f', `commit_id=${input.head}`, '-f', 'event=COMMENT', '-F', `body=@${file}`, '--jq', '.html_url',
   ])
   if (posted === null) return 'gh could not post the review.'
-  const postedAt = await $.clock.now()
-  await stampTiming($, t => afterReview(t, input.head, postedAt))
+  // A record review ends no round and carries none over, so the timing
+  // ledger, which keeps its rounds across a restart, never logs one for it.
+  if (record === null) {
+    const postedAt = await $.clock.now()
+    await stampTiming($, t => afterReview(t, input.head, postedAt))
+  }
   // Settled only once gh says the review is posted, so a failed post lists
   // them again next time. A decision left out for looking like a secret is
   // settled too, so it does not take the place of a line in every later review.
@@ -5186,7 +5232,7 @@ export const register: Register = on => {
     })
     await $.tool.register({
       name: 'post_review',
-      description: 'Post this round\'s review on the watched pull request, under the gh login, at the head that was reviewed. The mod writes the first line from the two verdicts; the body is everything after it. Refused when the head has moved or the body looks like it holds a secret.',
+      description: 'Post this round\'s review on the watched pull request, under the gh login, at the head that was reviewed. The mod writes the first line from the two verdicts; the body is everything after it. Refused when the head has moved or the body looks like it holds a secret. To post the record review of the /code-review pass at a head whose round already posted its review, give code_review: the mod then writes the CODE-REVIEW line under the verdicts line itself, so the body never holds it.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -5194,6 +5240,13 @@ export const register: Register = on => {
           spec: { type: 'string', enum: ['APPROVE', 'REQUEST_CHANGES'] },
           adversarial: { type: 'string', enum: ['APPROVE', 'REQUEST_CHANGES'] },
           body: { type: 'string', description: 'The findings, what was fixed in which commit, and the follow-ups, in Markdown.' },
+          code_review: {
+            description: 'Only for the record review of the /code-review pass, posted where both verdicts approve: { since } with the full sha the pass started from, or "base" for a pass that read the whole pull request, or { waived: true } when the person said to merge without the pass.',
+            anyOf: [
+              { type: 'object', properties: { since: { type: 'string' } }, required: ['since'], additionalProperties: false },
+              { type: 'object', properties: { waived: { type: 'boolean', enum: [true] } }, required: ['waived'], additionalProperties: false },
+            ],
+          },
         },
         required: ['head', 'spec', 'adversarial', 'body'],
       },
