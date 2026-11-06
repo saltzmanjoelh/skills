@@ -8,6 +8,7 @@ import { NOTHING_WATCHED, STALE_WARNING } from '../hooks/pane'
 import { GITHUB_NAMES_LINE, RELOAD_LINE, REREAD_CLOSING } from '../hooks/prompts'
 import { INSTRUCTION_PATHSPECS } from '../hooks/review'
 import { FOREMAN_NUDGE_TEXTS, STATUS_CHANGED_TEXT } from '../hooks/status'
+import type { UserClaude } from '../hooks/step'
 import type { BuildStatus, Compactions } from '../types'
 import { CROSS_SESSION_SHAPES } from './cross-session-fixture'
 
@@ -10611,10 +10612,12 @@ test('the base facts come from the session folder\'s base branch when the watch 
   expect(String(ran.result)).toContain(`gh pr merge 7 --merge --match-head-commit ${C}`)
 })
 
-// The CLAUDE.md in the user's configuration folder at a look: its text, null
-// when it is not there, `unreadable` when it exists but its read is refused,
-// or `exists-refused` when the check whether it exists is itself refused.
-type UserClaudeSetup = string | null | 'unreadable' | 'exists-refused'
+// The CLAUDE.md in the user's configuration folder at a look: read with its
+// text, missing when it is not there, unreadable when it exists but its read
+// is refused, or exists-refused when the check whether it exists is itself
+// refused. Each case is tagged, so that a file whose text happens to be the
+// word unreadable is still a file that can be read.
+type UserClaudeSetup = UserClaude | { kind: 'exists-refused' }
 
 const USER_ENV: Record<string, string> = { CLAUDE_CONFIG_DIR: '/config', HOME: '/home/me' }
 const USER_CLAUDE = '/config/CLAUDE.md'
@@ -10623,9 +10626,9 @@ function setUserClaude(files: ReturnType<typeof fakeFiles>, user: UserClaudeSetu
   files.delete(USER_CLAUDE)
   files.refusedReads.delete(USER_CLAUDE)
   files.refusedExists.delete(USER_CLAUDE)
-  if (user === 'unreadable') files.refusedReads.add(USER_CLAUDE)
-  else if (user === 'exists-refused') files.refusedExists.add(USER_CLAUDE)
-  else if (user !== null) files.set(USER_CLAUDE, user)
+  if (user.kind === 'unreadable') files.refusedReads.add(USER_CLAUDE)
+  else if (user.kind === 'exists-refused') files.refusedExists.add(USER_CLAUDE)
+  else if (user.kind === 'read') files.set(USER_CLAUDE, user.text)
 }
 
 // A pull request on which both verdicts approve and no check exists, with
@@ -10658,42 +10661,42 @@ const MERGE_STEP = 'The step that applies: Both verdicts approve at this head, m
 const REQUEST_STEP = 'The step that applies: Both verdicts approve at this head, request the outside review.'
 
 test('a Reviewer: line in the base branch\'s CLAUDE.md asks for that reviewer before the merge', async ($, on) => {
-  const answer = await reviewerStep($, on, 'Checks: none\nReviewer: ann\n', null)
+  const answer = await reviewerStep($, on, 'Checks: none\nReviewer: ann\n', { kind: 'missing' })
   expect(answer).toContain(REQUEST_STEP)
   expect(answer).toContain('`gh pr edit 7 --add-reviewer ann`')
 })
 
 test('a Reviewer: line in the user\'s own CLAUDE.md, read from CLAUDE_CONFIG_DIR, applies when the project names none', async ($, on) => {
-  const answer = await reviewerStep($, on, 'Checks: none\n', 'Reviewer: bob\n')
+  const answer = await reviewerStep($, on, 'Checks: none\n', { kind: 'read', text: 'Reviewer: bob\n' })
   expect(answer).toContain(REQUEST_STEP)
   expect(answer).toContain('`gh pr edit 7 --add-reviewer bob`')
 })
 
 test('the project\'s Reviewer: line overrides the user\'s', async ($, on) => {
-  const answer = await reviewerStep($, on, 'Checks: none\nReviewer: ann\n', 'Reviewer: bob\n')
+  const answer = await reviewerStep($, on, 'Checks: none\nReviewer: ann\n', { kind: 'read', text: 'Reviewer: bob\n' })
   expect(answer).toContain('`gh pr edit 7 --add-reviewer ann`')
   expect(answer).not.toContain('bob')
 })
 
 test('Reviewer: none in the project turns off the user\'s reviewer, and the pull request merges as before', async ($, on) => {
-  const answer = await reviewerStep($, on, 'Checks: none\nReviewer: none\n', 'Reviewer: bob\n')
+  const answer = await reviewerStep($, on, 'Checks: none\nReviewer: none\n', { kind: 'read', text: 'Reviewer: bob\n' })
   expect(answer).toContain('The step that applies: Both verdicts approve at this head, merge.')
   expect(answer).not.toContain('bob')
 })
 
 test('when the base branch\'s CLAUDE.md cannot be read, the user\'s Reviewer: line still applies', async ($, on) => {
-  const answer = await reviewerStep($, on, null, 'Reviewer: bob\n')
+  const answer = await reviewerStep($, on, null, { kind: 'read', text: 'Reviewer: bob\n' })
   expect(answer).toContain(REQUEST_STEP)
   expect(answer).toContain('`gh pr edit 7 --add-reviewer bob`')
 })
 
 test('with no Reviewer: line anywhere and no user file, the pull request merges as before', async ($, on) => {
-  const answer = await reviewerStep($, on, 'Checks: none\n', null)
+  const answer = await reviewerStep($, on, 'Checks: none\n', { kind: 'missing' })
   expect(answer).toContain('The step that applies: Both verdicts approve at this head, merge.')
 })
 
 test('a user CLAUDE.md that exists but cannot be read, with no Reviewer: line in the base branch\'s, holds the merge', async ($, on) => {
-  const answer = await reviewerStep($, on, 'Checks: none\n', 'unreadable')
+  const answer = await reviewerStep($, on, 'Checks: none\n', { kind: 'unreadable' })
   expect(answer).toContain(USER_CLAUDE_UNREAD_STEP)
   expect(answer).toContain('Merge nothing')
   expect(answer).not.toContain('gh pr merge')
@@ -10701,7 +10704,7 @@ test('a user CLAUDE.md that exists but cannot be read, with no Reviewer: line in
 })
 
 test('an exists call for the user\'s CLAUDE.md that is itself refused holds the merge', async ($, on) => {
-  const answer = await reviewerStep($, on, 'Checks: none\n', 'exists-refused')
+  const answer = await reviewerStep($, on, 'Checks: none\n', { kind: 'exists-refused' })
   expect(answer).toContain(USER_CLAUDE_UNREAD_STEP)
   expect(answer).not.toContain('gh pr merge')
 })
@@ -10716,17 +10719,14 @@ for (const [what, env] of [
   ['no CLAUDE_CONFIG_DIR and a relative HOME', { HOME: 'home/me' }],
 ] as const) {
   test(`with ${what}, the user's CLAUDE.md counts as missing and the pull request merges as before`, async ($, on) => {
-    const answer = await reviewerStep($, on, 'Checks: none\n', 'unreadable', env)
+    const answer = await reviewerStep($, on, 'Checks: none\n', { kind: 'unreadable' }, env)
     expect(answer).toContain(MERGE_STEP)
     expect(answer).not.toContain(USER_CLAUDE_UNREAD_STEP)
   })
 }
 
 test('a readable user CLAUDE.md whose whole text is the word unreadable names no reviewer, and the pull request merges as before', async ($, on) => {
-  const { files } = userClaudeWorld(on, 'Checks: none\n', null)
-  files.set(USER_CLAUDE, 'unreadable')
-  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
-  const answer = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  const answer = await reviewerStep($, on, 'Checks: none\n', { kind: 'read', text: 'unreadable' })
   expect(answer).toContain(MERGE_STEP)
   expect(answer).not.toContain(USER_CLAUDE_UNREAD_STEP)
 })
@@ -10747,26 +10747,26 @@ test('an environment that cannot be read, with no Reviewer: line in the base bra
 })
 
 test('a Reviewer: line in the base branch\'s CLAUDE.md still decides when the user\'s file cannot be read', async ($, on) => {
-  const answer = await reviewerStep($, on, 'Checks: none\nReviewer: ann\n', 'unreadable')
+  const answer = await reviewerStep($, on, 'Checks: none\nReviewer: ann\n', { kind: 'unreadable' })
   expect(answer).toContain(REQUEST_STEP)
   expect(answer).toContain('`gh pr edit 7 --add-reviewer ann`')
   expect(answer).not.toContain(USER_CLAUDE_UNREAD_STEP)
 })
 
 test('Reviewer: none in the base branch\'s CLAUDE.md still merges when the user\'s file cannot be read', async ($, on) => {
-  const answer = await reviewerStep($, on, 'Checks: none\nReviewer: none\n', 'unreadable')
+  const answer = await reviewerStep($, on, 'Checks: none\nReviewer: none\n', { kind: 'unreadable' })
   expect(answer).toContain(MERGE_STEP)
   expect(answer).not.toContain(USER_CLAUDE_UNREAD_STEP)
 })
 
 test('a user CLAUDE.md that cannot be read, with a base branch\'s CLAUDE.md that cannot be read either, holds the merge', async ($, on) => {
-  const answer = await reviewerStep($, on, null, 'unreadable')
+  const answer = await reviewerStep($, on, null, { kind: 'unreadable' })
   expect(answer).toContain(USER_CLAUDE_UNREAD_STEP)
   expect(answer).not.toContain('The step that applies: Both verdicts approve at this head, with no checks.')
 })
 
 test('with the user\'s CLAUDE.md unreadable, a requested outside reviewer is waited on first, and once they approve the look holds the merge', async ($, on) => {
-  const { world } = userClaudeWorld(on, 'Checks: none\n', 'unreadable')
+  const { world } = userClaudeWorld(on, 'Checks: none\n', { kind: 'unreadable' })
   world.pr = { ...approvedWithoutChecks(), reviewRequests: [{ __typename: 'User', login: 'ann' }] }
   await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
   const waiting = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
@@ -10780,13 +10780,13 @@ test('with the user\'s CLAUDE.md unreadable, a requested outside reviewer is wai
 })
 
 test('once the user\'s CLAUDE.md can be read again, the next look names the merge and says the file could be read again', async ($, on) => {
-  const { clock, files } = userClaudeWorld(on, 'Checks: none\n', 'unreadable')
+  const { clock, files } = userClaudeWorld(on, 'Checks: none\n', { kind: 'unreadable' })
   const prompts = recordPrompts(on)
   await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
   const held = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
   expect(held).toContain(USER_CLAUDE_UNREAD_STEP)
   await clock.settle()
-  setUserClaude(files, 'Base branch: main\n')
+  setUserClaude(files, { kind: 'read', text: 'Base branch: main\n' })
   await clock.advance(10 * 60_000)
   expect(prompts.length).toBe(1)
   expect(prompts[0]).toContain('The CLAUDE.md in the user\'s Claude configuration folder could be read again.')
