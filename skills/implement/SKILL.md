@@ -41,7 +41,7 @@ The project's `CLAUDE.md` holds the facts below. Each fact is one line,
 | `Max rounds:` | 5 |
 | `Merge command:` | `gh pr merge <n> --merge --match-head-commit <sha>`; a project whose merges go through its own gate names that command, with `<n>` and `<sha>` in it |
 | `Checks:` | `expected` when the base branch has files under `.github/workflows`, else `none`; a project whose checks report from an outside service writes `Checks: expected` |
-| `Reviewer:` | none; nobody but the session reviews. The value is one GitHub login, such as `alice`, or several separated by commas, such as `alice, bob`, of the people who review the pull requests (see "Outside reviewers"). A line in the user's own `CLAUDE.md`, in the Claude configuration folder (`CLAUDE_CONFIG_DIR`, or `~/.claude` when that is unset), applies to every project; the project's line overrides it, and `Reviewer: none` in a project turns it off there |
+| `Reviewer:` | none; nobody but the session reviews. The value is one GitHub login, such as `alice`, or several separated by commas, such as `alice, bob`, of the people who review the pull requests (see "Outside reviewers"). A line in the user's own `CLAUDE.md`, in the Claude configuration folder (`CLAUDE_CONFIG_DIR`, or `~/.claude` when that is unset), applies to every project; the project's line overrides it, and `Reviewer: none` in a project turns it off there. When the user's file exists but cannot be read and the project has no line of its own, the reviewers are unknown and the mod names no merge step until it can read the file |
 | `Frontend paths:` | none; no change is frontend |
 | `## Gates` heading, one bullet per gate | detect from the manifests, confirm once, offer to write it |
 | `## Hard rules` heading | none |
@@ -231,7 +231,9 @@ the state labels, which are for the person to read. It reads the limits, the
 `Checks:` line, the `Reviewer:` fact and whether a merge command of the
 project's own is named from the base branch's `CLAUDE.md`, and reads the
 `Reviewer:` fact from the user's own `CLAUDE.md` when the base branch's file
-has no such line or cannot be read.
+has no such line or cannot be read. A user's file that is not there names no
+reviewer. One that exists but cannot be read leaves the reviewers unknown,
+and the mod then names a step that merges nothing until it can read the file.
 Follow the step's text. It tells the session what to do, and every
 judgement in it, such as which half of a review round is due or what to
 ask the person, stays with the session.
