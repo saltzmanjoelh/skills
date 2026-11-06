@@ -128,7 +128,8 @@ After every push to a frontend pull request, bring its screenshot section up
 to date. Bring it up to date as well on resuming, after a compaction, and
 before running the merge command, because a session that stopped between a
 push and the rewrite leaves no later push to do it. It is up to date when it
-links each screenshot in the list above, and only those, by the newest commit
+links each screenshot in the list above, and no other file in the screenshot
+directory, by the newest commit
 that changed its file, which
 `git log -1 --format=%H <head> -- '<path>'` prints, and when every commit that
 `git log --format=%H --grep='^Screenshots not retaken:' origin/<base>..<head>`
@@ -153,7 +154,11 @@ add one line that names the screenshots that may now be out of date, or the
 change's screens as never captured, the commit's full sha, and the reason from
 its `Screenshots not retaken:` line. Build each image link from that sha and the path in the list,
 never by copying a link from the body, and drop from the section any image
-link whose path is not in the list. Just before posting, read the body again
+link that points at a file in the screenshot directory whose path is not in
+the list. Those are the only links the session builds. Leave every other
+image link and every other line of the section as it is, because a person or
+the project's own body rules may have put them there, and the rewrite must
+never delete what someone else wrote. Just before posting, read the body again
 the same way, and when it differs from the copy that was rewritten, make the
 same rewrite on the fresh copy instead, so that an edit made in between is
 kept. Post the body with
