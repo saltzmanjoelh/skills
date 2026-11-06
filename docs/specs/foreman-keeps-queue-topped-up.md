@@ -43,14 +43,14 @@ session per slot, so each freed slot is filled by foreman alone.
    foreman is on, foreman adds one context line when busy plus waiting is
    below the target. The line says how many issues to start: the gap to the
    target, but never more than 5. The 5 counts every start the parent makes
-   on that turn, so issues the owner names in the same message come out of
+   from that line on, so issues the owner names in the same message come out of
    it. Starts beyond the free slots get the existing wait line and join the
    queue in the order they are started. When busy plus waiting already meets
    the target, foreman adds no line. A prompt typed while a turn is already
-   running gets no top-up line, because that turn may already have had one,
-   and two lines on one turn could ask for more starts than the app allows
-   without a permission card; the owner's next prompt that starts a turn
-   tops the queue up.
+   running gets the line too, with its count worked out afresh from the
+   ledger, and the newest line on a turn replaces any earlier line's number.
+   This replaced an earlier rule that left such a prompt without a line; see
+   `docs/specs/foreman-tops-up-mid-turn-messages.md`.
 3. **Following `Next issue:`.** The wake skill gains a top-up section: the
    parent starts that many issues, each the next one the project's
    `Next issue:` fact picks, skipping any issue that already has a sub
