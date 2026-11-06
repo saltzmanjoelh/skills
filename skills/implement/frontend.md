@@ -42,15 +42,15 @@ When `/storypr` returns a reason instead, it has committed nothing. Open the
 pull request the plain way, with `--title` and `--body-file`, the title quoted
 as above, and end the body
 with a `## Screenshots` section that says the change is frontend, that its
-screenshots are missing, and the reason. When the base branch's `CLAUDE.md`
-has no `Frontend paths:` line, or one that is empty or holds only commas and
-spaces, step 7 found the change frontend with its built-in list. Work this out
-again from that file at this moment rather than remembering it. In that case
-the section also says that the built-in list of frontend paths matched the
-change, and that the project can write its own `Frontend paths:` list, or
-`Frontend paths: none`, in its `CLAUDE.md` to change that. That text names no
-path that matched. Tell the person the same, including that note when it
-applies, in one sentence, and carry on without waiting for an answer. Every reason that this
+screenshots are missing, and the reason. Read the base branch's `CLAUDE.md`
+again at this moment, rather than remembering what step 7 found, and apply
+step 7's three readings of its `Frontend paths:` line. When the reading is the
+one where the built-in list applies, the section also says that the built-in
+list of frontend paths matched the change, and that the project can write its
+own `Frontend paths:` list, or `Frontend paths: none`, in its `CLAUDE.md` to
+change that. That text names no path that matched. Tell the person the same,
+including that note when it applies, in one sentence, and carry on without
+waiting for an answer. Every reason that this
 step or a later commit publishes, in a body or a commit message, is a sentence
 or two of plain words that names no local path, host name, port, device
 identifier or token and quotes no raw error output, because the body and the
