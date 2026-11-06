@@ -15302,8 +15302,9 @@ test('a ready-to-merge from before, while an outside review is requested, is rel
   expect(world.pr.labels).toEqual([{ name: 'waiting-on-reviewer' }])
   expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'waiting-on-reviewer', at: clock.now() })
   // Nothing else acts on the pull request: no review request, no label
-  // created, no merge.
-  const acting = world.calls.filter(call => /^gh (pr (edit|merge)|label create)/.test(call))
+  // created, no merge, no comment or review, and no write through gh api,
+  // which the mod makes only with -f or -F fields.
+  const acting = world.calls.filter(call => /^gh (pr (edit|merge|comment|review|ready)|label create)|^gh api .* -[fF] /.test(call))
   expect(acting).toEqual(['gh pr edit 7 --repo o/r --add-label waiting-on-reviewer --remove-label ready-to-merge'])
 
   await clock.advance(30 * 60_000)
