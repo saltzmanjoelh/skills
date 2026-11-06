@@ -10686,10 +10686,12 @@ test('both merge texts bring a frontend pull request\'s screenshot section up to
   expect(ask).toContain('The step that applies: Both verdicts approve at this head, with no checks.')
   for (const text of [merge, ask]) {
     const at = text.indexOf('- On a frontend pull request, ')
+    const reread = text.indexOf('- Read the pull request again with')
     expect(at).toBeGreaterThan(text.indexOf('Before merging:'))
-    expect(at).toBeLessThan(text.indexOf('- Read the pull request again with'))
+    expect(at).toBeLessThan(reread)
+    const bullet = text.slice(at, reread)
     for (const part of ['`## Screenshots`', '`Frontend paths:`', '`skills/implement/frontend.md`', 'A pull request whose body has no such section skips this bullet.']) {
-      expect(text).toContain(part)
+      expect(bullet).toContain(part)
     }
   }
 })

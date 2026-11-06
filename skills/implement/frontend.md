@@ -135,9 +135,13 @@ For a screenshot the pull request never changed, that newest commit is one on
 the base branch, which holds the file, so its link resolves.
 A listed commit is settled when every screenshot its line names appears, word
 for word, on a `Screenshots:` line in what
-`git log --format=%B <listed sha>..<head>` prints, or as a line of what
-`git log --no-renames --name-only --format= <listed sha>..<head> -- '<screenshot directory>'`
-prints. Both are comparisons, so no name from a message goes into a command. A
+`git log --format=%B <listed sha>..<head> ^origin/<base>` prints, or as a line
+of what
+`git log --no-renames --name-only --format= <listed sha>..<head> ^origin/<base> -- '<screenshot directory>'`
+prints. The `^origin/<base>` leaves out the base branch's commits, which a merge
+of the base into the branch would otherwise bring into the range, so only a
+later commit of the pull request settles a line. Both are comparisons, so no
+name from a message goes into a command. A
 line for screens never captured is never settled. When the section is not up to date, write the body to a file in the
 scratchpad folder with `gh pr view <n> --json body --jq .body`, and rewrite
 only its `## Screenshots` section. Link each image by the full sha that
