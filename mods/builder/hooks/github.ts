@@ -596,6 +596,10 @@ export function fingerprintOf(s: Omit<Snapshot, 'fingerprint'>): string {
     (s.runs ?? []).map(run => `${run.id}.${run.attempt}`).join(','),
   ]
   if (s.runsCarriedOver === true && s.verdicts !== null && !isChangesRequested(s.verdicts)) parts.push('runs-unread')
+  // The same holds for a user CLAUDE.md that could not be read while the base
+  // branch's names no reviewer: the step chooser holds the merge on it once
+  // both verdicts approve, so the first look that reads the file is news.
+  if (s.facts?.reviewersUnknown === true && s.verdicts !== null && !isChangesRequested(s.verdicts)) parts.push('reviewers-unknown')
   const failed = failedRunsOf(headRunsIn(s) ?? [])
   if (failed.length > 0) parts.push(`failed-runs:${failed.map(run => `${run.id}.${run.attempt}`).join(',')}`)
   // The outside reviewers, added only when there are any, so a solo project's
@@ -700,6 +704,12 @@ export function changesBetween(before: Snapshot | null, after: Snapshot): string
   }
   if (before.runsCarriedOver === true && after.runsCarriedOver !== true) {
     changes.push('The workflow runs at the head could be read again.')
+  }
+  const unknownBefore = before.facts?.reviewersUnknown === true
+  if (unknownBefore !== (after.facts?.reviewersUnknown === true)) {
+    changes.push(unknownBefore
+      ? 'The CLAUDE.md in the user\'s Claude configuration folder could be read again.'
+      : 'The CLAUDE.md in the user\'s Claude configuration folder could not be read.')
   }
   const conflictBefore = before.mergeable === 'CONFLICTING'
   if (conflictBefore !== (after.mergeable === 'CONFLICTING')) {
