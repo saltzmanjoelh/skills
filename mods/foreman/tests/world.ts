@@ -36,7 +36,8 @@ export const record = (issueKey: string | null, state: string, over: Record<stri
 // The status folder, answered from memory: each file's text and modification
 // time, whether the folder exists, and a refusal every listing meets when
 // `listFails` is set. It counts the listings and every read, of the folder or
-// of any other file. A file put in it also pairs its record's ticket with the
+// of any other file, and records the path of every check that a path
+// exists. A file put in it also pairs its record's ticket with the
 // parent in `stored`, as though the parent had started that sub session,
 // unless `pair` is false. `project` holds the text of files outside the
 // folder by their full path, such as a project's CLAUDE.md, and
@@ -51,6 +52,7 @@ export function statusFolder(on: On, at = FOLDER, stored = new Map<string, unkno
     listFails: null as string | null,
     lists: 0,
     reads: 0,
+    existsAsked: [] as string[],
     projectReads: [] as string[],
     held: null as Promise<void> | null,
     hold() {
@@ -84,7 +86,10 @@ export function statusFolder(on: On, at = FOLDER, stored = new Map<string, unkno
     if (!w.exists || e.path !== at) return { deny: `ENOENT: no such file or directory, scandir '${e.path}'` }
     return { value: [...w.files].map(([name, f]) => ({ name, kind: 'file' as const, size: f.text.length, mtimeMs: f.mtimeMs, isLink: false })) }
   })
-  on('fs.exists', ($, e) => ({ value: w.exists && e.path === at }))
+  on('fs.exists', ($, e) => {
+    w.existsAsked.push(e.path)
+    return { value: w.exists && e.path === at }
+  })
   on('fs.read', ($, e) => {
     w.reads += 1
     if (!e.path.startsWith(`${at}/`)) {

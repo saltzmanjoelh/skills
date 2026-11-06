@@ -1307,3 +1307,22 @@ test('on first use, with no status folder, a started sub session that writes not
   await minutesPass(w, 10)
   expect(w.engine.prompts).toHaveLength(1)
 })
+
+// With no configuration folder, foreman reads no status folder and treats it
+// as missing, so the five-minute line still comes and no slot is freed.
+test('with no configuration folder, a started sub session wakes the parent once at five minutes and keeps its slot', async ($, on) => {
+  const w = world(on, { env: {} })
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await startSession($, IMPLEMENT)
+  await minutesPass(w, 4)
+  expect(w.engine.prompts).toEqual([])
+  await minutesPass(w, 1)
+  expect(w.engine.prompts).toEqual(['foreman: ABC-7 has written no status file 5 minutes after it started, so foreman cannot watch it.'])
+  await minutesPass(w, 10)
+  expect(w.engine.prompts).toHaveLength(1)
+  expect(ledger(w).pairings.map(p => [p.issueKey, p.standing])).toEqual([['ABC-7', 'active']])
+  expect(await ui.paneText()).not.toContain('is free')
+  expect(w.folder.lists).toBe(0)
+})

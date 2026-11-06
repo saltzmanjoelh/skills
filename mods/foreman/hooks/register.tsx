@@ -4,6 +4,7 @@ import type { EngineInterface, PromptSubmitInput, Register, ResolveInput, ToolCa
 import { checkOutcome, clampedDue, endsOf, isClaimed, soonestDue, withNote, withoutPaired, type CheckDone } from './checks'
 import { CALL_TIMEOUT_MS, decide, desktopOf, freedSlotIn, freeSlotsOfShown, GONE_MS, keptByUnreadList, needsList, NO_ANSWER, releasedIn, startWaits, topUpCount, watchingFrom, type Decision, type Limits, type SessionsLook } from './act'
 import { isSvgSurface } from './art'
+import { configDirOf } from './config'
 import { becameParentAnswer, COMMAND, commandOf, isCommandText, PASSED_ON, PASTED_LINE, pastedCommandIn, slotsAnswer, START_FOREMAN_FALLBACK, START_FOREMAN_OFF, startForemanText, type Command } from './commands'
 import { BACKGROUND_NUDGE_TEXT, BEGIN_TEXT, everySession, failureLine, linkedFamily, listSessions, NUDGE_TEXT, openSession, readHeader, REASONS, sendMessage, WHOLE_LOCAL_ID, type DesktopCall, type Listed, type OpenResult, type SavedCopies, type SendResult } from './desktop'
 import { FOLDS_CLOSED, foldsIn, menuPressed, prunedMenus, rowPressed } from './glance'
@@ -128,17 +129,19 @@ const reasonsLogged = new Set<string>()
 // in order.
 let markerWrites: Promise<void> = Promise.resolve()
 
-// Claude Code's configuration folder, without trailing slashes:
-// CLAUDE_CONFIG_DIR when it is set, else the home folder's `.claude`.
-async function configFolderOf($: $): Promise<string> {
-  const config = await $.env.get('CLAUDE_CONFIG_DIR')
-  const base = typeof config === 'string' && config !== '' ? config : `${(await $.env.get('HOME')) ?? ''}/.claude`
-  return base.replace(/\/+$/, '')
+// Claude Code's configuration folder, by the rule hooks/config.ts copies from
+// builder, or null when no folder can be worked out. Each variable is named
+// with a string literal, because `claude plugin validate` lists only the names
+// spelled in the source.
+async function configFolderOf($: $): Promise<string | null> {
+  return configDirOf(await $.env.get('CLAUDE_CONFIG_DIR'), await $.env.get('HOME'), await $.env.get('USERPROFILE'))
 }
 
-// The status folder, inside the configuration folder.
-async function statusFolderOf($: $): Promise<string> {
-  return `${await configFolderOf($)}/foreman/builds`
+// The status folder, inside the configuration folder, or null when there is
+// no configuration folder.
+async function statusFolderOf($: $): Promise<string | null> {
+  const config = await configFolderOf($)
+  return config === null ? null : `${config}/foreman/builds`
 }
 
 // Adds a line to the log, keeping the newest LOG_KEPT. A line the same as the
@@ -294,6 +297,13 @@ async function shownNow($: $): Promise<SubRow[]> {
 // files.
 async function readFolder($: $): Promise<{ found: FileRead[] | null; exists: boolean }> {
   const folder = await statusFolderOf($)
+  // With no configuration folder there is nothing to read, and the answer is
+  // the one for a missing folder. Answering that the folder exists would free
+  // the slot of every active sub session whose file it lacks, and answering
+  // null files would skip the rule that wakes the parent when a sub session
+  // has written no status file after five minutes. A missing folder logs its
+  // line once, frees nothing, and keeps that five-minute line.
+  if (folder === null) return { found: [], exists: false }
   let entries: Awaited<ReturnType<$['fs']['list']>>
   try {
     entries = await $.fs.list(folder)
@@ -990,7 +1000,13 @@ const desktopCall = ($: $): DesktopCall => (server, tool, args) => $.mcp.call(se
 // Claude Code's saved tool results, read through the engine, for a list
 // answer that Claude Code saved to a file rather than pass back whole.
 const savedCopies = ($: $): SavedCopies => ({
-  config: () => configFolderOf($),
+  // With no configuration folder no saved copy can be trusted, and a throw
+  // here makes the list answer count as saved outside the folder.
+  config: async () => {
+    const config = await configFolderOf($)
+    if (config === null) throw new Error('no configuration folder can be worked out')
+    return config
+  },
   read: path => $.fs.read(path),
   size: async path => (await $.fs.stat(path)).size,
 })

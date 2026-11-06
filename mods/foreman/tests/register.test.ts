@@ -385,6 +385,35 @@ test('CLAUDE_CONFIG_DIR moves the status folder', async ($, on) => {
   expect(await ui.bandText()).toContain('2 of 2 slots busy')
 })
 
+// Windows normally sets USERPROFILE and not HOME, so the status folder is
+// found under USERPROFILE when HOME gives none. The test engine runs on a
+// Unix-like system and resolves a drive-letter path against the folder the
+// tests run in, so this test gives USERPROFILE a path that starts with a
+// slash. The drive-letter forms are checked against builder's answers in
+// tests/art.test.ts.
+test('with HOME unset, the status folder is under USERPROFILE', async ($, on) => {
+  const w = world(on, { env: { USERPROFILE: '/Users/me' }, at: '/Users/me/.claude/foreman/builds' })
+  twoSubs(w.folder)
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  expect(await ui.bandText()).toContain('2 of 2 slots busy')
+})
+
+// With no variable that gives a configuration folder, foreman reads no status
+// folder at all, rather than the one at the root of the drive.
+test('with neither HOME nor USERPROFILE set, no status folder is read and the band shows no sub sessions', async ($, on) => {
+  const w = world(on, { env: {} })
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await w.clock.advance(MINUTE)
+  await w.clock.settle()
+  expect(w.folder.lists).toBe(0)
+  expect(w.folder.existsAsked).toEqual([])
+  expect(await ui.bandText()).toContain('no sub sessions')
+})
+
 test('a file more than three minutes old is dimmed with its age and still busy, and one just under is not stale', async ($, on) => {
   const w = world(on)
   w.folder.put('a.json', record('ABC-1', 'working', { stage: 'build', reason: 'building' }), T0 - 3 * MINUTE - SECOND)

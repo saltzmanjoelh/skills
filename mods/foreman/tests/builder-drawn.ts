@@ -1,11 +1,12 @@
 // What builder's own drawing code and issue link rules answered for each of
 // these inputs, at the commit foreman's copies in hooks/art.ts, hooks/text.ts,
-// hooks/stages.ts and hooks/links.ts were taken from. A test cannot import
+// hooks/stages.ts, hooks/links.ts and hooks/config.ts were taken from. A test cannot import
 // builder's files, because they lie outside this plugin's folder, so these
 // answers were written down by running builder's functions on the inputs.
 // tests/art.test.ts holds the copies to them. When builder's drawing or its
 // hooks/links.ts changes, copy the change into foreman and write these answers
-// again from builder's functions.
+// again from builder's functions. The same holds for builder's configDirOf in
+// hooks/status.ts, which hooks/config.ts copies.
 
 export type Drawn = { fn: string; args: unknown[]; out: unknown }
 
@@ -246,6 +247,23 @@ export const BUILDER_DRAWN: Drawn[] = [
   { fn: "mainCheckoutOf", args: ["/main/.git/worktrees/wt", "  \n"], out: null },
   { fn: "ignoredLine", args: ["builder", "it has no {key}"], out: "builder: the Issue link fact was ignored because it has no {key}" },
   { fn: "ignoredLine", args: ["foreman", "it does not begin with https://"], out: "foreman: the Issue link fact was ignored because it does not begin with https://" },
+  { fn: "configDirOf", args: [undefined, "/home/me", undefined], out: "/home/me/.claude" },
+  { fn: "configDirOf", args: [undefined, undefined, "C:\\Users\\me"], out: "C:\\Users\\me/.claude" },
+  { fn: "configDirOf", args: [undefined, undefined, "C:/Users/me"], out: "C:/Users/me/.claude" },
+  { fn: "configDirOf", args: [undefined, "me", "C:\\Users\\me"], out: "C:\\Users\\me/.claude" },
+  { fn: "configDirOf", args: [undefined, undefined, undefined], out: null },
+  { fn: "configDirOf", args: [undefined, "me", "Users\\me"], out: null },
+  { fn: "configDirOf", args: ["/config", "/home/me", "C:\\Users\\me"], out: "/config" },
+  { fn: "configDirOf", args: [undefined, "/home/me", "C:\\Users\\other"], out: "/home/me/.claude" },
+  { fn: "configDirOf", args: ["", "", "C:\\Users\\me"], out: "C:\\Users\\me/.claude" },
+  { fn: "configDirOf", args: [undefined, "/c/Users/me", "C:\\Users\\me"], out: "/c/Users/me/.claude" },
+  { fn: "configDirOf", args: [undefined, undefined, "C:\\Users\\me\\"], out: "C:\\Users\\me/.claude" },
+  { fn: "configDirOf", args: [undefined, "/home/me/", undefined], out: "/home/me/.claude" },
+  { fn: "configDirOf", args: ["C:\\config\\", "/home/me", undefined], out: "C:\\config" },
+  { fn: "configDirOf", args: ["/config//", undefined, undefined], out: "/config" },
+  { fn: "configDirOf", args: ["config", "/home/me", "C:\\Users\\me"], out: null },
+  { fn: "configDirOf", args: ["/", "/home/me", undefined], out: null },
+  { fn: "configDirOf", args: [undefined, undefined, "C:"], out: null },
 ]
 
 // The first line builder's usageLines in hooks/usage.ts drew for a ledger
