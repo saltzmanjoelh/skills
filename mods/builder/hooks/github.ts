@@ -544,8 +544,12 @@ function committedAfter(createdAt: string | undefined, commits: readonly { commi
 export const DECISION_LABEL = 'needs-decision'
 
 // The state labels /implement moves between. The pull request carries one of
-// them at a time: the mod sets the one that follows from the step it chose,
-// and the session sets `stuck` by its own judgement.
+// them at a time, and the session never edits them itself. The mod sets the
+// one that follows from the step it chose, and it sets `stuck` when the
+// session judges the pull request stuck and calls `mcp__builder__set_stuck`.
+// That tool records the judgement with the label that followed from the step,
+// and the mod keeps `stuck` on until the label that follows from the step
+// changes.
 export const STATE_LABELS = ['in-review', 'waiting-on-author', 'waiting-on-reviewer', 'ready-to-merge', 'stuck'] as const
 export type StateLabel = typeof STATE_LABELS[number]
 

@@ -21,7 +21,7 @@ import { changedKinds, commitRecordsOf, decidedItems, factIn, INSTRUCTION_PATHSP
 import { AGENTS_KEPT, backgroundOf, backgroundTaskIdOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isMerge, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
 import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isForemanNudge, keptTicketIn, keptTicketOf, memoOfKeptTicket, newMemo, parentIn, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, STATUS_CHANGED_TEXT, stateOf, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type KeptTicket, type Starts, type StatusFacts } from './status'
 import { afterSend, emptySends, sendOutcomeOf, sendsIn, sendsKey, sendsNewest, SENDS_KEPT_MS, SENDS_PREFIX, type SendOutcome, type SendSettled, type SendsRecord } from './sends'
-import { baseFactsOf, chooseStep, labelActionOf, labelFor, labelRecordIn, labelsToRemoveAfterEdit, needsListing, noteAfterRead, reviewerFactOf, SHORT_HASH, stepFor, UNPUSHED_KEPT, UNREAD_FACTS, type UserClaude } from './step'
+import { baseFactsOf, chooseStep, isJudgementKept, labelActionOf, labelFor, labelRecordIn, needsListing, otherStateLabelsOf, reviewerFactOf, SHORT_HASH, stepFor, UNPUSHED_KEPT, UNREAD_FACTS, type LabelRecord, type StuckJudgement, type UserClaude } from './step'
 import { timeOfDay } from './text'
 import { afterPackage, afterPr, afterReview, afterStage, afterState, emptyTiming, timingIn, type PullRequestSeen } from './timing'
 import { afterCost, afterStep, emptyUsage, usageIn } from './usage'
@@ -314,7 +314,8 @@ const COUNSEL_TOOL = 'mcp__builder__counsel'
 const TALLY_TOOL = 'mcp__builder__counsel_tally'
 const OPEN_PANE_TOOL = 'mcp__builder__open_pane'
 const PROGRESS_TOOL = 'mcp__builder__progress'
-const SESSION_TOOLS = new Set([WATCH_TOOL, PACKAGE_TOOL, REVIEW_TOOL, COUNSEL_TOOL, TALLY_TOOL, OPEN_PANE_TOOL, PROGRESS_TOOL])
+const SET_STUCK_TOOL = 'mcp__builder__set_stuck'
+const SESSION_TOOLS = new Set([WATCH_TOOL, PACKAGE_TOOL, REVIEW_TOOL, COUNSEL_TOOL, TALLY_TOOL, OPEN_PANE_TOOL, PROGRESS_TOOL, SET_STUCK_TOOL])
 
 // gh's output, trimmed, or null when gh failed or the engine cut its output
 // off at 4 MiB, as the git helper below also does. A cut-off answer is never
@@ -853,7 +854,7 @@ async function told($: $, r: BuilderRun): Promise<Snapshot | null> {
 
 // Makes a queue that runs the work given to it one at a time, in the order it
 // was queued. Work that fails never stops the queue: the next piece runs
-// either way. The two queues below differ only in what the caller of a
+// either way. The queues made with it differ only in what the caller of a
 // failed piece sees. With `passesErrors`, the caller's promise rejects with
 // that failure; without it, the caller's promise resolves without an error
 // and the failure goes no further.
@@ -3365,11 +3366,11 @@ async function addLabel($: $, r: BuilderRun, name: string, remove: readonly stri
   return (await gh($, r.cwd, args)) !== null
 }
 
-// The state label the mod last set on each pull request, kept in the store
-// under `state-label:<repo>#<number>` as `{ label, at }`, with a `note` of
-// what a successful read of the labels saw while a job for a changed step's
-// label has not finished, so that it survives a restart. It has no session
-// id, because the label is on the pull request, whichever session set it.
+// The state label the mod last recorded for each pull request, kept in the
+// store under `state-label:<repo>#<number>` as `{ label, at }`, with a
+// `judgement` while the session's judgement that the pull request is stuck
+// holds, so that both survive a restart. It has no session id, because the
+// label is on the pull request, whichever session set it.
 const STATE_LABEL_PREFIX = 'state-label:'
 const stateLabelKey = (target: Pick<BuilderRun, 'repo' | 'number'>) => `${STATE_LABEL_PREFIX}${target.repo}#${target.number}`
 // A record is kept far longer than a told record, because a pull request can
@@ -3382,109 +3383,229 @@ const STATE_LABEL_KEPT_MS = 90 * 24 * 60 * 60_000
 // while the job runs queues the next one.
 let isStateLabelQueued = false
 
-// The keys of state label records whose note a clear failed to remove, or
-// whose new note the store refused. The job reads such a record as holding
-// no note until a later write replaces it, so a stale note never decides a
-// later change. The set lives in memory only, so after a restart a note
-// that it hid counts again, which is one of the two risks that the comment
-// on settleStateLabel names.
-const staleNoteKeys = new Set<string>()
+// Every write or delete of a state label record in this copy of the module
+// runs one at a time, as a read of the stored record, a change and a write or
+// delete, so the set_stuck tool's judgement, a job's final save and the prune
+// at a session's start never interleave. The tool's caller sees a refused
+// read or write, so it passes errors on.
+const inRecordQueue = oneAtATime({ passesErrors: true })
 
 function requestStateLabel($: $) {
   if (isStateLabelQueued) return
   isStateLabelQueued = true
   void inLabelQueue(() => {
     isStateLabelQueued = false
-    return settleStateLabel($)
+    return settleStateLabel($, { trustsSnapshotLabels: true })
   })
 }
+
+// What a state label job did, which the set_stuck tool answers from. Each
+// outcome says what the job did to the labels, not whether a judgement was
+// recorded:
+// - `stuck-on`: the job kept a judgement and left `stuck` on.
+// - `failed`: the read of the labels, or the edit that adds a label, failed,
+//   so nothing changed on the pull request and a later look tries again.
+// - `ended`: the job put the step's label on, or only recorded it beside a
+//   `stuck`, which ends any judgement there was, even when a removal or the
+//   save after it failed.
+// - `merged`: the job changed nothing because the pull request is merged, so
+//   any judgement stays recorded.
+// - `unjudged`: the record held no judgement and the job had nothing to do.
+// - `moved`: the watch is not the one the job was asked about.
+// A job that throws, as on a refused read of the store, resolves to undefined
+// in the label queue.
+type StateLabelOutcome = 'stuck-on' | 'failed' | 'ended' | 'merged' | 'unjudged' | 'moved'
 
 // Sets the state label that follows from the step the stored snapshot calls
 // for. Everything is read again when the job runs, so a backlog never replays
 // an older label: the watch, the stored snapshot, whether a question is open,
-// the record, and the labels the pull request carries now, read fresh as for
-// a question's label because the snapshot can be minutes old. It stops when
-// the snapshot is of another pull request or the watch moved on. When the
-// step's label is back to the recorded one, it only clears any note the
-// record holds, and when the store refuses that clear the job treats the
-// note as gone from then on, so the first successful read after a later
-// change still decides. Otherwise, once the read of the labels succeeded
-// and before any edit, it notes in the record the derived label and whether
-// that read saw `stuck`, unless the record already holds a note for that
-// label, so that after an edit that failed the next job can tell a `stuck`
-// that was on before the step's label changed from one the session set by
-// its own judgement afterwards. When the store refuses that note, the job
-// treats any older note still stored as gone too, so the next job sees no
-// note and writes the label, which is the safe side. A new label record,
-// with no note, is saved only once every edit the job needed succeeded: on a
-// write, the edit and the removal that the read after it may call for; when
-// the label is only recorded, the removal of any state label beside `stuck`.
-// So a failed edit, read or removal is tried again at the next look. Two
-// risks remain. When that final save fails after a read that saw `stuck`,
-// the note still says it saw `stuck`, so a `stuck` the session puts on
-// afterwards by its own judgement comes off at the next look. And the set
-// of hidden notes lives in memory only, so after a restart a note it hid
-// counts again.
-async function settleStateLabel($: $) {
+// the record, and the labels the pull request carries now, read fresh as for a
+// question's label because the snapshot can be minutes old. It stops when the
+// snapshot is of another pull request, when the watch moved on, or, when
+// `expected` is given, when the watch is no longer that one. The Merged step
+// changes nothing, even while a judgement is recorded, because a merged pull
+// request shown as stuck would mislead the person. While the record holds a
+// judgement and the step's label is the judged one, or the step gives no label,
+// the job makes the pull request carry `stuck` and no other state label, and
+// leaves the record as it is (see labelActionOf). With no judgement, a step's
+// label equal to the recorded one, or no label from the step, changes nothing
+// and needs no read of the labels. While a judgement is kept, a job that a look
+// started, which passes `trustsSnapshotLabels`, also skips the read when the
+// snapshot the look has just stored, which holds the labels from the same read
+// of the pull request, shows `stuck` and no other state label, so a judgement
+// that holds for hours costs no extra read at each look. The set_stuck tool's
+// own job never passes it and always reads the labels, because its snapshot
+// can be minutes old. Otherwise the job writes the step's label, which ends any
+// judgement, or only records it beside a `stuck` when there is no record, and
+// saves a new record with no judgement once every edit the job needed
+// succeeded: on a write, the edit and the removal that the read after it may
+// call for; when the label is only recorded, the removal of any state label
+// beside `stuck`. So a failed edit, read or removal keeps the judgement and is
+// tried again at the next look.
+async function settleStateLabel($: $, { expected, trustsSnapshotLabels }: { expected?: BuilderRun; trustsSnapshotLabels: boolean }): Promise<StateLabelOutcome> {
   const r = await read($, run)
   const s = snapshotIn(await read($, pr))
-  if (r === null || s === null || s.repo !== r.repo || s.number !== r.number) return
-  if (!Number.isInteger(r.number) || r.number <= 0) return
-  const derived = labelFor(chooseStep(s, await isAsking($)))
-  if (derived === null) return
+  if (r === null || s === null || s.repo !== r.repo || s.number !== r.number) return 'moved'
+  if (expected !== undefined && !isSameRun(r, expected)) return 'moved'
+  if (!Number.isInteger(r.number) || r.number <= 0) return 'moved'
+  const step = chooseStep(s, await isAsking($))
+  if (step.kind === 'merged') return 'merged'
+  const derived = labelFor(step)
   const key = stateLabelKey(r)
-  const stored = labelRecordIn(await $.store.get(key))
-  const record = stored !== null && staleNoteKeys.has(key) ? { label: stored.label, at: stored.at } : stored
-  if (stored !== null && derived === stored.label) {
-    if (stored.note !== undefined) {
-      // The key is added before the write, so a refused clear leaves the
-      // note counted as gone, and taken out only once the write succeeded.
-      staleNoteKeys.add(key)
-      await $.store.set(key, { label: stored.label, at: stored.at })
-      staleNoteKeys.delete(key)
-    }
-    return
-  }
+  const record = labelRecordIn(await $.store.get(key))
+  const judgement = record?.judgement
+  if (judgement === undefined && (derived === null || derived === record?.label)) return 'unjudged'
+  // Only a look's job trusts the labels in the snapshot its look has just
+  // stored; the set_stuck tool's snapshot can be minutes old.
+  const isStuckAloneInSnapshot = s.labels.includes('stuck') && otherStateLabelsOf('stuck', s.labels).length === 0
+  if (trustsSnapshotLabels && isJudgementKept(derived, judgement?.label ?? null) && isStuckAloneInSnapshot) return 'stuck-on'
   const live = await liveLabelNames($, r)
-  if (live === null || !(await stillWatching($, r))) return
-  const note = noteAfterRead(record, derived, live)
-  if (record !== null && note !== null) {
-    try {
-      staleNoteKeys.add(key)
-      await $.store.set(key, { label: record.label, at: record.at, note })
-      staleNoteKeys.delete(key)
-    } catch {
-      // A refused note write leaves the key in the set, which hides any
-      // older note still stored, so the next job sees no note and writes
-      // the label, and the edits below still run.
-    }
+  if (live === null) return 'failed'
+  if (!(await stillWatching($, r))) return 'moved'
+  const action = labelActionOf(derived, record?.label ?? null, live, judgement?.label ?? null)
+  if (action.kind === 'keep') {
+    if (action.add) return (await addLabel($, r, 'stuck', action.remove)) ? 'stuck-on' : 'failed'
+    // Stuck is already on here, so a failed removal of another state label
+    // beside it still leaves stuck on, and the next look removes that label.
+    if (action.remove.length > 0) await removeLabels($, r, action.remove)
+    return 'stuck-on'
   }
-  const action = labelActionOf(derived, record?.label ?? null, live, record?.note ?? null)
-  if (action.kind === 'none') return
+  // This line only narrows the types for what follows and cannot be reached:
+  // the early return above covers no judgement with no label from the step
+  // or the recorded one, and labelActionOf answers only keep or write while
+  // a judgement holds. A throw makes the tool answer a failed edit with the
+  // judgement recorded, which would be true, where a return would claim an
+  // outcome that did not happen.
+  if (action.kind === 'none' || derived === null) throw new Error('settleStateLabel reached a case that cannot happen: no action, or no label to write.')
   if (action.kind === 'write') {
-    if (!(await addLabel($, r, derived, action.remove))) return
-    if (!(await removeOtherStateLabels($, r, derived, live))) return
+    if (!(await addLabel($, r, derived, action.remove))) return 'failed'
+    // From here the new label is on, so the judgement has ended on the pull
+    // request even when what follows fails and the next look ends it again.
+    if (!(await removeOtherStateLabels($, r, derived))) return 'ended'
   }
-  if (action.kind === 'record' && action.remove.length > 0 && !(await removeLabels($, r, action.remove))) return
-  await $.store.set(key, { label: derived, at: await $.clock.now() })
-  staleNoteKeys.delete(key)
+  if (action.kind === 'record' && action.remove.length > 0 && !(await removeLabels($, r, action.remove))) return 'ended'
+  try {
+    await saveLabelRecord($, key, record?.label, judgement, { label: derived, at: await $.clock.now() })
+  } catch {
+    // A refused save keeps the record as it was, so the next look tries again.
+  }
+  return 'ended'
 }
 
-// Reads the labels again after the edit that added `added`, and removes in one
-// more edit the state labels that labelsToRemoveAfterEdit names. A second
-// session on the same pull request can put one on between the first read
-// (`before`) and the edit, and once the record is saved no later look reads
-// the labels again. A `stuck` the session set by hand in that time stays, and
-// `added` comes off instead. True when the read shows nothing to remove or the
-// removal succeeded, and false when either failed, so the record is not saved
-// and the next look tries again. The labels removed are on the pull request,
-// so they exist in the repository.
-async function removeOtherStateLabels($: $, r: BuilderRun, added: StateLabel, before: readonly string[]): Promise<boolean> {
+// Saves `next` as the state label record under `key`, in the record queue.
+// `replaced` is the record label the job read at its start, the label it is
+// replacing, and `before` is the judgement the job read at its start, the one
+// it is ending. The function reads the stored record again first. When the
+// stored judgement is not `before`, by label or time, the set_stuck tool made
+// it while the job ran, so it is carried into the new record rather than
+// lost, by these rules:
+//
+// - When the newer judgement's label is `replaced` or the label of `before`,
+//   the tool may have made it while the step gave no label, under the label
+//   the job has just replaced. It is carried under the new record's label,
+//   because carried under the old label it would end at the next look where
+//   the step gives the new label, while the session is still asking the
+//   person. When the new label is `stuck` itself, a judgement is never made
+//   under `stuck`, so the judgement is carried unchanged instead. Dropping it
+//   would be wrong, because the tool may have made it from a newer snapshot
+//   whose step gives that label again, and the next look would then take
+//   `stuck` off while the session is still asking the person.
+// - A newer judgement under any other label was made from a newer snapshot,
+//   whose step gives that label, so it is carried unchanged, even onto a
+//   record of `stuck`, because the next look keeps stuck only while it holds.
+//
+// The read or the write throws when the store refuses it.
+async function saveLabelRecord($: $, key: string, replaced: StateLabel | undefined, before: StuckJudgement | undefined, next: LabelRecord) {
+  await inRecordQueue(async () => {
+    const stored = labelRecordIn(await $.store.get(key))?.judgement
+    const isNewer = stored !== undefined && (before === undefined || stored.label !== before.label || stored.at !== before.at)
+    if (!isNewer) {
+      await $.store.set(key, next)
+      return
+    }
+    const isUnderReplacedLabel = stored.label === replaced || stored.label === before?.label
+    if (!isUnderReplacedLabel || next.label === 'stuck') {
+      await $.store.set(key, { ...next, judgement: stored })
+      return
+    }
+    await $.store.set(key, { ...next, judgement: { label: next.label, at: stored.at } })
+  })
+}
+
+// Reads the labels again after the edit that added `added`, and removes in
+// one more edit every other state label the read sees. A second session on
+// the same pull request, or a person, can put one on between the first read
+// and the edit, and once the record is saved no later look reads the labels
+// again. True when the read shows nothing to remove or the removal
+// succeeded, and false when either failed, so the record is not saved and
+// the next look tries again. The labels removed are on the pull request, so
+// they exist in the repository.
+async function removeOtherStateLabels($: $, r: BuilderRun, added: StateLabel): Promise<boolean> {
   const live = await liveLabelNames($, r)
   if (live === null) return false
-  const others = labelsToRemoveAfterEdit(added, before, live)
+  const others = otherStateLabelsOf(added, live)
   if (others.length === 0) return true
   return removeLabels($, r, others)
+}
+
+// What the set_stuck tool does: records the session's judgement that the
+// watched pull request is stuck, then puts `stuck` on through the label
+// queue and waits for that job. It refuses, recording and editing nothing,
+// when nothing is watched, when the stored snapshot is of another pull
+// request, when the pull request is merged or closed, and when the step
+// gives no label and the mod has recorded none. When the step gives `stuck`
+// by itself, or gives no label and the recorded label is `stuck`, it records
+// nothing, because `stuck` already follows from the step. The judgement is
+// made under the label the step gives, or, when the step gives none, under
+// the label of the judgement already recorded, or else the recorded label,
+// and it is saved before any edit, so a job that runs meanwhile, or after a
+// reload cut this call off, keeps `stuck`. Only a store that refuses the read
+// or the write of the record is answered as an error.
+async function serveSetStuck($: $): Promise<ToolCallResult> {
+  const r = await read($, run)
+  if (r === null) return { result: 'builder: refused: nothing is watched, so there is no pull request to set stuck on. Call mcp__builder__watch first.' }
+  const target = `${r.repo}#${r.number}`
+  const s = snapshotIn(await read($, pr))
+  if (s === null || s.repo !== r.repo || s.number !== r.number) {
+    return { result: `builder: refused: the stored snapshot is not of ${target}, so the step is not known yet. Call mcp__builder__watch to read it, then call this tool again.` }
+  }
+  if (s.state === 'MERGED' || s.state === 'CLOSED') {
+    return { result: `builder: refused: ${target} is ${s.state === 'MERGED' ? 'merged' : 'closed'}, so no stuck is set on it. Ask the person as the skill says.` }
+  }
+  const derived = labelFor(chooseStep(s, await isAsking($)))
+  const already = `builder: stuck already follows from the step on ${target}, so no judgement is recorded and nothing is edited. Ask the person as the skill says.`
+  if (derived === 'stuck') return { result: already }
+  const key = stateLabelKey(r)
+  let judged: StateLabel | null
+  try {
+    judged = await inRecordQueue(async () => {
+      const record = labelRecordIn(await $.store.get(key))
+      // With no label from the step, a judgement already recorded keeps its
+      // own label, because the record's label can be older than the
+      // judgement when a job kept stuck without saving the record.
+      const label = derived ?? record?.judgement?.label ?? record?.label ?? null
+      if (label === null || label === 'stuck') return label
+      const at = await $.clock.now()
+      await $.store.set(key, { label: record?.label ?? label, at: record?.at ?? at, judgement: { label, at } })
+      return label
+    }) as StateLabel | null
+  } catch {
+    return { isError: true, result: `builder: the store refused to save the judgement for ${target}, so nothing was edited and stuck is not on. Tell the person that the mod could not record it, then ask them as the skill says.` }
+  }
+  if (judged === null) {
+    return { result: `builder: refused: the step on ${target} gives no state label now, and the mod has recorded none, so there is no label to judge it stuck under. Ask the person as the skill says.` }
+  }
+  if (judged === 'stuck') return { result: already }
+  const outcome = await inLabelQueue(() => settleStateLabel($, { expected: r, trustsSnapshotLabels: false })) as StateLabelOutcome | undefined
+  switch (outcome) {
+    case 'stuck-on': return { result: `builder: stuck is on ${target}, and the mod keeps it while the step gives ${judged}. Ask the person now, and never edit a state label yourself.` }
+    case 'ended': return { result: `builder: the step on ${target} no longer gives ${judged}, so the judgement ended and stuck is not on. Call mcp__builder__watch to read the step again.` }
+    case 'merged': return { result: `builder: ${target} is merged, so the mod changed no state label and stuck is not on. Call mcp__builder__watch to read the step again.` }
+    case 'unjudged': return { result: `builder: no judgement is recorded for ${target} any more, so the mod changed no state label for it and stuck is not on. Call mcp__builder__watch to read the step again.` }
+    case 'moved': return { result: `builder: the watch moved before the edit, so stuck was not put on. The judgement stays recorded for ${target}, and the mod puts stuck on when it is watched again under the same step.` }
+    case 'failed':
+    case undefined: return { result: `builder: the judgement is recorded for ${target}, but the edit on GitHub failed, so stuck is not on yet. The mod puts it on at its next look. Ask the person now, and never edit a state label yourself.` }
+  }
 }
 
 // The labels the pull request carries now, read fresh, or null when the read
@@ -3505,14 +3626,20 @@ function labelNamesIn(out: string | null): string[] | null {
   }
 }
 
-// Drops each state label record set more than ninety days ago, and one stored
-// in another shape at once.
+// Drops each state label record set more than ninety days ago, by the newer
+// of its own time and its judgement's, and one stored in another shape at
+// once. It runs while the session can already call the set_stuck tool, so
+// each record's read and delete wait in the record queue, and a judgement
+// saved in between is never deleted with the old record it replaced.
 async function pruneStateLabels($: $) {
   const now = await $.clock.now()
   for (const key of await $.store.keys()) {
     if (!key.startsWith(STATE_LABEL_PREFIX)) continue
-    const record = labelRecordIn(await $.store.get(key))
-    if (record === null || now - record.at > STATE_LABEL_KEPT_MS) await $.store.delete(key)
+    await inRecordQueue(async () => {
+      const record = labelRecordIn(await $.store.get(key))
+      // A judgement keeps the record's own time, so the newer of the two counts.
+      if (record === null || now - Math.max(record.at, record.judgement?.at ?? record.at) > STATE_LABEL_KEPT_MS) await $.store.delete(key)
+    })
   }
 }
 
@@ -4142,7 +4269,7 @@ async function serveProgress($: $, input: ReportInput): Promise<string> {
 async function route($: $, e: ToolCallInput, next: Next<'tool.call'>): Promise<ToolCallResult> {
   const tool = String(e.tool)
   if (SESSION_TOOLS.has(tool) && e.agentId !== undefined) {
-    return { deny: 'builder: only the session opens the pane, reports progress, watches, packages, posts and puts questions to the counsel; a subagent reports to it.' }
+    return { deny: 'builder: only the session opens the pane, reports progress, watches, packages, posts, sets stuck and puts questions to the counsel; a subagent reports to it.' }
   }
   if (tool === OPEN_PANE_TOOL) {
     await markStarted($)
@@ -4154,6 +4281,7 @@ async function route($: $, e: ToolCallInput, next: Next<'tool.call'>): Promise<T
   if (tool === REVIEW_TOOL) return { result: `builder: ${await serveReview($, e as unknown as ReviewInput)}` }
   if (tool === COUNSEL_TOOL) return { result: `builder: ${await serveCounsel($, e as unknown as CounselInput)}` }
   if (tool === TALLY_TOOL) return { result: `builder: ${await serveTally($, e as unknown as TallyInput)}` }
+  if (tool === SET_STUCK_TOOL) return serveSetStuck($)
   if (tool === 'AskUserQuestion' && e.agentId === undefined) {
     return asking($, (e as unknown as AskInput).questions?.[0]?.question, () => next(e))
   }
@@ -5126,6 +5254,10 @@ export const register: Register = on => {
     await $.tool.register({
       name: 'open_pane',
       description: 'Open the builder pane, as /builder does, so the person can see the mod from the start of the session. Takes no input. Answers that the pane is open, or that it waits and is not drawn yet, with the engine\'s reason.',
+    })
+    await $.tool.register({
+      name: 'set_stuck',
+      description: 'Put stuck on the watched pull request by the session\'s own judgement, where the skill or a step\'s text says to set stuck and ask the person. Takes no input. The mod records the judgement under the state label the step gives, puts stuck on in its place, and keeps it while the step gives that label. Answers that stuck is on; that the judgement is recorded but the edit failed, and the mod puts stuck on at its next look; that the step\'s label changed, so the judgement ended; that the pull request merged, or that no judgement is recorded any more, so the mod changed no label; that the watch moved; or that stuck already follows from the step. Refuses, saying why, when nothing is watched, the stored snapshot is of another pull request, the pull request is merged or closed, or there is no label to judge it under, and answers with an error when the store refused the judgement. Never edit a state label yourself.',
     })
     await $.tool.register({
       name: 'progress',
