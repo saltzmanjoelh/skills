@@ -4,7 +4,7 @@ import type { ElementQuery, Engine, FoundElement } from 'claude-code/testing'
 
 import { FACTS_LEAD, SETTINGS_HINT } from '../hooks/context'
 import { JOBS_JQ, RUNS_JQ, snapshotOf, type GhPullRequest } from '../hooks/github'
-import { NOTHING_WATCHED, STALE_WARNING } from '../hooks/pane'
+import { NO_STATUS_FILE, NOTHING_WATCHED, STALE_WARNING } from '../hooks/pane'
 import { GITHUB_NAMES_LINE, RELOAD_LINE, REREAD_CLOSING } from '../hooks/prompts'
 import { INSTRUCTION_PATHSPECS } from '../hooks/review'
 import { FOREMAN_NUDGE_TEXTS, STATUS_CHANGED_TEXT } from '../hooks/status'
@@ -10677,6 +10677,34 @@ test('a Reviewer: line in the user\'s own CLAUDE.md, read from CLAUDE_CONFIG_DIR
   expect(answer).toContain('`gh pr edit 7 --add-reviewer bob`')
 })
 
+// The test kit runs on a Unix-like system, where a Windows drive path such as
+// `C:\Users\me/.claude` is relative, so the kit resolves it against the
+// folder the tests run in before the fake file system sees it. This wraps
+// `on` so that each file system event reaches its handler with that folder
+// dropped again, and a test can name the drive path the mod worked out. The
+// handler is wrapped as the kit registers it, since an event takes one
+// handler.
+function withDrivePaths(on: On): On {
+  return ((event: string, ...rest: unknown[]) => {
+    const register = on as unknown as (...args: unknown[]) => unknown
+    if (!event.startsWith('fs.')) return register(event, ...rest)
+    const handler = rest[rest.length - 1] as (...args: unknown[]) => unknown
+    return register(event, ...rest.slice(0, -1), ($: unknown, e: { path?: unknown }, ...more: unknown[]) => {
+      const path = typeof e.path === 'string' ? e.path.replace(/^.*\/(?=[A-Za-z]:[\\/])/, '') : e.path
+      return handler($, { ...e, path }, ...more)
+    })
+  }) as typeof on
+}
+
+test('a Reviewer: line in the user\'s own CLAUDE.md, read from USERPROFILE when HOME is unset, applies when the project names none', async ($, on) => {
+  const { files } = userClaudeWorld(withDrivePaths(on), 'Checks: none\n', { kind: 'missing' }, { USERPROFILE: 'C:\\Users\\me' })
+  files.set('C:\\Users\\me/.claude/CLAUDE.md', 'Reviewer: bob\n')
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  const answer = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  expect(answer).toContain(REQUEST_STEP)
+  expect(answer).toContain('`gh pr edit 7 --add-reviewer bob`')
+})
+
 test('the project\'s Reviewer: line overrides the user\'s', async ($, on) => {
   const answer = await reviewerStep($, on, 'Checks: none\nReviewer: ann\n', { kind: 'read', text: 'Reviewer: bob\n' })
   expect(answer).toContain('`gh pr edit 7 --add-reviewer ann`')
@@ -12207,13 +12235,82 @@ test('after a /clear and a new session id, the new conversation\'s own ticket wr
   expect(s.writesOf()).toBe(oldWrites)
 })
 
-test('a ticket with neither CLAUDE_CONFIG_DIR nor HOME set writes nothing', async ($, on) => {
+test('a ticket with none of CLAUDE_CONFIG_DIR, HOME and USERPROFILE set writes nothing', async ($, on) => {
   const s = foremanSession(on, { env: {} })
   await firstPrompt($, s.clock)
   await $.turn.start({ text: 'go', turnId: 't1' } as never)
   await s.clock.advance(2 * MINUTE)
 
   expect(s.files.writes.log.filter(path => path.includes('/foreman/'))).toEqual([])
+})
+
+test('a ticket with HOME unset and USERPROFILE set writes its record under USERPROFILE, and keeps the ticket record with that path', async ($, on) => {
+  const s = foremanSession(withDrivePaths(on), { env: { USERPROFILE: 'C:\\Users\\me', CLAUDE_CODE_HOST_SESSION_ID: 'desk-1' } })
+  await firstPrompt($, s.clock)
+
+  const path = 'C:\\Users\\me/.claude/foreman/builds/session-1.json'
+  expect(s.statusAt(path)).toMatchObject({ sessionId: 'session-1', ticket: 'slot-1', state: 'idle' })
+  expect(s.stored.get('ticket:session-1')).toMatchObject({ sessionId: 'session-1', ticket: 'slot-1', path })
+})
+
+// Mounts the builder pane and answers, after drawing it again, the line that
+// says no status file can be written, or undefined when the pane draws none,
+// and the whole tree as text.
+async function noStatusFileReader($: Engine) {
+  const pane = await $.ui.mount({ plugin: 'builder', surface: 'terminal', component: 'Pane', requestId: 'builder', props: {} as never })
+  return async () => {
+    await pane.redraw()
+    const row = await pane.find({ type: 'Text', text: NO_STATUS_FILE })
+    return { row, drawn: JSON.stringify(await pane.drawn()) }
+  }
+}
+
+test('a ticket with no usable configuration folder writes nothing, sends nothing, and shows the pane line in yellow without the variables\' values', async ($, on) => {
+  const s = foremanSession(on, { env: { HOME: 'home/me', USERPROFILE: 'Users\\me' } })
+  const sends = parentSends(on, s)
+  const pane = await noStatusFileReader($)
+  await firstPrompt($, s.clock, PARENTED)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.advance(2 * MINUTE)
+
+  expect(s.files.writes.log.filter(path => path.includes('/foreman/'))).toEqual([])
+  expect(sends.log).toEqual([])
+  const { row, drawn } = await pane()
+  expect(row?.text).toBe(NO_STATUS_FILE)
+  expect(row?.props.color).toBe('yellow')
+  expect(drawn).not.toContain('home/me')
+  expect(drawn).not.toContain('Users\\\\me')
+})
+
+test('a session with no ticket shows no line about the status file, whatever the variables', async ($, on) => {
+  const s = foremanSession(on, { env: {} })
+  const pane = await noStatusFileReader($)
+  await firstPrompt($, s.clock, 'Implement the next issue.')
+
+  expect((await pane()).row).toBeUndefined()
+})
+
+test('a ticket with a usable configuration folder shows no line about the status file', async ($, on) => {
+  const s = foremanSession(on)
+  const pane = await noStatusFileReader($)
+  await firstPrompt($, s.clock)
+
+  expect(s.statusAt()?.ticket).toBe('slot-1')
+  expect((await pane()).row).toBeUndefined()
+})
+
+test('with a ticket and no classic hook event at all, the clock still rewrites the status file each minute', async ($, on) => {
+  const s = foremanSession(on)
+  await firstPrompt($, s.clock)
+  const writes = s.writesOf()
+  expect(writes).toBeGreaterThan(0)
+
+  await s.clock.advance(MINUTE)
+  expect(s.writesOf()).toBe(writes + 1)
+  expect(s.statusAt()?.writtenAt).toBe(S0 + MINUTE)
+  await s.clock.advance(MINUTE)
+  expect(s.writesOf()).toBe(writes + 2)
+  expect(s.statusAt()?.writtenAt).toBe(S0 + 2 * MINUTE)
 })
 
 test('a call that returns with no permission prompt open, and a turn that starts with none, leave the memo unwritten', async ($, on) => {
