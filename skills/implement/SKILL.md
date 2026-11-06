@@ -333,6 +333,8 @@ for the edit, and answers with one of these:
   at its next look.
 - The label that follows from the step changed before the edit, so the
   judgement ended and `stuck` is not on.
+- The pull request merged, or no judgement is recorded any more, before the
+  edit, so the mod changed no label and `stuck` is not on.
 - The watch moved to another pull request before the edit, and the judgement
   stays recorded for the pull request it was made on.
 - `stuck` already follows from the step, as on **Over a limit**, so nothing

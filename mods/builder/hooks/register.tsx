@@ -3378,12 +3378,14 @@ function requestStateLabel($: $) {
 // What a state label job did about a judgement `stuck`, which the set_stuck
 // tool answers from: `stuck-on` when the job left `stuck` on by a judgement,
 // `failed` when a read or an edit failed while a judgement still holds, so a
-// later look tries again, `ended` when no judgement holds once the job is
-// done, because the step's label changed and the new label was written, the
-// record held none, or the pull request is merged, and `moved` when the
-// watch is not the one the job was asked about. A job that throws, as on a
-// refused read of the store, resolves to undefined in the label queue.
-type StateLabelOutcome = 'stuck-on' | 'failed' | 'ended' | 'moved'
+// later look tries again, `ended` when the step's label changed and the job
+// ended the judgement by writing the new label, `merged` when the job
+// changed nothing because the pull request is merged, so any judgement stays
+// recorded, `unjudged` when the record held no judgement, so the job had
+// none to end, and `moved` when the watch is not the one the job was asked
+// about. A job that throws, as on a refused read of the store, resolves to
+// undefined in the label queue.
+type StateLabelOutcome = 'stuck-on' | 'failed' | 'ended' | 'merged' | 'unjudged' | 'moved'
 
 // Sets the state label that follows from the step the stored snapshot calls
 // for. Everything is read again when the job runs, so a backlog never replays
@@ -3413,19 +3415,21 @@ async function settleStateLabel($: $, expected?: BuilderRun): Promise<StateLabel
   if (expected !== undefined && !isSameRun(r, expected)) return 'moved'
   if (!Number.isInteger(r.number) || r.number <= 0) return 'moved'
   const step = chooseStep(s, await isAsking($))
-  if (step.kind === 'merged') return 'ended'
+  if (step.kind === 'merged') return 'merged'
   const derived = labelFor(step)
   const key = stateLabelKey(r)
   const record = labelRecordIn(await $.store.get(key))
   const judgement = record?.judgement
-  if (judgement === undefined && (derived === null || derived === record?.label)) return 'ended'
+  if (judgement === undefined && (derived === null || derived === record?.label)) return 'unjudged'
   const live = await liveLabelNames($, r)
   if (live === null) return 'failed'
   if (!(await stillWatching($, r))) return 'moved'
   const action = labelActionOf(derived, record?.label ?? null, live, judgement?.label ?? null)
   if (action.kind === 'keep') {
     if (action.add) return (await addLabel($, r, 'stuck', action.remove)) ? 'stuck-on' : 'failed'
-    if (action.remove.length > 0 && !(await removeLabels($, r, action.remove))) return 'failed'
+    // Stuck is already on here, so a failed removal of another state label
+    // beside it still leaves stuck on, and the next look removes that label.
+    if (action.remove.length > 0) await removeLabels($, r, action.remove)
     return 'stuck-on'
   }
   if (action.kind === 'none' || derived === null) return 'ended'
@@ -3448,13 +3452,28 @@ async function settleStateLabel($: $, expected?: BuilderRun): Promise<StateLabel
 // reads the stored record again first, and when the stored judgement is not
 // the one the job read at its start (`before`), by label or time, the
 // set_stuck tool made it while the job ran, so it is carried into the new
-// record rather than lost. The read or the write throws when the store
-// refuses it.
+// record rather than lost. When that newer judgement has the label of the
+// judgement this job is ending, the tool made it while the step gave no
+// label, under the stored judgement's label, which is the label the job has
+// just replaced, so it is carried under the new record's label instead.
+// Carried under the old label, it would end at the next look where the step
+// gives the new label, while the session is still asking the person. When
+// the new label is `stuck` itself, stuck follows from the step, so no
+// judgement is carried. The read or the write throws when the store refuses
+// it.
 async function saveLabelRecord($: $, key: string, before: StuckJudgement | undefined, next: LabelRecord) {
   await inRecordQueue(async () => {
     const stored = labelRecordIn(await $.store.get(key))?.judgement
     const isNewer = stored !== undefined && (before === undefined || stored.label !== before.label || stored.at !== before.at)
-    await $.store.set(key, isNewer ? { ...next, judgement: stored } : next)
+    if (!isNewer) {
+      await $.store.set(key, next)
+      return
+    }
+    if (before === undefined || stored.label !== before.label) {
+      await $.store.set(key, { ...next, judgement: stored })
+      return
+    }
+    await $.store.set(key, next.label === 'stuck' ? next : { ...next, judgement: { label: next.label, at: stored.at } })
   })
 }
 
@@ -3526,6 +3545,8 @@ async function serveSetStuck($: $): Promise<ToolCallResult> {
   switch (outcome) {
     case 'stuck-on': return { result: `builder: stuck is on ${target}, and the mod keeps it while the step gives ${judged}. Ask the person now, and never edit a state label yourself.` }
     case 'ended': return { result: `builder: the step on ${target} no longer gives ${judged}, so the judgement ended and stuck is not on. Call mcp__builder__watch to read the step again.` }
+    case 'merged': return { result: `builder: ${target} is merged, so the mod changed no state label and stuck is not on. Call mcp__builder__watch to read the step again.` }
+    case 'unjudged': return { result: `builder: no judgement is recorded for ${target} any more, so the mod changed no state label for it and stuck is not on. Call mcp__builder__watch to read the step again.` }
     case 'moved': return { result: `builder: the watch moved before the edit, so stuck was not put on. The judgement stays recorded for ${target}, and the mod puts stuck on when it is watched again under the same step.` }
     default: return { result: `builder: the judgement is recorded for ${target}, but the edit on GitHub failed, so stuck is not on yet. The mod puts it on at its next look. Ask the person now, and never edit a state label yourself.` }
   }
@@ -5176,7 +5197,7 @@ export const register: Register = on => {
     })
     await $.tool.register({
       name: 'set_stuck',
-      description: 'Put stuck on the watched pull request by the session\'s own judgement, where the skill or a step\'s text says to set stuck and ask the person. Takes no input. The mod records the judgement under the state label the step gives, puts stuck on in its place, and keeps it while the step gives that label. Answers that stuck is on; that the judgement is recorded but the edit failed, and the mod puts stuck on at its next look; that the step\'s label changed, so the judgement ended; that the watch moved; or that stuck already follows from the step. Refuses, saying why, when nothing is watched, the stored snapshot is of another pull request, the pull request is merged or closed, or there is no label to judge it under, and answers with an error when the store refused the judgement. Never edit a state label yourself.',
+      description: 'Put stuck on the watched pull request by the session\'s own judgement, where the skill or a step\'s text says to set stuck and ask the person. Takes no input. The mod records the judgement under the state label the step gives, puts stuck on in its place, and keeps it while the step gives that label. Answers that stuck is on; that the judgement is recorded but the edit failed, and the mod puts stuck on at its next look; that the step\'s label changed, so the judgement ended; that the pull request merged, or that no judgement is recorded any more, so the mod changed no label; that the watch moved; or that stuck already follows from the step. Refuses, saying why, when nothing is watched, the stored snapshot is of another pull request, the pull request is merged or closed, or there is no label to judge it under, and answers with an error when the store refused the judgement. Never edit a state label yourself.',
     })
     await $.tool.register({
       name: 'progress',
