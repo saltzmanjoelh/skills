@@ -161,8 +161,9 @@ line of the base branch's `CLAUDE.md`, read with
 having no such line. The line is read in one of three ways:
 
 - When its value is the word `none`, in any case and alone on the line apart
-  from spaces, no change is frontend, and the next paragraph applies as
-  written. Everywhere in this skill and in `frontend.md`, the base branch's
+  from spaces, no change is frontend: run no command below, and open the pull
+  request the plain way, as the paragraph that begins "Check the diff against
+  the base" says. Everywhere in this skill and in `frontend.md`, the base branch's
   `CLAUDE.md` "says `Frontend paths: none`" when it has this line, and only
   then.
 - When its value holds at least one glob, it is the project's own
@@ -206,7 +207,8 @@ When the change is frontend, read the section **A frontend change** of
 `skills/implement/frontend.md`, in this skill's folder, before going on. A
 frontend change keeps the next paragraph's checks, its rules for the body and
 its watch call, and replaces only its push and its `gh pr create` with what
-that section says.
+that section says. When the command prints nothing, whichever list it used,
+the change is not frontend, and the next paragraph applies as written.
 
 Check the diff against the base lists only this change's files, check it
 for credentials (see "Rules"), then push and open it with
