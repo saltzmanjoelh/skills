@@ -9,12 +9,13 @@ lacks" or the second half's point 5, are those of `SKILL.md` beside this file.
 globs or from its built-in list with its exclusions. Step 7 includes the
 section **A frontend change** below, so "as step 7 says a published reason is
 written" points at that section, and "the paragraph above" in it means step
-7's paragraph that opens the pull request the plain way. Run every git command below from the worktree's top
-folder.
+7's paragraph that opens the pull request the plain way. Run every git command
+below from the worktree's top folder.
 
 ## A frontend change
 
-**A frontend change.** For a change that step 7 found frontend, after checking that the diff lists only this change's files, run
+**A frontend change.** For a change that step 7 found frontend, after
+checking that the diff lists only this change's files, run
 `/storypr` as its section **When another skill calls it** says. When it
 returns a body file, a commit and the screenshot paths, write at the top of the
 body file any lines that the project's `CLAUDE.md` says the body must begin
@@ -67,9 +68,8 @@ Once it says that, nothing below applies, whatever the body holds. While they
 apply, the pathspecs of step 7 are never empty, because a missing or empty
 line means the built-in list. That matters because
 `git diff --cached --name-only` with no pathspec would list every staged file.
-On a
-frontend pull request, test every commit before making it: stage the change by path, then
-run `git diff --cached --no-renames --name-only` with the pathspecs of step 7,
+On a frontend pull request, test every commit before making it: stage the
+change by path, then run `git diff --cached --no-renames --name-only` with the pathspecs of step 7,
 before any screenshot is staged, so that a screenshot never makes its own
 commit frontend. When it prints a path, the commit touches a frontend path.
 That can be a fix at the first half's point 4, the fixes for a blocking verdict
