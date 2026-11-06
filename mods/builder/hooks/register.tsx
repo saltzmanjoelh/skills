@@ -3448,8 +3448,11 @@ async function settleStateLabel($: $, expected?: BuilderRun): Promise<StateLabel
   const record = labelRecordIn(await $.store.get(key))
   const judgement = record?.judgement
   if (judgement === undefined && (derived === null || derived === record?.label)) return 'unjudged'
+  // Only a look's job, with no `expected`, trusts the labels in the snapshot
+  // its look has just stored; the set_stuck tool's snapshot can be minutes old.
   const isKept = judgement !== undefined && (derived === null || derived === judgement.label)
-  if (expected === undefined && isKept && s.labels.includes('stuck') && otherStateLabelsOf('stuck', s.labels).length === 0) return 'stuck-on'
+  const isStuckAloneInSnapshot = s.labels.includes('stuck') && otherStateLabelsOf('stuck', s.labels).length === 0
+  if (expected === undefined && isKept && isStuckAloneInSnapshot) return 'stuck-on'
   const live = await liveLabelNames($, r)
   if (live === null) return 'failed'
   if (!(await stillWatching($, r))) return 'moved'

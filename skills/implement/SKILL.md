@@ -311,7 +311,10 @@ for the edit, and answers with one of these:
 - An error, when the store refused to save the judgement. The session reports
   that error to the person.
 
-In every case the session carries on with asking the person. The mod keeps
+After the answers that say `stuck` is not on because the step's label changed,
+the pull request merged or no judgement is recorded any more, the session
+calls `mcp__builder__watch` and follows the step it names, as the answer says.
+After every other answer it carries on with asking the person. The mod keeps
 that `stuck`, and puts it back when someone takes it off, until the label that
 follows from the step changes. The mod manages `needs-decision` itself; it is not a state label. The mod cannot
 tell who put that label on, so a `needs-decision` label that a person or
