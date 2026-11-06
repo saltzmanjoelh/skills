@@ -1042,24 +1042,28 @@ function memoryStore(on: On, entries: [string, unknown][] = []) {
 // folders that exist, so a test can add another checkout beside `/repo`.
 // `refusedReads` holds paths that exist but whose read is refused, as a file
 // without read permission is, and `refusedExists` holds paths whose `exists`
-// call is itself refused.
+// call is itself refused. `notText` maps paths that exist, and whose read
+// gives a value that is not text, as a read of bytes does, to that value.
 function fakeFiles(on: On) {
   const files = new Map<string, string>([['/repo/CLAUDE.md', 'Architecture document: docs/arch.md\n'], ['/repo/docs/arch.md', 'x']])
   const links = new Map<string, string>()
   const dirs = new Set(['/repo'])
   const refusedReads = new Set<string>()
   const refusedExists = new Set<string>()
+  const notText = new Map<string, { base64: string }>()
   const writes = { refused: false, log: [] as string[], texts: [] as string[], hold: null as Promise<void> | null }
   // Every path read, in order, whether or not it is there.
   const reads: string[] = []
   on('fs.read', ($, e) => {
     reads.push(e.path)
     if (refusedReads.has(e.path)) return { deny: 'permission denied' }
+    const bytes = notText.get(e.path)
+    if (bytes !== undefined) return { value: bytes }
     return files.has(e.path) ? { value: files.get(e.path) as string } : { deny: 'missing' }
   })
   on('fs.exists', ($, e) => {
     if (refusedExists.has(e.path)) return { deny: 'the check could not be made' }
-    return { value: files.has(e.path) || dirs.has(e.path) || refusedReads.has(e.path) }
+    return { value: files.has(e.path) || dirs.has(e.path) || refusedReads.has(e.path) || notText.has(e.path) }
   })
   // `links` maps a path to where it really points. A path that is none of the
   // files, folders or links is refused, as the real file system refuses it.
@@ -1078,7 +1082,7 @@ function fakeFiles(on: On) {
     files.set(e.path, e.text)
     return { value: undefined }
   })
-  return Object.assign(files, { links, dirs, writes, reads, refusedReads, refusedExists })
+  return Object.assign(files, { links, dirs, writes, reads, refusedReads, refusedExists, notText })
 }
 
 // The mod loaded through a link into a checkout at `dir`: every stat resolves
@@ -10838,10 +10842,11 @@ test('a relative session folder still reads no base facts, even when the watch t
 
 // The CLAUDE.md in the user's configuration folder at a look: read with its
 // text, missing when it is not there, unreadable when it exists but its read
-// is refused, or exists-refused when the check whether it exists is itself
-// refused. Each case is tagged, so that a file whose text happens to be the
-// word unreadable is still a file that can be read.
-type UserClaudeSetup = UserClaude | { kind: 'exists-refused' }
+// is refused, exists-refused when the check whether it exists is itself
+// refused, or not-text when it exists but its read gives a value that is not
+// text. Each case is tagged, so that a file whose text happens to be the word
+// unreadable is still a file that can be read.
+type UserClaudeSetup = UserClaude | { kind: 'exists-refused' } | { kind: 'not-text' }
 
 const USER_ENV: Record<string, string> = { CLAUDE_CONFIG_DIR: '/config', HOME: '/home/me' }
 const USER_CLAUDE = '/config/CLAUDE.md'
@@ -10850,8 +10855,10 @@ function setUserClaude(files: ReturnType<typeof fakeFiles>, user: UserClaudeSetu
   files.delete(USER_CLAUDE)
   files.refusedReads.delete(USER_CLAUDE)
   files.refusedExists.delete(USER_CLAUDE)
+  files.notText.delete(USER_CLAUDE)
   if (user.kind === 'unreadable') files.refusedReads.add(USER_CLAUDE)
   else if (user.kind === 'exists-refused') files.refusedExists.add(USER_CLAUDE)
+  else if (user.kind === 'not-text') files.notText.set(USER_CLAUDE, { base64: 'AAEC' })
   else if (user.kind === 'read') files.set(USER_CLAUDE, user.text)
 }
 
@@ -10953,6 +10960,12 @@ test('a user CLAUDE.md that exists but cannot be read, with no Reviewer: line in
   expect(answer).toContain('Merge nothing')
   expect(answer).not.toContain('gh pr merge')
   expect(answer).not.toContain(USER_CLAUDE)
+})
+
+test('a user CLAUDE.md whose read gives no text, with no Reviewer: line in the base branch\'s, holds the merge', async ($, on) => {
+  const answer = await reviewerStep($, on, 'Checks: none\n', { kind: 'not-text' })
+  expect(answer).toContain(USER_CLAUDE_UNREAD_STEP)
+  expect(answer).not.toContain('gh pr merge')
 })
 
 test('an exists call for the user\'s CLAUDE.md that is itself refused holds the merge', async ($, on) => {
