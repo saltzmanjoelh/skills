@@ -57,16 +57,29 @@ export function linkOf(address: string | null, key: string | null): string | nul
   return address.split('{key}').join(key)
 }
 
-// A path resolved against a folder: an absolute path as it is, a relative one
+// Whether a path starts with a Windows drive letter, a colon and a slash of
+// either kind, such as `C:\x` or `c:/x`. With a leading `/`, this is the same
+// absolute rule as builder's isAbsolute in hooks/text.ts, which this module
+// cannot import.
+const DRIVE = /^[A-Za-z]:[\\/]/
+
+// A path resolved against a folder: an absolute path, one that starts with `/`
+// or with a drive letter, a colon and a slash, as it is, and a relative one
 // joined to the folder, and in both `.`, `..` and repeated slashes folded.
+// When the starting point begins with a drive letter, a `\` is a slash too,
+// the drive letter is kept as written, a `..` never removes it, and the
+// answer is written with `/`. Otherwise only `/` is a slash, so a `\` stays
+// part of a name, as it may on macOS and Linux.
 export function resolved(base: string, path: string): string {
+  const start = path.startsWith('/') || DRIVE.test(path) ? path : `${base}/${path}`
+  const drive = DRIVE.test(start) ? start.slice(0, 2) : ''
   const parts: string[] = []
-  for (const part of (path.startsWith('/') ? path : `${base}/${path}`).split('/')) {
+  for (const part of start.slice(drive.length).split(drive === '' ? '/' : /[\\/]/)) {
     if (part === '' || part === '.') continue
     if (part === '..') parts.pop()
     else parts.push(part)
   }
-  return `/${parts.join('/')}`
+  return `${drive}/${parts.join('/')}`
 }
 
 // The git folder that a worktree's `.git` file names on its first line as
