@@ -65,18 +65,20 @@ export function heldLine(keys: readonly string[]): string {
 
 // What the top-up line asks for, without its "foreman: " head, so that the
 // text that replaces the start-foreman skill can say the same: `n` more
-// issues, in words, started on this turn, where every start the parent makes
-// on the turn counts, the issues the person names first and then the ones
-// the project's Next issue: fact picks. The wake skill heads its top-up
+// issues, in words, started now, where every start the parent makes from the
+// line on counts, the issues the person names first and then the ones the
+// project's Next issue: fact picks, and the number replaces any earlier
+// top-up line's number on the turn, because a message typed while the turn
+// runs can carry a newer line. The wake skill heads its top-up
 // section with the line for one issue, so this is pinned by
 // tests/held.test.ts.
 export function topUpSentence(n: number): string {
   const w = inWords(n)
-  return `the queue needs ${w} more ${n === 1 ? 'issue' : 'issues'}; start ${w} on this turn, counting every start you make on it, the issues the person names first and then the next ones the project's Next issue: fact picks.`
+  return `the queue needs ${w} more ${n === 1 ? 'issue' : 'issues'}; start ${w} now, counting every start you make from here on, the issues the person names first and then the next ones the project's Next issue: fact picks; this number replaces any earlier top-up line's number on this turn.`
 }
 
-// The context line added after the held line to each of the person's prompts
-// while foreman is on and its queue is short of one waiting sub session per
+// The context line added after the held line to each of the person's prompts,
+// one typed while a turn runs included, while foreman is on and its queue is short of one waiting sub session per
 // slot, as topUpCount in act.ts counts.
 export const topUpLine = (n: number) => `foreman: ${topUpSentence(n)}`
 

@@ -112,8 +112,8 @@ test('no hold text says where the person is', () => {
 // The wake skill heads its top-up section with the line for one issue, so the
 // line is pinned word for word, with the count in words for every count the
 // line can carry.
-test('the top-up line says how many issues to start on this turn, in words, and that every start on it counts', () => {
-  expect(topUpLine(1)).toBe('foreman: the queue needs one more issue; start one on this turn, counting every start you make on it, the issues the person names first and then the next ones the project\'s Next issue: fact picks.')
-  expect(topUpLine(3)).toBe('foreman: the queue needs three more issues; start three on this turn, counting every start you make on it, the issues the person names first and then the next ones the project\'s Next issue: fact picks.')
-  for (const [n, word] of [[2, 'two'], [4, 'four'], [5, 'five']] as const) expect(topUpLine(n)).toContain(`needs ${word} more issues; start ${word} on this turn`)
+test('the top-up line says how many issues to start now, in words, that every start from here on counts, and that its number replaces an earlier line\'s', () => {
+  expect(topUpLine(1)).toBe('foreman: the queue needs one more issue; start one now, counting every start you make from here on, the issues the person names first and then the next ones the project\'s Next issue: fact picks; this number replaces any earlier top-up line\'s number on this turn.')
+  expect(topUpLine(3)).toBe('foreman: the queue needs three more issues; start three now, counting every start you make from here on, the issues the person names first and then the next ones the project\'s Next issue: fact picks; this number replaces any earlier top-up line\'s number on this turn.')
+  for (const [n, word] of [[2, 'two'], [4, 'four'], [5, 'five']] as const) expect(topUpLine(n)).toContain(`needs ${word} more issues; start ${word} now, counting every start you make from here on`)
 })

@@ -1377,12 +1377,17 @@ const isStartForeman = (e: PromptSubmitInput) => e.command?.name === COMMAND || 
 // The prompt with foreman's lines added to its context, when it is the
 // person's own and the role is on, or else as it came: the held line while
 // some key is held, and after it the top-up line while the queue is short of
-// one waiting sub session per slot. The top-up line is left out of a prompt
-// typed while a turn runs, which has the running turn's id, because that turn
-// may already have had the line, and two lines on one turn could ask for more
-// starts than the app allows without a permission card. It is left out of a
-// typed /start-foreman too, because the text that replaces the skill gives
-// the count on that turn. A failed count leaves the line out and keeps the
+// one waiting sub session per slot. A prompt typed while a turn runs, which
+// has the running turn's id, gets the top-up line too: the desktop app lets a
+// start through on a turn once the person's typed message has joined it, and
+// it counts its ten starts before a permission card from the person's last
+// typed message, so each message can carry its own line. The count is worked
+// out afresh from the ledger, where the start_session hook writes each start's
+// reservation before the start goes on, so a count taken mid-turn already
+// leaves out the starts made on that turn, and the line says that its number
+// replaces an earlier one's. The line is left out of a typed /start-foreman,
+// because the text that replaces the skill gives the count on that turn. A
+// failed count leaves the line out and keeps the
 // held line. Whose prompt it is is checked first, so a plugin's prompt,
 // foreman's own wake among them, reads no state here. The parent setting and
 // the ledger are each read once, for both lines.
@@ -1392,9 +1397,7 @@ async function withForemanLines($: $, e: PromptSubmitInput): Promise<PromptSubmi
   if (!settings.isOn) return e
   const ledger = ticketsIn(await read($, tickets))
   const lines = ledger.held.length === 0 ? [] : [heldLine(ledger.held)]
-  const inRunningTurn = e.turnId !== undefined
-  const skipsTopUp = inRunningTurn || isStartForeman(e)
-  if (!skipsTopUp) {
+  if (!isStartForeman(e)) {
     const failedCount = 0
     const count = await topUpFrom($, settings, ledger).catch(() => failedCount)
     if (count > 0) lines.push(topUpLine(count))
