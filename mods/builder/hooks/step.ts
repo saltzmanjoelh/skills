@@ -39,7 +39,7 @@ export type Step =
   | { kind: 'review'; head: string | null }
   | { kind: 'changes-requested' }
   // The three steps for reviewers other than the session's own login, which
-  // come once both verdicts approve and before the four outcomes below.
+  // come once both verdicts approve and before the five outcomes below.
   // `reviewers` holds the outside reviewers the step is about, and `others`
   // the other reviewers whose newest review comments or requests changes,
   // which this step and the merge steps carry only when there are any, so a
@@ -48,7 +48,11 @@ export type Step =
   | { kind: 'outside-feedback'; number: number; reviewers: string[]; others?: string[] }
   | { kind: 'request-review'; number: number; reviewers: string[]; others?: string[] }
   | { kind: 'awaiting-review'; reviewers: string[]; others?: string[] }
-  // The four outcomes of the step where both verdicts approve at the head.
+  // The five outcomes of the step where both verdicts approve at the head.
+  // The first holds every later one while the CLAUDE.md in the user's
+  // configuration folder exists but could not be read and the base branch's
+  // CLAUDE.md names no reviewer of its own, so the reviewers are unknown.
+  | { kind: 'user-claude-unread' }
   | { kind: 'runs-unread' }
   | { kind: 'waiting' }
   // The head is not a full commit sha, so no merge command can carry it.
@@ -117,6 +121,20 @@ export function reviewersOf(project: string | null, user: string | null): string
   return [...kept.values()]
 }
 
+// The `Reviewer:` fact with whether it is unknown. `user` is the text of the
+// CLAUDE.md in the user's configuration folder, null when it is missing, or
+// `unreadable` when it exists but could not be read. The reviewers are
+// unknown when the user's file is unreadable and the project has no
+// `Reviewer:` line of its own, which is the same check reviewersOf makes to
+// decide which line wins, because the fact would then have come from the
+// file that could not be read. A project's `Reviewer:` line, including
+// `Reviewer: none`, decides whatever the user's file is.
+export function reviewerFactOf(project: string | null, user: string | null | 'unreadable'): { reviewers: string[]; isUnknown: boolean } {
+  if (user !== 'unreadable') return { reviewers: reviewersOf(project, user), isUnknown: false }
+  const hasLine = project !== null && factIn(project, 'Reviewer') !== null
+  return { reviewers: reviewersOf(project, null), isUnknown: !hasLine }
+}
+
 function limitIn(claude: string, label: string, fallback: number): number {
   const value = factIn(claude, label)
   return value !== null && /^\d+$/.test(value) ? Number(value) : fallback
@@ -183,6 +201,14 @@ export function chooseStep(s: Snapshot, isAsking: boolean): Step {
   if (unrequested.length > 0) return { kind: 'request-review', number: s.number, reviewers: unrequested, ...withOthers }
   const requested = inState('requested')
   if (requested.length > 0) return { kind: 'awaiting-review', reviewers: requested, ...withOthers }
+  // Both verdicts approve, and every outside reviewer the look knows of has
+  // approved. While the user's own CLAUDE.md could not be read and the base
+  // branch's names no reviewer, a reviewer only that file names may be
+  // missing, so no later step, and so no merge, is named. The mark is read
+  // from the snapshot itself rather than through factsOf, because factsOf
+  // answers the unread facts when the base branch's file was not read, and
+  // those carry no mark.
+  if (s.facts?.reviewersUnknown === true) return { kind: 'user-claude-unread' }
   // Both verdicts approve. A snapshot without the runs at the head, as one an
   // older build stored, holds as if the runs could not be read, so it never
   // leads to a merge.
@@ -255,8 +281,10 @@ export function linkedIn(raw: unknown): Linked {
 // give ready-to-merge, from which waitingOn derives the merge interval. The
 // step for runs that could not be read is not one of them: it exists only
 // because the runs read failed, so a ready-to-merge there would rest on a
-// failed read, and it would also move the poll to the merge interval. Merged
-// and An open question change nothing either.
+// failed read, and it would also move the poll to the merge interval. The
+// step for a user CLAUDE.md that could not be read gives none for the same
+// reason, so the label the pull request carries stays. Merged and An open
+// question change nothing either.
 export function labelFor(step: Step): StateLabel | null {
   switch (step.kind) {
     case 'review': return 'in-review'
@@ -274,6 +302,7 @@ export function labelFor(step: Step): StateLabel | null {
     case 'closed': return 'stuck'
     case 'merged':
     case 'question':
+    case 'user-claude-unread':
     case 'runs-unread': return null
   }
 }
@@ -427,6 +456,7 @@ function nameOf(step: Step): string {
     case 'outside-feedback': return 'Both verdicts approve at this head, and an outside review has feedback to address'
     case 'request-review': return 'Both verdicts approve at this head, request the outside review'
     case 'awaiting-review': return 'Both verdicts approve at this head, waiting on the outside review'
+    case 'user-claude-unread': return 'Both verdicts approve at this head, but the user\'s own CLAUDE.md could not be read'
     case 'runs-unread': return 'Both verdicts approve at this head, but the workflow runs could not be read'
     case 'waiting': return 'Both verdicts approve at this head, waiting on checks'
     case 'head-unchecked': return 'Both verdicts approve at this head, but the head is not a full commit sha'
@@ -458,6 +488,10 @@ function textOf(step: Step): string[] {
       `Both verdicts approve at this head, and the review of ${listed(step.reviewers)} is requested and not yet given (see ${see('Outside reviewers')}). The merge waits until every outside reviewer approves.`,
       ...othersLines(step.others),
       `Say "waiting on the review of ${step.reviewers.join(', ')}" and end the turn. The mod starts a turn when a review arrives or a request changes.`,
+    ]
+    case 'user-claude-unread': return [
+      'Both verdicts approve at this head, but the CLAUDE.md in the user\'s Claude configuration folder exists and could not be read at the mod\'s last look, so the reviewers its `Reviewer:` line may name are unknown.',
+      'Merge nothing, and end the turn. The mod looks again at its next poll, and starts a turn once the file can be read.',
     ]
     case 'runs-unread': return [
       'Both verdicts approve at this head, but the workflow runs at the head could not be read at the mod\'s last look, so the runs it shows are the ones it stored before.',
