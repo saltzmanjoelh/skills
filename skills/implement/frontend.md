@@ -89,7 +89,11 @@ commit frontend. When it prints a path, the commit touches a frontend path.
 That holds only when the command succeeds, run as a command of its own. When
 it exits nonzero it gives no answer, whatever it printed. It also gives no
 answer when the read of the base branch's `CLAUDE.md` that gives it the
-pathspecs of step 7 gives no answer. When the check gives no answer, run
+pathspecs of step 7 gives no answer. Read that file as step 7 does:
+`git show origin/<base>:CLAUDE.md`, and when that fails,
+`git ls-tree --full-tree --name-only origin/<base> -- CLAUDE.md`, which
+succeeds and prints nothing only when the file is missing, so a missing file
+is an answer and the built-in list applies. When the check gives no answer, run
 `git fetch origin <base>`, and run the read and the check once more. When it
 still gives no answer, treat the commit as touching a frontend path, retake
 the screenshots as below, tell the person in one sentence that the frontend
