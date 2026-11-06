@@ -56,6 +56,9 @@ so the base branch's facts (`Checks:`, `Merge command:`, the limits and
    is used to read the base branch's `CLAUDE.md`. A relative folder is still
    refused, and a session whose watch was given a `repo` or a `checkout` reads
    from exactly the same folder as before.
+6. The watch tool's own description of `checkout`, which a session reads
+   before it calls the tool, and the tool's row in the builder README say that
+   a Windows drive path is written `C:\…` or `C:/…`.
 
 ## Edge cases
 
@@ -93,14 +96,15 @@ so the base branch's facts (`Checks:`, `Merge command:`, the limits and
 
 ## Verification
 
-- Unit tests of the shared check: `C:\x`, `C:/x`, `c:/x` and `/x` are
-  absolute; `x`, `.\x`, `C:x` and an empty string are not.
+- Unit tests of the shared check: `C:\x`, `C:/x`, `c:/x`, `c:\x` and `/x`
+  are absolute; `x`, `.\x`, `C:x`, `\\server\share` and an empty string are
+  not.
 - A watch test with `checkout: 'C:\\work\\api'` and another with
   `checkout: 'C:/work/api'` each watch the pull request, and the recorded
   commands show `gh repo view` and `git worktree list` run in that folder,
   character for character.
 - A watch test with a relative checkout is refused with "The checkout must
-  be an absolute path", and nothing new is watched.
+  be an absolute path", and the pull request watched before stays watched.
 - A watch test with `checkout: '/c/work/api'` that gh cannot read gets the
   refusal with the added sentence; the same path that gh can read is watched
   with no sentence; `/cd/work` and `/work/api` that gh cannot read get the
@@ -108,7 +112,10 @@ so the base branch's facts (`Checks:`, `Merge command:`, the limits and
 - A test with the watch taking its repository from a session folder
   `C:\work\repo` reads the base branch's `CLAUDE.md` in that folder, and
   shows its facts as read; a relative session folder still counts as unread.
-- Each new test is seen to fail before the change and pass after it.
+- Each test of new behaviour is seen to fail before the change and pass
+  after it. The tests that guard behaviour which must not change, such as the
+  relative-checkout refusal and the refusals without the added sentence, pass
+  on both sides, and the pull request names them.
 - The four gates pass. Nobody runs this on Windows before the merge.
 
 ## Decided by the counsel
