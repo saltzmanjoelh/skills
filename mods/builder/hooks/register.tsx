@@ -3386,8 +3386,8 @@ let isStateLabelQueued = false
 // Every write or delete of a state label record in this copy of the module
 // runs one at a time, as a read of the stored record, a change and a write or
 // delete, so the set_stuck tool's judgement, a job's final save and the prune
-// at a session's start never interleave. The
-// tool's caller sees a refused read or write, so it passes errors on.
+// at a session's start never interleave. The tool's caller sees a refused
+// read or write, so it passes errors on.
 const inRecordQueue = oneAtATime({ passesErrors: true })
 
 function requestStateLabel($: $) {
@@ -3430,13 +3430,13 @@ type StateLabelOutcome = 'stuck-on' | 'failed' | 'ended' | 'merged' | 'unjudged'
 // of the pull request, shows `stuck` and no other state label, so a judgement
 // that holds for hours costs no extra read at each look. The set_stuck tool's
 // own job never passes it and always reads the labels, because its snapshot
-// can be minutes old. Otherwise
-// the job writes the step's label, which ends any judgement, or only records it
-// beside a `stuck` when there is no record, and saves a new record with no
-// judgement once every edit the job needed succeeded: on a write, the edit and
-// the removal that the read after it may call for; when the label is only
-// recorded, the removal of any state label beside `stuck`. So a failed edit,
-// read or removal keeps the judgement and is tried again at the next look.
+// can be minutes old. Otherwise the job writes the step's label, which ends any
+// judgement, or only records it beside a `stuck` when there is no record, and
+// saves a new record with no judgement once every edit the job needed
+// succeeded: on a write, the edit and the removal that the read after it may
+// call for; when the label is only recorded, the removal of any state label
+// beside `stuck`. So a failed edit, read or removal keeps the judgement and is
+// tried again at the next look.
 async function settleStateLabel($: $, { expected, trustsSnapshotLabels }: { expected?: BuilderRun; trustsSnapshotLabels: boolean }): Promise<StateLabelOutcome> {
   const r = await read($, run)
   const s = snapshotIn(await read($, pr))
