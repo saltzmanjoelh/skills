@@ -42,7 +42,8 @@ could not be listed. The person reads the label on the pull request.
    gives from the stored snapshot, as the state label job does. When the
    step gives no label, as while the runs could not be read, it uses the
    label the mod last recorded, and refuses when there is none. When the
-   step already gives `stuck` by itself (Over a limit and Closed), it answers
+   step already gives `stuck` by itself (Over a limit), or the step gives no
+   label and the label last recorded is `stuck`, it answers
    that `stuck` already follows from the step, records no judgement, and
    edits nothing.
 4. **Record first.** The tool saves a judgement in the state label record:
@@ -69,7 +70,9 @@ could not be listed. The person reads the label on the pull request.
    judgement and writes no new label. While a judgement is recorded, it
    keeps `stuck` as point 6 says, as though the step's label were unchanged,
    so a judgement made while the runs could not be read still puts `stuck`
-   on. With no judgement it changes nothing, as today.
+   on. With no judgement it changes nothing, as today. The Merged step is
+   the exception: it changes nothing even while a judgement is recorded,
+   because a merged pull request shown as stuck would mislead the person.
 9. **A `stuck` with no judgement.** When the record holds no judgement, the
    job keeps today's plain rules: with no record, it records the label the
    step gives without writing it and leaves a `stuck` that is on, removing any
