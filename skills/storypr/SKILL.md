@@ -193,7 +193,12 @@ to that skill.
    that shows none, or leave it out and say in the body which screen is
    missing and why. A screenshot that fails the check is never committed.
 2. Commit the screenshots in one commit, staging each file by its path, never
-   with a glob.
+   with a glob. Its message carries, after a blank line, the line
+   `Screenshots: <path>, <path>`, which names every screenshot that passed
+   point 1's check, including one whose file came out identical to the one
+   already on the branch. When the captures passed but every file is identical
+   to the stored one, nothing is staged, so make the commit with
+   `git commit --allow-empty`, so that it still carries the line.
 3. Write the body, laid out as step 4 says, to a file in the session's
    scratchpad folder, never to a shared folder such as `/tmp`. In every image
    link, put `<screenshot sha>` where step 4 puts the branch, so that the
@@ -202,7 +207,8 @@ to that skill.
    screenshot paths.
 
 Never push, never create or edit a pull request, and never ask the person
-anything. When no real capture path works, commit nothing, write no body, and
+anything. When no real capture path works, or every screenshot failed point
+1's check, or none could be kept, commit nothing, write no body, and
 return the reason instead of stopping to tell the person; a mockup is still
 never the answer. Write the reason in a sentence or two of plain words that
 names no local path, host name, port, device identifier or token and quotes no
