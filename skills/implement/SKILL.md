@@ -277,9 +277,10 @@ After a review round's first half finds nothing to fix, and after its
 second half posts the review without pushing, call `mcp__builder__watch`
 with the pull request's number and follow the step it names, in the same
 turn: the mod does not start a turn for a review the session posted
-itself, and the watch is what reaches **Both verdicts approve at this
-head** and the merge. When nothing applies but waiting, say what the
-session waits on and end the turn. Never sleep or poll inside a tool call.
+itself, and the watch is what reaches **Run the /code-review pass at this
+head**, then **Both verdicts approve at this head** and the merge.
+When nothing applies but waiting, say what the session waits on and end
+the turn. Never sleep or poll inside a tool call.
 
 ### Commits the pull request lacks
 
@@ -984,7 +985,11 @@ inert.
    too, it sets stuck and asks the person whether to merge without the
    pass, and records nothing at the head, so the step keeps asking for the
    pass until the person answers. When the person says to merge without
-   it, the session posts a review with `code_review: { waived: true }`.
+   it, the session posts a review with `code_review: { waived: true }`,
+   carrying both verdicts as they stand. Its body says that the person
+   waived the pass and why the pass could not run, and repeats the
+   **Follow-ups** section of the review before it, because the waiver is
+   then the last review before the merge.
 4. The session drops findings that repeat an earlier review's, gives every
    finding left to one `builder:claim-checker`, and treats the result as
    the first half's point 3 and point 4 do: it fixes every finding that

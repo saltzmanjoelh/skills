@@ -112,8 +112,10 @@ to, and the mod's README lists the step.
 - **Someone else writes a `CODE-REVIEW` line,** or the session's own line
   names a head other than the review's commit. The mod ignores it.
 - **The check after approval carries the verdicts over to a cheap-fix head.**
-  Both verdicts then approve at that head, so the pass runs there and reads
-  only the cheap-fix commit.
+  Both verdicts then approve at that head, so the pass runs there. No pass
+  ran at the approved head before it, because the cheap fix is pushed in
+  the same turn as the round's review, so the pass reads from the last head
+  a pass read, or the whole pull request when there is none.
 - **An inert change only.** The pass still runs; the range is small.
 - **A snapshot stored by an older build has neither fact.** It counts as no
   pass at the head, so the pass runs once more; the marker on the pull request
