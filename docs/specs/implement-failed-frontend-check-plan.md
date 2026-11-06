@@ -120,13 +120,13 @@ Insert before the paragraph that begins "When the change is frontend, read
 the section":
 
 > When either read gives no answer, run `git fetch origin <base>` again,
-> whether or not the first fetch succeeded, and then repeat the read that
-> failed and every read after it, once. This is the only retry in one pass
-> through step 7. When a read still gives no answer, push nothing and open
-> no pull request. Ask the person with `AskUserQuestion`, in the form
-> "Questions" gives, without putting the question to the counsel. The
-> question names the command that failed and gives what git printed on its
-> standard error. Its options, in this order, are:
+> whether or not the first fetch succeeded, and then run both reads again,
+> once, so the read that failed is repeated with a fresh `CLAUDE.md`. This is
+> the only retry in one pass through step 7. When a read still gives no
+> answer, push nothing and open no pull request. Ask the person with
+> `AskUserQuestion`, in the form "Questions" gives, without putting the
+> question to the counsel. The question names the command that failed and
+> gives what git printed on its standard error. Its options, in this order, are:
 >
 > - "Wait, then check again", the recommended one: when the person says the
 >   cause is fixed, run step 7 again from its first fetch.
