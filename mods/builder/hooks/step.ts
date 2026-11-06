@@ -38,6 +38,12 @@ export type Step =
   // text then names no head.
   | { kind: 'review'; head: string | null }
   | { kind: 'changes-requested' }
+  // Both verdicts approve at the head, and the head has no record of a
+  // /code-review pass or of a waiver. `head` is null when the snapshot's head
+  // is not a full commit sha, and `since`, the head the last pass read, is
+  // null when there is none or it is not a full commit sha; the text then
+  // says the pass reads the whole pull request.
+  | { kind: 'code-review'; head: string | null; since: string | null }
   // The three steps for reviewers other than the session's own login, which
   // come once both verdicts approve and before the five outcomes below.
   // `reviewers` holds the outside reviewers the step is about, and `others`
@@ -204,6 +210,13 @@ export function chooseStep(s: Snapshot, isAsking: boolean): Step {
   const head = isFullSha(s.head) ? s.head : null
   if (s.verdicts === null) return { kind: 'review', head }
   if (isChangesRequested(s.verdicts)) return { kind: 'changes-requested' }
+  // Both verdicts approve. The /code-review pass runs at the head before any
+  // outside reviewer is asked and before the merge. A snapshot an older build
+  // stored has no record of a pass, so the pass runs once more there.
+  if (s.codeReviewed !== true) {
+    const since = typeof s.codeReviewSince === 'string' && isFullSha(s.codeReviewSince) ? s.codeReviewSince : null
+    return { kind: 'code-review', head, since }
+  }
   // Both verdicts approve. Reviewers other than the session hold the merge
   // until each approves: their feedback first, then a reviewer who has
   // neither a request nor a review that stands, then a review that is asked
@@ -307,7 +320,8 @@ export function linkedIn(raw: unknown): Linked {
 // question change nothing either.
 export function labelFor(step: Step): StateLabel | null {
   switch (step.kind) {
-    case 'review': return 'in-review'
+    case 'review':
+    case 'code-review': return 'in-review'
     case 'failed':
     case 'conflicting':
     case 'changes-requested':
@@ -418,6 +432,7 @@ export const SKILL_SECTIONS = [
   'Updating the linked checkout',
   'The line to the starting session',
   'The check after approval',
+  'The /code-review pass',
   'When a turn ends',
 ] as const
 
@@ -470,6 +485,7 @@ function nameOf(step: Step): string {
     case 'failed': return 'A check or a workflow run failed at the head'
     case 'review': return 'Review this head'
     case 'changes-requested': return 'The newest verdict at this head requests changes'
+    case 'code-review': return 'Run the /code-review pass at this head'
     case 'outside-feedback': return 'Both verdicts approve at this head, and an outside review has feedback to address'
     case 'request-review': return 'Both verdicts approve at this head, request the outside review'
     case 'awaiting-review': return 'Both verdicts approve at this head, waiting on the outside review'
@@ -495,6 +511,7 @@ function textOf(step: Step): string[] {
     case 'failed': return failedText(step.runs)
     case 'review': return reviewText(step.head)
     case 'changes-requested': return CHANGES_REQUESTED
+    case 'code-review': return codeReviewText(step.head, step.since)
     case 'outside-feedback': return outsideFeedbackText(step)
     case 'request-review': return [
       `Both verdicts approve at this head, and ${listed(step.reviewers)} ${step.reviewers.length === 1 ? 'has' : 'have'} neither a review request nor a review that stands, because the \`Reviewer:\` fact names them and they were never asked, or their newest review was dismissed (see ${see('Outside reviewers')}). The merge waits until every outside reviewer approves.`,
@@ -598,6 +615,21 @@ function reviewText(head: string | null): string[] {
     '- The first half launches only the focused reviewers that the package tool\'s answer names, and the ones it does not name count as run at this head.',
     `- A head that the answer says is up for the check after approval runs the check instead (see ${see('The check after approval')}).`,
     '- After a restart or a compaction, count the first half as run at this head only when a verdict review at this head names the focused reviewers that ran.',
+  ]
+}
+
+// The text of the /code-review pass. Only the head and the start, each a full
+// commit sha, are put into it, and the range is built from them.
+function codeReviewText(head: string | null, since: string | null): string[] {
+  const at = head ?? '<head>'
+  const range = since === null
+    ? `The pass reads the whole pull request, so its range is \`<merge base>..${at}\`, where the merge base comes from \`git merge-base origin/<base> ${at}\` and <base> is the pull request's \`baseRefName\`.`
+    : `The last pass read ${since}, so this pass reads only the change since then, the range \`${since}..${at}\`.`
+  const record = since === null ? 'base' : since
+  return [
+    `Both verdicts approve at this head${head === null ? '' : `, ${head}`}, and no /code-review pass has run here. Run it before any outside reviewer is asked and before the merge, as ${see('The /code-review pass')} says. ${range}${head === null ? ' The head is not a full commit sha in the mod\'s snapshot, so read it with `gh pr view --json headRefOid` first.' : ''}`,
+    `Invoke the Skill tool with \`code-review\` and the args \`medium <range>\`, with no other flag, and check that the worktree and its \`HEAD\` did not change. Check its findings as that paragraph says, then commit the fixes, post the record review at the head with \`mcp__builder__post_review\`, carrying both verdicts as they stand and \`code_review: { since: "${record}" }\`, and then push and ${AFTER_PUSH}. With nothing to fix, post the record review and call \`mcp__builder__watch\`.`,
+    `If the pass fails twice, because the skill is missing, errors, is stopped or gives something other than a list of findings, set \`stuck\` with \`mcp__builder__set_stuck\`, ask the person whether to merge without the pass, and record nothing at the head until they answer. When they say to merge without it, post the record review with \`code_review: { waived: true }\`.`,
   ]
 }
 

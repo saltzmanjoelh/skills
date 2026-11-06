@@ -117,6 +117,15 @@ export type Snapshot = {
   // sorted by login. Their review wakes the session, and the merge does not
   // wait for them. A snapshot with none has no field.
   others?: OtherReviewer[]
+  // Set when one of this login's reviews at the head records the /code-review
+  // pass, or the person's waiver of it. A snapshot with neither has no field,
+  // and one an older build stored counts as no pass at the head.
+  codeReviewed?: true
+  // The full sha of the newest head a /code-review pass read, never a waiver,
+  // that is still one of the pull request's commits: where the next pass
+  // starts. A snapshot with no such head has no field, and the next pass then
+  // reads the whole pull request.
+  codeReviewSince?: string
   fingerprint: string
 }
 

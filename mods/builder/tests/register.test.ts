@@ -1101,6 +1101,18 @@ const verdictReview = (sha: string, spec: string, adversarial: string) => ({
   commit: { oid: sha },
 })
 
+// A record review of the /code-review pass at `sha`, as the mod writes it.
+const recordReview = (sha: string, marker: string) => ({
+  author: { login: 'owner' },
+  state: 'COMMENTED',
+  body: `VERDICTS ${sha.slice(0, 8)} spec=APPROVE adversarial=APPROVE\nCODE-REVIEW ${sha.slice(0, 8)} ${marker}\n\nThe pass ran.`,
+  commit: { oid: sha },
+})
+
+// Both verdicts approve at `sha`, and the /code-review pass ran there, so the
+// steps after the pass are chosen.
+const codeReviewedAt = (sha: string) => [verdictReview(sha, 'APPROVE', 'APPROVE'), recordReview(sha, 'since=base')]
+
 test('the package tool refuses when the checkout is not at the pull request\'s head', async ($, on) => {
   mock.clock(on)
   mock.store(on)
@@ -1710,6 +1722,58 @@ test('the review tool refuses a moved head, a second verdict at the head, and a 
   expect(String(moved.result)).toContain('not the reviewed')
   expect(String(twice.result)).toContain('already posted')
   expect(String(secret.result)).toContain('a GitHub token')
+  expect(world.calls.some(call => call.startsWith('gh api repos/o/r/pulls/7/reviews'))).toBe(false)
+})
+
+test('the review tool writes the /code-review marker on the second line, for a pass from a head, a pass over the whole pull request, and a waiver', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr = openPullRequest({ commits: [{ oid: A }, { oid: C }], reviews: [verdictReview(C, 'APPROVE', 'APPROVE')] })
+  const files = fakeFiles(on)
+  await watch($)
+
+  const cases: [unknown, string][] = [
+    [{ since: A }, 'CODE-REVIEW cccccccc since=aaaaaaaa'],
+    [{ since: 'base' }, 'CODE-REVIEW cccccccc since=base'],
+    [{ waived: true }, 'CODE-REVIEW cccccccc waived'],
+  ]
+  for (const [record, line] of cases) {
+    const ran = await loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'The pass ran.', code_review: record })
+    expect(String(ran.result)).toContain('Posted the review')
+    expect(files.get('/repo/.git/builder/cccccccc/review.md')).toBe(`VERDICTS cccccccc spec=APPROVE adversarial=APPROVE\n${line}\n\nThe pass ran.\n`)
+  }
+})
+
+test('the review tool refuses a record of the /code-review pass under a verdict that requests changes, with a malformed start, with both or neither key, before the head has a verdict review, and a second time at the head', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr = openPullRequest({ reviews: [verdictReview(C, 'APPROVE', 'APPROVE')] })
+  fakeFiles(on)
+  await watch($)
+  const post = (over: Record<string, unknown>) =>
+    loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'x', ...over }).then(ran => String(ran.result))
+
+  expect(await post({ spec: 'REQUEST_CHANGES', code_review: { since: 'base' } })).toContain('Refused')
+  expect(await post({ adversarial: 'REQUEST_CHANGES', code_review: { waived: true } })).toContain('Refused')
+  for (const since of ['abc', 'cccccccc', C.toUpperCase(), '', 7]) {
+    expect(await post({ code_review: { since } })).toContain('Refused')
+  }
+  expect(await post({ code_review: { since: 'base', waived: true } })).toContain('Refused')
+  expect(await post({ code_review: {} })).toContain('Refused')
+  expect(await post({ code_review: { waived: false } })).toContain('Refused')
+  expect(await post({ code_review: 'base' })).toContain('Refused')
+
+  world.pr = openPullRequest()
+  expect(await post({ code_review: { since: 'base' } })).toContain('no verdict review')
+
+  world.pr = openPullRequest({ reviews: [verdictReview(C, 'APPROVE', 'APPROVE'), recordReview(C, 'since=base')] })
+  expect(await post({ code_review: { waived: true } })).toContain('already')
+  // A second review without the record is still refused, as before.
+  expect(await post({})).toContain('already posted')
   expect(world.calls.some(call => call.startsWith('gh api repos/o/r/pulls/7/reviews'))).toBe(false)
 })
 
@@ -10600,7 +10664,7 @@ test('the jobs reads of one look run at the same time rather than one after anot
 
 // Both verdicts approve at the head, and no check exists, so the base's
 // `Checks:` line decides between merging and asking.
-const approvedWithoutChecks = () => openPullRequest({ statusCheckRollup: [], reviews: [verdictReview(C, 'APPROVE', 'APPROVE')] })
+const approvedWithoutChecks = () => openPullRequest({ statusCheckRollup: [], reviews: [...codeReviewedAt(C)] })
 
 test('the base facts come from the session folder\'s base branch when the watch took its repository from that folder', async ($, on) => {
   mock.clock(on)
@@ -10968,7 +11032,7 @@ test('while both verdicts approve, a failed runs read holds the merge in a turn,
   engine(on)
   const world = fakeGitHub(on)
   const prompts = recordPrompts(on)
-  world.pr = openPullRequest({ reviews: [verdictReview(C, 'APPROVE', 'APPROVE')] })
+  world.pr = openPullRequest({ reviews: [...codeReviewedAt(C)] })
   world.baseClaude = 'Checks: expected\n'
   await watch($)
   await clock.settle()
@@ -14935,7 +14999,7 @@ test('a delivery held for a batch of agents launched together never asks for the
 
 // The commits the worktree holds that the pull request lacks, listed by the
 // mod at a look that chose a merge step or the Merged step.
-const approvedAndPassed = () => openPullRequest({ reviews: [verdictReview(C, 'APPROVE', 'APPROVE')] })
+const approvedAndPassed = () => openPullRequest({ reviews: [...codeReviewedAt(C)] })
 const unpushedListings = (world: { calls: string[] }) => world.calls.filter(call => call.startsWith('git rev-list ') && !call.includes('--merges'))
 
 test('the merge step states that the worktree holds no commits the pull request lacks, listed in the head branch\'s worktree', async ($, on) => {
@@ -15452,7 +15516,7 @@ test('a ready-to-merge from before, while an outside review is requested, is rel
   engine(on)
   const world = fakeGitHub(on)
   world.pr = openPullRequest({
-    statusCheckRollup: [], reviews: [verdictReview(C, 'APPROVE', 'APPROVE')],
+    statusCheckRollup: [], reviews: [...codeReviewedAt(C)],
     reviewRequests: [{ __typename: 'User', login: 'ann' }], labels: [{ name: 'ready-to-merge' }],
   })
   world.baseClaude = 'Checks: none\n'
@@ -15896,7 +15960,7 @@ test('with no label from the step, a second call keeps the judgement\'s own labe
   const stored = memoryStore(on, [[STATE_LABEL_KEY, { label: 'in-review', at: 0, judgement: { label: 'waiting-on-author', at: 0 } }]])
   engine(on)
   const world = fakeGitHub(on)
-  world.pr = openPullRequest({ reviews: [verdictReview(C, 'APPROVE', 'APPROVE')], labels: [{ name: 'stuck' }] })
+  world.pr = openPullRequest({ reviews: [...codeReviewedAt(C)], labels: [{ name: 'stuck' }] })
   world.runsReadsToFail = 100
   await watch($)
   await clock.settle()
@@ -15988,7 +16052,7 @@ test('with no label from the step and stuck recorded, the tool records no judgem
   const stored = memoryStore(on, [[STATE_LABEL_KEY, { label: 'stuck', at: 0 }]])
   engine(on)
   const world = fakeGitHub(on)
-  world.pr = openPullRequest({ reviews: [verdictReview(C, 'APPROVE', 'APPROVE')], labels: [{ name: 'stuck' }] })
+  world.pr = openPullRequest({ reviews: [...codeReviewedAt(C)], labels: [{ name: 'stuck' }] })
   world.runsReadsToFail = 100
   await watch($)
   await clock.settle()
@@ -16232,7 +16296,7 @@ test('a judgement made under the label a job is replacing, while the job waits b
   // label, and the tool judges under the label of the judgement still
   // stored, in-review.
   world.runsReadsToFail = 100
-  world.pr = openPullRequest({ reviews: [verdictReview(C, 'APPROVE', 'APPROVE')], labels: world.pr.labels })
+  world.pr = openPullRequest({ reviews: [...codeReviewedAt(C)], labels: world.pr.labels })
   await clock.advance(30 * 60_000)
   const answer = setStuck($)
   await clock.settle()
@@ -16278,7 +16342,7 @@ test('a judgement made under the record label a job is replacing, when the recor
   // The runs cannot be read, so a poll's look stores a step that gives no
   // label, and the tool judges under the label still recorded, in-review.
   world.runsReadsToFail = 100
-  world.pr = openPullRequest({ reviews: [verdictReview(C, 'APPROVE', 'APPROVE')], labels: world.pr.labels })
+  world.pr = openPullRequest({ reviews: [...codeReviewedAt(C)], labels: world.pr.labels })
   await clock.advance(30 * 60_000)
   const answer = setStuck($)
   await clock.settle()
@@ -16683,6 +16747,27 @@ test('a review round runs from the package call to the post_review call at its h
   await loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'Findings.' })
   await clock.settle()
   expect(timingOf(stored)?.rounds).toEqual([{ head: C, startedAt: T0 + MINUTE, endedAt: T0 + 12 * MINUTE, ended: 'reviewed' }])
+})
+
+test('a record review of the /code-review pass adds no round to the timing, and closes none', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  const stored = memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  fakePanes(on)
+  fakeFiles(on)
+  world.pr = openPullRequest({ reviews: [verdictReview(C, 'APPROVE', 'APPROVE')] })
+  await watch($)
+  await clock.advance(MINUTE)
+  await packageAnswer($)
+  await clock.settle()
+  const before = timingOf(stored)?.rounds
+
+  await clock.advance(10 * MINUTE)
+  const ran = await loose($)({ tool: 'mcp__builder__post_review', head: C, spec: 'APPROVE', adversarial: 'APPROVE', body: 'The pass ran.', code_review: { since: 'base' } })
+  await clock.settle()
+  expect(String(ran.result)).toContain('Posted the review')
+  expect(timingOf(stored)?.rounds).toEqual(before)
 })
 
 test('a damaged record stored under the session\'s key reads as none, and the timing starts again from the session\'s start', async ($, on) => {

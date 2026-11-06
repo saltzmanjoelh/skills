@@ -1,7 +1,7 @@
 // The review package the reviewers read, and the review the session posts.
 // Pure functions of what the hooks gathered, so the tests can check the text.
 
-import { verdictsOf, type Verdict } from './github'
+import { codeReviewOf, verdictsOf, type Verdict } from './github'
 import { areaKey, printable, sameText } from './text'
 
 export type PackageInput = {
@@ -515,6 +515,21 @@ export function verdictsLine(head: string, spec: Verdict, adversarial: Verdict):
   return `VERDICTS ${head.slice(0, 8)} spec=${spec} adversarial=${adversarial}`
 }
 
+// What a record review of the /code-review pass says about it: the head the
+// pass started from, `base` for a pass that read the whole pull request, or
+// that the person said to merge without the pass.
+export type CodeReviewRecord = { since: string } | { waived: true }
+
+// The second line of a record review, which the mod writes under the verdicts
+// line and the snapshot reads back: the head, then where the pass started or
+// that it was waived. A start that is a sha is cut to eight characters, as
+// the head is.
+export function codeReviewLine(head: string, record: CodeReviewRecord): string {
+  if ('waived' in record) return `CODE-REVIEW ${head.slice(0, 8)} waived`
+  const since = record.since === 'base' ? 'base' : record.since.slice(0, 8)
+  return `CODE-REVIEW ${head.slice(0, 8)} since=${since}`
+}
+
 // Shapes of credentials that must never reach a pull request. A false alarm
 // costs one rewrite of the body; a miss publishes a secret. The update of the
 // linked checkout removes the same shapes from what it quotes.
@@ -756,13 +771,18 @@ export const isFullSha = (sha: string) => /^[0-9a-f]{40}$/.test(sha)
 export const CARRIED_OVER = /^Both verdicts are carried over from /m
 
 // The verdict head, the newest head both verdict reviewers read: the commit of
-// the newest earlier verdict review that is not at `head` and was not carried
-// over, or null when there is none. A review at the head itself is skipped,
-// because the change from a head to itself is empty. A carried-over review is
-// skipped wherever it sits, because the spec reviewer never read the code of
-// its head, and the sha it names is never read.
+// the newest earlier verdict review that is not at `head`, was not carried
+// over and is not a record review of the /code-review pass, or null when there
+// is none. A review at the head itself is skipped, because the change from a
+// head to itself is empty. A carried-over review is skipped wherever it sits,
+// because the spec reviewer never read the code of its head, and the sha it
+// names is never read. A record review is skipped for the same reason: at a
+// head the verdicts were carried over to, it would otherwise stand in for a
+// round that never read that head, and at a normally reviewed head the round's
+// own review has the same sha anyway.
 export function verdictHeadOf(earlier: readonly EarlierRound[], head: string): string | null {
-  return earlier.filter(round => round.sha !== head && !CARRIED_OVER.test(round.body)).at(-1)?.sha ?? null
+  const isRecord = (round: EarlierRound) => codeReviewOf({ body: round.body, commit: { oid: round.sha } }) !== null
+  return earlier.filter(round => round.sha !== head && !CARRIED_OVER.test(round.body) && !isRecord(round)).at(-1)?.sha ?? null
 }
 
 // The reviewed head, where the focused reviewers last ran: the newest commit

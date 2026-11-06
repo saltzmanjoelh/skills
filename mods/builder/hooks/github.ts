@@ -121,6 +121,28 @@ export function verdictsOf(review: GhReview): Verdicts | null {
   return { sha, spec: match[2] as Verdict, adversarial: match[3] as Verdict }
 }
 
+// The second line of a record review of the /code-review pass, which the mod
+// writes under the verdicts line: `CODE-REVIEW <sha8> since=<sha8>`,
+// `CODE-REVIEW <sha8> since=base` or `CODE-REVIEW <sha8> waived`.
+const CODE_REVIEW_LINE = /^CODE-REVIEW ([0-9a-f]{8}) (?:since=(?:[0-9a-f]{8}|base)|(waived))$/
+
+// The record of a /code-review pass that a review holds: the review's full
+// commit sha, and whether the person waived the pass there. The marker counts
+// only on the second line, under a verdicts line that approves with both
+// verdicts, and only when the review's commit is the head the marker names.
+// The start of a later pass is taken from the commit sha rather than from the
+// `since` text, so git is always given a full sha.
+export type CodeReview = { sha: string; isWaiver: boolean }
+
+export function codeReviewOf(review: GhReview): CodeReview | null {
+  const verdicts = verdictsOf(review)
+  if (verdicts === null || isChangesRequested(verdicts)) return null
+  const second = (review.body ?? '').split(/\r?\n/, 2)[1] ?? ''
+  const match = CODE_REVIEW_LINE.exec(second)
+  if (!match || !verdicts.sha.startsWith(match[1] ?? '-')) return null
+  return { sha: verdicts.sha, isWaiver: match[2] !== undefined }
+}
+
 export function isChangesRequested(verdicts: Verdicts) {
   return verdicts.spec === 'REQUEST_CHANGES' || verdicts.adversarial === 'REQUEST_CHANGES'
 }
@@ -379,6 +401,18 @@ export function snapshotOf(repo: string, pr: GhPullRequest, login: string, runs:
     runs,
     ...extras,
   }
+  // The record of the /code-review pass, read from the same reviews of this
+  // login. Both fields are left out when they do not apply, so a snapshot
+  // without them fingerprints as it did before the pass existed. The start
+  // of the next pass is the newest pass, never a waiver, at a head that is
+  // still one of the pull request's commits.
+  const passes = (pr.reviews ?? [])
+    .filter(review => review.author?.login === login)
+    .map(codeReviewOf)
+    .filter((pass): pass is CodeReview => pass !== null)
+  if (passes.some(pass => pass.sha === head)) snapshot.codeReviewed = true
+  const since = passes.filter(pass => !pass.isWaiver && commits.includes(pass.sha)).at(-1)?.sha
+  if (since !== undefined) snapshot.codeReviewSince = since
   const named = extras.facts?.reviewers ?? []
   const newest = newestReviewsOf(pr, login)
   const outside = outsideOf(pr, login, named, newest)
@@ -604,6 +638,10 @@ export function fingerprintOf(s: Omit<Snapshot, 'fingerprint'>): string {
   // branch's names no reviewer: the step chooser holds the merge on it once
   // both verdicts approve, so the first look that reads the file is news.
   if (s.facts?.reviewersUnknown === true && s.verdicts !== null && !isChangesRequested(s.verdicts)) parts.push('reviewers-unknown')
+  // A record of the /code-review pass at the head, or of a waiver, moves the
+  // step on, so it is news. The start of the next pass changes nothing the
+  // session decides on at this head, so it is not part of the fingerprint.
+  if (s.codeReviewed === true) parts.push('code-reviewed')
   const failed = failedRunsOf(headRunsIn(s) ?? [])
   if (failed.length > 0) parts.push(`failed-runs:${failed.map(run => `${run.id}.${run.attempt}`).join(',')}`)
   // The outside reviewers, added only when there are any, so a solo project's
@@ -735,6 +773,9 @@ export function changesBetween(before: Snapshot | null, after: Snapshot): string
     changes.push(after.verdicts
       ? `A verdict review is posted at the head: spec ${after.verdicts.spec}, adversarial ${after.verdicts.adversarial}.`
       : 'The head has no verdict review yet.')
+  }
+  if (before.head === after.head && before.codeReviewed !== true && after.codeReviewed === true) {
+    changes.push('A record of the /code-review pass, or of the person\'s waiver of it, is posted at the head.')
   }
   // Something the fingerprint covers moved without changing a field named
   // above; never hand over a change with nothing in it.
