@@ -10788,6 +10788,7 @@ test('a base CLAUDE.md without a Checks: line asks whether the base has workflow
 
 test('both merge texts bring a frontend pull request\'s screenshot section up to date before reading the pull request again', async ($, on) => {
   mock.clock(on)
+  mock.env(on, {})
   mock.store(on)
   engine(on)
   const world = fakeGitHub(on)
