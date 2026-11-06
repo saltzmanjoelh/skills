@@ -44,9 +44,12 @@ could not be listed. The person reads the label on the pull request.
    label of the judgement already recorded, or else the label the mod last
    recorded, and refuses when there is neither. When the
    step already gives `stuck` by itself (Over a limit), or the step gives no
-   label and the label last recorded is `stuck`, it answers
-   that `stuck` already follows from the step, records no judgement, and
-   edits nothing.
+   label, no judgement is recorded and the label last recorded is `stuck`,
+   it answers that `stuck` already follows from the step, records no
+   judgement, and edits nothing. When the step gives no label and a
+   judgement is recorded, the judgement's label wins even when the label
+   last recorded is `stuck`, so the tool records the judgement again under
+   that label and keeps `stuck` on.
 4. **Record first.** The tool saves a judgement in the state label record:
    the label it is judged under and the time. With no record yet, it saves a
    record whose label is that label, with the judgement. When the store
