@@ -123,8 +123,9 @@ export const savedNotice = (path: string, size = '57,997 characters across 1,441
 // with text that is not a list, not at all, as a server that is not
 // connected does, or never, for a call that hangs. `list` may also be
 // `saved`, for an answer too large to pass back whole: the list answers as it
-// does normally, but Claude Code saves that answer in `saved` at SAVED_PATH
-// and passes back its notice in its place. `sendTo` says how
+// does normally, but Claude Code saves that answer in `saved` at `savedPath`,
+// which is SAVED_PATH unless a test moves it, and passes back its notice in
+// its place. `sendTo` says how
 // send_message answers for one target, in place of `send`. `events` says how
 // list_events answers for each session id: with a header that gives the
 // session's state, whether it is archived and its title ("example" when none
@@ -159,6 +160,8 @@ export function desktopApp(on: On, saved = new Map<string, string>()) {
     // The messages send_message delivered, as [session id, text].
     sent: [] as [string, string][],
     beforeSend: undefined as undefined | (() => Promise<void>),
+    // Where Claude Code saves a list answer for `list` set to `saved`.
+    savedPath: SAVED_PATH,
   }
   const answer = (result: McpToolResult) => ({ value: result })
   on('mcp.call', ($, e) => {
@@ -197,8 +200,8 @@ export function desktopApp(on: On, saved = new Map<string, string>()) {
       const shown = d.sessions.filter(s => whole || s.outside !== true).map(({ outside: _, ...s }) => s)
       const text = JSON.stringify([...shown, ...rest])
       if (how !== 'saved') return answer({ content: [{ type: 'text', text }], isError: false })
-      saved.set(SAVED_PATH, text)
-      return answer({ content: [{ type: 'text', text: savedNotice(SAVED_PATH) }], isError: false })
+      saved.set(d.savedPath, text)
+      return answer({ content: [{ type: 'text', text: savedNotice(d.savedPath) }], isError: false })
     }
     return answer({ content: [{ type: 'text', text: 'Opened in split view.' }], isError: false })
   }
