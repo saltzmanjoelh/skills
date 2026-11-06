@@ -15,7 +15,7 @@ import { ciOf, type Snapshot } from './github'
 import { barOf } from './progress'
 import { secretIn } from './review'
 import { isRunning } from './state'
-import { printable } from './text'
+import { isAbsolute, printable } from './text'
 import { recordTiming } from './timing'
 
 // The version the record carries. Whoever changes what a field means raises
@@ -158,9 +158,6 @@ export function errorLineOf(error: unknown): string {
   const last = [...lines].reverse().find(line => printable(line, Infinity) !== '') ?? ''
   return last === '' ? '' : shownOrWithheld(last, ERROR_CHARS)
 }
-
-// Whether a path is absolute, on a Unix-like system or with a Windows drive.
-const isAbsolute = (path: string) => path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path)
 
 // A path with the slashes at its end dropped.
 const withoutTrailingSlashes = (path: string) => path.replace(/[\\/]+$/, '')

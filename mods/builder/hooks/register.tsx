@@ -22,7 +22,7 @@ import { AGENTS_KEPT, backgroundOf, backgroundTaskIdOf, endedCards, endedTaskOf,
 import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isFolderless, isForemanNudge, keptTicketIn, keptTicketOf, memoOfKeptTicket, newMemo, parentIn, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, STATUS_CHANGED_TEXT, stateOf, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type KeptTicket, type Starts, type StatusFacts } from './status'
 import { afterSend, emptySends, sendOutcomeOf, sendsIn, sendsKey, sendsNewest, SENDS_KEPT_MS, SENDS_PREFIX, type SendOutcome, type SendSettled, type SendsRecord } from './sends'
 import { baseFactsOf, chooseStep, isJudgementKept, labelActionOf, labelFor, labelRecordIn, needsListing, otherStateLabelsOf, reviewerFactOf, SHORT_HASH, stepFor, UNPUSHED_KEPT, UNREAD_FACTS, type LabelRecord, type StuckJudgement, type UserClaude } from './step'
-import { timeOfDay } from './text'
+import { isAbsolute, timeOfDay } from './text'
 import { afterPackage, afterPr, afterReview, afterStage, afterState, emptyTiming, timingIn, type PullRequestSeen } from './timing'
 import { afterCost, afterStep, emptyUsage, usageIn } from './usage'
 
@@ -484,7 +484,7 @@ function plainBranchOf(name: unknown): string | null {
 // checks.
 function baseFolderOf(r: SnapshotTarget): string | null {
   if (r.checkout !== undefined) return r.checkout
-  return r.repoFromCwd === true && r.cwd.startsWith('/') ? r.cwd : null
+  return r.repoFromCwd === true && isAbsolute(r.cwd) ? r.cwd : null
 }
 
 // The facts of the base branch's CLAUDE.md, read with
@@ -2547,6 +2547,17 @@ async function repoOf($: $, dir: string | null): Promise<string | null> {
   return (await gh($, dir, ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner']))?.trim() || null
 }
 
+// The sentence added when gh cannot read a checkout written as /<letter> or
+// /<letter>/…, the form Git Bash gives a Windows drive. A native Windows
+// program such as gh reads that path as a folder under the current drive, so
+// the sentence names the form to write instead. The path itself is never
+// rewritten, because on macOS and Linux it can be a real folder.
+const GIT_BASH_DRIVE_HINT = 'On Windows a path such as /c/Users/me is read as C:\\c\\Users\\me, so write a drive path as C:\\… or C:/… instead.'
+
+// Whether a path has the form Git Bash gives a Windows drive: a slash, one
+// letter, and then nothing or another slash.
+const isGitBashDriveForm = (path: string) => /^\/[A-Za-z](\/|$)/.test(path)
+
 // A watch of the pull request already watched, with no checkout and either no
 // repository or the same one, keeps the repository and the checkout that the
 // earlier watch was given. Without this, `/builder watch <n>`, which can pass
@@ -2568,9 +2579,12 @@ async function serveWatch($: $, asked: WatchInput): Promise<string> {
   const given = input.checkout
   let checkoutRepo: string | null = null
   if (given !== undefined) {
-    if (!given.startsWith('/')) return `The checkout must be an absolute path, and ${given} is not.`
+    if (!isAbsolute(given)) return `The checkout must be an absolute path, and ${given} is not.`
     checkoutRepo = await repoOf($, given)
-    if (checkoutRepo === null) return `Could not read the repository of ${given}; is it a checkout?`
+    if (checkoutRepo === null) {
+      const refusal = `Could not read the repository of ${given}; is it a checkout?`
+      return isGitBashDriveForm(given) ? `${refusal} ${GIT_BASH_DRIVE_HINT}` : refusal
+    }
     if (input.repo !== undefined && input.repo.toLowerCase() !== checkoutRepo.toLowerCase()) {
       return `${given} is a checkout of ${checkoutRepo}, not of ${input.repo}; still watching what was watched before.`
     }
@@ -5210,7 +5224,7 @@ export const register: Register = on => {
         properties: {
           number: { type: 'integer', description: 'The pull request number.' },
           repo: { type: 'string', description: 'owner/name; defaults to the repository of checkout when it is given, else of the session folder.' },
-          checkout: { type: 'string', description: 'An absolute path inside a checkout of the pull request\'s repository. Give it only when the session folder belongs to another repository; the package and review tools then look for the head branch among that checkout\'s worktrees.' },
+          checkout: { type: 'string', description: 'An absolute path inside a checkout of the pull request\'s repository. On Windows, write a drive path as C:\\… or C:/…, not as /c/…. Give it only when the session folder belongs to another repository; the package and review tools then look for the head branch among that checkout\'s worktrees.' },
         },
         required: ['number'],
       },
