@@ -482,7 +482,7 @@ test('the failed text holds the run ids and how to read them', () => {
   expect(text).toContain('gh run rerun <id> --failed')
   // The mod sets waiting-on-author itself; only the judgement stuck stays.
   expect(text).not.toContain('waiting-on-author')
-  expect(text).toContain('set `stuck` and ask the person')
+  expect(text).toContain('set `stuck` with `mcp__builder__set_stuck` and ask the person')
   expect(textOf({ kind: 'failed', runs: [] })).toContain('No workflow run counts as failed')
 })
 
@@ -726,7 +726,7 @@ test('the merge, ask-merge and Merged texts carry none, the short hashes with th
   expect(textOf({ kind: 'closed' })).not.toContain('commits')
 })
 
-test('no step text tells the session to set a label the mod sets, to report a stage, or to list commits itself', () => {
+test('no step text tells the session to set a label the mod sets, to report a stage, or to list commits itself, and stuck is set only through the tool', () => {
   for (const step of EVERY_STEP) {
     const text = textOf(step)
     for (const label of ['in-review', 'waiting-on-author', 'waiting-on-reviewer', 'ready-to-merge']) expect(text).not.toContain(label)
@@ -735,7 +735,12 @@ test('no step text tells the session to set a label the mod sets, to report a st
     expect(text).not.toMatch(/git log [^`]*\.\.HEAD/)
     expect(text).not.toContain('list the commits the worktree holds')
     if (step.kind === 'closed' || step.kind === 'over-limit') expect(text).not.toContain('stuck')
+    // stuck is set only through the tool, which records the judgement first.
+    expect(text).not.toMatch(/gh pr edit[^`]*--add-label/)
+    for (const said of text.matchAll(/set `stuck`(.{0,40})/gi)) expect(said[1]).toMatch(/^ with `mcp__builder__set_stuck`/)
   }
+  // The texts that tell the session to set stuck still do, through the tool.
+  expect(EVERY_STEP.filter(step => textOf(step).includes('`mcp__builder__set_stuck`')).length).toBeGreaterThan(0)
 })
 
 test('each outcome of the update of the linked checkout reaches the Merged step\'s text as the snapshot holds it', () => {
