@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import { snapshotOf } from '../hooks/github'
 import {
   afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite,
-  backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, ERROR_CHARS, errorLineOf, firstPromptOf, FOREMAN_NUDGE_TEXTS, generationIn, HUNG_AFTER_MS, hungAtOf, isBackgroundOnly, isCleanupSkill,
+  backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, ERROR_CHARS, errorLineOf, firstPromptOf, FOREMAN_NUDGE_TEXTS, generationIn, HUNG_AFTER_MS, hungAtOf, isBackgroundOnly, isCleanupSkill, isFolderless,
   isForemanNudge, isProbablyHung, issueOf, keptTicketIn, keptTicketOf, memoOfKeptTicket, newMemo, oldestTaskOf, parentIn, recordOf, shownOrWithheld, startOf, startsBackgrounded, startsIn, startsPruned, startsSeen, startsWithout, STATE_RULES, stateOf,
   STATUS_CHANGED_TEXT, statusMemoIn, TASK_CHARS, taskKeyOf, taskKeyOfId, ticketIn, WITHHELD, type StatusFacts,
 } from '../hooks/status'
@@ -153,18 +153,50 @@ test('an error line is cut to 200 characters, and a line that looks like a secre
 })
 
 test('the configuration folder is CLAUDE_CONFIG_DIR when set, else .claude under HOME, and only when absolute', () => {
-  expect(configDirOf('/custom/config/', '/home/me')).toBe('/custom/config')
-  expect(configDirOf(undefined, '/home/me/')).toBe('/home/me/.claude')
-  expect(configDirOf('', '/home/me')).toBe('/home/me/.claude')
-  expect(configDirOf('relative/config', '/home/me')).toBeNull()
-  expect(configDirOf(undefined, 'home')).toBeNull()
-  expect(configDirOf(undefined, undefined)).toBeNull()
-  expect(configDirOf('/', '/home/me')).toBeNull()
+  expect(configDirOf('/custom/config/', '/home/me', undefined)).toBe('/custom/config')
+  expect(configDirOf(undefined, '/home/me/', undefined)).toBe('/home/me/.claude')
+  expect(configDirOf('', '/home/me', undefined)).toBe('/home/me/.claude')
+  expect(configDirOf('relative/config', '/home/me', undefined)).toBeNull()
+  expect(configDirOf(undefined, 'home', undefined)).toBeNull()
+  expect(configDirOf(undefined, undefined, undefined)).toBeNull()
+  expect(configDirOf('/', '/home/me', undefined)).toBeNull()
   // A Windows drive path counts as absolute, with its trailing backslashes
   // dropped, and a drive with no separator after it is relative.
-  expect(configDirOf('C:\\Users\\me\\.claude\\', undefined)).toBe('C:\\Users\\me\\.claude')
-  expect(configDirOf(undefined, 'C:\\Users\\me')).toBe('C:\\Users\\me/.claude')
-  expect(configDirOf('C:config', '/home/me')).toBeNull()
+  expect(configDirOf('C:\\Users\\me\\.claude\\', undefined, undefined)).toBe('C:\\Users\\me\\.claude')
+  expect(configDirOf(undefined, 'C:\\Users\\me', undefined)).toBe('C:\\Users\\me/.claude')
+  expect(configDirOf('C:config', '/home/me', undefined)).toBeNull()
+})
+
+// Each row gives CLAUDE_CONFIG_DIR, HOME and USERPROFILE, and the folder the
+// rule should answer. The first seven rows are the cases the spec lists.
+const FOLDER_CASES: readonly { name: string; configDir: string | undefined; home: string | undefined; userProfile: string | undefined; folder: string | null }[] = [
+  { name: 'HOME absolute', configDir: undefined, home: '/home/me', userProfile: undefined, folder: '/home/me/.claude' },
+  { name: 'HOME unset, USERPROFILE with backslashes', configDir: undefined, home: undefined, userProfile: 'C:\\Users\\me', folder: 'C:\\Users\\me/.claude' },
+  { name: 'HOME unset, USERPROFILE with forward slashes', configDir: undefined, home: undefined, userProfile: 'C:/Users/me', folder: 'C:/Users/me/.claude' },
+  { name: 'HOME relative, USERPROFILE absolute', configDir: undefined, home: 'home/me', userProfile: 'C:\\Users\\me', folder: 'C:\\Users\\me/.claude' },
+  { name: 'both unset', configDir: undefined, home: undefined, userProfile: undefined, folder: null },
+  { name: 'both relative', configDir: undefined, home: 'home/me', userProfile: 'Users\\me', folder: null },
+  { name: 'CLAUDE_CONFIG_DIR set wins over both', configDir: '/custom/config', home: '/home/me', userProfile: 'C:\\Users\\me', folder: '/custom/config' },
+  { name: 'HOME wins over a different USERPROFILE', configDir: undefined, home: '/home/me', userProfile: 'C:\\Users\\other', folder: '/home/me/.claude' },
+  { name: 'HOME empty, USERPROFILE absolute', configDir: undefined, home: '', userProfile: 'C:\\Users\\me', folder: 'C:\\Users\\me/.claude' },
+  { name: 'HOME in the POSIX form of a Windows shell', configDir: undefined, home: '/c/Users/me', userProfile: 'C:\\Users\\me', folder: '/c/Users/me/.claude' },
+  { name: 'USERPROFILE with a trailing backslash', configDir: undefined, home: undefined, userProfile: 'C:\\Users\\me\\', folder: 'C:\\Users\\me/.claude' },
+  { name: 'USERPROFILE with a trailing slash', configDir: undefined, home: undefined, userProfile: 'C:/Users/me/', folder: 'C:/Users/me/.claude' },
+  { name: 'CLAUDE_CONFIG_DIR relative, USERPROFILE absolute', configDir: 'relative/config', home: undefined, userProfile: 'C:\\Users\\me', folder: null },
+]
+
+for (const row of FOLDER_CASES) {
+  test(`the configuration folder rule: ${row.name}`, () => {
+    expect(configDirOf(row.configDir, row.home, row.userProfile)).toBe(row.folder)
+  })
+}
+
+test('a memo is folderless only when it holds a ticket, no path and a session id that is safe as a file name', () => {
+  const base = newMemo({ sessionId: 'session-1', ticket: null, path: null, cwd: '/repo', generation: 1 })
+  expect(isFolderless({ ...base, ticket: 'ticket-1' })).toBe(true)
+  expect(isFolderless(base)).toBe(false)
+  expect(isFolderless({ ...base, ticket: 'ticket-1', path: '/home/me/.claude/foreman/builds/session-1.json' })).toBe(false)
+  expect(isFolderless({ ...base, sessionId: 'a/b', ticket: 'ticket-1' })).toBe(false)
 })
 
 test('the path is the session id under the builds folder, and refused for an id that could leave it', () => {

@@ -36,7 +36,8 @@ export const record = (issueKey: string | null, state: string, over: Record<stri
 // The status folder, answered from memory: each file's text and modification
 // time, whether the folder exists, and a refusal every listing meets when
 // `listFails` is set. It counts the listings and every read, of the folder or
-// of any other file. A file put in it also pairs its record's ticket with the
+// of any other file, and records the path of every check that a path
+// exists. A file put in it also pairs its record's ticket with the
 // parent in `stored`, as though the parent had started that sub session,
 // unless `pair` is false. `project` holds the text of files outside the
 // folder by their full path, such as a project's CLAUDE.md, and
@@ -51,6 +52,7 @@ export function statusFolder(on: On, at = FOLDER, stored = new Map<string, unkno
     listFails: null as string | null,
     lists: 0,
     reads: 0,
+    existsAsked: [] as string[],
     projectReads: [] as string[],
     held: null as Promise<void> | null,
     hold() {
@@ -84,7 +86,10 @@ export function statusFolder(on: On, at = FOLDER, stored = new Map<string, unkno
     if (!w.exists || e.path !== at) return { deny: `ENOENT: no such file or directory, scandir '${e.path}'` }
     return { value: [...w.files].map(([name, f]) => ({ name, kind: 'file' as const, size: f.text.length, mtimeMs: f.mtimeMs, isLink: false })) }
   })
-  on('fs.exists', ($, e) => ({ value: w.exists && e.path === at }))
+  on('fs.exists', ($, e) => {
+    w.existsAsked.push(e.path)
+    return { value: w.exists && e.path === at }
+  })
   on('fs.read', ($, e) => {
     w.reads += 1
     if (!e.path.startsWith(`${at}/`)) {
@@ -118,8 +123,9 @@ export const savedNotice = (path: string, size = '57,997 characters across 1,441
 // with text that is not a list, not at all, as a server that is not
 // connected does, or never, for a call that hangs. `list` may also be
 // `saved`, for an answer too large to pass back whole: the list answers as it
-// does normally, but Claude Code saves that answer in `saved` at SAVED_PATH
-// and passes back its notice in its place. `sendTo` says how
+// does normally, but Claude Code saves that answer in `saved` at `savedPath`,
+// which is SAVED_PATH unless a test moves it, and passes back its notice in
+// its place. `sendTo` says how
 // send_message answers for one target, in place of `send`. `events` says how
 // list_events answers for each session id: with a header that gives the
 // session's state, whether it is archived and its title ("example" when none
@@ -154,6 +160,8 @@ export function desktopApp(on: On, saved = new Map<string, string>()) {
     // The messages send_message delivered, as [session id, text].
     sent: [] as [string, string][],
     beforeSend: undefined as undefined | (() => Promise<void>),
+    // Where Claude Code saves a list answer for `list` set to `saved`.
+    savedPath: SAVED_PATH,
   }
   const answer = (result: McpToolResult) => ({ value: result })
   on('mcp.call', ($, e) => {
@@ -192,8 +200,8 @@ export function desktopApp(on: On, saved = new Map<string, string>()) {
       const shown = d.sessions.filter(s => whole || s.outside !== true).map(({ outside: _, ...s }) => s)
       const text = JSON.stringify([...shown, ...rest])
       if (how !== 'saved') return answer({ content: [{ type: 'text', text }], isError: false })
-      saved.set(SAVED_PATH, text)
-      return answer({ content: [{ type: 'text', text: savedNotice(SAVED_PATH) }], isError: false })
+      saved.set(d.savedPath, text)
+      return answer({ content: [{ type: 'text', text: savedNotice(d.savedPath) }], isError: false })
     }
     return answer({ content: [{ type: 'text', text: 'Opened in split view.' }], isError: false })
   }

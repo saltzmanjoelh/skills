@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
+import { configDirOf } from '../hooks/config'
 import { barCells, barSvg, BAR_SVG_HEIGHT, fitBar, hasSvg, isSvgSurface, svgWidth, xmlText, type Bar } from '../hooks/art'
 import { gitDirOf, ignoredLine, issueLinkIn, linkFactIn, linkOf, mainCheckoutOf, resolved, whyUnusable } from '../hooks/links'
 import { spendOf, spendWords } from '../hooks/spend'
@@ -7,10 +8,10 @@ import { STAGES, stageLabel, type StageId } from '../hooks/stages'
 import { clockTime, printable, timeOfDay } from '../hooks/text'
 import { BUILDER_DRAWN, BUILDER_SPENT, BUILDER_STAGE_IDS } from './builder-drawn'
 
-// Foreman copies builder's drawing code and its issue link rules, because a
-// mod cannot import another plugin's files. These tests hold each copy to what
-// builder's own function answered for the same input, as
-// tests/builder-drawn.ts wrote it down. The reader in hooks/links.ts is held
+// Foreman copies builder's drawing code, its issue link rules and its rule
+// for the configuration folder, because a mod cannot import another plugin's
+// files. These tests hold each copy to what builder's own function answered
+// for the same input, as tests/builder-drawn.ts wrote it down. The reader in hooks/links.ts is held
 // by tests/links.test.ts, which is builder's test of it without builder's
 // check against factIn.
 
@@ -34,6 +35,7 @@ const COPIES: Record<string, (...args: never[]) => unknown> = {
   gitDirOf: gitDirOf as (...args: never[]) => unknown,
   mainCheckoutOf: mainCheckoutOf as (...args: never[]) => unknown,
   ignoredLine: ignoredLine as (...args: never[]) => unknown,
+  configDirOf: configDirOf as (...args: never[]) => unknown,
 }
 
 test('every copied function answers what builder\'s answered for the same input', () => {

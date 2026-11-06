@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import { agentSvg } from '../hooks/art'
 import { SETTINGS_HINT } from '../hooks/context'
 import { snapshotOf } from '../hooks/github'
-import { abovePromptLine, agentCount, timingLinesOf, agentLines, heldLine, agentRowOf, backgroundLines, contextLines, counselLines, messageLines, messagesReadOf, NAMED_AFTER_MS, nextStep, secondRow, STALE_WARNING, timeUntil, type View } from '../hooks/pane'
+import { abovePromptLine, agentCount, timingLinesOf, agentLines, heldLine, agentRowOf, backgroundLines, contextLines, counselLines, messageLines, messagesReadOf, NAMED_AFTER_MS, NO_STATUS_FILE, nextStep, secondRow, STALE_WARNING, timeUntil, type View } from '../hooks/pane'
 import { RELOAD_LINE, resumePrompt, stateLines, stuckPrompt } from '../hooks/prompts'
 import { stepFor } from '../hooks/step'
 import { clockTime, printable, timeOfDay } from '../hooks/text'
@@ -52,6 +52,7 @@ function view(over: Partial<View> = {}): View {
     planned: [],
     usageHold: null,
     stale: false,
+    noStatusFile: false,
     issueLink: null,
     context: null,
     compactions: null,
@@ -555,6 +556,12 @@ test('before builder is started the second row is the line as before: none while
 
 test('the stale warning says the mod changed on disk and asks for a restart, without saying which way it moved', () => {
   expect(STALE_WARNING).toBe('builder changed on disk since this session loaded it; restart this session to load it')
+})
+
+test('the line for a missing status file names the three variables builder looked at', () => {
+  expect(NO_STATUS_FILE).toContain('foreman ticket')
+  expect(NO_STATUS_FILE).toContain('status file')
+  for (const name of ['CLAUDE_CONFIG_DIR', 'HOME', 'USERPROFILE']) expect(NO_STATUS_FILE).toContain(name)
 })
 
 test('a stale session leads the line with the warning, and the rest of the line follows without its prefix', () => {

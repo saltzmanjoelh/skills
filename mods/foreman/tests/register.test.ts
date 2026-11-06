@@ -2,13 +2,14 @@ import { expect, test } from 'claude-code/testing'
 import type { On, SessionReceiveOrigin } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
+import { listFailedNotice } from '../hooks/act'
 import { REASONS } from '../hooks/desktop'
 import { FIRST_MARKER_LOG, markersKey } from '../hooks/markers'
 import { STATUS_CHANGED_TEXT } from '../hooks/notes'
 import { START_FOREMAN_FALLBACK, START_FOREMAN_OFF, startForemanText } from '../hooks/commands'
 import { heldLine, topUpLine } from '../hooks/held'
 import { newPairing, ticketsIn, ticketsKey, TICKETS_EMPTY } from '../hooks/tickets'
-import { builderUsage, CHANGED, CHANGED_AS_RECEIVED, CHANGED_ELEMENT, foreman, held, HOME, MINUTE, SECOND, SECRET, SURFACES, T0, leftInState, mountBoth, record, SENT, start, statusFolder, world } from './world'
+import { builderUsage, CHANGED, CHANGED_AS_RECEIVED, CHANGED_ELEMENT, foreman, held, HOME, MINUTE, SAVED_PATH, SECOND, SECRET, SURFACES, T0, leftInState, mountBoth, record, SENT, start, statusFolder, world } from './world'
 
 // Two sub sessions: one working at the plan stage with three stages done and
 // a pull request, and one that needs the person.
@@ -383,6 +384,61 @@ test('CLAUDE_CONFIG_DIR moves the status folder', async ($, on) => {
   await start($)
   await foreman($)
   expect(await ui.bandText()).toContain('2 of 2 slots busy')
+})
+
+// Windows normally sets USERPROFILE and not HOME, so the status folder is
+// found under USERPROFILE when HOME gives none. The test engine runs on a
+// Unix-like system and resolves a drive-letter path against the folder the
+// tests run in, so this test gives USERPROFILE a path that starts with a
+// slash. The drive-letter forms are checked against builder's answers in
+// tests/art.test.ts.
+test('with HOME unset, the status folder is under USERPROFILE', async ($, on) => {
+  const w = world(on, { env: { USERPROFILE: '/Users/me' }, at: '/Users/me/.claude/foreman/builds' })
+  twoSubs(w.folder)
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  expect(await ui.bandText()).toContain('2 of 2 slots busy')
+})
+
+// With no variable that gives a configuration folder, foreman reads no status
+// folder at all, rather than the one at the root of the drive.
+test('with neither HOME nor USERPROFILE set, no status folder is read and the band shows no sub sessions', async ($, on) => {
+  const w = world(on, { env: {} })
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  await w.clock.advance(MINUTE)
+  await w.clock.settle()
+  expect(w.folder.lists).toBe(0)
+  expect(w.folder.existsAsked).toEqual([])
+  expect(await ui.bandText()).toContain('no sub sessions')
+})
+
+// With no configuration folder, no place can be trusted as Claude Code's saved
+// tool results, so a list answer that Claude Code saved to a file is never
+// read and counts as saved outside the folder. The copy is saved where a
+// folder worked out from empty variables would put the saved tool results, at
+// the root of the drive or relative to it, as well as under a home folder, so
+// a fallback to any of them would read it. A waiting issue makes every read
+// ask for the list, and with no files a read comes every two minutes.
+test('with neither HOME nor USERPROFILE set, a saved list answer is never read and counts as saved outside the folder', async ($, on) => {
+  const waits = newPairing('ft-ABC-2', 'local_ABC-2', T0, 'ABC-2', { place: 1, claim: null })
+  const w = world(on, { env: {}, store: { 'parent:session-1': { isOn: true, slots: 1 }, [ticketsKey('session-1')]: { ...TICKETS_EMPTY, pairings: [waits] } } })
+  w.desktop.list = 'saved'
+  const ui = await mountBoth($, on)
+  await start($)
+  await foreman($)
+  for (const path of [SAVED_PATH, '/.claude/projects/-work-parent/session-1/tool-results/toolu_list.txt', '/projects/-work-parent/session-1/tool-results/toolu_list.txt']) {
+    w.desktop.savedPath = path
+    const lists = w.desktop.calls.filter(c => c.tool === 'list_sessions').length
+    await w.clock.advance(2 * MINUTE)
+    await w.clock.settle()
+    expect([path, w.desktop.calls.filter(c => c.tool === 'list_sessions').length > lists]).toEqual([path, true])
+    expect(w.folder.projectReads).not.toContain(path)
+  }
+  expect(w.engine.notices).toEqual([listFailedNotice(REASONS.savedOutside)])
+  expect(await ui.paneText()).toContain(`Could not read the desktop app's list of sessions, so no queued issue was begun or dropped: ${REASONS.savedOutside}.`)
 })
 
 test('a file more than three minutes old is dimmed with its age and still busy, and one just under is not stale', async ($, on) => {

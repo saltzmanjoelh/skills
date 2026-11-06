@@ -54,6 +54,11 @@ export type View = {
   // Whether the mod's files on disk differ from the ones this session loaded,
   // as isStale in hooks/loaded.ts says.
   stale: boolean
+  // Whether this session's first prompt holds a foreman ticket but no
+  // configuration folder could be worked out for its status file, as
+  // isFolderless in hooks/status.ts says. It is always false in the band's
+  // view, which never reads it, so only the pane shows it.
+  noStatusFile: boolean
   // The project's usable issue address, with `{key}` where the key goes, or
   // null when the project names none or names one that cannot be used.
   issueLink: string | null
@@ -277,6 +282,13 @@ function lineAbove(v: View, width: number | undefined): string | null {
 // session loaded. It never claims the loaded mod is the older one, because
 // the checkout may have moved either way.
 export const STALE_WARNING = 'builder changed on disk since this session loaded it; restart this session to load it'
+
+// What the pane says when the session holds a foreman ticket but builder can
+// work out no folder for its status file. Builder refuses a CLAUDE_CONFIG_DIR
+// that is set but not absolute without looking at HOME or USERPROFILE, so the
+// sentence covers that case as well as the one where all three fail. It names
+// the variables builder looked at and never their values.
+export const NO_STATUS_FILE = 'builder found a foreman ticket but cannot write its status file, because CLAUDE_CONFIG_DIR is set but not absolute, or it is unset and neither HOME nor USERPROFILE is absolute'
 
 const SEPARATOR = ' · '
 // How every line above the prompt begins. withWarning drops it after the
@@ -777,8 +789,16 @@ function staleTree({ Text }: El, v: View) {
   return [<Text key="stale-warning" color="yellow">{STALE_WARNING}</Text>, <Text key="stale-gap"> </Text>]
 }
 
+// The line saying no status file can be written, in yellow, when the session
+// holds a foreman ticket but no configuration folder could be worked out.
+function noStatusFileTree({ Text }: El, v: View) {
+  if (!v.noStatusFile) return null
+  return [<Text key="no-status-file" color="yellow">{NO_STATUS_FILE}</Text>, <Text key="no-status-file-gap"> </Text>]
+}
+
 // The pane, with a pull request watched or not: the stale warning when the
-// session is stale, then the work, then the pull request's state when one is
+// session is stale, the line saying no status file can be written when that
+// is so, then the work, then the pull request's state when one is
 // watched, then the context lines, what the session has spent, how long its
 // issue has taken and, with a foreman parent, its messages to the parent,
 // then the agents, the background work, the open questions, the counsel and,
@@ -793,6 +813,7 @@ export function paneTree(ui: Elements, v: View, presses: PanePresses, columns?: 
     return (
       <Box flexDirection="column">
         {staleTree(ui, v)}
+        {noStatusFileTree(ui, v)}
         {workTree(ui, v, columns)}
         <Text dimColor>{NOTHING_WATCHED}</Text>
         {contextTree(ui, v)}
@@ -815,6 +836,7 @@ export function paneTree(ui: Elements, v: View, presses: PanePresses, columns?: 
   return (
     <Box flexDirection="column">
       {staleTree(ui, v)}
+      {noStatusFileTree(ui, v)}
       {workTree(ui, v, columns)}
       <Text bold>{`${s.repo}#${s.number} · ${s.state.toLowerCase()} · head ${s.head.slice(0, 8)}`}</Text>
       <Text>{`Labels: ${s.labels.length > 0 ? s.labels.join(', ') : 'none'} · mergeable ${s.mergeable.toLowerCase()}`}</Text>

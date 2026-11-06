@@ -166,19 +166,22 @@ const isAbsolute = (path: string) => path.startsWith('/') || /^[A-Za-z]:[\\/]/.t
 const withoutTrailingSlashes = (path: string) => path.replace(/[\\/]+$/, '')
 
 // The configuration folder the foreman reads from: CLAUDE_CONFIG_DIR when it
-// is set and not empty, and otherwise `.claude` under HOME. A folder that is
-// not an absolute path, including a CLAUDE_CONFIG_DIR that is set but
-// relative, gives null, so nothing is written rather than written somewhere
-// that depends on the folder the session runs in. Trailing slashes are
-// dropped.
-export function configDirOf(configDir: string | undefined, home: string | undefined): string | null {
+// is set and not empty, and otherwise `.claude` under the home folder. The
+// home folder is HOME when it is set and absolute, and otherwise USERPROFILE
+// when it is set and absolute, because Windows keeps the home folder in
+// USERPROFILE and does not normally set HOME. A CLAUDE_CONFIG_DIR that is set
+// but relative gives null, and so does a home folder that neither variable
+// gives, so nothing is written rather than written somewhere that depends on
+// the folder the session runs in. Trailing slashes and backslashes are
+// dropped. Foreman keeps its own copy of this rule, held to the same answers.
+export function configDirOf(configDir: string | undefined, home: string | undefined, userProfile: string | undefined): string | null {
   if (configDir !== undefined && configDir !== '') {
     if (!isAbsolute(configDir)) return null
     const trimmed = withoutTrailingSlashes(configDir)
     return trimmed === '' ? null : trimmed
   }
-  if (home === undefined || home === '' || !isAbsolute(home)) return null
-  return `${withoutTrailingSlashes(home)}/.claude`
+  const folder = [home, userProfile].find(value => value !== undefined && value !== '' && isAbsolute(value))
+  return folder === undefined ? null : `${withoutTrailingSlashes(folder)}/.claude`
 }
 
 // A session id that can name a file inside the builds folder and nothing
@@ -190,6 +193,14 @@ const SAFE_ID = /^[A-Za-z0-9_-]+$/
 export function buildPathOf(config: string | null, sessionId: string): string | null {
   if (config === null || typeof sessionId !== 'string' || !SAFE_ID.test(sessionId)) return null
   return `${config}/foreman/builds/${sessionId}.json`
+}
+
+// Whether a memo holds a foreman ticket but no status file path because no
+// configuration folder could be worked out, which the pane says in a line of
+// its own. A memo whose session id is not safe as a file name has no path
+// either, but for that reason, not the variables, so it does not count.
+export function isFolderless(memo: StatusMemo): boolean {
+  return memo.ticket !== null && memo.path === null && SAFE_ID.test(memo.sessionId)
 }
 
 // Everything the record is worked out from, as the mod's state holds it.

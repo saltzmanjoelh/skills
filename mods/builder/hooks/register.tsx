@@ -19,7 +19,7 @@ import { ADVERSARIAL_REVIEWER, afterReport, afterSeen, endedOf, FOCUSED_REVIEWER
 import { changePrompt, ciEventContext, GITHUB_NAMES_LINE, resumePrompt, stateLines, stuckPrompt } from './prompts'
 import { changedKinds, commitRecordsOf, decidedItems, factIn, INSTRUCTION_PATHSPECS, instructionFileIsLink, isFullSha, isUpForCheck, LATER_CONTEXT_LINES, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pluginRootsOf, reviewedHeadOf, secretIn, specDirOf, trendOf, trendStopLine, underRoot, verdictHeadOf, verdictsLine, type CommitRecord, type EarlierRound, type FileKind, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, backgroundTaskIdOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isMerge, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
-import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isForemanNudge, keptTicketIn, keptTicketOf, memoOfKeptTicket, newMemo, parentIn, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, STATUS_CHANGED_TEXT, stateOf, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type KeptTicket, type Starts, type StatusFacts } from './status'
+import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isFolderless, isForemanNudge, keptTicketIn, keptTicketOf, memoOfKeptTicket, newMemo, parentIn, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, STATUS_CHANGED_TEXT, stateOf, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type KeptTicket, type Starts, type StatusFacts } from './status'
 import { afterSend, emptySends, sendOutcomeOf, sendsIn, sendsKey, sendsNewest, SENDS_KEPT_MS, SENDS_PREFIX, type SendOutcome, type SendSettled, type SendsRecord } from './sends'
 import { baseFactsOf, chooseStep, isJudgementKept, labelActionOf, labelFor, labelRecordIn, needsListing, otherStateLabelsOf, reviewerFactOf, SHORT_HASH, stepFor, UNPUSHED_KEPT, UNREAD_FACTS, type LabelRecord, type StuckJudgement, type UserClaude } from './step'
 import { timeOfDay } from './text'
@@ -531,8 +531,8 @@ async function factsOfBase($: $, dir: string, base: string, claude: string): Pro
 // The CLAUDE.md in the user's configuration folder: its text when it was
 // read, missing in exactly two cases, and unreadable in every other. It is
 // missing when no configuration folder can be worked out, because
-// CLAUDE_CONFIG_DIR is set but relative, or HOME is unset or not absolute,
-// and when `$.fs.exists` answers false for the file. A rejected read of a
+// CLAUDE_CONFIG_DIR is set but relative, or neither HOME nor USERPROFILE is
+// set and absolute (see configDirOf in hooks/status.ts), and when `$.fs.exists` answers false for the file. A rejected read of a
 // path that exists, an `exists` call that itself rejects, a read that gives
 // no text and an environment that cannot be read are all unreadable. Only
 // `exists` tells the two apart, never the shape or text of a read's error,
@@ -540,7 +540,7 @@ async function factsOfBase($: $, dir: string, base: string, claude: string): Pro
 async function readUserClaude($: $): Promise<UserClaude> {
   let dir: string | null
   try {
-    dir = configDirOf(await $.env.get('CLAUDE_CONFIG_DIR'), await $.env.get('HOME'))
+    dir = configDirOf(await $.env.get('CLAUDE_CONFIG_DIR'), await $.env.get('HOME'), await $.env.get('USERPROFILE'))
   } catch {
     return { kind: 'unreadable' }
   }
@@ -1966,6 +1966,19 @@ async function currentSends($: $): Promise<SendsRecord | null> {
     return record.sessionId === (await $.session.id()) ? record : null
   } catch {
     return null
+  }
+}
+
+// Whether this session's memo holds a foreman ticket but no configuration
+// folder for its status file, as the pane draws it. A memo that cannot be
+// read, or belongs to another session, counts as not, and so does a read
+// that throws.
+async function isWithoutStatusFile($: $): Promise<boolean> {
+  try {
+    const memo = statusMemoIn(await read($, statusMemo), await $.session.id())
+    return memo !== null && isFolderless(memo)
+  } catch {
+    return false
   }
 }
 
@@ -4143,12 +4156,14 @@ async function agentType($: $, id: string): Promise<string | undefined> {
 
 // What the band and the panes draw from. A value an older build stored in
 // another shape is read as its default: no progress, not started, folded.
-// The spending, the times, the count of held reports and the record of the
-// sends to the parent are read only when `isPane` is set, which only the pane
-// sets, because the band never shows them, and reading the spending and the
-// count while drawing would subscribe the band to values that change after
-// every counted model step and every batch delivery. Without the flag the
-// spending, the times and the record are null and the count is zero.
+// The spending, the times, the count of held reports, the record of the
+// sends to the parent and whether no status file can be written are read
+// only when `isPane` is set, which only the pane sets, because the band never
+// shows them, and reading the spending, the count and the status memo while
+// drawing would subscribe the band to values that change after every counted
+// model step, every batch delivery and every change of state. Without the
+// flag the spending, the times and the record are null, the count is zero and
+// the status file counts as writable.
 async function view($: $, isPane: boolean): Promise<View> {
   const s = await read($, pr)
   const shown = isDrawable(s) ? s : null
@@ -4180,6 +4195,7 @@ async function view($: $, isPane: boolean): Promise<View> {
     timing: isPane ? await storedTiming($) : null,
     heldReports: isPane ? heldReports(await storedBatches($)) : 0,
     sends: isPane ? await currentSends($) : null,
+    noStatusFile: isPane ? await isWithoutStatusFile($) : false,
   }
 }
 
@@ -4864,7 +4880,13 @@ async function lookForTicket($: $, submitted: string) {
 // The memo that the first prompt `first` of this session gives, carrying this
 // copy's load stamp: one that says the session has no ticket when the prompt
 // holds no ticket line, and otherwise one with the ticket, the file's path,
-// the desktop id, the parent's id and the session's folder.
+// the desktop id, the parent's id and the session's folder. The path is null
+// when no configuration folder can be worked out from CLAUDE_CONFIG_DIR, HOME
+// and USERPROFILE, and the pane then says so. The three variables are named
+// as string literals, because `claude plugin validate` lists only the names
+// spelled in the source. A read of the environment that throws is left to
+// throw, so the look is tried again later, rather than taken for a missing
+// folder, because a memo once stored is not worked out again.
 async function memoFrom($: $, sessionId: string, first: string): Promise<StatusMemo> {
   const ticket = ticketIn(first)
   return ticket === null
@@ -4872,7 +4894,7 @@ async function memoFrom($: $, sessionId: string, first: string): Promise<StatusM
     : newMemo({
         sessionId,
         ticket,
-        path: buildPathOf(configDirOf(await $.env.get('CLAUDE_CONFIG_DIR'), await $.env.get('HOME')), sessionId),
+        path: buildPathOf(configDirOf(await $.env.get('CLAUDE_CONFIG_DIR'), await $.env.get('HOME'), await $.env.get('USERPROFILE')), sessionId),
         desktopSessionId: await $.env.get('CLAUDE_CODE_HOST_SESSION_ID'),
         parentSessionId: parentIn(first) ?? undefined,
         cwd: (await read($, cwd)) ?? (await $.session.cwd()),
