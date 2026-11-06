@@ -609,6 +609,28 @@ test('while both verdicts approve, the fingerprint changes when the runs could n
   expect(isSameState(reviewing, snapshotOf('o/r', pullRequest(), ME, [], { headRuns: [], runsCarriedOver: true }))).toBe(true)
 })
 
+test('while both verdicts approve, the fingerprint changes when the user\'s CLAUDE.md could not be read and again when it can be, and the changes say so', () => {
+  const facts = { maxPushes: 8, maxRounds: 5, checks: 'none' as const, merge: 'default' as const, isClaudeRead: true }
+  const approved = pullRequest({ reviews: [review(C, 'APPROVE', 'APPROVE')] })
+  const known = snapshotOf('o/r', approved, ME, [], { headRuns: [], facts })
+  const unknown = snapshotOf('o/r', approved, ME, [], { headRuns: [], facts: { ...facts, reviewersUnknown: true } })
+  expect(unknown.fingerprint).toBe(`${known.fingerprint}|reviewers-unknown`)
+  expect(isSameState(unknown, known)).toBe(false)
+  expect(changesBetween(known, unknown)).toEqual(['The CLAUDE.md in the user\'s Claude configuration folder could not be read.'])
+  expect(changesBetween(unknown, known)).toEqual(['The CLAUDE.md in the user\'s Claude configuration folder could be read again.'])
+  // Before both verdicts approve, or when one requests changes, the mark is
+  // not news, so the fingerprint leaves it out.
+  for (const pr of [pullRequest(), pullRequest({ reviews: [review(C, 'REQUEST_CHANGES', 'APPROVE')] })]) {
+    const before = snapshotOf('o/r', pr, ME, [], { headRuns: [], facts })
+    const after = snapshotOf('o/r', pr, ME, [], { headRuns: [], facts: { ...facts, reviewersUnknown: true } })
+    expect(after.fingerprint).toBe(before.fingerprint)
+    expect(after.fingerprint).not.toContain('reviewers-unknown')
+  }
+  // A snapshot an older build stored has no mark and fingerprints as before.
+  const older = snapshotOf('o/r', approved, ME, [], { headRuns: [] })
+  expect(older.fingerprint).not.toContain('reviewers-unknown')
+})
+
 test('the fingerprint changes when a run newly counts as failed, even one that started and failed between two looks', () => {
   const none = snapshotOf('o/r', pullRequest(), ME, [], { headRuns: [] })
   const failed = snapshotOf('o/r', pullRequest(), ME, [], { headRuns: [headRun({ conclusion: 'startup_failure' })] })

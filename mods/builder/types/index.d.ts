@@ -37,7 +37,13 @@ export type HeadRun = {
 // branch's CLAUDE.md or else the user's own. Only snapshotOf reads it, at the
 // look that read it, so a snapshot an older build stored, which has none,
 // loses nothing.
-export type BaseFacts = { maxPushes: number; maxRounds: number; checks: 'none' | 'expected'; merge: 'default' | 'custom' | 'unread'; isClaudeRead: boolean; reviewers?: string[] }
+// `reviewersUnknown` is set, and only ever to true, when the CLAUDE.md in the
+// user's configuration folder exists but could not be read and the base
+// branch's CLAUDE.md has no `Reviewer:` line of its own, so the reviewers the
+// user's file may name are unknown and no merge step is named. Every look
+// writes it afresh. A snapshot without it, as one an older build stored,
+// counts as known.
+export type BaseFacts = { maxPushes: number; maxRounds: number; checks: 'none' | 'expected'; merge: 'default' | 'custom' | 'unread'; isClaudeRead: boolean; reviewers?: string[]; reviewersUnknown?: true }
 
 // The state of a reviewer other than the session's own login, decided in this
 // order: their review is requested now, their newest review approves, their

@@ -88,6 +88,7 @@ test('the text that replaces the start-foreman skill carries the top-up count, s
     expect(text.startsWith('foreman: foreman is on, and this session is its parent. ')).toBe(true)
     expect(text).toContain(topUpLine(n).slice('foreman: '.length))
   }
+  expect(startForemanText(2)).toContain('start two now, counting every start you make from here on, the issues the person names first and then the next ones the project\'s Next issue: fact picks; this number replaces any earlier top-up line\'s number on this turn.')
   expect(startForemanText(0)).toBe('foreman: foreman is on, and this session is its parent. Its queue is full, with one waiting sub session for every slot, so start no sub session now; tell the person in one line that foreman is on and its queue is full.')
   expect(START_FOREMAN_OFF).toBe('foreman: /start-foreman did not turn foreman on in this session, so start no sub session; tell the person in one line that foreman did not turn on and that the log in foreman\'s pane may say why.')
   expect(START_FOREMAN_FALLBACK).toBe('foreman: foreman could not count its queue, so start no sub session on this turn; tell the person in one line that foreman could not count its queue and that their next message lines up more.')

@@ -234,8 +234,13 @@ pane says the session waits on the reviewer.
 - **A `Reviewer:` line in the user's own `CLAUDE.md` names someone with no
   access to a repository.** Every pull request there ends at `stuck` until the
   project writes `Reviewer: none`.
-- **The user's `CLAUDE.md` cannot be read.** It is treated as having no
-  `Reviewer:` line, and the project's line, if any, still applies.
+- **The user's `CLAUDE.md` cannot be read.** A file that is not there, or a
+  configuration folder that cannot be worked out, counts as having no
+  `Reviewer:` line. A file that exists but cannot be read leaves the reviewers
+  unknown when the project has no `Reviewer:` line of its own, and the mod
+  names no merge step until a look reads it; a project's line, including
+  `Reviewer: none`, still decides. See
+  `docs/specs/builder-unreadable-user-claude-holds-merge.md`.
 - **The pull request read fails.** Nothing new happens: the look already
   retries a failed read, and the snapshot keeps its last outside reviewers.
 - **The reviewer never answers.** The session waits, and the mod's existing

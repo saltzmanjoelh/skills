@@ -8,6 +8,7 @@ import { NOTHING_WATCHED, STALE_WARNING } from '../hooks/pane'
 import { GITHUB_NAMES_LINE, RELOAD_LINE, REREAD_CLOSING } from '../hooks/prompts'
 import { INSTRUCTION_PATHSPECS } from '../hooks/review'
 import { FOREMAN_NUDGE_TEXTS, STATUS_CHANGED_TEXT } from '../hooks/status'
+import type { UserClaude } from '../hooks/step'
 import type { BuildStatus, Compactions } from '../types'
 import { CROSS_SESSION_SHAPES } from './cross-session-fixture'
 
@@ -1034,18 +1035,27 @@ function memoryStore(on: On, entries: [string, unknown][] = []) {
 // and `writes.hold`, when set, keeps the next write waiting until it
 // resolves, and the file then holds that write's text. `dirs` holds the
 // folders that exist, so a test can add another checkout beside `/repo`.
+// `refusedReads` holds paths that exist but whose read is refused, as a file
+// without read permission is, and `refusedExists` holds paths whose `exists`
+// call is itself refused.
 function fakeFiles(on: On) {
   const files = new Map<string, string>([['/repo/CLAUDE.md', 'Architecture document: docs/arch.md\n'], ['/repo/docs/arch.md', 'x']])
   const links = new Map<string, string>()
   const dirs = new Set(['/repo'])
+  const refusedReads = new Set<string>()
+  const refusedExists = new Set<string>()
   const writes = { refused: false, log: [] as string[], texts: [] as string[], hold: null as Promise<void> | null }
   // Every path read, in order, whether or not it is there.
   const reads: string[] = []
   on('fs.read', ($, e) => {
     reads.push(e.path)
+    if (refusedReads.has(e.path)) return { deny: 'permission denied' }
     return files.has(e.path) ? { value: files.get(e.path) as string } : { deny: 'missing' }
   })
-  on('fs.exists', ($, e) => ({ value: files.has(e.path) || dirs.has(e.path) }))
+  on('fs.exists', ($, e) => {
+    if (refusedExists.has(e.path)) return { deny: 'the check could not be made' }
+    return { value: files.has(e.path) || dirs.has(e.path) || refusedReads.has(e.path) }
+  })
   // `links` maps a path to where it really points. A path that is none of the
   // files, folders or links is refused, as the real file system refuses it.
   on('fs.stat', ($, e) => {
@@ -1063,7 +1073,7 @@ function fakeFiles(on: On) {
     files.set(e.path, e.text)
     return { value: undefined }
   })
-  return Object.assign(files, { links, dirs, writes, reads })
+  return Object.assign(files, { links, dirs, writes, reads, refusedReads, refusedExists })
 }
 
 // The mod loaded through a link into a checkout at `dir`: every stat resolves
@@ -10589,6 +10599,7 @@ const approvedWithoutChecks = () => openPullRequest({ statusCheckRollup: [], rev
 
 test('the base facts come from the session folder\'s base branch when the watch took its repository from that folder', async ($, on) => {
   mock.clock(on)
+  mock.env(on, {})
   mock.store(on)
   engine(on)
   const world = fakeGitHub(on)
@@ -10601,61 +10612,190 @@ test('the base facts come from the session folder\'s base branch when the watch 
   expect(String(ran.result)).toContain(`gh pr merge 7 --merge --match-head-commit ${C}`)
 })
 
-// The `Reviewer:` fact, read through the register: the base branch's
-// CLAUDE.md, or else the CLAUDE.md in the user's configuration folder.
-async function reviewerStep($: Engine, on: On, project: string | null, user: string | null): Promise<string> {
-  mock.clock(on)
+// The CLAUDE.md in the user's configuration folder at a look: read with its
+// text, missing when it is not there, unreadable when it exists but its read
+// is refused, or exists-refused when the check whether it exists is itself
+// refused. Each case is tagged, so that a file whose text happens to be the
+// word unreadable is still a file that can be read.
+type UserClaudeSetup = UserClaude | { kind: 'exists-refused' }
+
+const USER_ENV: Record<string, string> = { CLAUDE_CONFIG_DIR: '/config', HOME: '/home/me' }
+const USER_CLAUDE = '/config/CLAUDE.md'
+
+function setUserClaude(files: ReturnType<typeof fakeFiles>, user: UserClaudeSetup) {
+  files.delete(USER_CLAUDE)
+  files.refusedReads.delete(USER_CLAUDE)
+  files.refusedExists.delete(USER_CLAUDE)
+  if (user.kind === 'unreadable') files.refusedReads.add(USER_CLAUDE)
+  else if (user.kind === 'exists-refused') files.refusedExists.add(USER_CLAUDE)
+  else if (user.kind === 'read') files.set(USER_CLAUDE, user.text)
+}
+
+// A pull request on which both verdicts approve and no check exists, with
+// the base branch's CLAUDE.md as `project` (null when it cannot be read) and
+// the user's own as `user`, under the environment `env`.
+function userClaudeWorld(on: On, project: string | null, user: UserClaudeSetup, env: Record<string, string> = USER_ENV) {
+  const clock = mock.clock(on)
   mock.store(on)
-  mock.env(on, { CLAUDE_CONFIG_DIR: '/config', HOME: '/home/me' })
+  mock.env(on, env)
   engine(on)
   const world = fakeGitHub(on)
   const files = fakeFiles(on)
-  if (user !== null) files.set('/config/CLAUDE.md', user)
+  setUserClaude(files, user)
   world.pr = approvedWithoutChecks()
   world.baseClaude = project
+  return { clock, world, files }
+}
+
+// The `Reviewer:` fact, read through the register: the base branch's
+// CLAUDE.md, or else the CLAUDE.md in the user's configuration folder.
+async function reviewerStep($: Engine, on: On, project: string | null, user: UserClaudeSetup, env: Record<string, string> = USER_ENV): Promise<string> {
+  userClaudeWorld(on, project, user, env)
   await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
   return String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
 }
 
+const USER_CLAUDE_UNREAD_STEP = 'The step that applies: Both verdicts approve at this head, but the user\'s own CLAUDE.md could not be read.'
+const MERGE_STEP = 'The step that applies: Both verdicts approve at this head, merge.'
+
 const REQUEST_STEP = 'The step that applies: Both verdicts approve at this head, request the outside review.'
 
 test('a Reviewer: line in the base branch\'s CLAUDE.md asks for that reviewer before the merge', async ($, on) => {
-  const answer = await reviewerStep($, on, 'Checks: none\nReviewer: ann\n', null)
+  const answer = await reviewerStep($, on, 'Checks: none\nReviewer: ann\n', { kind: 'missing' })
   expect(answer).toContain(REQUEST_STEP)
   expect(answer).toContain('`gh pr edit 7 --add-reviewer ann`')
 })
 
 test('a Reviewer: line in the user\'s own CLAUDE.md, read from CLAUDE_CONFIG_DIR, applies when the project names none', async ($, on) => {
-  const answer = await reviewerStep($, on, 'Checks: none\n', 'Reviewer: bob\n')
+  const answer = await reviewerStep($, on, 'Checks: none\n', { kind: 'read', text: 'Reviewer: bob\n' })
   expect(answer).toContain(REQUEST_STEP)
   expect(answer).toContain('`gh pr edit 7 --add-reviewer bob`')
 })
 
 test('the project\'s Reviewer: line overrides the user\'s', async ($, on) => {
-  const answer = await reviewerStep($, on, 'Checks: none\nReviewer: ann\n', 'Reviewer: bob\n')
+  const answer = await reviewerStep($, on, 'Checks: none\nReviewer: ann\n', { kind: 'read', text: 'Reviewer: bob\n' })
   expect(answer).toContain('`gh pr edit 7 --add-reviewer ann`')
   expect(answer).not.toContain('bob')
 })
 
 test('Reviewer: none in the project turns off the user\'s reviewer, and the pull request merges as before', async ($, on) => {
-  const answer = await reviewerStep($, on, 'Checks: none\nReviewer: none\n', 'Reviewer: bob\n')
+  const answer = await reviewerStep($, on, 'Checks: none\nReviewer: none\n', { kind: 'read', text: 'Reviewer: bob\n' })
   expect(answer).toContain('The step that applies: Both verdicts approve at this head, merge.')
   expect(answer).not.toContain('bob')
 })
 
 test('when the base branch\'s CLAUDE.md cannot be read, the user\'s Reviewer: line still applies', async ($, on) => {
-  const answer = await reviewerStep($, on, null, 'Reviewer: bob\n')
+  const answer = await reviewerStep($, on, null, { kind: 'read', text: 'Reviewer: bob\n' })
   expect(answer).toContain(REQUEST_STEP)
   expect(answer).toContain('`gh pr edit 7 --add-reviewer bob`')
 })
 
 test('with no Reviewer: line anywhere and no user file, the pull request merges as before', async ($, on) => {
-  const answer = await reviewerStep($, on, 'Checks: none\n', null)
+  const answer = await reviewerStep($, on, 'Checks: none\n', { kind: 'missing' })
   expect(answer).toContain('The step that applies: Both verdicts approve at this head, merge.')
+})
+
+test('a user CLAUDE.md that exists but cannot be read, with no Reviewer: line in the base branch\'s, holds the merge', async ($, on) => {
+  const answer = await reviewerStep($, on, 'Checks: none\n', { kind: 'unreadable' })
+  expect(answer).toContain(USER_CLAUDE_UNREAD_STEP)
+  expect(answer).toContain('Merge nothing')
+  expect(answer).not.toContain('gh pr merge')
+  expect(answer).not.toContain(USER_CLAUDE)
+})
+
+test('an exists call for the user\'s CLAUDE.md that is itself refused holds the merge', async ($, on) => {
+  const answer = await reviewerStep($, on, 'Checks: none\n', { kind: 'exists-refused' })
+  expect(answer).toContain(USER_CLAUDE_UNREAD_STEP)
+  expect(answer).not.toContain('gh pr merge')
+})
+
+// A file that is not there, and a configuration folder that cannot be worked
+// out, both count as a missing file, which names no reviewer. The path the
+// default environment would read is refused in each, so a look that read it
+// anyway would hold the merge.
+for (const [what, env] of [
+  ['a relative CLAUDE_CONFIG_DIR', { CLAUDE_CONFIG_DIR: 'config', HOME: '/home/me' }],
+  ['no CLAUDE_CONFIG_DIR and no HOME', {}],
+  ['no CLAUDE_CONFIG_DIR and a relative HOME', { HOME: 'home/me' }],
+] as const) {
+  test(`with ${what}, the user's CLAUDE.md counts as missing and the pull request merges as before`, async ($, on) => {
+    const answer = await reviewerStep($, on, 'Checks: none\n', { kind: 'unreadable' }, env)
+    expect(answer).toContain(MERGE_STEP)
+    expect(answer).not.toContain(USER_CLAUDE_UNREAD_STEP)
+  })
+}
+
+test('a readable user CLAUDE.md whose whole text is the word unreadable names no reviewer, and the pull request merges as before', async ($, on) => {
+  const answer = await reviewerStep($, on, 'Checks: none\n', { kind: 'read', text: 'unreadable' })
+  expect(answer).toContain(MERGE_STEP)
+  expect(answer).not.toContain(USER_CLAUDE_UNREAD_STEP)
+})
+
+test('an environment that cannot be read, with no Reviewer: line in the base branch\'s CLAUDE.md, holds the merge', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  on('env.get', () => { throw new Error('the environment could not be read') })
+  engine(on)
+  const world = fakeGitHub(on)
+  fakeFiles(on)
+  world.pr = approvedWithoutChecks()
+  world.baseClaude = 'Checks: none\n'
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  const answer = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  expect(answer).toContain(USER_CLAUDE_UNREAD_STEP)
+  expect(answer).not.toContain('gh pr merge')
+})
+
+test('a Reviewer: line in the base branch\'s CLAUDE.md still decides when the user\'s file cannot be read', async ($, on) => {
+  const answer = await reviewerStep($, on, 'Checks: none\nReviewer: ann\n', { kind: 'unreadable' })
+  expect(answer).toContain(REQUEST_STEP)
+  expect(answer).toContain('`gh pr edit 7 --add-reviewer ann`')
+  expect(answer).not.toContain(USER_CLAUDE_UNREAD_STEP)
+})
+
+test('Reviewer: none in the base branch\'s CLAUDE.md still merges when the user\'s file cannot be read', async ($, on) => {
+  const answer = await reviewerStep($, on, 'Checks: none\nReviewer: none\n', { kind: 'unreadable' })
+  expect(answer).toContain(MERGE_STEP)
+  expect(answer).not.toContain(USER_CLAUDE_UNREAD_STEP)
+})
+
+test('a user CLAUDE.md that cannot be read, with a base branch\'s CLAUDE.md that cannot be read either, holds the merge', async ($, on) => {
+  const answer = await reviewerStep($, on, null, { kind: 'unreadable' })
+  expect(answer).toContain(USER_CLAUDE_UNREAD_STEP)
+  expect(answer).not.toContain('The step that applies: Both verdicts approve at this head, with no checks.')
+})
+
+test('with the user\'s CLAUDE.md unreadable, a requested outside reviewer is waited on first, and once they approve the look holds the merge', async ($, on) => {
+  const { world } = userClaudeWorld(on, 'Checks: none\n', { kind: 'unreadable' })
+  world.pr = { ...approvedWithoutChecks(), reviewRequests: [{ __typename: 'User', login: 'ann' }] }
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  const waiting = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  expect(waiting).toContain('The step that applies: Both verdicts approve at this head, waiting on the outside review.')
+  expect(waiting).not.toContain(USER_CLAUDE_UNREAD_STEP)
+  const annApproves = { author: { login: 'ann' }, state: 'APPROVED', body: '', commit: { oid: C }, submittedAt: '2026-11-05T10:00:00Z', authorAssociation: 'COLLABORATOR' }
+  world.pr = { ...approvedWithoutChecks(), reviews: [...(approvedWithoutChecks().reviews ?? []), annApproves] }
+  const held = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  expect(held).toContain(USER_CLAUDE_UNREAD_STEP)
+  expect(held).not.toContain('gh pr merge')
+})
+
+test('once the user\'s CLAUDE.md can be read again, the next look names the merge and says the file could be read again', async ($, on) => {
+  const { clock, files } = userClaudeWorld(on, 'Checks: none\n', { kind: 'unreadable' })
+  const prompts = recordPrompts(on)
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  const held = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  expect(held).toContain(USER_CLAUDE_UNREAD_STEP)
+  await clock.settle()
+  setUserClaude(files, { kind: 'read', text: 'Base branch: main\n' })
+  await clock.advance(10 * 60_000)
+  expect(prompts.length).toBe(1)
+  expect(prompts[0]).toContain('The CLAUDE.md in the user\'s Claude configuration folder could be read again.')
+  expect(prompts[0]).toContain(MERGE_STEP)
 })
 
 test('a base CLAUDE.md without a Checks: line asks whether the base has workflow files', async ($, on) => {
   mock.clock(on)
+  mock.env(on, {})
   mock.store(on)
   engine(on)
   const world = fakeGitHub(on)
@@ -10670,8 +10810,36 @@ test('a base CLAUDE.md without a Checks: line asks whether the base has workflow
   expect(String(listed.result)).toContain('The step that applies: Both verdicts approve at this head, with no checks.')
 })
 
+test('both merge texts bring a frontend pull request\'s screenshot section up to date before reading the pull request again', async ($, on) => {
+  mock.clock(on)
+  mock.env(on, {})
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr = approvedWithoutChecks()
+  world.baseClaude = 'Base branch: main\n'
+  world.workflows = ''
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  const merge = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  world.workflows = '100644 blob 0123 .github/workflows/test.yml\n'
+  const ask = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  expect(merge).toContain('The step that applies: Both verdicts approve at this head, merge.')
+  expect(ask).toContain('The step that applies: Both verdicts approve at this head, with no checks.')
+  for (const text of [merge, ask]) {
+    const at = text.indexOf('- On a frontend pull request, ')
+    const reread = text.indexOf('- Read the pull request again with')
+    expect(at).toBeGreaterThan(text.indexOf('Before merging:'))
+    expect(at).toBeLessThan(reread)
+    const bullet = text.slice(at, reread)
+    for (const part of ['`## Screenshots`', '`Frontend paths:`', '`skills/implement/frontend.md`', 'A pull request whose body has no such section skips this bullet.']) {
+      expect(bullet).toContain(part)
+    }
+  }
+})
+
 test('a session that started in a subfolder of the checkout still finds the base\'s workflow files', async ($, on) => {
   mock.clock(on)
+  mock.env(on, {})
   mock.store(on)
   engine(on)
   const world = fakeGitHub(on)
@@ -10698,6 +10866,7 @@ for (const [what, name] of [
 ] as const) {
   test(`a base branch name that ${what} runs no git show and asks before merging without checks`, async ($, on) => {
     mock.clock(on)
+    mock.env(on, {})
     mock.store(on)
     engine(on)
     const world = fakeGitHub(on)
@@ -10713,6 +10882,7 @@ for (const [what, name] of [
 
 test('a watch given a checkout reads the base CLAUDE.md in that checkout, not in the session folder', async ($, on) => {
   mock.clock(on)
+  mock.env(on, {})
   mock.store(on)
   engine(on)
   const world = fakeGitHub(on)
@@ -10729,6 +10899,7 @@ test('a watch given a checkout reads the base CLAUDE.md in that checkout, not in
 
 test('a base CLAUDE.md that cannot be read gives the unread facts, which ask before merging without checks and read the merge command from the base', async ($, on) => {
   mock.clock(on)
+  mock.env(on, {})
   mock.store(on)
   engine(on)
   const world = fakeGitHub(on)
@@ -10743,6 +10914,7 @@ test('a base CLAUDE.md that cannot be read gives the unread facts, which ask bef
 
 test('a watch named a repository with no checkout reads no base facts from the session folder, which may be another repository\'s', async ($, on) => {
   mock.clock(on)
+  mock.env(on, {})
   mock.store(on)
   engine(on)
   const world = fakeGitHub(on)
@@ -10757,6 +10929,7 @@ test('a watch named a repository with no checkout reads no base facts from the s
 
 test('while both verdicts approve, a failed runs read holds the merge in a turn, and the next good read wakes the session to merge', async ($, on) => {
   const clock = mock.clock(on)
+  mock.env(on, {})
   mock.store(on)
   engine(on)
   const world = fakeGitHub(on)
@@ -14650,6 +14823,7 @@ const unpushedListings = (world: { calls: string[] }) => world.calls.filter(call
 
 test('the merge step states that the worktree holds no commits the pull request lacks, listed in the head branch\'s worktree', async ($, on) => {
   mock.clock(on)
+  mock.env(on, {})
   mock.store(on)
   engine(on)
   const world = fakeGitHub(on)
@@ -14668,6 +14842,7 @@ test('the merge step states that the worktree holds no commits the pull request 
 
 test('with a checkout given to the watch tool, the commits are listed in the worktree of that checkout that has the head branch, not in the session\'s folder', async ($, on) => {
   mock.clock(on)
+  mock.env(on, {})
   mock.store(on)
   engine(on)
   const world = fakeGitHub(on)
@@ -14682,6 +14857,7 @@ test('with a checkout given to the watch tool, the commits are listed in the wor
 
 test('commits the pull request lacks are named by short hash with the ancestor answer, on the merge, ask-merge and Merged steps', async ($, on) => {
   mock.clock(on)
+  mock.env(on, {})
   mock.store(on)
   engine(on)
   const world = fakeGitHub(on)
@@ -14704,6 +14880,7 @@ test('commits the pull request lacks are named by short hash with the ancestor a
 
 test('a head the worktree lacks is fetched before the listing, and a failed fetch, listing or ancestor check, or no worktree, gives could not be listed', async ($, on) => {
   mock.clock(on)
+  mock.env(on, {})
   mock.store(on)
   engine(on)
   const world = fakeGitHub(on)
@@ -14782,6 +14959,7 @@ test('a merged pull request whose head is not a full commit sha gives could not 
 // prompt only this way when the look at the resume time fails.
 test('a resume whose look fails lists the commits again rather than showing the stored listing of none', async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
+  mock.env(on, {})
   mock.store(on)
   engine(on)
   const world = fakeGitHub(on)
@@ -14809,6 +14987,7 @@ test('a resume whose look fails lists the commits again rather than showing the 
 
 test('the stuck prompt lists the commits again rather than showing the stored listing of none', async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
+  mock.env(on, {})
   mock.store(on)
   engine(on)
   const world = fakeGitHub(on)
@@ -14832,6 +15011,7 @@ test('the stuck prompt lists the commits again rather than showing the stored li
 
 test('a review step and a closed pull request run no listing, and a change in the listing alone never wakes the session', async ($, on) => {
   const clock = mock.clock(on)
+  mock.env(on, {})
   mock.store(on)
   engine(on)
   const world = fakeGitHub(on)

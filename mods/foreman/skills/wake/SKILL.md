@@ -178,12 +178,12 @@ a slot count or words after it, has happened.
 2. Start no sub session until they have, and do not act on the count or the
    words that followed the command in the text. Wait for their next message.
 
-## the queue needs one more issue; start one on this turn, counting every start you make on it, the issues the person names first and then the next ones the project's Next issue: fact picks.
+## the queue needs one more issue; start one now, counting every start you make from here on, the issues the person names first and then the next ones the project's Next issue: fact picks; this number replaces any earlier top-up line's number on this turn.
 
 The heading leaves out the line's `foreman: ` head, as the other headings in
 this skill do. When the queue needs more than one issue, the line names the
 number in words, both times, and says "issues" in place of "issue", as in
-"the queue needs three more issues; start three on this turn". The number is
+"the queue needs three more issues; start three now". The number is
 never more than five.
 
 Foreman keeps one sub session waiting in its queue for every slot, so that
@@ -191,13 +191,24 @@ each slot that frees is filled by foreman alone, without a message from the
 person. It adds this line as context to each message the person types while
 the queue is short of that, and the number is how many issues it is short,
 counting busy and waiting sub sessions together. The line arrives with the
-person's own typed message, so start the issues on this same turn, at once,
-as "Starting a session" says. A message typed while a turn already runs gets
-no line, and neither does a typed `/start-foreman`, whose text gives the
-number in its place.
+person's own typed message, so start the issues at once, on the turn that
+message is on, as "Starting a session" says. A message the person types while
+a turn already runs carries the line too, and the app allows starts on that
+turn from then on, even on a turn that foreman began. A typed
+`/start-foreman` gets no line, because its text gives the number in its
+place.
 
-Every start you make on this turn counts against the number, whoever asked
-for it. Make the starts in this order:
+Foreman works the number out afresh for each message, and it has already
+left out every start made on the turn so far. So when a turn carries more
+than one top-up line, the newest line's number replaces the number of every
+earlier one, and it is the number still to start; never add the numbers
+together. A text that foreman gave in place of the start-foreman skill
+earlier on the turn counts as an earlier line here, including one that said
+to start no sub session.
+
+Every start you make from the line on counts against its number, whoever
+asked for it, the held keys and the issues the person names included. Make
+the starts in this order:
 
 1. First the keys that foreman's held line names, as the section headed with
    that line says.
@@ -240,9 +251,10 @@ model reads one of these texts from foreman:
 - "foreman: foreman is on, and this session is its parent. Top up its queue
   now, as the foreman:wake skill says: " followed by the top-up line's
   sentence for the number of issues the queue needs, such as "the queue needs
-  two more issues; start two on this turn, counting every start you make on
-  it, the issues the person names first and then the next ones the project's
-  Next issue: fact picks." Follow it exactly as the top-up line above, on this
+  two more issues; start two now, counting every start you make from here on,
+  the issues the person names first and then the next ones the project's Next
+  issue: fact picks; this number replaces any earlier top-up line's number on
+  this turn." Follow it exactly as the top-up line above, on this
   same turn, and then tell the person in one line that foreman is on and
   which issues started or are queued.
 - "foreman: foreman is on, and this session is its parent. Its queue is full,
@@ -873,7 +885,8 @@ reports them.
   refusal while it is off, only when the person says to start without
   foreman, as that refusal's section says.
 - It never starts more issues for a top-up line, or for the text foreman
-  gives for `/start-foreman`, than the number it names, beyond the issues the
+  gives for `/start-foreman`, than the number the newest such line or text on
+  the turn names, beyond the issues the
   person asked for themselves, and never puts a start off to a later
   `foreman: ` line that arrives as its own prompt or is appended to a running
   turn.

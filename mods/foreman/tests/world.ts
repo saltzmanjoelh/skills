@@ -17,6 +17,15 @@ export const FOLDER = `${HOME}/.claude/foreman/builds`
 export const SECRET = 'SECRET-ERROR-TEXT'
 export const SURFACES = ['terminal', 'desktop'] as const
 
+// Answers foreman's reads of builder's `usage` state value with `value`, as
+// builder running in the same session would hold it.
+export function builderUsage(on: On, value: unknown) {
+  on('state.get', ($, e, next) => {
+    if (e.plugin !== 'builder' || e.key !== 'usage') return next(e)
+    return { value: { value, version: 0 } } as never
+  })
+}
+
 // A status record as builder writes it, with `over` changing its fields. Its
 // ticket is `ft-<issue key>`, which the test folder pairs with the parent.
 export const record = (issueKey: string | null, state: string, over: Record<string, unknown> = {}) => JSON.stringify({

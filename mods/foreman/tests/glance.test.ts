@@ -6,7 +6,7 @@ import { FOLDS_CLOSED, foldsIn, menuPressed, prunedMenus, rowPressed } from '../
 import { mergedOf } from '../hooks/spend'
 import { newPairing, ticketsKey, TICKETS_EMPTY } from '../hooks/tickets'
 import type { ForemanSpent, ForemanTiming } from '../types'
-import { foreman, held, leftInState, MINUTE, mountBoth, record, SECOND, SURFACES, start, T0, world } from './world'
+import { builderUsage, foreman, held, leftInState, MINUTE, mountBoth, record, SECOND, SURFACES, start, T0, world } from './world'
 
 // Foreman's pane at a glance: the slot lights, a card for each busy sub
 // session, a compact line for each one that is not busy, the up-next row, the
@@ -295,7 +295,14 @@ for (const surface of SURFACES) {
 test('on the desktop, a card\'s stage drawing fits inside the card\'s border and padding', async ($, on) => {
   const { ui } = await parent($, on, 2, { 'a.json': busy('ABC-1', 'working', { stage: 'build' }) }, 'desktop')
   await ui.pane.redraw()
-  expect(held(await ui.pane.find({ key: 'stages-a.json' }))?.props?.width).toBe((200 - 4) * 8)
+  // The width is worked out from the padding the card draws and the round
+  // border's one column on each side, so a change to the card's padding that
+  // the drawing's width does not follow fails here.
+  const frame = (await ui.pane.find({ key: 'card-a.json' }))?.props
+  expect(frame?.borderStyle).toBe('round')
+  const padding = frame?.paddingX
+  expect(typeof padding).toBe('number')
+  expect(held(await ui.pane.find({ key: 'stages-a.json' }))?.props?.width).toBe((200 - 2 * Number(padding) - 2) * 8)
 })
 
 for (const surface of SURFACES) {
@@ -414,6 +421,53 @@ test('a ledger that cannot be read leaves the tiles and the merged count unknown
   expect((await ui.pane.find({ key: 'tile-spent' }))?.text).toContain('unknown')
 })
 
+// Builder's usage value for the parent session itself, so the parent's own
+// spend is known, at $1.75.
+const OWN_USAGE = { ...USAGE, sessionId: 'session-1', lastEngineUsd: 1.75, turns: [], at: T0 }
+
+// The Spent tile's figure, and its small print on the desktop, or its one
+// line on the terminal.
+async function spentTile(ui: Awaited<ReturnType<typeof mountBoth>>, surface: typeof SURFACES[number]) {
+  await ui.pane.redraw()
+  if (surface === 'terminal') return [(await ui.pane.find({ key: 'tile-spent' }))?.text]
+  return [(await ui.pane.find({ key: 'tile-spent-figure' }))?.text, (await ui.pane.find({ key: 'tile-spent-small' }))?.text]
+}
+
+for (const surface of SURFACES) {
+  // The test above sets no spend of the parent's own, so its total was
+  // unknown even before the Spent tile checked whether the ledger was read.
+  test(`on the ${surface}, a ledger that cannot be read makes the Spent figure unknown even when the parent's own spend is known`, async ($, on) => {
+    const w = world(on, { store: { 'parent:session-1': { isOn: true, slots: 2 }, [ticketsKey('session-1')]: { ...TICKETS_EMPTY, spent: [entry('ft-x', 2, T0)] } } })
+    // The engine takes one state.get handler per test, so this one answers
+    // builder's usage value, as builderUsage does, and refuses the ledger.
+    let fails = false
+    on('state.get', ($, e, next) => {
+      if (e.plugin === 'builder' && e.key === 'usage') return { value: { value: OWN_USAGE, version: 0 } } as never
+      return fails && e.plugin === 'foreman' && e.key === 'tickets' ? { deny: 'the state is gone' } as never : next(e)
+    })
+    const ui = await mountBoth($, on, surface)
+    await start($)
+    await foreman($)
+    await w.clock.settle()
+    fails = true
+    expect(await spentTile(ui, surface)).toEqual(surface === 'terminal'
+      ? ['Spent cost unknown · sub sessions cost unknown · this session $1.75']
+      : ['Spent cost unknown', 'sub sessions cost unknown · this session $1.75'])
+  })
+
+  test(`on the ${surface}, a ledger that reads with no sub session spending leaves the parent's own spend as the Spent figure`, async ($, on) => {
+    const w = world(on, { store: { 'parent:session-1': { isOn: true, slots: 2 }, [ticketsKey('session-1')]: { ...TICKETS_EMPTY } } })
+    builderUsage(on, OWN_USAGE)
+    const ui = await mountBoth($, on, surface)
+    await start($)
+    await foreman($)
+    await w.clock.settle()
+    expect(await spentTile(ui, surface)).toEqual(surface === 'terminal'
+      ? ['Spent $1.75 · sub sessions cost unknown · this session $1.75']
+      : ['Spent $1.75', 'sub sessions cost unknown · this session $1.75'])
+  })
+}
+
 test('a ledger that cannot be read hands the band back to the host rather than claim no slot is busy', async ($, on) => {
   const w = world(on, { store: { 'parent:session-1': { isOn: true, slots: 2 }, [ticketsKey('session-1')]: { ...TICKETS_EMPTY } } })
   w.folder.put('a.json', record('ABC-1', 'working', { stage: 'build', desktopSessionId: 'local_ABC-1' }))
@@ -427,6 +481,7 @@ test('a ledger that cannot be read hands the band back to the host rather than c
   expect(await ui.bandText()).toContain('1 of 2 slots busy')
   fails = true
   expect(await ui.bandText()).toBe('')
+  expect(await ui.band.find({ text: 'host line' })).toBeDefined()
 })
 
 test('a ledger that cannot be read draws no slot lights, says the busy slots are unknown and shows no badge', async ($, on) => {

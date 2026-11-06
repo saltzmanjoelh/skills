@@ -39,7 +39,7 @@ export type Step =
   | { kind: 'review'; head: string | null }
   | { kind: 'changes-requested' }
   // The three steps for reviewers other than the session's own login, which
-  // come once both verdicts approve and before the four outcomes below.
+  // come once both verdicts approve and before the five outcomes below.
   // `reviewers` holds the outside reviewers the step is about, and `others`
   // the other reviewers whose newest review comments or requests changes,
   // which this step and the merge steps carry only when there are any, so a
@@ -48,7 +48,11 @@ export type Step =
   | { kind: 'outside-feedback'; number: number; reviewers: string[]; others?: string[] }
   | { kind: 'request-review'; number: number; reviewers: string[]; others?: string[] }
   | { kind: 'awaiting-review'; reviewers: string[]; others?: string[] }
-  // The four outcomes of the step where both verdicts approve at the head.
+  // The five outcomes of the step where both verdicts approve at the head.
+  // The first holds every later one while the CLAUDE.md in the user's
+  // configuration folder exists but could not be read and the base branch's
+  // CLAUDE.md names no reviewer of its own, so the reviewers are unknown.
+  | { kind: 'user-claude-unread' }
   | { kind: 'runs-unread' }
   | { kind: 'waiting' }
   // The head is not a full commit sha, so no merge command can carry it.
@@ -107,7 +111,7 @@ export function baseFactsOf(claude: string, workflowsListed: boolean | null): Ba
 // whole value. This function also drops a leading `@` from each login and
 // leaves out anything that is not a GitHub login.
 export function reviewersOf(project: string | null, user: string | null): string[] {
-  const line = (project === null ? null : factIn(project, 'Reviewer')) ?? (user === null ? null : factIn(user, 'Reviewer'))
+  const line = projectReviewerLine(project) ?? (user === null ? null : factIn(user, 'Reviewer'))
   if (line === null || line.trim().toLowerCase() === 'none') return []
   const logins = line.split(',').map(part => part.trim().replace(/^`+|`+$/g, '').replace(/^@/, '')).filter(isLogin)
   // GitHub compares logins without regard to case, so a repeat in another
@@ -115,6 +119,40 @@ export function reviewersOf(project: string | null, user: string | null): string
   const kept = new Map<string, string>()
   for (const login of logins) if (!kept.has(login.toLowerCase())) kept.set(login.toLowerCase(), login)
   return [...kept.values()]
+}
+
+// The value of the project's own `Reviewer:` line, or null when the project's
+// CLAUDE.md could not be read or has no such line. A project line wins over
+// the user's, so reviewersOf and reviewerFactOf both ask this one function
+// whether the project decides the reviewers.
+function projectReviewerLine(project: string | null): string | null {
+  return project === null ? null : factIn(project, 'Reviewer')
+}
+
+// The CLAUDE.md in the user's configuration folder as one look found it: its
+// text when it was read, missing when it is not there, or unreadable when it
+// exists but could not be read. The kind is a tag of its own, so no text of
+// the file, not even the single word "unreadable", can be taken for a file
+// that could not be read.
+export type UserClaude = { kind: 'read'; text: string } | { kind: 'missing' } | { kind: 'unreadable' }
+
+// The `Reviewer:` fact with whether it is unknown. `user` is the CLAUDE.md in
+// the user's configuration folder. The reviewers are unknown when the user's
+// file is unreadable and the project has no `Reviewer:` line of its own,
+// which is the same check reviewersOf makes to decide which line wins,
+// because the fact would then have come from the file that could not be
+// read. A project's `Reviewer:` line, including `Reviewer: none`, decides
+// whatever the user's file is.
+export function reviewerFactOf(project: string | null, user: UserClaude): { reviewers: string[]; isUnknown: boolean } {
+  switch (user.kind) {
+    case 'read':
+      return { reviewers: reviewersOf(project, user.text), isUnknown: false }
+    case 'missing':
+      return { reviewers: reviewersOf(project, null), isUnknown: false }
+    case 'unreadable': {
+      return { reviewers: reviewersOf(project, null), isUnknown: projectReviewerLine(project) === null }
+    }
+  }
 }
 
 function limitIn(claude: string, label: string, fallback: number): number {
@@ -183,6 +221,14 @@ export function chooseStep(s: Snapshot, isAsking: boolean): Step {
   if (unrequested.length > 0) return { kind: 'request-review', number: s.number, reviewers: unrequested, ...withOthers }
   const requested = inState('requested')
   if (requested.length > 0) return { kind: 'awaiting-review', reviewers: requested, ...withOthers }
+  // Both verdicts approve, and every outside reviewer the look knows of has
+  // approved. While the user's own CLAUDE.md could not be read and the base
+  // branch's names no reviewer, a reviewer only that file names may be
+  // missing, so no later step, and so no merge, is named. The mark is read
+  // from the snapshot itself rather than through factsOf, because factsOf
+  // answers the unread facts when the base branch's file was not read, and
+  // those carry no mark.
+  if (s.facts?.reviewersUnknown === true) return { kind: 'user-claude-unread' }
   // Both verdicts approve. A snapshot without the runs at the head, as one an
   // older build stored, holds as if the runs could not be read, so it never
   // leads to a merge.
@@ -255,8 +301,10 @@ export function linkedIn(raw: unknown): Linked {
 // give ready-to-merge, from which waitingOn derives the merge interval. The
 // step for runs that could not be read is not one of them: it exists only
 // because the runs read failed, so a ready-to-merge there would rest on a
-// failed read, and it would also move the poll to the merge interval. Merged
-// and An open question change nothing either.
+// failed read, and it would also move the poll to the merge interval. The
+// step for a user CLAUDE.md that could not be read gives none for the same
+// reason, so the label the pull request carries stays. Merged and An open
+// question change nothing either.
 export function labelFor(step: Step): StateLabel | null {
   switch (step.kind) {
     case 'review': return 'in-review'
@@ -274,6 +322,7 @@ export function labelFor(step: Step): StateLabel | null {
     case 'closed': return 'stuck'
     case 'merged':
     case 'question':
+    case 'user-claude-unread':
     case 'runs-unread': return null
   }
 }
@@ -416,6 +465,7 @@ function nameOf(step: Step): string {
     case 'outside-feedback': return 'Both verdicts approve at this head, and an outside review has feedback to address'
     case 'request-review': return 'Both verdicts approve at this head, request the outside review'
     case 'awaiting-review': return 'Both verdicts approve at this head, waiting on the outside review'
+    case 'user-claude-unread': return 'Both verdicts approve at this head, but the user\'s own CLAUDE.md could not be read'
     case 'runs-unread': return 'Both verdicts approve at this head, but the workflow runs could not be read'
     case 'waiting': return 'Both verdicts approve at this head, waiting on checks'
     case 'head-unchecked': return 'Both verdicts approve at this head, but the head is not a full commit sha'
@@ -447,6 +497,10 @@ function textOf(step: Step): string[] {
       `Both verdicts approve at this head, and the review of ${listed(step.reviewers)} is requested and not yet given (see ${see('Outside reviewers')}). The merge waits until every outside reviewer approves.`,
       ...othersLines(step.others),
       `Say "waiting on the review of ${step.reviewers.join(', ')}" and end the turn. The mod starts a turn when a review arrives or a request changes.`,
+    ]
+    case 'user-claude-unread': return [
+      'Both verdicts approve at this head, but the CLAUDE.md in the user\'s Claude configuration folder exists and could not be read at the mod\'s last look, so the reviewers its `Reviewer:` line may name are unknown.',
+      'Merge nothing, and end the turn. The mod looks again at its next poll, and starts a turn once the file can be read.',
     ]
     case 'runs-unread': return [
       'Both verdicts approve at this head, but the workflow runs at the head could not be read at the mod\'s last look, so the runs it shows are the ones it stored before.',
@@ -620,6 +674,7 @@ function mergeLines(step: Extract<Step, { kind: 'merge' | 'ask-merge' }>): strin
     '- If the branch changes any of the `Merge command:`, `Checks:`, `Max pushes per round:`, `Max rounds:`, `Reviewer:` or `Base branch:` lines of CLAUDE.md, ask the person before merging, because those lines govern the merge and are read from the base branch.',
     `- Fetch the base with \`git fetch origin <base>\`, where <base> is the pull request's \`baseRefName\`, and read \`git show origin/<base>:CLAUDE.md\` again, because the mod read that file from the local copy of the base branch, which can be out of date. If the fetch fails, do not merge: say why and end the turn.${baseChecks(step)} If the fetched file has a \`Reviewer:\` line that names a login, other than \`none\` and the session's own, who has not approved the pull request, because they have no review of it or their newest review of it is not an approval, merge nothing and end the turn: the mod's look could not read that file and so missed that reviewer, who may never have been asked for a review, and its next look that reads the file names them.`,
     `- ${unpushedLine(step.unpushed)} When the worktree holds commits the pull request lacks, or they could not be listed, do not merge: do what ${see('Commits the pull request lacks')} says, and after a push ${AFTER_PUSH}.`,
+    '- On a frontend pull request, one whose body has a `## Screenshots` section and whose fetched base branch\'s CLAUDE.md names at least one glob on its `Frontend paths:` line, first read `skills/implement/frontend.md`, in the /implement skill\'s folder, again, and bring the screenshot section up to date as its section **Screenshots on a frontend pull request** says, because a session that stopped between a push and that rewrite would otherwise merge image links to old commits. A pull request whose body has no such section skips this bullet.',
     `- Read the pull request again with \`gh pr view ${number} --json headRefOid,statusCheckRollup,reviews,reviewRequests\`, and every workflow run at the head with ${runsReadOf(step.repo, head)}. If the head moved from ${head}, call \`mcp__builder__watch\` and follow the step it names. If a check is no longer passed, call \`mcp__builder__watch\` and follow the step it names. If any reviewer other than the session is now requested as a user, or any login that the \`Reviewer:\` fact names, other than the session's own, has not approved the pull request, because they have no review of it or their newest review of it is not an approval, or any reviewer other than the session's own login whose newest review is not an approval carries the association \`OWNER\`, \`MEMBER\` or \`COLLABORATOR\`, merge nothing: call \`mcp__builder__watch\` and follow the step it names. The \`Reviewer:\` fact is the fetched base branch's \`Reviewer:\` line when that file has one, and the user's own \`Reviewer:\` line only when it has none. A line that says \`none\` names nobody, so \`Reviewer: none\` in the base branch turns the user's line off, and the branch's own CLAUDE.md never counts here. The session's own verdict reviews, which are comment reviews, never hold the merge under any of these rules.`,
     `- The mod saw ${runsText(step.runs)} at this head, and has already applied the rules for which runs count to them, so an unfinished or failed run among them is one that a later run replaced. If the read finds any other run, or another attempt of one of them, whether it is unfinished, has failed or passed, call \`mcp__builder__watch\` and follow the step it names instead of merging.`,
     `To merge, ${run}. Never merge any other way: a project that names a gate means no session merges around it. If the command refuses, say why and wait.`,

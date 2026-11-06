@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { countingRuns, failedRunsOf, hasFailed, isReplaced, isUnfinished, needsJobs, snapshotOf, type GhPullRequest } from '../hooks/github'
-import { baseFactsOf, chooseStep, CLEANUP_SECTIONS, DEFAULT_MERGE_COMMAND, labelActionOf, LINKED_KEPT, linkedIn, labelFor, labelRecordIn, needsListing, otherStateLabelsOf, SKILL_POINTS, SKILL_SECTIONS, stepFor, stepLines, unpushedIn, type Step } from '../hooks/step'
+import { baseFactsOf, chooseStep, CLEANUP_SECTIONS, DEFAULT_MERGE_COMMAND, labelActionOf, LINKED_KEPT, linkedIn, labelFor, labelRecordIn, needsListing, otherStateLabelsOf, reviewerFactOf, SKILL_POINTS, SKILL_SECTIONS, stepFor, stepLines, UNREAD_FACTS, unpushedIn, type Step } from '../hooks/step'
 import type { BaseFacts, HeadRun, Snapshot, Unpushed } from '../types'
 
 const ME = 'owner'
@@ -241,6 +241,63 @@ test('a snapshot an older build stored, with no runs at the head, holds the merg
   expect(kind(older as Snapshot)).toBe('runs-unread')
 })
 
+// The base facts of a look that found the user's own CLAUDE.md unreadable
+// while the base branch's CLAUDE.md named no reviewer.
+const UNKNOWN: BaseFacts = { ...FACTS, reviewersUnknown: true }
+
+test('both verdicts approving with the reviewers unknown holds the merge, in place of every later step where both verdicts approve', () => {
+  const pending = [{ __typename: 'CheckRun', name: 'tests', status: 'IN_PROGRESS', conclusion: null }]
+  const none = { reviews: approved, statusCheckRollup: [] }
+  // Without the mark: merge, runs unread, waiting, merge without checks.
+  expect(kind(snapshot({ reviews: approved }, [headRun()]))).toBe('merge')
+  expect(kind(snapshot({ reviews: approved }, [headRun()], UNKNOWN))).toBe('user-claude-unread')
+  expect(kind(snapshot({ reviews: approved }, [headRun()], UNKNOWN, true))).toBe('user-claude-unread')
+  expect(kind(snapshot({ reviews: approved, statusCheckRollup: pending }, [], UNKNOWN))).toBe('user-claude-unread')
+  expect(kind(snapshot(none, [], { ...UNKNOWN, checks: 'none' }))).toBe('user-claude-unread')
+  expect(kind(snapshot(none, [headRun({ id: 5 })], UNKNOWN))).toBe('user-claude-unread')
+  const sha = 'abcdef0123456789'
+  expect(kind(snapshot({ reviews: [review(sha, 'APPROVE', 'APPROVE')], headRefOid: sha, commits: [{ oid: sha }] }, [headRun()], UNKNOWN))).toBe('user-claude-unread')
+  // The base branch's file unread too: factsOf would answer the unread facts,
+  // which have no mark, so the chooser reads the mark from the snapshot.
+  expect(kind(snapshot(none, [], { ...UNREAD_FACTS, reviewersUnknown: true }))).toBe('user-claude-unread')
+})
+
+test('with the reviewers unknown, the steps before both verdicts approve and the outside reviewer steps still come first', () => {
+  expect(kind(snapshot({}, [headRun()], UNKNOWN))).toBe('review')
+  expect(kind(snapshot({ reviews: [review(C, 'REQUEST_CHANGES', 'APPROVE')] }, [], UNKNOWN))).toBe('changes-requested')
+  expect(kind(snapshot({ reviews: approved, mergeable: 'CONFLICTING' }, [], UNKNOWN))).toBe('conflicting')
+  expect(kind(snapshot({ reviews: approved }, [], UNKNOWN), true)).toBe('question')
+  expect(kind(snapshot({ reviews: approved, reviewRequests: [{ __typename: 'User', login: 'ann' }] }, [headRun()], UNKNOWN))).toBe('awaiting-review')
+  const annComments = { author: { login: 'ann' }, state: 'COMMENTED', body: '', commit: { oid: C }, submittedAt: '2026-11-05T10:00:00Z', authorAssociation: 'MEMBER' }
+  expect(kind(snapshot({ reviews: [...approved, annComments] }, [headRun()], UNKNOWN))).toBe('outside-feedback')
+  const annApproves = { ...annComments, state: 'APPROVED' }
+  expect(kind(snapshot({ reviews: [...approved, annApproves] }, [headRun()], UNKNOWN))).toBe('user-claude-unread')
+})
+
+test('a snapshot without the unknown mark counts as known and merges, including one with unread base facts', () => {
+  const none = { reviews: approved, statusCheckRollup: [] }
+  expect(kind(snapshot({ reviews: approved }, [headRun()]))).toBe('merge')
+  expect(kind(snapshot(none, [], UNREAD_FACTS))).toBe('ask-merge')
+  const { facts: _facts, ...noFacts } = snapshot(none)
+  expect(kind(noFacts as Snapshot)).toBe('ask-merge')
+})
+
+test('the reviewers are unknown only when the user\'s file is unreadable and the base branch\'s file names no reviewer', () => {
+  expect(reviewerFactOf('Checks: none\n', { kind: 'unreadable' })).toEqual({ reviewers: [], isUnknown: true })
+  expect(reviewerFactOf(null, { kind: 'unreadable' })).toEqual({ reviewers: [], isUnknown: true })
+  expect(reviewerFactOf('Reviewer: ann\n', { kind: 'unreadable' })).toEqual({ reviewers: ['ann'], isUnknown: false })
+  expect(reviewerFactOf('Reviewer: none\n', { kind: 'unreadable' })).toEqual({ reviewers: [], isUnknown: false })
+  expect(reviewerFactOf('Checks: none\n', { kind: 'read', text: 'Reviewer: bob\n' })).toEqual({ reviewers: ['bob'], isUnknown: false })
+  expect(reviewerFactOf(null, { kind: 'read', text: 'Reviewer: bob\n' })).toEqual({ reviewers: ['bob'], isUnknown: false })
+  expect(reviewerFactOf('Reviewer: ann\n', { kind: 'read', text: 'Reviewer: bob\n' })).toEqual({ reviewers: ['ann'], isUnknown: false })
+  expect(reviewerFactOf('Checks: none\n', { kind: 'missing' })).toEqual({ reviewers: [], isUnknown: false })
+  expect(reviewerFactOf(null, { kind: 'missing' })).toEqual({ reviewers: [], isUnknown: false })
+})
+
+test('a user CLAUDE.md that was read and whose whole text is the word unreadable is not taken for an unreadable file', () => {
+  expect(reviewerFactOf('Checks: none\n', { kind: 'read', text: 'unreadable' })).toEqual({ reviewers: [], isUnknown: false })
+})
+
 test('both verdicts approving with a pending check or an unfinished run waits on checks', () => {
   const pending = [{ __typename: 'CheckRun', name: 'tests', status: 'IN_PROGRESS', conclusion: null }]
   expect(kind(snapshot({ reviews: approved, statusCheckRollup: pending }))).toBe('waiting')
@@ -319,6 +376,7 @@ const EVERY_STEP: Step[] = [
   { kind: 'failed', runs: [123456, 789] },
   { kind: 'review', head: C },
   { kind: 'changes-requested' },
+  { kind: 'user-claude-unread' },
   { kind: 'runs-unread' },
   { kind: 'waiting' },
   { kind: 'head-unchecked' },
@@ -515,6 +573,18 @@ test('the waiting and unread texts end the turn and never merge', () => {
   expect(unread).toContain('end the turn')
 })
 
+test('the text for an unreadable user CLAUDE.md names the file by its place, holds no path, merges nothing and ends the turn', () => {
+  expect(stepLines({ kind: 'user-claude-unread' })).toEqual([
+    'The step that applies: Both verdicts approve at this head, but the user\'s own CLAUDE.md could not be read.',
+    'Both verdicts approve at this head, but the CLAUDE.md in the user\'s Claude configuration folder exists and could not be read at the mod\'s last look, so the reviewers its `Reviewer:` line may name are unknown.',
+    'Merge nothing, and end the turn. The mod looks again at its next poll, and starts a turn once the file can be read.',
+  ])
+  const text = textOf({ kind: 'user-claude-unread' })
+  expect(text).not.toContain('/')
+  expect(text).not.toContain('~')
+  expect(text).not.toContain('gh pr merge')
+})
+
 test('the merged text states the outcome of the mod\'s update of the linked checkout and never tells the session to run it, and keeps the follow-ups and the cleanup', () => {
   const text = textOf({ kind: 'merged', unpushed: NONE, linked: UPDATED })
   expect(text).toContain(UPDATED[0]!)
@@ -601,6 +671,7 @@ test('each step gives the state label that follows from it, and Merged, An open 
     'outside-feedback': 'waiting-on-author',
     'request-review': 'waiting-on-reviewer',
     'awaiting-review': 'waiting-on-reviewer',
+    'user-claude-unread': null,
     'runs-unread': null,
     waiting: 'ready-to-merge',
     'head-unchecked': 'ready-to-merge',

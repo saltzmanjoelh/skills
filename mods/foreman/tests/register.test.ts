@@ -8,7 +8,7 @@ import { STATUS_CHANGED_TEXT } from '../hooks/notes'
 import { START_FOREMAN_FALLBACK, START_FOREMAN_OFF, startForemanText } from '../hooks/commands'
 import { heldLine, topUpLine } from '../hooks/held'
 import { newPairing, ticketsIn, ticketsKey, TICKETS_EMPTY } from '../hooks/tickets'
-import { CHANGED, CHANGED_AS_RECEIVED, CHANGED_ELEMENT, foreman, held, HOME, MINUTE, SECOND, SECRET, SURFACES, T0, leftInState, mountBoth, record, SENT, start, statusFolder, world } from './world'
+import { builderUsage, CHANGED, CHANGED_AS_RECEIVED, CHANGED_ELEMENT, foreman, held, HOME, MINUTE, SECOND, SECRET, SURFACES, T0, leftInState, mountBoth, record, SENT, start, statusFolder, world } from './world'
 
 // Two sub sessions: one working at the plan stage with three stages done and
 // a pull request, and one that needs the person.
@@ -547,15 +547,6 @@ async function linesOf(ui: Awaited<ReturnType<typeof mountBoth>>, head: string):
   return (await ui.pane.findAll({ type: 'Text', text: new RegExp(`^${head}`) })).map(t => t.text)
 }
 
-// Answers foreman's reads of builder's `usage` state value with `value`, as
-// builder running in the same session would hold it.
-function builderUsage(on: On, value: unknown) {
-  on('state.get', ($, e, next) => {
-    if (e.plugin !== 'builder' || e.key !== 'usage') return next(e)
-    return { value: { value, version: 0 } } as never
-  })
-}
-
 test('each row shows its sub session\'s spending, and a row whose file carries none shows it as unknown, never as $0', async ($, on) => {
   const w = world(on)
   w.folder.put('a.json', record('ABC-1', 'working', { usage: USAGE }))
@@ -1030,6 +1021,9 @@ async function parentFor($: Engine, on: On, slots: number, pairings: ReturnType<
   return w
 }
 
+// The parent's start_session call for `key`, through foreman's tool call hook.
+const startOne = ($: Engine, key: string) => $.tool.call({ tool: 'mcp__ccd_session__start_session', prompt: `/implement ${key}`, context: 'fresh', title: `${key}: short` } as never)
+
 // A start that went ahead and has no status file yet, and a sub session that
 // waits at `place`.
 const wentAhead = (key: string) => newPairing(`ft-${key}`, null, T0, key)
@@ -1061,14 +1055,63 @@ test('with one busy and one waiting sub session per slot, a typed prompt gets no
   expect(w.engine.contexts.at(-1)).toBeUndefined()
 })
 
-test('a plugin\'s prompt, a prompt typed while a turn runs and the prompt of a typed /start-foreman get no top-up line', async ($, on) => {
+test('a plugin\'s prompt and the prompt of a typed /start-foreman get no top-up line, whether or not a turn runs', async ($, on) => {
   const w = await parentFor($, on, 2)
   await typed($, 'foreman: a line', { origin: { kind: 'plugin', name: 'foreman' } })
-  await typed($, 'go on', { turnId: 't1' })
+  await typed($, 'foreman: a line', { origin: { kind: 'plugin', name: 'foreman' }, turnId: 't1' })
   await typed($, '/start-foreman', { command: { name: 'start-foreman', args: '' } })
+  await typed($, '/start-foreman', { command: { name: 'start-foreman', args: '' }, turnId: 't1' })
   await typed($, '/start-foreman 3')
+  await typed($, '/start-foreman 3', { turnId: 't1' })
   await typed($, '  /start-foreman')
-  expect(w.engine.contexts).toEqual([undefined, undefined, undefined, undefined, undefined])
+  expect(w.engine.contexts).toEqual([undefined, undefined, undefined, undefined, undefined, undefined, undefined])
+})
+
+// A prompt the person types while a turn already runs carries that turn's id.
+const midTurn = { turnId: 't1' }
+
+test('a prompt typed while a turn runs carries the top-up line, counted afresh from the ledger, so a start on that turn makes the next count smaller', async ($, on) => {
+  const w = await parentFor($, on, 2)
+  w.engine.startAnswers = ['Started the session local_new1 (name: example).']
+  expect((await typed($, 'go on', midTurn)).context).toEqual([topUpLine(4)])
+  await startOne($, 'ABC-1')
+  expect((await typed($, 'go on', midTurn)).context).toEqual([topUpLine(3)])
+})
+
+test('a prompt typed while a start is still going through already leaves that start out of its count', async ($, on) => {
+  const w = await parentFor($, on, 1)
+  let mid: Submitted | undefined
+  w.engine.onStart = async () => { mid = await typed($, 'go on', midTurn) }
+  await startOne($, 'ABC-1')
+  expect(mid?.context).toEqual([topUpLine(1)])
+})
+
+test('the top-up line on a prompt typed while a turn runs asks for at most five starts', async ($, on) => {
+  await parentFor($, on, 4)
+  expect((await typed($, 'go on', midTurn)).context).toEqual([topUpLine(5)])
+})
+
+test('on a prompt typed while a turn runs, the top-up line comes after the held line', async ($, on) => {
+  await parentFor($, on, 1, [], ['ABC-7'])
+  expect((await typed($, 'go on', midTurn)).context).toEqual([heldLine(['ABC-7']), topUpLine(2)])
+})
+
+test('with one busy and one waiting sub session per slot, a prompt typed while a turn runs gets no top-up line', async ($, on) => {
+  const w = await parentFor($, on, 1, [wentAhead('ABC-1'), waitsAt('ABC-2', 1)])
+  expect(await typed($, 'go on', midTurn)).toEqual({ text: 'go on' })
+  expect(w.engine.contexts.at(-1)).toBeUndefined()
+})
+
+test('a count that fails leaves the top-up line out and keeps the held line, whether or not a turn runs', async ($, on) => {
+  world(on, { store: { 'parent:session-1': { isOn: true, slots: 1 }, [ticketsKey('session-1')]: { ...TICKETS_EMPTY, held: ['ABC-7'] } } })
+  let fails = false
+  on('state.get', ($, e, next) => (fails && e.plugin === 'foreman' && e.key === 'files' ? { deny: 'the state is gone' } as never : next(e)))
+  await mountBoth($, on)
+  await start($)
+  expect((await typed($, 'go on')).context).toEqual([heldLine(['ABC-7']), topUpLine(2)])
+  fails = true
+  expect((await typed($, 'go on', midTurn)).context).toEqual([heldLine(['ABC-7'])])
+  expect((await typed($, 'go on')).context).toEqual([heldLine(['ABC-7'])])
 })
 
 test('with the role off, a typed prompt gets no top-up line', async ($, on) => {
@@ -1131,7 +1174,6 @@ test('the skill\'s text is replaced with the top-up count from the live ledger f
     expect(text).not.toContain('not loaded')
     seen.push(n)
   }
-  const startOne = (key: string) => $.tool.call({ tool: 'mcp__ccd_session__start_session', prompt: `/implement ${key}`, context: 'fresh', title: `${key}: short` } as never)
   await foreman($, '3')
   await expectCount(5)
   await foreman($, '2')
@@ -1139,11 +1181,11 @@ test('the skill\'s text is replaced with the top-up count from the live ledger f
   await foreman($, '1')
   await expectCount(2)
   await foreman($, '2')
-  await startOne('ABC-1')
+  await startOne($, 'ABC-1')
   await expectCount(3)
   await foreman($, '1')
   await expectCount(1)
-  await startOne('ABC-2')
+  await startOne($, 'ABC-2')
   await expectCount(0)
   expect(seen.sort()).toEqual([0, 1, 2, 3, 4, 5])
   // Foreman answered every expansion itself, so the skill's own text never

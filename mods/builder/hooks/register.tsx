@@ -21,7 +21,7 @@ import { changedKinds, commitRecordsOf, decidedItems, factIn, INSTRUCTION_PATHSP
 import { AGENTS_KEPT, backgroundOf, backgroundTaskIdOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isMerge, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
 import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isForemanNudge, keptTicketIn, keptTicketOf, memoOfKeptTicket, newMemo, parentIn, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, STATUS_CHANGED_TEXT, stateOf, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type KeptTicket, type Starts, type StatusFacts } from './status'
 import { afterSend, emptySends, sendOutcomeOf, sendsIn, sendsKey, sendsNewest, SENDS_KEPT_MS, SENDS_PREFIX, type SendOutcome, type SendSettled, type SendsRecord } from './sends'
-import { baseFactsOf, chooseStep, labelActionOf, labelFor, labelRecordIn, needsListing, otherStateLabelsOf, reviewersOf, SHORT_HASH, stepFor, UNPUSHED_KEPT, UNREAD_FACTS, type LabelRecord, type StuckJudgement } from './step'
+import { baseFactsOf, chooseStep, labelActionOf, labelFor, labelRecordIn, needsListing, otherStateLabelsOf, reviewerFactOf, SHORT_HASH, stepFor, UNPUSHED_KEPT, UNREAD_FACTS, type LabelRecord, type StuckJudgement, type UserClaude } from './step'
 import { timeOfDay } from './text'
 import { afterPackage, afterPr, afterReview, afterStage, afterState, emptyTiming, timingIn, type PullRequestSeen } from './timing'
 import { afterCost, afterStep, emptyUsage, usageIn } from './usage'
@@ -494,19 +494,26 @@ function baseFolderOf(r: SnapshotTarget): string | null {
 // is no folder or base to read it from, the facts are the unread defaults.
 // The reviewers the `Reviewer:` fact names come from that file, or else from
 // the CLAUDE.md in the user's configuration folder, which is read even when
-// the base branch's file is not; reviewersOf decides which line wins.
+// the base branch's file is not; reviewerFactOf decides which line wins, and
+// whether the reviewers are unknown because the user's file could not be
+// read.
 async function readBaseFacts($: $, dir: string | null, base: string | null): Promise<BaseFacts> {
   const claude = dir === null || base === null ? null : await git($, dir, ['show', `origin/${base}:CLAUDE.md`])
-  const reviewers = reviewersOf(claude, await readUserClaude($))
-  if (dir === null || base === null || claude === null) return withReviewers(UNREAD_FACTS, reviewers)
-  return withReviewers(await factsOfBase($, dir, base, claude), reviewers)
+  const { reviewers, isUnknown } = reviewerFactOf(claude, await readUserClaude($))
+  if (dir === null || base === null || claude === null) return withReviewers(UNREAD_FACTS, reviewers, isUnknown)
+  return withReviewers(await factsOfBase($, dir, base, claude), reviewers, isUnknown)
 }
 
 // The facts with the reviewers the `Reviewer:` fact names, which are left
-// out when there are none, so a project without a reviewer stores the facts
+// out when there are none, and the mark that they are unknown, which is left
+// out when they are known, so a project without a reviewer stores the facts
 // it stored before.
-function withReviewers(facts: BaseFacts, reviewers: string[]): BaseFacts {
-  return reviewers.length === 0 ? facts : { ...facts, reviewers }
+function withReviewers(facts: BaseFacts, reviewers: string[], isUnknown: boolean): BaseFacts {
+  return {
+    ...facts,
+    ...(reviewers.length === 0 ? {} : { reviewers }),
+    ...(isUnknown ? { reviewersUnknown: true as const } : {}),
+  }
 }
 
 async function factsOfBase($: $, dir: string, base: string, claude: string): Promise<BaseFacts> {
@@ -521,14 +528,30 @@ async function factsOfBase($: $, dir: string, base: string, claude: string): Pro
   return baseFactsOf(claude, tree === null ? null : tree.trim() !== '')
 }
 
-// The text of the CLAUDE.md in the user's configuration folder, or null when
-// there is no such folder or the file cannot be read.
-async function readUserClaude($: $): Promise<string | null> {
+// The CLAUDE.md in the user's configuration folder: its text when it was
+// read, missing in exactly two cases, and unreadable in every other. It is
+// missing when no configuration folder can be worked out, because
+// CLAUDE_CONFIG_DIR is set but relative, or HOME is unset or not absolute,
+// and when `$.fs.exists` answers false for the file. A rejected read of a
+// path that exists, an `exists` call that itself rejects, a read that gives
+// no text and an environment that cannot be read are all unreadable. Only
+// `exists` tells the two apart, never the shape or text of a read's error,
+// which is not documented. It never throws.
+async function readUserClaude($: $): Promise<UserClaude> {
+  let dir: string | null
   try {
-    const dir = configDirOf(await $.env.get('CLAUDE_CONFIG_DIR'), await $.env.get('HOME'))
-    return dir === null ? null : await $.fs.read(`${dir}/CLAUDE.md`)
+    dir = configDirOf(await $.env.get('CLAUDE_CONFIG_DIR'), await $.env.get('HOME'))
   } catch {
-    return null
+    return { kind: 'unreadable' }
+  }
+  if (dir === null) return { kind: 'missing' }
+  const path = `${dir}/CLAUDE.md`
+  try {
+    if (!(await $.fs.exists(path))) return { kind: 'missing' }
+    const text: unknown = await $.fs.read(path)
+    return typeof text === 'string' ? { kind: 'read', text } : { kind: 'unreadable' }
+  } catch {
+    return { kind: 'unreadable' }
   }
 }
 
