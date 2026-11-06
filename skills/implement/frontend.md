@@ -1,28 +1,20 @@
 # Frontend rules for /implement
 
-Read this file only when the base branch's `CLAUDE.md` names at least one
-glob under `Frontend paths:`. The steps, points and sections it names, such as
-step 7, "Rules", "A review round", "Commits the pull request lacks" or the
-second half's point 5, are those of `SKILL.md` beside this file. Step 7 there
-includes the section **A frontend change** below, so "the pathspecs of step 7"
-and "as step 7 says a published reason is written" point at that section, and
-"the paragraph above" in it means step 7's paragraph that opens the pull
-request the plain way. Run every git command below from the worktree's top
+Read this file only when step 7 of `SKILL.md` finds the change frontend, or
+when a pull request's body has a `## Screenshots` section and the base branch's
+`CLAUDE.md` does not say `Frontend paths: none`. The steps, points and sections
+it names, such as step 7, "Rules", "A review round", "Commits the pull request
+lacks" or the second half's point 5, are those of `SKILL.md` beside this file.
+"The pathspecs of step 7" are the ones step 7 builds, from the project's own
+globs or from its built-in list with its exclusions. Step 7 includes the
+section **A frontend change** below, so "as step 7 says a published reason is
+written" points at that section, and "the paragraph above" in it means step
+7's paragraph that opens the pull request the plain way. Run every git command below from the worktree's top
 folder.
 
 ## A frontend change
 
-**A frontend change.** The project's `Frontend paths:` fact is a
-comma-separated list of path globs, such as
-`Frontend paths: web/src/**, app/screens/**`. A line that is empty, or holds
-only commas and spaces, counts as missing, and with the fact missing no change
-is frontend. Otherwise the change is frontend when
-`git diff --no-renames --name-only origin/<base>...HEAD -- ':(glob)<first glob>' ':(glob)<second glob>'`,
-with one quoted pathspec per glob, prints at least one path. A file the change
-adds, modifies, deletes or renames counts, because each of them changes what a
-person can see. Without `--no-renames`, git reports a rename only under its new
-path, so a file moved out of a frontend path would not count. For a frontend
-change, after checking that the diff lists only this change's files, run
+**A frontend change.** For a change that step 7 found frontend, after checking that the diff lists only this change's files, run
 `/storypr` as its section **When another skill calls it** says. When it
 returns a body file, a commit and the screenshot paths, write at the top of the
 body file any lines that the project's `CLAUDE.md` says the body must begin
@@ -50,8 +42,15 @@ When `/storypr` returns a reason instead, it has committed nothing. Open the
 pull request the plain way, with `--title` and `--body-file`, the title quoted
 as above, and end the body
 with a `## Screenshots` section that says the change is frontend, that its
-screenshots are missing, and the reason. Tell the person the same in one
-sentence, and carry on without waiting for an answer. Every reason that this
+screenshots are missing, and the reason. When the base branch's `CLAUDE.md`
+has no `Frontend paths:` line, or one that is empty or holds only commas and
+spaces, step 7 found the change frontend with its built-in list. Work this out
+again from that file at this moment rather than remembering it. In that case
+the section also says that the built-in list of frontend paths matched the
+change, and that the project can write its own `Frontend paths:` list, or
+`Frontend paths: none`, in its `CLAUDE.md` to change that. That text names no
+path that matched. Tell the person the same, including that note when it
+applies, in one sentence, and carry on without waiting for an answer. Every reason that this
 step or a later commit publishes, in a body or a commit message, is a sentence
 or two of plain words that names no local path, host name, port, device
 identifier or token and quotes no raw error output, because the body and the
@@ -62,10 +61,13 @@ history are published for good.
 **Screenshots on a frontend pull request.** A pull request was opened as
 frontend when its body has a `## Screenshots` section, which step 7 writes only
 for a frontend change. A pull request that step 7 opened with a plain body
-keeps it, even when a later fix touches a frontend path. The rule applies only
-while the `Frontend paths:` fact names at least one glob, because
-`git diff --cached --name-only` with no pathspec lists every staged file; with
-the fact missing or empty, nothing below applies, whatever the body holds. On a
+keeps it, even when a later fix touches a frontend path. The rules below apply
+only while the base branch's `CLAUDE.md` does not say `Frontend paths: none`.
+Once it says that, nothing below applies, whatever the body holds. While they
+apply, the pathspecs of step 7 are never empty, because a missing or empty
+line means the built-in list. That matters because
+`git diff --cached --name-only` with no pathspec would list every staged file.
+On a
 frontend pull request, test every commit before making it: stage the change by path, then
 run `git diff --cached --no-renames --name-only` with the pathspecs of step 7,
 before any screenshot is staged, so that a screenshot never makes its own
