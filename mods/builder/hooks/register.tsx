@@ -3383,9 +3383,10 @@ const STATE_LABEL_KEPT_MS = 90 * 24 * 60 * 60_000
 // while the job runs queues the next one.
 let isStateLabelQueued = false
 
-// Every write of a state label record in this copy of the module runs one at
-// a time, as a read of the stored record, a change and a write, so the
-// set_stuck tool's judgement and a job's final save never interleave. The
+// Every write or delete of a state label record in this copy of the module
+// runs one at a time, as a read of the stored record, a change and a write or
+// delete, so the set_stuck tool's judgement, a job's final save and the prune
+// at a session's start never interleave. The
 // tool's caller sees a refused read or write, so it passes errors on.
 const inRecordQueue = oneAtATime({ passesErrors: true })
 
@@ -3622,14 +3623,18 @@ function labelNamesIn(out: string | null): string[] | null {
 
 // Drops each state label record set more than ninety days ago, by the newer
 // of its own time and its judgement's, and one stored in another shape at
-// once.
+// once. It runs while the session can already call the set_stuck tool, so
+// each record's read and delete wait in the record queue, and a judgement
+// saved in between is never deleted with the old record it replaced.
 async function pruneStateLabels($: $) {
   const now = await $.clock.now()
   for (const key of await $.store.keys()) {
     if (!key.startsWith(STATE_LABEL_PREFIX)) continue
-    const record = labelRecordIn(await $.store.get(key))
-    // A judgement keeps the record's own time, so the newer of the two counts.
-    if (record === null || now - Math.max(record.at, record.judgement?.at ?? record.at) > STATE_LABEL_KEPT_MS) await $.store.delete(key)
+    await inRecordQueue(async () => {
+      const record = labelRecordIn(await $.store.get(key))
+      // A judgement keeps the record's own time, so the newer of the two counts.
+      if (record === null || now - Math.max(record.at, record.judgement?.at ?? record.at) > STATE_LABEL_KEPT_MS) await $.store.delete(key)
+    })
   }
 }
 

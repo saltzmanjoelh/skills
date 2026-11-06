@@ -986,12 +986,14 @@ test('an agent the engine does not list keeps its tools', async ($, on) => {
 // `hold.gets` the key of every read, in the same way.
 // `hold.onDelete`, when set, is called with the key of every delete as it
 // begins, so a test can see what had already happened by then.
+// `hold.deleteUntil`, when set, keeps the next delete waiting until it
+// resolves, so a test can act between a read and the delete that follows it.
 function memoryStore(on: On, entries: [string, unknown][] = []) {
   const stored = new Map<string, unknown>(entries)
   const hold = {
     prefix: '', skip: 0, until: null as Promise<void> | null, refused: null as string | null, full: false,
     setsRefused: null as string | null, deletesRefused: false, keysRefused: false, listings: 0, sets: [] as string[],
-    gets: [] as string[], onDelete: null as ((key: string) => void) | null,
+    gets: [] as string[], onDelete: null as ((key: string) => void) | null, deleteUntil: null as Promise<void> | null,
   }
   on('store.keys', () => {
     hold.listings += 1
@@ -1018,8 +1020,11 @@ function memoryStore(on: On, entries: [string, unknown][] = []) {
     stored.set(e.key, e.value)
     return { value: undefined }
   })
-  on('store.delete', ($, e) => {
+  on('store.delete', async ($, e) => {
     hold.onDelete?.(e.key)
+    const deleteUntil = hold.deleteUntil
+    hold.deleteUntil = null
+    if (deleteUntil !== null) await deleteUntil
     if (hold.deletesRefused) return { deny: 'the store could not delete the key' }
     stored.delete(e.key)
     return { value: undefined }
@@ -16292,6 +16297,37 @@ test('a session start prunes label records older than they are kept, and records
   await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
   await clock.settle()
   expect([...stored.keys()].filter(key => key.startsWith('state-label:'))).toEqual(['state-label:o/r#2', 'state-label:o/r#4'])
+})
+
+// The prune at a session's start runs while the session can already call
+// the set_stuck tool, so its read and delete of a record wait in the same
+// queue as the tool's save of a judgement.
+test('a judgement saved while the prune at a session\'s start reads an old record of the watched pull request is kept', async ($, on) => {
+  const clock = mock.clock(on, { now: 200 * 24 * 60 * 60_000 })
+  // A record set long ago, of the label the step still gives, with no judgement.
+  const stored = memoryStore(on, [[STATE_LABEL_KEY, { label: 'in-review', at: 0 }]])
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr = openPullRequest({ labels: [{ name: 'in-review' }] })
+  // The prune has read the old record, and its delete waits until the tool
+  // has been called.
+  let release = () => {}
+  stored.hold.deleteUntil = new Promise(resolve => { release = resolve })
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  await clock.settle()
+  // Only the prune deletes at a session's start here, and it took the hold.
+  expect(stored.hold.deleteUntil).toBeNull()
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await clock.settle()
+
+  const answer = setStuck($)
+  await clock.settle()
+  release()
+  const ran = await answer
+  await clock.settle()
+  expect(String(ran.result)).toContain('stuck is on o/r#7')
+  expect(world.pr.labels).toEqual([{ name: 'stuck' }])
+  expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ label: 'in-review', judgement: { label: 'in-review', at: clock.now() } })
 })
 
 // The stages the mod reports by itself once the pull request is open.
