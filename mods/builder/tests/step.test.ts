@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { countingRuns, failedRunsOf, hasFailed, isReplaced, isUnfinished, needsJobs, snapshotOf, type GhPullRequest } from '../hooks/github'
-import { baseFactsOf, chooseStep, CLEANUP_SECTIONS, DEFAULT_MERGE_COMMAND, labelActionOf, LINKED_KEPT, linkedIn, labelFor, labelRecordIn, labelsToRemoveAfterEdit, needsListing, noteAfterRead, SKILL_POINTS, SKILL_SECTIONS, stepFor, stepLines, unpushedIn, type Step } from '../hooks/step'
+import { baseFactsOf, chooseStep, CLEANUP_SECTIONS, DEFAULT_MERGE_COMMAND, labelActionOf, LINKED_KEPT, linkedIn, labelFor, labelRecordIn, labelsToRemoveAfterEdit, needsListing, noteAfterRead, otherStateLabelsOf, SKILL_POINTS, SKILL_SECTIONS, stepFor, stepLines, unpushedIn, type Step } from '../hooks/step'
 import type { BaseFacts, HeadRun, Snapshot, Unpushed } from '../types'
 
 const ME = 'owner'
@@ -599,14 +599,22 @@ test('each step gives the state label that follows from it, and Merged, An open 
     review: 'in-review',
     'changes-requested': 'waiting-on-author',
     'outside-feedback': 'waiting-on-author',
-    'request-review': 'ready-to-merge',
-    'awaiting-review': 'ready-to-merge',
+    'request-review': 'waiting-on-reviewer',
+    'awaiting-review': 'waiting-on-reviewer',
     'runs-unread': null,
     waiting: 'ready-to-merge',
     'head-unchecked': 'ready-to-merge',
     merge: 'ready-to-merge',
     'ask-merge': 'ready-to-merge',
   })
+})
+
+test('setting waiting-on-reviewer removes the other four state labels, and setting any other removes it', () => {
+  const all = ['bug', 'in-review', 'waiting-on-author', 'waiting-on-reviewer', 'ready-to-merge', 'stuck', 'needs-decision']
+  expect(otherStateLabelsOf('waiting-on-reviewer', all)).toEqual(['in-review', 'waiting-on-author', 'ready-to-merge', 'stuck'])
+  for (const kept of ['in-review', 'waiting-on-author', 'ready-to-merge', 'stuck'] as const) {
+    expect(otherStateLabelsOf(kept, ['bug', 'waiting-on-reviewer'])).toEqual(['waiting-on-reviewer'])
+  }
 })
 
 test('a derived label equal to the record, or no derived label, changes nothing', () => {
@@ -730,7 +738,7 @@ test('the merge, ask-merge and Merged texts carry none, the short hashes with th
 test('no step text tells the session to set a label the mod sets, to report a stage, or to list commits itself', () => {
   for (const step of EVERY_STEP) {
     const text = textOf(step)
-    for (const label of ['in-review', 'waiting-on-author', 'ready-to-merge']) expect(text).not.toContain(label)
+    for (const label of ['in-review', 'waiting-on-author', 'waiting-on-reviewer', 'ready-to-merge']) expect(text).not.toContain(label)
     expect(text).not.toContain('mcp__builder__progress')
     expect(text).not.toContain('git fetch origin pull/')
     expect(text).not.toMatch(/git log [^`]*\.\.HEAD/)

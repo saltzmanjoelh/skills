@@ -211,8 +211,12 @@ export function waitingOn(s: Snapshot | null, cards: readonly AgentCard[], asked
   if (ci === 'failed') return 'fix'
   if (ci === 'pending' || (s.runs ?? []).length > 0) return 'ci'
   // A review asked of someone other than the session can take minutes or
-  // hours, and only a look sees it arrive.
-  if (outsideIn(s.outside).some(r => r.state === 'requested')) return 'reviewer'
+  // hours, and only a look sees it arrive. The waiting-on-reviewer label
+  // counts as well, so the step that requests the review polls at the same
+  // interval before the request reaches GitHub. It comes before the
+  // ready-to-merge line, so a pull request that carries both labels, as one
+  // relabelled by an older copy of the mod can, waits on the reviewer.
+  if (s.labels.includes('waiting-on-reviewer') || outsideIn(s.outside).some(r => r.state === 'requested')) return 'reviewer'
   if (s.labels.includes('ready-to-merge')) return 'merge'
   return 'nothing'
 }

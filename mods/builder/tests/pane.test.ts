@@ -94,6 +94,12 @@ test('a review requested of someone other than the session reads as waiting on t
   expect(nextStep(view({ pr: checksRunning }))).toBe('waiting on checks · next look in 7m')
 })
 
+test('a pull request carrying waiting-on-reviewer reads as waiting on the reviewer before any review is requested', () => {
+  const labelled = pullRequest(passed, ['waiting-on-reviewer'])
+  expect(nextStep(view({ pr: labelled }))).toBe('waiting on the reviewer · next look in 7m')
+  expect(abovePromptLine(view({ pr: labelled }))).toContain('waiting on the reviewer')
+})
+
 test('a failed check reads as waiting on a fix, in the next step and the line above the prompt', () => {
   expect(nextStep(view({ pr: pullRequest(failed) }))).toBe('waiting on a fix · next look in 7m')
   expect(abovePromptLine(view({ pr: pullRequest(failed) }))).toBe('builder: #7 open · checks failed · waiting on a fix · next look in 7m')
