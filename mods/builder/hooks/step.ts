@@ -121,18 +121,31 @@ export function reviewersOf(project: string | null, user: string | null): string
   return [...kept.values()]
 }
 
-// The `Reviewer:` fact with whether it is unknown. `user` is the text of the
-// CLAUDE.md in the user's configuration folder, null when it is missing, or
-// `unreadable` when it exists but could not be read. The reviewers are
-// unknown when the user's file is unreadable and the project has no
-// `Reviewer:` line of its own, which is the same check reviewersOf makes to
-// decide which line wins, because the fact would then have come from the
-// file that could not be read. A project's `Reviewer:` line, including
-// `Reviewer: none`, decides whatever the user's file is.
-export function reviewerFactOf(project: string | null, user: string | null | 'unreadable'): { reviewers: string[]; isUnknown: boolean } {
-  if (user !== 'unreadable') return { reviewers: reviewersOf(project, user), isUnknown: false }
-  const hasLine = project !== null && factIn(project, 'Reviewer') !== null
-  return { reviewers: reviewersOf(project, null), isUnknown: !hasLine }
+// The CLAUDE.md in the user's configuration folder as one look found it: its
+// text when it was read, missing when it is not there, or unreadable when it
+// exists but could not be read. The kind is a tag of its own, so no text of
+// the file, not even the single word "unreadable", can be taken for a file
+// that could not be read.
+export type UserClaude = { kind: 'read'; text: string } | { kind: 'missing' } | { kind: 'unreadable' }
+
+// The `Reviewer:` fact with whether it is unknown. `user` is the CLAUDE.md in
+// the user's configuration folder. The reviewers are unknown when the user's
+// file is unreadable and the project has no `Reviewer:` line of its own,
+// which is the same check reviewersOf makes to decide which line wins,
+// because the fact would then have come from the file that could not be
+// read. A project's `Reviewer:` line, including `Reviewer: none`, decides
+// whatever the user's file is.
+export function reviewerFactOf(project: string | null, user: UserClaude): { reviewers: string[]; isUnknown: boolean } {
+  switch (user.kind) {
+    case 'read':
+      return { reviewers: reviewersOf(project, user.text), isUnknown: false }
+    case 'missing':
+      return { reviewers: reviewersOf(project, null), isUnknown: false }
+    case 'unreadable': {
+      const hasLine = project !== null && factIn(project, 'Reviewer') !== null
+      return { reviewers: reviewersOf(project, null), isUnknown: !hasLine }
+    }
+  }
 }
 
 function limitIn(claude: string, label: string, fallback: number): number {

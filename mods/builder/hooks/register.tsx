@@ -21,7 +21,7 @@ import { changedKinds, commitRecordsOf, decidedItems, factIn, INSTRUCTION_PATHSP
 import { AGENTS_KEPT, backgroundOf, backgroundTaskIdOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isMerge, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
 import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isForemanNudge, keptTicketIn, keptTicketOf, memoOfKeptTicket, newMemo, parentIn, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, STATUS_CHANGED_TEXT, stateOf, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type KeptTicket, type Starts, type StatusFacts } from './status'
 import { afterSend, emptySends, sendOutcomeOf, sendsIn, sendsKey, sendsNewest, SENDS_KEPT_MS, SENDS_PREFIX, type SendOutcome, type SendSettled, type SendsRecord } from './sends'
-import { baseFactsOf, chooseStep, labelActionOf, labelFor, labelRecordIn, labelsToRemoveAfterEdit, needsListing, noteAfterRead, reviewerFactOf, SHORT_HASH, stepFor, UNPUSHED_KEPT, UNREAD_FACTS } from './step'
+import { baseFactsOf, chooseStep, labelActionOf, labelFor, labelRecordIn, labelsToRemoveAfterEdit, needsListing, noteAfterRead, reviewerFactOf, SHORT_HASH, stepFor, UNPUSHED_KEPT, UNREAD_FACTS, type UserClaude } from './step'
 import { timeOfDay } from './text'
 import { afterPackage, afterPr, afterReview, afterStage, afterState, emptyTiming, timingIn, type PullRequestSeen } from './timing'
 import { afterCost, afterStep, emptyUsage, usageIn } from './usage'
@@ -498,8 +498,7 @@ function baseFolderOf(r: SnapshotTarget): string | null {
 // read.
 async function readBaseFacts($: $, dir: string | null, base: string | null): Promise<BaseFacts> {
   const claude = dir === null || base === null ? null : await git($, dir, ['show', `origin/${base}:CLAUDE.md`])
-  const user = await readUserClaude($)
-  const { reviewers, isUnknown } = reviewerFactOf(claude, user.kind === 'read' ? user.text : user.kind === 'missing' ? null : 'unreadable')
+  const { reviewers, isUnknown } = reviewerFactOf(claude, await readUserClaude($))
   if (dir === null || base === null || claude === null) return withReviewers(UNREAD_FACTS, reviewers, isUnknown)
   return withReviewers(await factsOfBase($, dir, base, claude), reviewers, isUnknown)
 }
@@ -537,7 +536,7 @@ async function factsOfBase($: $, dir: string, base: string, claude: string): Pro
 // no text and an environment that cannot be read are all unreadable. Only
 // `exists` tells the two apart, never the shape or text of a read's error,
 // which is not documented. It never throws.
-async function readUserClaude($: $): Promise<{ kind: 'read'; text: string } | { kind: 'missing' } | { kind: 'unreadable' }> {
+async function readUserClaude($: $): Promise<UserClaude> {
   let dir: string | null
   try {
     dir = configDirOf(await $.env.get('CLAUDE_CONFIG_DIR'), await $.env.get('HOME'))

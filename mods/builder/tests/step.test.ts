@@ -283,15 +283,19 @@ test('a snapshot without the unknown mark counts as known and merges, including 
 })
 
 test('the reviewers are unknown only when the user\'s file is unreadable and the base branch\'s file names no reviewer', () => {
-  expect(reviewerFactOf('Checks: none\n', 'unreadable')).toEqual({ reviewers: [], isUnknown: true })
-  expect(reviewerFactOf(null, 'unreadable')).toEqual({ reviewers: [], isUnknown: true })
-  expect(reviewerFactOf('Reviewer: ann\n', 'unreadable')).toEqual({ reviewers: ['ann'], isUnknown: false })
-  expect(reviewerFactOf('Reviewer: none\n', 'unreadable')).toEqual({ reviewers: [], isUnknown: false })
-  expect(reviewerFactOf('Checks: none\n', 'Reviewer: bob\n')).toEqual({ reviewers: ['bob'], isUnknown: false })
-  expect(reviewerFactOf(null, 'Reviewer: bob\n')).toEqual({ reviewers: ['bob'], isUnknown: false })
-  expect(reviewerFactOf('Reviewer: ann\n', 'Reviewer: bob\n')).toEqual({ reviewers: ['ann'], isUnknown: false })
-  expect(reviewerFactOf('Checks: none\n', null)).toEqual({ reviewers: [], isUnknown: false })
-  expect(reviewerFactOf(null, null)).toEqual({ reviewers: [], isUnknown: false })
+  expect(reviewerFactOf('Checks: none\n', { kind: 'unreadable' })).toEqual({ reviewers: [], isUnknown: true })
+  expect(reviewerFactOf(null, { kind: 'unreadable' })).toEqual({ reviewers: [], isUnknown: true })
+  expect(reviewerFactOf('Reviewer: ann\n', { kind: 'unreadable' })).toEqual({ reviewers: ['ann'], isUnknown: false })
+  expect(reviewerFactOf('Reviewer: none\n', { kind: 'unreadable' })).toEqual({ reviewers: [], isUnknown: false })
+  expect(reviewerFactOf('Checks: none\n', { kind: 'read', text: 'Reviewer: bob\n' })).toEqual({ reviewers: ['bob'], isUnknown: false })
+  expect(reviewerFactOf(null, { kind: 'read', text: 'Reviewer: bob\n' })).toEqual({ reviewers: ['bob'], isUnknown: false })
+  expect(reviewerFactOf('Reviewer: ann\n', { kind: 'read', text: 'Reviewer: bob\n' })).toEqual({ reviewers: ['ann'], isUnknown: false })
+  expect(reviewerFactOf('Checks: none\n', { kind: 'missing' })).toEqual({ reviewers: [], isUnknown: false })
+  expect(reviewerFactOf(null, { kind: 'missing' })).toEqual({ reviewers: [], isUnknown: false })
+})
+
+test('a user CLAUDE.md that was read and whose whole text is the word unreadable is not taken for an unreadable file', () => {
+  expect(reviewerFactOf('Checks: none\n', { kind: 'read', text: 'unreadable' })).toEqual({ reviewers: [], isUnknown: false })
 })
 
 test('both verdicts approving with a pending check or an unfinished run waits on checks', () => {

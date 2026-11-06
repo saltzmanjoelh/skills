@@ -35,14 +35,18 @@ one extra turn, and it never causes a merge.
    means and that a snapshot without it counts as known. Run the first gate
    again afterwards, so foreman's linked types see it.
 2. **The pure rule.** In `mods/builder/hooks/step.ts`, add
-   `reviewerFactOf(project: string | null, user: string | null | 'unreadable'): { reviewers: string[]; isUnknown: boolean }`.
+   the exported type
+   `UserClaude = { kind: 'read'; text: string } | { kind: 'missing' } | { kind: 'unreadable' }`
+   and
+   `reviewerFactOf(project: string | null, user: UserClaude): { reviewers: string[]; isUnknown: boolean }`,
+   which switches on the kind. The kind is a tag of its own, so a file whose
+   whole text is the word "unreadable" is still read as text.
    `isUnknown` is true when the user's file is unreadable and the project has
    no `Reviewer:` line, which is the same `factIn(project, 'Reviewer')` check
    `reviewersOf` makes. `reviewersOf` stays and keeps its callers.
 3. **Reading the user's file.** In `mods/builder/hooks/register.tsx`,
-   `readUserClaude` returns
-   `{ kind: 'read'; text: string } | { kind: 'missing' } | { kind: 'unreadable' }`
-   and never throws. No workable configuration folder answers missing. A
+   `readUserClaude` returns a `UserClaude`, which `readBaseFacts` passes to
+   `reviewerFactOf` as it is, and it never throws. No workable configuration folder answers missing. A
    rejected `env.get` answers unreadable, because the spec's two missing cases
    are the only ones. `$.fs.exists` answering false answers missing, and a
    rejected `exists`, a rejected read, or a read that gives no string answers

@@ -10722,6 +10722,30 @@ for (const [what, env] of [
   })
 }
 
+test('a readable user CLAUDE.md whose whole text is the word unreadable names no reviewer, and the pull request merges as before', async ($, on) => {
+  const { files } = userClaudeWorld(on, 'Checks: none\n', null)
+  files.set(USER_CLAUDE, 'unreadable')
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  const answer = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  expect(answer).toContain(MERGE_STEP)
+  expect(answer).not.toContain(USER_CLAUDE_UNREAD_STEP)
+})
+
+test('an environment that cannot be read, with no Reviewer: line in the base branch\'s CLAUDE.md, holds the merge', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  on('env.get', () => { throw new Error('the environment could not be read') })
+  engine(on)
+  const world = fakeGitHub(on)
+  fakeFiles(on)
+  world.pr = approvedWithoutChecks()
+  world.baseClaude = 'Checks: none\n'
+  await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
+  const answer = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  expect(answer).toContain(USER_CLAUDE_UNREAD_STEP)
+  expect(answer).not.toContain('gh pr merge')
+})
+
 test('a Reviewer: line in the base branch\'s CLAUDE.md still decides when the user\'s file cannot be read', async ($, on) => {
   const answer = await reviewerStep($, on, 'Checks: none\nReviewer: ann\n', 'unreadable')
   expect(answer).toContain(REQUEST_STEP)
