@@ -111,7 +111,7 @@ export function baseFactsOf(claude: string, workflowsListed: boolean | null): Ba
 // whole value. This function also drops a leading `@` from each login and
 // leaves out anything that is not a GitHub login.
 export function reviewersOf(project: string | null, user: string | null): string[] {
-  const line = (project === null ? null : factIn(project, 'Reviewer')) ?? (user === null ? null : factIn(user, 'Reviewer'))
+  const line = projectReviewerLine(project) ?? (user === null ? null : factIn(user, 'Reviewer'))
   if (line === null || line.trim().toLowerCase() === 'none') return []
   const logins = line.split(',').map(part => part.trim().replace(/^`+|`+$/g, '').replace(/^@/, '')).filter(isLogin)
   // GitHub compares logins without regard to case, so a repeat in another
@@ -119,6 +119,14 @@ export function reviewersOf(project: string | null, user: string | null): string
   const kept = new Map<string, string>()
   for (const login of logins) if (!kept.has(login.toLowerCase())) kept.set(login.toLowerCase(), login)
   return [...kept.values()]
+}
+
+// The value of the project's own `Reviewer:` line, or null when the project's
+// CLAUDE.md could not be read or has no such line. A project line wins over
+// the user's, so reviewersOf and reviewerFactOf both ask this one function
+// whether the project decides the reviewers.
+function projectReviewerLine(project: string | null): string | null {
+  return project === null ? null : factIn(project, 'Reviewer')
 }
 
 // The CLAUDE.md in the user's configuration folder as one look found it: its
@@ -142,8 +150,7 @@ export function reviewerFactOf(project: string | null, user: UserClaude): { revi
     case 'missing':
       return { reviewers: reviewersOf(project, null), isUnknown: false }
     case 'unreadable': {
-      const hasLine = project !== null && factIn(project, 'Reviewer') !== null
-      return { reviewers: reviewersOf(project, null), isUnknown: !hasLine }
+      return { reviewers: reviewersOf(project, null), isUnknown: projectReviewerLine(project) === null }
     }
   }
 }

@@ -10614,12 +10614,12 @@ test('the base facts come from the session folder\'s base branch when the watch 
 // The CLAUDE.md in the user's configuration folder at a look: its text, null
 // when it is not there, `unreadable` when it exists but its read is refused,
 // or `exists-refused` when the check whether it exists is itself refused.
-type UserClaude = string | null | 'unreadable' | 'exists-refused'
+type UserClaudeSetup = string | null | 'unreadable' | 'exists-refused'
 
 const USER_ENV: Record<string, string> = { CLAUDE_CONFIG_DIR: '/config', HOME: '/home/me' }
 const USER_CLAUDE = '/config/CLAUDE.md'
 
-function setUserClaude(files: ReturnType<typeof fakeFiles>, user: UserClaude) {
+function setUserClaude(files: ReturnType<typeof fakeFiles>, user: UserClaudeSetup) {
   files.delete(USER_CLAUDE)
   files.refusedReads.delete(USER_CLAUDE)
   files.refusedExists.delete(USER_CLAUDE)
@@ -10631,7 +10631,7 @@ function setUserClaude(files: ReturnType<typeof fakeFiles>, user: UserClaude) {
 // A pull request on which both verdicts approve and no check exists, with
 // the base branch's CLAUDE.md as `project` (null when it cannot be read) and
 // the user's own as `user`, under the environment `env`.
-function userClaudeWorld(on: On, project: string | null, user: UserClaude, env: Record<string, string> = USER_ENV) {
+function userClaudeWorld(on: On, project: string | null, user: UserClaudeSetup, env: Record<string, string> = USER_ENV) {
   const clock = mock.clock(on)
   mock.store(on)
   mock.env(on, env)
@@ -10646,7 +10646,7 @@ function userClaudeWorld(on: On, project: string | null, user: UserClaude, env: 
 
 // The `Reviewer:` fact, read through the register: the base branch's
 // CLAUDE.md, or else the CLAUDE.md in the user's configuration folder.
-async function reviewerStep($: Engine, on: On, project: string | null, user: UserClaude, env: Record<string, string> = USER_ENV): Promise<string> {
+async function reviewerStep($: Engine, on: On, project: string | null, user: UserClaudeSetup, env: Record<string, string> = USER_ENV): Promise<string> {
   userClaudeWorld(on, project, user, env)
   await $.session.start({ cwd: '/repo', surface: null, isInteractive: true })
   return String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
