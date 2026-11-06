@@ -1008,7 +1008,9 @@ inert.
 
 The tool refuses a record review when either verdict requests changes,
 when `since` is neither `base` nor a full sha, when the head has no verdict
-review yet, and when the head already has a pass or a waiver. If it refuses
+review yet, when the round at the head requested changes, because the record
+would otherwise be read as the head's approval, and when the head already has
+a pass or a waiver. If it refuses
 the record because the head moved, the new head goes through a normal
 round, and its pass starts from the newest head a pass read, so nothing is
 skipped. The pass's findings go only into this record review: never post
