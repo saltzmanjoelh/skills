@@ -279,40 +279,37 @@ export function labelFor(step: Step): StateLabel | null {
 }
 
 // What the mod does with the label it derived: nothing, record it without
-// writing, or write it and remove the other state labels the live read saw.
-// `record` is the label the mod last set on the pull request, `liveLabels`
-// the labels the pull request carries now, and `note` the record's note as it
-// stood before this job: what the first successful read of the labels saw
-// after the step's label last changed, at a job that did not finish. While
-// `stuck` is on, the derived label is only recorded when there is no record,
-// as after a restart, or when the note is for the derived label and its read
-// did not see `stuck`, because then the session set that `stuck` by its own
-// judgement after the step's label changed. In every other case, a missing
-// note included, the `stuck` was on before the change, or the mod cannot
-// tell, so the derived label is written and `stuck` comes off. Any other
-// state label beside a `stuck` that stays, such as one an edit put on just
-// before the session set it, still comes off. Only labels the live read saw
-// are removed, because a label on the pull request exists in the repository,
-// so removing it cannot fail for lack of the label.
-export type LabelAction = { kind: 'none' } | { kind: 'record'; remove: StateLabel[] } | { kind: 'write'; remove: StateLabel[] }
+// writing, write it and remove the other state labels the live read saw, or
+// keep a judgement `stuck`. `record` is the label the mod last recorded for
+// the pull request, `liveLabels` the labels the pull request carries now, and
+// `judged` the label the step gave when the session judged the pull request
+// stuck through the set_stuck tool, or null when the record holds no
+// judgement. While a judgement holds and the derived label is the judged one,
+// or the step gives no label, `stuck` is kept: it goes on when it is missing,
+// and every other state label comes off, so the record is not changed. A
+// derived label that differs from the judged one ends the judgement, so the
+// derived label is written and `stuck` comes off with the others, even when
+// the derived label is the record's own. With no judgement, a `stuck` that
+// is on is only kept when there is no record, as after a restart, and the
+// derived label is then recorded without a write; otherwise a derived label
+// equal to the record changes nothing and any other is written, `stuck`
+// included among the labels that come off. Only labels the live read saw are
+// removed, because a label on the pull request exists in the repository, so
+// removing it cannot fail for lack of the label.
+export type LabelAction =
+  | { kind: 'none' }
+  | { kind: 'record'; remove: StateLabel[] }
+  | { kind: 'write'; remove: StateLabel[] }
+  | { kind: 'keep'; add: boolean; remove: StateLabel[] }
 
-export function labelActionOf(derived: StateLabel | null, record: StateLabel | null, liveLabels: readonly string[], note: LabelNote | null = null): LabelAction {
-  if (derived === null || derived === record) return { kind: 'none' }
-  const isStuckJudgement = record === null || (note?.label === derived && !note.sawStuck)
-  if (isStuckJudgement && liveLabels.includes('stuck')) return { kind: 'record', remove: otherStateLabelsOf('stuck', liveLabels) }
+export function labelActionOf(derived: StateLabel | null, record: StateLabel | null, liveLabels: readonly string[], judged: StateLabel | null = null): LabelAction {
+  if (judged !== null && (derived === null || derived === judged)) {
+    return { kind: 'keep', add: !liveLabels.includes('stuck'), remove: otherStateLabelsOf('stuck', liveLabels) }
+  }
+  if (derived === null) return { kind: 'none' }
+  if (judged === null && record === null && liveLabels.includes('stuck')) return { kind: 'record', remove: otherStateLabelsOf('stuck', liveLabels) }
+  if (judged === null && derived === record) return { kind: 'none' }
   return { kind: 'write', remove: otherStateLabelsOf(derived, liveLabels) }
-}
-
-// The note to save after a successful read of the labels, or null when the
-// record should keep the note it has. There is none without a record, because
-// the rule for a missing record already applies, and none when the record
-// already holds a note for `derived`, because the first successful read after
-// the step's label changed decides: a later read could otherwise turn a
-// `stuck` that was on before the change into one that looks set by judgement.
-// Otherwise the note is `derived` and whether this read saw `stuck`.
-export function noteAfterRead(record: LabelRecord | null, derived: StateLabel, liveLabels: readonly string[]): LabelNote | null {
-  if (record === null || record.note?.label === derived) return null
-  return { label: derived, sawStuck: liveLabels.includes('stuck') }
 }
 
 // The state labels among `liveLabels` other than `kept`.
@@ -320,45 +317,37 @@ export function otherStateLabelsOf(kept: StateLabel, liveLabels: readonly string
   return STATE_LABELS.filter(label => label !== kept && liveLabels.includes(label))
 }
 
-// The state labels to remove after the edit that added `added`, given the
-// labels read before that edit and after it. A `stuck` that only the read
-// after the edit saw was set by the session's judgement while the edit ran,
-// so it stays and every other state label comes off, `added` included: the
-// mod leaves a judgement `stuck` alone until the label it derives changes.
-export function labelsToRemoveAfterEdit(added: StateLabel, before: readonly string[], after: readonly string[]): StateLabel[] {
-  const isStuckSetMeanwhile = added !== 'stuck' && after.includes('stuck') && !before.includes('stuck')
-  return otherStateLabelsOf(isStuckSetMeanwhile ? 'stuck' : added, after)
-}
-
-// The record of the label the mod last set on a pull request, as it is
-// stored: the label, when it was set, and, only while a job for a changed
-// step's label has not finished, a note of what that job's successful read
-// of the labels saw: the label the step gave and whether `stuck` was on. A
-// finished job saves no note, and a return of the step to the recorded label
-// clears it. Any other shape counts as no record, and a note of any other
-// shape is left out. The `derived` field that records written before the
-// note held is never read, so such a record reads as one with no note.
-export type LabelNote = { label: StateLabel; sawStuck: boolean }
-export type LabelRecord = { label: StateLabel; at: number; note?: LabelNote }
+// The record of the state label the mod last recorded for a pull request, as
+// it is stored: the label, when it was recorded, and, while the session's
+// judgement that the pull request is stuck holds, that judgement: the label
+// the step gave when the session called the set_stuck tool, which is never
+// `stuck` itself, and when it called it. Any other shape counts as no record,
+// and a judgement of any other shape is left out. The `note` and `derived`
+// fields of records written before the judgement are never read, so such a
+// record reads as one with no judgement, and the next save drops them.
+export type StuckJudgement = { label: StateLabel; at: number }
+export type LabelRecord = { label: StateLabel; at: number; judgement?: StuckJudgement }
 
 export function labelRecordIn(raw: unknown): LabelRecord | null {
   if (typeof raw !== 'object' || raw === null) return null
   const r = raw as Record<string, unknown>
   const label = STATE_LABELS.find(name => name === r.label)
-  if (label === undefined || typeof r.at !== 'number' || !Number.isFinite(r.at)) return null
-  const note = labelNoteIn(r.note)
-  return note === null ? { label, at: r.at } : { label, at: r.at, note }
+  if (label === undefined || !isTime(r.at)) return null
+  const judgement = judgementIn(r.judgement)
+  return judgement === null ? { label, at: r.at } : { label, at: r.at, judgement }
 }
 
-// The note a stored record holds, or null when it holds none or one of
+// The judgement a stored record holds, or null when it holds none or one of
 // another shape.
-function labelNoteIn(raw: unknown): LabelNote | null {
+function judgementIn(raw: unknown): StuckJudgement | null {
   if (typeof raw !== 'object' || raw === null) return null
-  const n = raw as Record<string, unknown>
-  const label = STATE_LABELS.find(name => name === n.label)
-  if (label === undefined || typeof n.sawStuck !== 'boolean') return null
-  return { label, sawStuck: n.sawStuck }
+  const j = raw as Record<string, unknown>
+  const label = STATE_LABELS.find(name => name === j.label && name !== 'stuck')
+  if (label === undefined || !isTime(j.at)) return null
+  return { label, at: j.at }
 }
+
+const isTime = (raw: unknown): raw is number => typeof raw === 'number' && Number.isFinite(raw)
 
 // The sections and named paragraphs of skills/implement/SKILL.md that the
 // step texts point to. No test can read the skill, because the testing kit

@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { countingRuns, failedRunsOf, hasFailed, isReplaced, isUnfinished, needsJobs, snapshotOf, type GhPullRequest } from '../hooks/github'
-import { baseFactsOf, chooseStep, CLEANUP_SECTIONS, DEFAULT_MERGE_COMMAND, labelActionOf, LINKED_KEPT, linkedIn, labelFor, labelRecordIn, labelsToRemoveAfterEdit, needsListing, noteAfterRead, otherStateLabelsOf, SKILL_POINTS, SKILL_SECTIONS, stepFor, stepLines, unpushedIn, type Step } from '../hooks/step'
+import { baseFactsOf, chooseStep, CLEANUP_SECTIONS, DEFAULT_MERGE_COMMAND, labelActionOf, LINKED_KEPT, linkedIn, labelFor, labelRecordIn, needsListing, otherStateLabelsOf, SKILL_POINTS, SKILL_SECTIONS, stepFor, stepLines, unpushedIn, type Step } from '../hooks/step'
 import type { BaseFacts, HeadRun, Snapshot, Unpushed } from '../types'
 
 const ME = 'owner'
@@ -617,10 +617,11 @@ test('setting waiting-on-reviewer removes the other four state labels, and setti
   }
 })
 
-test('a derived label equal to the record, or no derived label, changes nothing', () => {
+test('without a judgement, a derived label equal to the record, or no derived label, changes nothing', () => {
   expect(labelActionOf('in-review', 'in-review', ['stuck'])).toEqual({ kind: 'none' })
   expect(labelActionOf(null, 'in-review', [])).toEqual({ kind: 'none' })
   expect(labelActionOf(null, null, ['stuck'])).toEqual({ kind: 'none' })
+  expect(labelActionOf(null, 'in-review', ['stuck'], null)).toEqual({ kind: 'none' })
 })
 
 test('with no record while stuck is on, the derived label is recorded without a write, so a reload never removes it', () => {
@@ -629,33 +630,31 @@ test('with no record while stuck is on, the derived label is recorded without a 
   expect(labelActionOf('in-review', null, ['in-review', 'stuck', 'ready-to-merge'])).toEqual({ kind: 'record', remove: ['in-review', 'ready-to-merge'] })
 })
 
-test('with stuck on, a note for the derived label whose read did not see stuck only records the label, and any other note writes it', () => {
-  // The first successful read after the step's label changed saw no stuck, so the stuck on now is the session's judgement.
-  expect(labelActionOf('ready-to-merge', 'in-review', ['in-review', 'stuck'], { label: 'ready-to-merge', sawStuck: false })).toEqual({ kind: 'record', remove: ['in-review'] })
-  // That read already saw stuck, so the stuck was on before the step's label changed and comes off.
-  expect(labelActionOf('ready-to-merge', 'in-review', ['in-review', 'stuck'], { label: 'ready-to-merge', sawStuck: true })).toEqual({ kind: 'write', remove: ['in-review', 'stuck'] })
-  // A note for another label, or no note, says nothing about this label, so the label is written.
-  expect(labelActionOf('ready-to-merge', 'in-review', ['stuck'], { label: 'waiting-on-author', sawStuck: false })).toEqual({ kind: 'write', remove: ['stuck'] })
-  expect(labelActionOf('ready-to-merge', 'in-review', ['stuck'])).toEqual({ kind: 'write', remove: ['stuck'] })
+test('without a judgement, a stuck that is on comes off once the derived label differs from the record', () => {
+  expect(labelActionOf('ready-to-merge', 'in-review', ['in-review', 'stuck'])).toEqual({ kind: 'write', remove: ['in-review', 'stuck'] })
   expect(labelActionOf('ready-to-merge', 'in-review', ['stuck'], null)).toEqual({ kind: 'write', remove: ['stuck'] })
-  // Without stuck on, the derived label is written whatever the note says.
-  expect(labelActionOf('ready-to-merge', 'in-review', ['in-review'], { label: 'ready-to-merge', sawStuck: false })).toEqual({ kind: 'write', remove: ['in-review'] })
 })
 
-test('a note is made only when a record exists and holds no note for the derived label, so the first successful read decides', () => {
-  const record = { label: 'in-review' as const, at: 5 }
-  // With no record at all, the rule for a missing record applies and no note is made.
-  expect(noteAfterRead(null, 'ready-to-merge', [])).toBeNull()
-  expect(noteAfterRead(null, 'ready-to-merge', ['stuck'])).toBeNull()
-  // A note already for the derived label is kept as it is.
-  expect(noteAfterRead({ ...record, note: { label: 'ready-to-merge', sawStuck: false } }, 'ready-to-merge', [])).toBeNull()
-  expect(noteAfterRead({ ...record, note: { label: 'ready-to-merge', sawStuck: false } }, 'ready-to-merge', ['stuck'])).toBeNull()
-  // A note for another label is replaced by what this read saw.
-  expect(noteAfterRead({ ...record, note: { label: 'waiting-on-author', sawStuck: true } }, 'ready-to-merge', [])).toEqual({ label: 'ready-to-merge', sawStuck: false })
-  expect(noteAfterRead({ ...record, note: { label: 'waiting-on-author', sawStuck: false } }, 'ready-to-merge', ['bug', 'stuck'])).toEqual({ label: 'ready-to-merge', sawStuck: true })
-  // A record with no note gets one.
-  expect(noteAfterRead(record, 'ready-to-merge', ['in-review'])).toEqual({ label: 'ready-to-merge', sawStuck: false })
-  expect(noteAfterRead(record, 'ready-to-merge', ['in-review', 'stuck'])).toEqual({ label: 'ready-to-merge', sawStuck: true })
+test('while a judgement holds and the derived label is the judged one, stuck is kept, put on when missing, and the other state labels come off', () => {
+  // stuck is on alone, so there is nothing to do but keep it.
+  expect(labelActionOf('ready-to-merge', 'in-review', ['bug', 'stuck'], 'ready-to-merge')).toEqual({ kind: 'keep', add: false, remove: [] })
+  // stuck is on beside other state labels, which come off.
+  expect(labelActionOf('ready-to-merge', 'in-review', ['in-review', 'stuck', 'ready-to-merge'], 'ready-to-merge')).toEqual({ kind: 'keep', add: false, remove: ['in-review', 'ready-to-merge'] })
+  // stuck is missing, as after a failed edit or a removal by hand, so it goes on and the others come off in the same edit.
+  expect(labelActionOf('ready-to-merge', 'ready-to-merge', ['ready-to-merge'], 'ready-to-merge')).toEqual({ kind: 'keep', add: true, remove: ['ready-to-merge'] })
+  expect(labelActionOf('in-review', null, [], 'in-review')).toEqual({ kind: 'keep', add: true, remove: [] })
+})
+
+test('while a judgement holds and the step gives no label, stuck is kept as though the step\'s label were unchanged', () => {
+  expect(labelActionOf(null, 'in-review', ['in-review'], 'in-review')).toEqual({ kind: 'keep', add: true, remove: ['in-review'] })
+  expect(labelActionOf(null, 'in-review', ['stuck'], 'in-review')).toEqual({ kind: 'keep', add: false, remove: [] })
+})
+
+test('a derived label that differs from the judged one ends the judgement: the derived label is written and stuck comes off', () => {
+  expect(labelActionOf('waiting-on-author', 'in-review', ['stuck'], 'in-review')).toEqual({ kind: 'write', remove: ['stuck'] })
+  expect(labelActionOf('waiting-on-author', 'in-review', ['bug', 'stuck', 'in-review'], 'in-review')).toEqual({ kind: 'write', remove: ['in-review', 'stuck'] })
+  // Even when the derived label is the record's own label but not the judged one.
+  expect(labelActionOf('in-review', 'in-review', ['stuck'], 'ready-to-merge')).toEqual({ kind: 'write', remove: ['stuck'] })
 })
 
 test('otherwise the derived label is written, removing only the other state labels the live read saw', () => {
@@ -665,28 +664,20 @@ test('otherwise the derived label is written, removing only the other state labe
   expect(labelActionOf('waiting-on-author', 'ready-to-merge', ['stuck', 'ready-to-merge', 'waiting-on-author'])).toEqual({ kind: 'write', remove: ['ready-to-merge', 'stuck'] })
 })
 
-test('after the edit, every other state label comes off, unless a stuck appeared since the read before it, which stays while the added label comes off', () => {
-  expect(labelsToRemoveAfterEdit('in-review', [], ['in-review'])).toEqual([])
-  expect(labelsToRemoveAfterEdit('in-review', [], ['in-review', 'waiting-on-author'])).toEqual(['waiting-on-author'])
-  // A stuck the session set while the edit ran stays, and the added label goes.
-  expect(labelsToRemoveAfterEdit('in-review', [], ['bug', 'in-review', 'stuck'])).toEqual(['in-review'])
-  expect(labelsToRemoveAfterEdit('ready-to-merge', ['in-review'], ['ready-to-merge', 'stuck', 'waiting-on-author'])).toEqual(['waiting-on-author', 'ready-to-merge'])
-  // A stuck the read before the edit already saw is one the write chose to remove.
-  expect(labelsToRemoveAfterEdit('waiting-on-author', ['stuck'], ['stuck', 'waiting-on-author'])).toEqual(['stuck'])
-  expect(labelsToRemoveAfterEdit('stuck', [], ['in-review', 'stuck'])).toEqual(['in-review'])
-})
-
-test('a stored label record reads back only in the shape the mod writes', () => {
+test('a stored label record reads back only in the shape the mod writes, with a judgement only in its own shape', () => {
   expect(labelRecordIn({ label: 'stuck', at: 5 })).toEqual({ label: 'stuck', at: 5 })
-  expect(labelRecordIn({ label: 'stuck', at: 5, note: { label: 'in-review', sawStuck: true } })).toEqual({ label: 'stuck', at: 5, note: { label: 'in-review', sawStuck: true } })
-  expect(labelRecordIn({ label: 'stuck', at: 5, note: { label: 'in-review', sawStuck: false } })).toEqual({ label: 'stuck', at: 5, note: { label: 'in-review', sawStuck: false } })
-  // A note of any other shape is left out.
-  for (const note of [null, 'in-review', { label: 'bug', sawStuck: true }, { label: 'in-review' }, { label: 'in-review', sawStuck: 'yes' }, { sawStuck: true }]) {
-    expect(labelRecordIn({ label: 'stuck', at: 5, note })).toEqual({ label: 'stuck', at: 5 })
+  expect(labelRecordIn({ label: 'in-review', at: 5, judgement: { label: 'in-review', at: 9 } })).toEqual({ label: 'in-review', at: 5, judgement: { label: 'in-review', at: 9 } })
+  expect(labelRecordIn({ label: 'in-review', at: 5, judgement: { label: 'ready-to-merge', at: 0 } })).toEqual({ label: 'in-review', at: 5, judgement: { label: 'ready-to-merge', at: 0 } })
+  // A judgement of any other shape is left out: not an object, a label that is not a state label or is stuck itself, a missing or non-finite time.
+  for (const judgement of [null, 'in-review', 5, { label: 'bug', at: 9 }, { label: 'needs-decision', at: 9 }, { label: 'stuck', at: 9 }, { label: 'in-review' },
+    { label: 'in-review', at: '9' }, { label: 'in-review', at: Number.NaN }, { label: 'in-review', at: Number.POSITIVE_INFINITY }, { at: 9 }]) {
+    expect(labelRecordIn({ label: 'in-review', at: 5, judgement })).toEqual({ label: 'in-review', at: 5 })
   }
-  // The derived field that records written before the note held is ignored, alone or beside a note.
+  // The note and derived fields of records written before the judgement are ignored, alone or beside a judgement.
   expect(labelRecordIn({ label: 'stuck', at: 5, derived: 'in-review' })).toEqual({ label: 'stuck', at: 5 })
-  expect(labelRecordIn({ label: 'stuck', at: 5, derived: 'in-review', note: { label: 'ready-to-merge', sawStuck: false } })).toEqual({ label: 'stuck', at: 5, note: { label: 'ready-to-merge', sawStuck: false } })
+  expect(labelRecordIn({ label: 'stuck', at: 5, note: { label: 'in-review', sawStuck: false } })).toEqual({ label: 'stuck', at: 5 })
+  expect(labelRecordIn({ label: 'in-review', at: 5, derived: 'in-review', note: { label: 'ready-to-merge', sawStuck: false }, judgement: { label: 'in-review', at: 9 } }))
+    .toEqual({ label: 'in-review', at: 5, judgement: { label: 'in-review', at: 9 } })
   for (const raw of [null, undefined, 'stuck', { label: 'bug', at: 5 }, { label: 'stuck' }, { label: 'stuck', at: Number.NaN }, { label: 'needs-decision', at: 1 }]) {
     expect(labelRecordIn(raw)).toBeNull()
   }
