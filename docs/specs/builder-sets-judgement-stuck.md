@@ -41,7 +41,8 @@ could not be listed. The person reads the label on the pull request.
 3. **The label it is judged under.** The tool works out the label the step
    gives from the stored snapshot, as the state label job does. When the
    step gives no label, as while the runs could not be read, it uses the
-   label the mod last recorded, and refuses when there is none. When the
+   label of the judgement already recorded, or else the label the mod last
+   recorded, and refuses when there is neither. When the
    step already gives `stuck` by itself (Over a limit), or the step gives no
    label and the label last recorded is `stuck`, it answers
    that `stuck` already follows from the step, records no judgement, and

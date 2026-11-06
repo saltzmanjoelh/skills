@@ -15566,7 +15566,83 @@ test('a judgement made while the runs could not be read still puts stuck on at a
   expect(world.pr.labels).toEqual([{ name: 'stuck' }])
 })
 
-test('when the step gives stuck by itself, or gives no label and stuck is recorded, the tool records no judgement and edits nothing', async ($, on) => {
+test('with no label from the step, a second call keeps the judgement\'s own label, so stuck stays once the step gives that label again', async ($, on) => {
+  const clock = mock.clock(on)
+  // The record a race leaves behind: the judgement was made under
+  // waiting-on-author, and the job that kept stuck saved no record of that
+  // label, so the record's own label is still in-review.
+  const stored = memoryStore(on, [[STATE_LABEL_KEY, { label: 'in-review', at: 0, judgement: { label: 'waiting-on-author', at: 0 } }]])
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr = openPullRequest({ reviews: [verdictReview(C, 'APPROVE', 'APPROVE')], labels: [{ name: 'stuck' }] })
+  world.runsReadsToFail = 100
+  await watch($)
+  await clock.settle()
+
+  const ran = await setStuck($)
+  expect(String(ran.result)).toContain('stuck is on o/r#7')
+  expect(String(ran.result)).toContain('while the step gives waiting-on-author')
+  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'in-review', at: 0, judgement: { label: 'waiting-on-author', at: clock.now() } })
+
+  // The runs can be read again, and the step gives waiting-on-author, the
+  // label the judgement was made under, so stuck stays on.
+  world.runsReadsToFail = 0
+  world.pr = changesRequested(world.pr.labels)
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await clock.settle()
+  expect(world.pr.labels).toEqual([{ name: 'stuck' }])
+  expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ judgement: { label: 'waiting-on-author' } })
+  expect(labelEdits(world).filter(edit => edit.includes('--add-label waiting-on-author'))).toEqual([])
+})
+
+test('when the step\'s label changes after the tool saved its judgement but before its job ran, the tool says the judgement ended and the new label is written', async ($, on) => {
+  const clock = mock.clock(on)
+  const stored = memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  // The snapshot of the first watch, whose step gives in-review, and once
+  // armed every read of the snapshot answers with it.
+  let first: unknown = null
+  let isArmed = false
+  on('state.get', async ($, e, next) => {
+    const answer = await next(e)
+    if (e.plugin !== 'builder' || e.key !== 'pr') return answer
+    const held = answer as { value: { value: unknown; version: number } | null }
+    if (first === null && held.value?.value != null) first = held.value.value
+    if (!isArmed || held.value === null) return answer
+    return { value: { ...held.value, value: first } } as never
+  })
+  await watch($)
+  await clock.settle()
+  expect(first).not.toBeNull()
+
+  // The step's label changes to waiting-on-author, and the job the watch
+  // queues waits on its read of the labels, so the tool's job waits behind it.
+  let release = () => {}
+  world.labelsHold = new Promise(resolve => { release = resolve })
+  world.pr = changesRequested(world.pr.labels)
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await clock.settle()
+  const answer = setStuck($)
+  await clock.settle()
+  expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ judgement: { label: 'waiting-on-author' } })
+
+  // Before the tool's job runs, the step goes back to in-review: the job
+  // reads the first snapshot. A new call of the watch tool would start a new
+  // watch, and a look would wait behind the held job, so neither can do it.
+  isArmed = true
+  release()
+  const ran = await answer
+  await clock.settle()
+  expect(ran.isError).toBeUndefined()
+  expect(String(ran.result)).toContain('no longer gives waiting-on-author, so the judgement ended and stuck is not on')
+  expect(stuckEdits(world)).toEqual([])
+  expect(labelEdits(world).at(-1)).toBe('gh pr edit 7 --repo o/r --add-label in-review --remove-label waiting-on-author')
+  expect(world.pr.labels).toEqual([{ name: 'in-review' }])
+  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'in-review', at: clock.now() })
+})
+
+test('when the step gives stuck by itself, the tool records no judgement and edits nothing', async ($, on) => {
   const clock = mock.clock(on)
   const stored = memoryStore(on)
   engine(on)

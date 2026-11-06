@@ -3482,10 +3482,11 @@ async function removeOtherStateLabels($: $, r: BuilderRun, added: StateLabel): P
 // gives no label and the mod has recorded none. When the step gives `stuck`
 // by itself, or gives no label and the recorded label is `stuck`, it records
 // nothing, because `stuck` already follows from the step. The judgement is
-// made under the label the step gives, or under the recorded label when the
-// step gives none, and it is saved before any edit, so a job that runs
-// meanwhile, or after a reload cut this call off, keeps `stuck`. Only a store
-// that refuses the read or the write of the record is answered as an error.
+// made under the label the step gives, or, when the step gives none, under
+// the label of the judgement already recorded, or else the recorded label,
+// and it is saved before any edit, so a job that runs meanwhile, or after a
+// reload cut this call off, keeps `stuck`. Only a store that refuses the read
+// or the write of the record is answered as an error.
 async function serveSetStuck($: $): Promise<ToolCallResult> {
   const r = await read($, run)
   if (r === null) return { result: 'builder: refused: nothing is watched, so there is no pull request to set stuck on. Call mcp__builder__watch first.' }
@@ -3505,7 +3506,10 @@ async function serveSetStuck($: $): Promise<ToolCallResult> {
   try {
     judged = await inRecordQueue(async () => {
       const record = labelRecordIn(await $.store.get(key))
-      const label = derived ?? record?.label ?? null
+      // With no label from the step, a judgement already recorded keeps its
+      // own label, because the record's label can be older than the
+      // judgement when a job kept stuck without saving the record.
+      const label = derived ?? record?.judgement?.label ?? record?.label ?? null
       if (label === null || label === 'stuck') return label
       const at = await $.clock.now()
       await $.store.set(key, { label: record?.label ?? label, at: record?.at ?? at, judgement: { label, at } })
@@ -5172,7 +5176,7 @@ export const register: Register = on => {
     })
     await $.tool.register({
       name: 'set_stuck',
-      description: 'Put stuck on the watched pull request by the session\'s own judgement, where the skill or a step\'s text says to set stuck and ask the person. Takes no input. The mod records the judgement under the state label the step gives, puts stuck on in its place, and keeps it while the step gives that label. Answers that stuck is on, that the edit failed and the mod puts it on at its next look, or why it refused: nothing watched, the pull request merged or closed, or no label to judge it under. Never edit a state label yourself.',
+      description: 'Put stuck on the watched pull request by the session\'s own judgement, where the skill or a step\'s text says to set stuck and ask the person. Takes no input. The mod records the judgement under the state label the step gives, puts stuck on in its place, and keeps it while the step gives that label. Answers that stuck is on; that the judgement is recorded but the edit failed, and the mod puts stuck on at its next look; that the step\'s label changed, so the judgement ended; that the watch moved; or that stuck already follows from the step. Refuses, saying why, when nothing is watched, the stored snapshot is of another pull request, the pull request is merged or closed, or there is no label to judge it under, and answers with an error when the store refused the judgement. Never edit a state label yourself.',
     })
     await $.tool.register({
       name: 'progress',
