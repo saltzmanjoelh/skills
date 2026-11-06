@@ -150,6 +150,14 @@ function windowsForm(text: string): string {
 // data stream of a file.
 const unsafeOnWindows = (part: string) => /^[. ]+$/.test(part) || part.includes(':')
 
+// Whether one part of a saved path is a plain name: not empty, `.` or `..`,
+// and, on a drive-letter path, not a name that Windows reads otherwise.
+function plainName(part: string, onDrive: boolean): boolean {
+  if (part === '' || part === '.' || part === '..') return false
+  if (onDrive && unsafeOnWindows(part)) return false
+  return true
+}
+
 // Whether `path` lies in Claude Code's saved tool results under the
 // configuration folder `config`: exactly
 // <config>/projects/<folder>/<folder>/tool-results/<file>, each part one
@@ -160,13 +168,13 @@ const unsafeOnWindows = (part: string) => /^[. ]+$/.test(part) || part.includes(
 // start with `/` and is checked as it is. The notice is text a tool answer
 // could imitate, so no other file is ever read for it.
 export function isSavedResult(path: string, config: string): boolean {
-  const drive = DRIVE_PATH.test(path)
-  if (!drive && !path.startsWith('/')) return false
-  const seen = drive ? windowsForm(path) : path
-  const root = `${drive ? windowsForm(config) : config}/projects/`
+  const onDrive = DRIVE_PATH.test(path)
+  if (!onDrive && !path.startsWith('/')) return false
+  const seen = onDrive ? windowsForm(path) : path
+  const root = `${onDrive ? windowsForm(config) : config}/projects/`
   if (!seen.startsWith(root)) return false
   const parts = seen.slice(root.length).split('/')
-  return parts.length === 4 && parts.every(p => p !== '' && p !== '.' && p !== '..' && !(drive && unsafeOnWindows(p))) && parts[2] === 'tool-results'
+  return parts.length === 4 && parts.every(part => plainName(part, onDrive)) && parts[2] === 'tool-results'
 }
 
 // The entries of the saved copy at `path`, or why they could not be read.
