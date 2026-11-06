@@ -1,6 +1,7 @@
 # Frontend rules for /implement
 
 Read this file only when step 7 of `SKILL.md` finds the change frontend, or
+when its check gave no answer and the person chose "Open as frontend", or
 when a pull request's body has a `## Screenshots` section and the base branch's
 `CLAUDE.md` does not say `Frontend paths: none`. The steps, points and sections
 it names, such as step 7, "Rules", "A review round", "Commits the pull request
@@ -14,7 +15,8 @@ below from the worktree's top folder.
 
 ## A frontend change
 
-**A frontend change.** For a change that step 7 found frontend, after
+**A frontend change.** For a change that step 7 found frontend, or that
+the person chose to open as frontend after step 7's check gave no answer, after
 checking that the diff lists only this change's files, run
 `/storypr` as its section **When another skill calls it** says. When it
 returns a body file, a commit and the screenshot paths, write at the top of the
@@ -45,12 +47,24 @@ as above, and end the body
 with a `## Screenshots` section that says the change is frontend, that its
 screenshots are missing, and the reason. Read the base branch's `CLAUDE.md`
 again at this moment, rather than remembering what step 7 found, and apply
-step 7's three readings of its `Frontend paths:` line. When the reading is the
-one where the built-in list applies, the section also says that the built-in
-list of frontend paths matched the change, and that the project can write its
-own `Frontend paths:` list, or `Frontend paths: none`, in its `CLAUDE.md` to
-change that. That text names no path that matched. Tell the person the same,
-including that note when it applies, in one sentence, and carry on without
+step 7's three readings of its `Frontend paths:` line. Read it as step 7
+does, from the top folder: `git show origin/<base>:CLAUDE.md`, and when that
+fails, `git ls-tree --full-tree --name-only origin/<base> -- CLAUDE.md`,
+which succeeds and prints nothing only when the file is missing. A read
+whose exit status is not zero gives no answer, whatever it printed. When the
+read gives no answer, run `git fetch origin <base>` and read once more. When
+it still gives no answer, write the section as if the built-in list applies.
+The section may also carry one note. When the person chose "Open as frontend"
+after step 7's check gave no answer, the note says that the frontend check
+could not run. Otherwise, when this read gave no answer, the note says that
+the project's `Frontend paths:` line could not be read, so the section was
+written as if the built-in list applied. Otherwise, when step 7 found the
+change frontend, this read succeeded, and the reading is the one where the
+built-in list applies, the note says that the built-in list of frontend paths
+matched the change, and that the project can write its own
+`Frontend paths:` list, or `Frontend paths: none`, in its `CLAUDE.md` to
+change that. The note names no path that matched. Tell the person the same,
+including the note when there is one, in one sentence, and carry on without
 waiting for an answer. Every reason that this
 step or a later commit publishes, in a body or a commit message, is a sentence
 or two of plain words that names no local path, host name, port, device
@@ -72,9 +86,22 @@ On a frontend pull request, test every commit before making it: stage the
 change by path, then run `git diff --cached --no-renames --name-only` with the pathspecs of step 7,
 before any screenshot is staged, so that a screenshot never makes its own
 commit frontend. When it prints a path, the commit touches a frontend path.
-That can be a fix at the first half's point 4, the fixes for a blocking verdict
-in the step **The newest verdict at this head requests changes**, or the second
-half's `Fix this round's cheap follow-ups` commit. Before making such a commit,
+That holds only when the command succeeds, run as a command of its own. When
+it exits nonzero it gives no answer, whatever it printed. It also gives no
+answer when the read of the base branch's `CLAUDE.md` that gives it the
+pathspecs of step 7 gives no answer. Read that file as step 7 does:
+`git show origin/<base>:CLAUDE.md`, and when that fails,
+`git ls-tree --full-tree --name-only origin/<base> -- CLAUDE.md`, which
+succeeds and prints nothing only when the file is missing, so a missing file
+is an answer and the built-in list applies. When the check gives no answer, run
+`git fetch origin <base>`, and run the read and the check once more. When it
+still gives no answer, treat the commit as touching a frontend path, retake
+the screenshots as below, tell the person in one sentence that the frontend
+check could not run, and carry on without asking. A commit that touches a
+frontend path can be a fix at the first half's point 4, the fixes for a
+blocking verdict in the step
+**The newest verdict at this head requests changes**, or the second half's
+`Fix this round's cheap follow-ups` commit. Before making such a commit,
 retake the screenshots whose screens the change could alter, or all of them
 when that cannot be told, as `/storypr`'s step 2 says, and read each one to
 check it as point 1 of `/storypr`'s section **When another skill calls it**
