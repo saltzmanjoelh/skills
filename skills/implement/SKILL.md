@@ -322,8 +322,8 @@ The pull request carries exactly one of `in-review`, `waiting-on-author`,
 turn it is. The mod sets the label that follows from the step it chooses,
 removes the other state labels as it does, creates the label first when the
 repository lacks it, and remembers the label it set, so the session does not
-set those. **Review this head** gives `in-review`; the failed, conflicting and
-changes-requested steps, and the step where an outside review has feedback to
+set those. **Review this head** and **Run the /code-review pass at this
+head** give `in-review`; the failed, conflicting and changes-requested steps, and the step where an outside review has feedback to
 address, give `waiting-on-author`; the steps that request the outside review
 and wait on it give `waiting-on-reviewer`, because an outside reviewer holds
 the merge there; the other steps where both verdicts approve, where nobody
@@ -959,6 +959,62 @@ before it is posted, the head is checked again on the next turn; the record
 of the approved head stays in its review. When every line point 4's commit
 changed is inert, the verdicts are carried over without the check, as the
 second half's point 5 says.
+
+**The /code-review pass.** Once both verdicts approve at a head, whether a
+round approved it or the check after approval carried the verdicts over to
+it, the session runs Claude Code's built-in `/code-review` skill at medium
+effort against that head, before any outside reviewer is asked and before
+the merge. The mod names the step **Run the /code-review pass at this
+head**, with the head and the head to start from, and it gives the label
+`in-review`. The first pass reads the whole pull request, and each later
+pass reads only what changed since the head the previous pass read. The
+pass runs at every such head, even when the change since the last pass is
+inert.
+
+1. The range is `<since>..<head>`, or, for the first pass,
+   `<merge base>..<head>`, where the merge base comes from
+   `git merge-base origin/<base> <head>`.
+2. The session records `git status --porcelain` and `git rev-parse HEAD` in
+   the worktree, then invokes the Skill tool itself with `code-review` and
+   the args `medium <range>`, never with `--fix`, `--comment` or any other
+   flag, then records both again. If either changed, it discards nothing,
+   sets stuck with `mcp__builder__set_stuck` and asks the person.
+3. If the skill is missing, errors, is stopped, or returns something that
+   is not a list of findings, the session tries once more. If that fails
+   too, it sets stuck and asks the person whether to merge without the
+   pass, and records nothing at the head, so the step keeps asking for the
+   pass until the person answers. When the person says to merge without
+   it, the session posts a review with `code_review: { waived: true }`.
+4. The session drops findings that repeat an earlier review's, gives every
+   finding left to one `builder:claim-checker`, and treats the result as
+   the first half's point 3 and point 4 do: it fixes every finding that
+   survives and is in scope, and sends findings outside the spec to the
+   counsel as `{ text, outside_spec: true }`, which may only file or drop
+   them.
+5. The session commits the fixes, then posts the record review at the head
+   with `mcp__builder__post_review`, carrying both verdicts as they stand
+   and `code_review` with the head the pass started from, `{ since: "<full
+   sha>" }`, or `{ since: "base" }` for a pass that read the whole pull
+   request, and then pushes. Committing first keeps the fixes in the
+   worktree if a turn ends between the post and the push. The record
+   review's body says that the `/code-review` pass ran, the range it read,
+   each finding with the claim checker's verdict and what happens to it,
+   and repeats the **Follow-ups** section of the review before it. The mod
+   writes the `CODE-REVIEW` line under the `VERDICTS` line itself, so the
+   body never holds it. The pushed fixes make a new head that goes through
+   a normal round, and whose pass later reads from this head. With nothing
+   to fix, the session posts the record review and calls
+   `mcp__builder__watch`.
+
+The tool refuses a record review when either verdict requests changes,
+when `since` is neither `base` nor a full sha, when the head has no verdict
+review yet, and when the head already has a pass or a waiver. If it refuses
+the record because the head moved, the new head goes through a normal
+round, and its pass starts from the newest head a pass read, so nothing is
+skipped. The pass's findings go only into this record review: never post
+them with `--comment`, never apply them with `--fix`, and never name the
+pass on the package tool's `Focused reviewers to launch:` line, because it
+is not a package reviewer.
 
 ### Updating the linked checkout
 
