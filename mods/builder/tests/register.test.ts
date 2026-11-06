@@ -15612,6 +15612,31 @@ test('a stuck taken off by hand while the judgement holds is put back at the nex
   expect(world.pr.labels).toEqual([{ name: 'stuck' }])
 })
 
+test('while a judgement holds and the look shows stuck alone, the look\'s job reads no labels, and the tool\'s own job still reads them fresh', async ($, on) => {
+  const clock = mock.clock(on)
+  memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const labelReads = () => world.calls.filter(call => call.startsWith('gh pr view 7 ') && call.includes('--json labels ')).length
+  await watch($)
+  await clock.settle()
+  await setStuck($)
+  expect(world.pr.labels).toEqual([{ name: 'stuck' }])
+
+  // The looks' snapshots show stuck and no other state label, so their jobs
+  // trust them and read nothing more.
+  const readsBefore = labelReads()
+  await clock.advance(30 * 60_000)
+  expect(labelReads()).toBe(readsBefore)
+  expect(world.pr.labels).toEqual([{ name: 'stuck' }])
+
+  // The tool's own job reads the labels fresh, because its snapshot can be
+  // minutes old.
+  const ran = await setStuck($)
+  expect(String(ran.result)).toContain('stuck is on o/r#7')
+  expect(labelReads()).toBe(readsBefore + 1)
+})
+
 test('a change of the step\'s label ends the judgement, writes the new label, removes stuck and saves a record with no judgement', async ($, on) => {
   const clock = mock.clock(on)
   const stored = memoryStore(on)

@@ -3413,24 +3413,28 @@ type StateLabelOutcome = 'stuck-on' | 'failed' | 'ended' | 'merged' | 'unjudged'
 // Sets the state label that follows from the step the stored snapshot calls
 // for. Everything is read again when the job runs, so a backlog never replays
 // an older label: the watch, the stored snapshot, whether a question is open,
-// the record, and the labels the pull request carries now, read fresh as for
-// a question's label because the snapshot can be minutes old. It stops when
-// the snapshot is of another pull request, when the watch moved on, or, when
+// the record, and the labels the pull request carries now, read fresh as for a
+// question's label because the snapshot can be minutes old. It stops when the
+// snapshot is of another pull request, when the watch moved on, or, when
 // `expected` is given, when the watch is no longer that one. The Merged step
 // changes nothing, even while a judgement is recorded, because a merged pull
 // request shown as stuck would mislead the person. While the record holds a
-// judgement and the step's label is the judged one, or the step gives no
-// label, the job makes the pull request carry `stuck` and no other state
-// label, and leaves the record as it is (see labelActionOf). With no
-// judgement, a step's label equal to the recorded one, or no label from the
-// step, changes nothing and needs no read of the labels. Otherwise the job
-// writes the step's label, which ends any judgement, or only records it
+// judgement and the step's label is the judged one, or the step gives no label,
+// the job makes the pull request carry `stuck` and no other state label, and
+// leaves the record as it is (see labelActionOf). With no judgement, a step's
+// label equal to the recorded one, or no label from the step, changes nothing
+// and needs no read of the labels. While a judgement is kept, a job that a look
+// started, with no `expected`, also skips the read when the snapshot the look
+// has just stored, which holds the labels from the same read of the pull
+// request, shows `stuck` and no other state label, so a judgement that holds
+// for hours costs no extra read at each look. The set_stuck tool's own job
+// always reads the labels, because its snapshot can be minutes old. Otherwise
+// the job writes the step's label, which ends any judgement, or only records it
 // beside a `stuck` when there is no record, and saves a new record with no
-// judgement once every edit the job needed succeeded: on a write, the edit
-// and the removal that the read after it may call for; when the label is
-// only recorded, the removal of any state label beside `stuck`. So a failed
-// edit, read or removal keeps the judgement and is tried again at the next
-// look.
+// judgement once every edit the job needed succeeded: on a write, the edit and
+// the removal that the read after it may call for; when the label is only
+// recorded, the removal of any state label beside `stuck`. So a failed edit,
+// read or removal keeps the judgement and is tried again at the next look.
 async function settleStateLabel($: $, expected?: BuilderRun): Promise<StateLabelOutcome> {
   const r = await read($, run)
   const s = snapshotIn(await read($, pr))
@@ -3444,6 +3448,8 @@ async function settleStateLabel($: $, expected?: BuilderRun): Promise<StateLabel
   const record = labelRecordIn(await $.store.get(key))
   const judgement = record?.judgement
   if (judgement === undefined && (derived === null || derived === record?.label)) return 'unjudged'
+  const isKept = judgement !== undefined && (derived === null || derived === judgement.label)
+  if (expected === undefined && isKept && s.labels.includes('stuck') && otherStateLabelsOf('stuck', s.labels).length === 0) return 'stuck-on'
   const live = await liveLabelNames($, r)
   if (live === null) return 'failed'
   if (!(await stillWatching($, r))) return 'moved'
@@ -3588,7 +3594,8 @@ async function serveSetStuck($: $): Promise<ToolCallResult> {
     case 'merged': return { result: `builder: ${target} is merged, so the mod changed no state label and stuck is not on. Call mcp__builder__watch to read the step again.` }
     case 'unjudged': return { result: `builder: no judgement is recorded for ${target} any more, so the mod changed no state label for it and stuck is not on. Call mcp__builder__watch to read the step again.` }
     case 'moved': return { result: `builder: the watch moved before the edit, so stuck was not put on. The judgement stays recorded for ${target}, and the mod puts stuck on when it is watched again under the same step.` }
-    default: return { result: `builder: the judgement is recorded for ${target}, but the edit on GitHub failed, so stuck is not on yet. The mod puts it on at its next look. Ask the person now, and never edit a state label yourself.` }
+    case 'failed':
+    case undefined: return { result: `builder: the judgement is recorded for ${target}, but the edit on GitHub failed, so stuck is not on yet. The mod puts it on at its next look. Ask the person now, and never edit a state label yourself.` }
   }
 }
 
