@@ -3432,7 +3432,13 @@ async function settleStateLabel($: $, expected?: BuilderRun): Promise<StateLabel
     if (action.remove.length > 0) await removeLabels($, r, action.remove)
     return 'stuck-on'
   }
-  if (action.kind === 'none' || derived === null) return 'ended'
+  // This line only narrows the types for what follows and cannot be reached:
+  // the early return above covers no judgement with no label from the step
+  // or the recorded one, and labelActionOf answers only keep or write while
+  // a judgement holds. A throw makes the tool answer a failed edit with the
+  // judgement recorded, which would be true, where a return would claim an
+  // outcome that did not happen.
+  if (action.kind === 'none' || derived === null) throw new Error('settleStateLabel reached a case that cannot happen: no action, or no label to write.')
   if (action.kind === 'write') {
     if (!(await addLabel($, r, derived, action.remove))) return 'failed'
     // From here the new label is on, so the judgement has ended on the pull
@@ -3441,27 +3447,34 @@ async function settleStateLabel($: $, expected?: BuilderRun): Promise<StateLabel
   }
   if (action.kind === 'record' && action.remove.length > 0 && !(await removeLabels($, r, action.remove))) return 'ended'
   try {
-    await saveLabelRecord($, key, judgement, { label: derived, at: await $.clock.now() })
+    await saveLabelRecord($, key, record?.label, judgement, { label: derived, at: await $.clock.now() })
   } catch {
     // A refused save keeps the record as it was, so the next look tries again.
   }
   return 'ended'
 }
 
-// Saves `next` as the state label record under `key`, in the record queue. It
-// reads the stored record again first, and when the stored judgement is not
-// the one the job read at its start (`before`), by label or time, the
-// set_stuck tool made it while the job ran, so it is carried into the new
-// record rather than lost. When that newer judgement has the label of the
-// judgement this job is ending, the tool made it while the step gave no
-// label, under the stored judgement's label, which is the label the job has
-// just replaced, so it is carried under the new record's label instead.
-// Carried under the old label, it would end at the next look where the step
-// gives the new label, while the session is still asking the person. When
-// the new label is `stuck` itself, stuck follows from the step, so no
-// judgement is carried. The read or the write throws when the store refuses
-// it.
-async function saveLabelRecord($: $, key: string, before: StuckJudgement | undefined, next: LabelRecord) {
+// Saves `next` as the state label record under `key`, in the record queue.
+// `replaced` is the record label the job read at its start, the label it is
+// replacing, and `before` is the judgement the job read at its start, the one
+// it is ending. The function reads the stored record again first. When the
+// stored judgement is not `before`, by label or time, the set_stuck tool made
+// it while the job ran, so it is carried into the new record rather than
+// lost, by these rules:
+//
+// - When the newer judgement's label is `replaced` or the label of `before`,
+//   the tool made it while the step gave no label, under the label the job
+//   has just replaced. It is carried under the new record's label, because
+//   carried under the old label it would end at the next look where the step
+//   gives the new label, while the session is still asking the person. When
+//   the new label is `stuck` itself, stuck follows from the step, so no
+//   judgement is carried.
+// - A newer judgement under any other label was made from a newer snapshot,
+//   whose step gives that label, so it is carried unchanged, even onto a
+//   record of `stuck`, because the next look keeps stuck only while it holds.
+//
+// The read or the write throws when the store refuses it.
+async function saveLabelRecord($: $, key: string, replaced: StateLabel | undefined, before: StuckJudgement | undefined, next: LabelRecord) {
   await inRecordQueue(async () => {
     const stored = labelRecordIn(await $.store.get(key))?.judgement
     const isNewer = stored !== undefined && (before === undefined || stored.label !== before.label || stored.at !== before.at)
@@ -3469,7 +3482,8 @@ async function saveLabelRecord($: $, key: string, before: StuckJudgement | undef
       await $.store.set(key, next)
       return
     }
-    if (before === undefined || stored.label !== before.label) {
+    const isUnderReplacedLabel = stored.label === replaced || stored.label === before?.label
+    if (!isUnderReplacedLabel) {
       await $.store.set(key, { ...next, judgement: stored })
       return
     }
