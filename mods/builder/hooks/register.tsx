@@ -21,7 +21,7 @@ import { changedKinds, commitRecordsOf, decidedItems, factIn, INSTRUCTION_PATHSP
 import { AGENTS_KEPT, backgroundOf, backgroundTaskIdOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isMerge, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
 import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isForemanNudge, keptTicketIn, keptTicketOf, memoOfKeptTicket, newMemo, parentIn, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, STATUS_CHANGED_TEXT, stateOf, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type KeptTicket, type Starts, type StatusFacts } from './status'
 import { afterSend, emptySends, sendOutcomeOf, sendsIn, sendsKey, sendsNewest, SENDS_KEPT_MS, SENDS_PREFIX, type SendOutcome, type SendSettled, type SendsRecord } from './sends'
-import { baseFactsOf, chooseStep, labelActionOf, labelFor, labelRecordIn, needsListing, otherStateLabelsOf, reviewerFactOf, SHORT_HASH, stepFor, UNPUSHED_KEPT, UNREAD_FACTS, type LabelRecord, type StuckJudgement, type UserClaude } from './step'
+import { baseFactsOf, chooseStep, isJudgementKept, labelActionOf, labelFor, labelRecordIn, needsListing, otherStateLabelsOf, reviewerFactOf, SHORT_HASH, stepFor, UNPUSHED_KEPT, UNREAD_FACTS, type LabelRecord, type StuckJudgement, type UserClaude } from './step'
 import { timeOfDay } from './text'
 import { afterPackage, afterPr, afterReview, afterStage, afterState, emptyTiming, timingIn, type PullRequestSeen } from './timing'
 import { afterCost, afterStep, emptyUsage, usageIn } from './usage'
@@ -3395,7 +3395,7 @@ function requestStateLabel($: $) {
   isStateLabelQueued = true
   void inLabelQueue(() => {
     isStateLabelQueued = false
-    return settleStateLabel($)
+    return settleStateLabel($, { trustsSnapshotLabels: true })
   })
 }
 
@@ -3425,18 +3425,19 @@ type StateLabelOutcome = 'stuck-on' | 'failed' | 'ended' | 'merged' | 'unjudged'
 // leaves the record as it is (see labelActionOf). With no judgement, a step's
 // label equal to the recorded one, or no label from the step, changes nothing
 // and needs no read of the labels. While a judgement is kept, a job that a look
-// started, with no `expected`, also skips the read when the snapshot the look
-// has just stored, which holds the labels from the same read of the pull
-// request, shows `stuck` and no other state label, so a judgement that holds
-// for hours costs no extra read at each look. The set_stuck tool's own job
-// always reads the labels, because its snapshot can be minutes old. Otherwise
+// started, which passes `trustsSnapshotLabels`, also skips the read when the
+// snapshot the look has just stored, which holds the labels from the same read
+// of the pull request, shows `stuck` and no other state label, so a judgement
+// that holds for hours costs no extra read at each look. The set_stuck tool's
+// own job never passes it and always reads the labels, because its snapshot
+// can be minutes old. Otherwise
 // the job writes the step's label, which ends any judgement, or only records it
 // beside a `stuck` when there is no record, and saves a new record with no
 // judgement once every edit the job needed succeeded: on a write, the edit and
 // the removal that the read after it may call for; when the label is only
 // recorded, the removal of any state label beside `stuck`. So a failed edit,
 // read or removal keeps the judgement and is tried again at the next look.
-async function settleStateLabel($: $, expected?: BuilderRun): Promise<StateLabelOutcome> {
+async function settleStateLabel($: $, { expected, trustsSnapshotLabels }: { expected?: BuilderRun; trustsSnapshotLabels: boolean }): Promise<StateLabelOutcome> {
   const r = await read($, run)
   const s = snapshotIn(await read($, pr))
   if (r === null || s === null || s.repo !== r.repo || s.number !== r.number) return 'moved'
@@ -3449,11 +3450,10 @@ async function settleStateLabel($: $, expected?: BuilderRun): Promise<StateLabel
   const record = labelRecordIn(await $.store.get(key))
   const judgement = record?.judgement
   if (judgement === undefined && (derived === null || derived === record?.label)) return 'unjudged'
-  // Only a look's job, with no `expected`, trusts the labels in the snapshot
-  // its look has just stored; the set_stuck tool's snapshot can be minutes old.
-  const isKept = judgement !== undefined && (derived === null || derived === judgement.label)
+  // Only a look's job trusts the labels in the snapshot its look has just
+  // stored; the set_stuck tool's snapshot can be minutes old.
   const isStuckAloneInSnapshot = s.labels.includes('stuck') && otherStateLabelsOf('stuck', s.labels).length === 0
-  if (expected === undefined && isKept && isStuckAloneInSnapshot) return 'stuck-on'
+  if (trustsSnapshotLabels && isJudgementKept(derived, judgement?.label ?? null) && isStuckAloneInSnapshot) return 'stuck-on'
   const live = await liveLabelNames($, r)
   if (live === null) return 'failed'
   if (!(await stillWatching($, r))) return 'moved'
@@ -3591,7 +3591,7 @@ async function serveSetStuck($: $): Promise<ToolCallResult> {
     return { result: `builder: refused: the step on ${target} gives no state label now, and the mod has recorded none, so there is no label to judge it stuck under. Ask the person as the skill says.` }
   }
   if (judged === 'stuck') return { result: already }
-  const outcome = await inLabelQueue(() => settleStateLabel($, r)) as StateLabelOutcome | undefined
+  const outcome = await inLabelQueue(() => settleStateLabel($, { expected: r, trustsSnapshotLabels: false })) as StateLabelOutcome | undefined
   switch (outcome) {
     case 'stuck-on': return { result: `builder: stuck is on ${target}, and the mod keeps it while the step gives ${judged}. Ask the person now, and never edit a state label yourself.` }
     case 'ended': return { result: `builder: the step on ${target} no longer gives ${judged}, so the judgement ended and stuck is not on. Call mcp__builder__watch to read the step again.` }

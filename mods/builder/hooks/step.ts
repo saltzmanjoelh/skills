@@ -351,8 +351,16 @@ export type LabelAction =
   | { kind: 'write'; remove: StateLabel[] }
   | { kind: 'keep'; add: boolean; remove: StateLabel[] }
 
+// Whether a judgement made under `judged` is kept while the step gives
+// `derived`: the step gives the judged label, or gives no label at all. The
+// state label job's shortcut that skips reading the labels uses the same rule,
+// so the two can never disagree.
+export function isJudgementKept(derived: StateLabel | null, judged: StateLabel | null): boolean {
+  return judged !== null && (derived === null || derived === judged)
+}
+
 export function labelActionOf(derived: StateLabel | null, record: StateLabel | null, liveLabels: readonly string[], judged: StateLabel | null = null): LabelAction {
-  if (judged !== null && (derived === null || derived === judged)) {
+  if (isJudgementKept(derived, judged)) {
     return { kind: 'keep', add: !liveLabels.includes('stuck'), remove: otherStateLabelsOf('stuck', liveLabels) }
   }
   if (derived === null) return { kind: 'none' }

@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { countingRuns, failedRunsOf, hasFailed, isReplaced, isUnfinished, needsJobs, snapshotOf, type GhPullRequest } from '../hooks/github'
-import { baseFactsOf, chooseStep, CLEANUP_SECTIONS, DEFAULT_MERGE_COMMAND, labelActionOf, LINKED_KEPT, linkedIn, labelFor, labelRecordIn, needsListing, otherStateLabelsOf, reviewerFactOf, SKILL_POINTS, SKILL_SECTIONS, stepFor, stepLines, UNREAD_FACTS, unpushedIn, type Step } from '../hooks/step'
+import { baseFactsOf, chooseStep, CLEANUP_SECTIONS, DEFAULT_MERGE_COMMAND, isJudgementKept, labelActionOf, LINKED_KEPT, linkedIn, labelFor, labelRecordIn, needsListing, otherStateLabelsOf, reviewerFactOf, SKILL_POINTS, SKILL_SECTIONS, stepFor, stepLines, UNREAD_FACTS, unpushedIn, type Step } from '../hooks/step'
 import type { BaseFacts, HeadRun, Snapshot, Unpushed } from '../types'
 
 const ME = 'owner'
@@ -685,6 +685,17 @@ test('setting waiting-on-reviewer removes the other four state labels, and setti
   expect(otherStateLabelsOf('waiting-on-reviewer', all)).toEqual(['in-review', 'waiting-on-author', 'ready-to-merge', 'stuck'])
   for (const kept of ['in-review', 'waiting-on-author', 'ready-to-merge', 'stuck'] as const) {
     expect(otherStateLabelsOf(kept, ['bug', 'waiting-on-reviewer'])).toEqual(['waiting-on-reviewer'])
+  }
+})
+
+test('a judgement is kept while the step gives its label or no label, and labelActionOf keeps it exactly then', () => {
+  const labels = ['in-review', 'waiting-on-author', 'waiting-on-reviewer', 'ready-to-merge', 'stuck', null] as const
+  for (const judged of ['in-review', 'waiting-on-author', null] as const) {
+    for (const derived of labels) {
+      const kept = judged !== null && (derived === null || derived === judged)
+      expect(isJudgementKept(derived, judged)).toBe(kept)
+      expect(labelActionOf(derived, 'in-review', ['stuck'], judged).kind === 'keep').toBe(kept)
+    }
   }
 })
 
