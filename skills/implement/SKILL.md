@@ -42,7 +42,7 @@ The project's `CLAUDE.md` holds the facts below. Each fact is one line,
 | `Merge command:` | `gh pr merge <n> --merge --match-head-commit <sha>`; a project whose merges go through its own gate names that command, with `<n>` and `<sha>` in it |
 | `Checks:` | `expected` when the base branch has files under `.github/workflows`, else `none`; a project whose checks report from an outside service writes `Checks: expected` |
 | `Reviewer:` | none; nobody but the session reviews. The value is one GitHub login, such as `alice`, or several separated by commas, such as `alice, bob`, of the people who review the pull requests (see "Outside reviewers"). A line in the user's own `CLAUDE.md`, in the Claude configuration folder (`CLAUDE_CONFIG_DIR`, or `~/.claude` when that is unset), applies to every project; the project's line overrides it, and `Reviewer: none` in a project turns it off there. When the user's file exists but cannot be read and the project has no line of its own, the reviewers are unknown and the mod names no merge step until it can read the file |
-| `Frontend paths:` | none; no change is frontend |
+| `Frontend paths:` | the built-in list in step 7. A project's own comma-separated globs replace that list, and `Frontend paths: none` turns it off, so that no change is frontend |
 | `## Gates` heading, one bullet per gate | detect from the manifests, confirm once, offer to write it |
 | `## Hard rules` heading | none |
 
@@ -155,15 +155,60 @@ Every command started in the background runs under its own time limit (see
 
 ### 7. Open the pull request
 
-First find out whether the change is frontend. The project's
-`Frontend paths:` fact is a comma-separated list of path globs. A line that is
-empty, or holds only commas and spaces, counts as missing, and with the fact
-missing no change is frontend and the next paragraph applies as written. When
-the base branch's `CLAUDE.md` names at least one glob there, read the section
-**A frontend change** of `skills/implement/frontend.md`, in this skill's
-folder, before going on. A frontend change keeps the next paragraph's checks,
-its rules for the body and its watch call, and replaces only its push and its
-`gh pr create` with what that section says.
+First find out whether the change is frontend, from the `Frontend paths:`
+line of the base branch's `CLAUDE.md`, read with
+`git show origin/<base>:CLAUDE.md`. A base branch with no `CLAUDE.md` counts as
+having no such line. The line is read in one of three ways:
+
+- When its value is the word `none`, in any case and alone on the line apart
+  from spaces, no change is frontend: run no command below, and open the pull
+  request the plain way, as the paragraph that begins "Check the diff against
+  the base" says. Everywhere in this skill and in `frontend.md`, the base branch's
+  `CLAUDE.md` "says `Frontend paths: none`" when it has this line, and only
+  then.
+- When its value holds at least one glob, it is the project's own
+  comma-separated list of path globs, such as
+  `Frontend paths: web/src/**, app/screens/**`. That list replaces the built-in
+  list below entirely, and no exclusions are added to it. Each glob becomes one
+  quoted pathspec, `':(glob)<glob>'`. A value that holds globs together with the
+  word `none` is a list of globs, because only `none` alone turns the check off.
+  When the project's own list matches nothing in the change, the change is not
+  frontend, and the built-in list is not consulted.
+- When the line is missing, is empty, or holds only commas and spaces, the
+  built-in list applies.
+
+The change is frontend when this command prints at least one path. With the
+built-in list, the command and its pathspecs are exactly these:
+
+```
+git diff --no-renames --name-only origin/<base>...HEAD -- \
+  ':(glob)**/*.tsx' ':(glob)**/*.jsx' ':(glob)**/*.vue' ':(glob)**/*.svelte' \
+  ':(glob)**/*.astro' ':(glob)**/*.html' ':(glob)**/*.css' ':(glob)**/*.scss' \
+  ':(glob)**/*.sass' ':(glob)**/*.less' ':(glob)**/*.storyboard' ':(glob)**/*.xib' \
+  ':(glob)**/res/layout/**' ':(glob)**/*View.swift' ':(glob)**/*Screen.swift' \
+  ':(glob)**/*Screen.kt' ':(glob)**/*Screen.dart' ':(glob)**/*Page.dart' \
+  ':(glob)**/*.xaml' ':(glob)**/*.axaml' \
+  ':(exclude,glob)**/*.test.*' ':(exclude,glob)**/*.spec.*' ':(exclude,glob)**/*.stories.*' \
+  ':(exclude,glob)**/__tests__/**' ':(exclude,glob)**/__snapshots__/**'
+```
+
+With the project's own list, the command is the same but ends with the
+pathspecs of that list in place of all of the pathspecs above. "The pathspecs
+of step 7" means whichever of these two sets applies. The five exclude
+pathspecs leave out test, story and snapshot files, so a change that touches
+only those is not frontend. The globs that match names ending in `View`,
+`Screen` or `Page` rely on a common naming convention, so a project whose views
+are named otherwise writes its own `Frontend paths:` list. A file the change
+adds, modifies, deletes or renames counts, because each of them changes what a
+person can see. Without `--no-renames`, git reports a rename only under its new
+path, so a file moved out of a frontend path would not count.
+
+When the change is frontend, read the section **A frontend change** of
+`skills/implement/frontend.md`, in this skill's folder, before going on. A
+frontend change keeps the next paragraph's checks, its rules for the body and
+its watch call, and replaces only its push and its `gh pr create` with what
+that section says. When the command prints nothing, whichever list it used,
+the change is not frontend, and the next paragraph applies as written.
 
 Check the diff against the base lists only this change's files, check it
 for credentials (see "Rules"), then push and open it with
@@ -208,8 +253,8 @@ what the session waits on is real; if the wait is real, the session ends
 the turn, and otherwise it follows the step the prompt names.
 
 **When a turn ends.** After any push to a pull request whose body has a
-`## Screenshots` section, when the base branch's `CLAUDE.md` names a
-`Frontend paths:` glob, first read the section **Screenshots on a frontend
+`## Screenshots` section, when the base branch's `CLAUDE.md` does not say
+`Frontend paths: none`, first read the section **Screenshots on a frontend
 pull request** of `skills/implement/frontend.md` again and bring the screenshot
 section up to date as it says. After any push, what follows depends on `Checks:`.
 Either way the mod counts the pushes and rounds again from the new state,
@@ -555,15 +600,16 @@ commit that is made, and until then the package keeps listing the `Tidied:`
 line as not corrected. There is no line that turns an `Area:` line into a
 `Tidied:` one.
 
-**Screenshots on a frontend pull request.** When the base branch's
-`CLAUDE.md` names at least one glob under `Frontend paths:`, the rules for a
-pull request's screenshots are in the section **Screenshots on a frontend pull
-request** of `skills/implement/frontend.md`, in this skill's folder. Read that
+**Screenshots on a frontend pull request.** When a pull request's body has a
+`## Screenshots` section and the base branch's `CLAUDE.md` does not say
+`Frontend paths: none`, the rules for its screenshots are in the section
+**Screenshots on a frontend pull request** of `skills/implement/frontend.md`,
+in this skill's folder. Read that
 section again at each moment it applies, even when it was read earlier in the
 session, because a compaction or a restart drops it: before making a commit,
 after a push, on resuming, after a compaction, and before running the merge
-command. With the fact missing or empty, nothing here asks the session to read
-that file.
+command. When the body has no such section, or the base branch's `CLAUDE.md`
+says `Frontend paths: none`, nothing here asks the session to read that file.
 
 **A streak of 3.** When the package tool's first line says an area's
 streak has reached 3, launch no reviewer on that package. The stop always
@@ -1088,7 +1134,7 @@ request's branch and its worktree (make one from the branch if there is
 none), call `mcp__builder__watch`, and read the spec and plan paths from the
 spec directory on the branch (never from the pull request body). On a pull
 request whose body has a `## Screenshots` section, when the base branch's
-`CLAUDE.md` names a `Frontend paths:` glob, read the section **Screenshots on a
+`CLAUDE.md` does not say `Frontend paths: none`, read the section **Screenshots on a
 frontend pull request** of `skills/implement/frontend.md` and bring the
 screenshot section up to date as it says. Then follow
 the step that the watch tool's answer names, doing what "Commits the pull
@@ -1115,7 +1161,7 @@ pane, Remote Control and the watch are still there. Read the pull request's
 state with `mcp__builder__watch`, and when the summary does not name the
 spec and plan paths, read them from the spec directory on the branch. On a
 pull request whose body has a `## Screenshots` section, when the base branch's
-`CLAUDE.md` names a `Frontend paths:` glob, read the section **Screenshots on a
+`CLAUDE.md` does not say `Frontend paths: none`, read the section **Screenshots on a
 frontend pull request** of `skills/implement/frontend.md` and bring the
 screenshot section up to date as it says. Then
 follow the step that the watch tool's answer names, as "Resuming" says,

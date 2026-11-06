@@ -10836,9 +10836,10 @@ test('both merge texts bring a frontend pull request\'s screenshot section up to
     expect(at).toBeGreaterThan(text.indexOf('Before merging:'))
     expect(at).toBeLessThan(reread)
     const bullet = text.slice(at, reread)
-    for (const part of ['`## Screenshots`', '`Frontend paths:`', '`skills/implement/frontend.md`', 'A pull request whose body has no such section skips this bullet.']) {
+    for (const part of ['`## Screenshots`', 'does not say `Frontend paths: none`', '`skills/implement/frontend.md`', 'A pull request whose body has no such section skips this bullet.']) {
       expect(bullet).toContain(part)
     }
+    expect(bullet).not.toContain('names at least one glob')
   }
 })
 
