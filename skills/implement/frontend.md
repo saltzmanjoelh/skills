@@ -11,7 +11,10 @@ globs or from its built-in list with its exclusions. Step 7 includes the
 section **A frontend change** below, so "as step 7 says a published reason is
 written" points at that section, and "the paragraph above" in it means step
 7's paragraph that opens the pull request the plain way. Run every git command
-below from the worktree's top folder.
+below from the worktree's top folder. A note for whoever edits this file:
+the builder mod's merge step names this file and its own section "Screenshots
+on a frontend pull request" by these names, so renaming either means changing
+`FRONTEND_FILE` and `FRONTEND_SECTIONS` in `mods/builder/hooks/step.ts` too.
 
 ## A frontend change
 
