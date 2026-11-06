@@ -292,9 +292,15 @@ export function bandTree(ui: Elements, view: View, width: number | undefined, pr
 // builder's pane does.
 const PX_PER_COLUMN = 8
 
-// The columns a card's round border and its side padding take on a surface
-// that draws images, which its stage drawing leaves out.
-const CARD_FRAME_COLUMNS = 4
+// A card's side padding, in columns on each side, on a surface that draws
+// images, and the columns its round border takes on each side.
+const CARD_PADDING_X = 1
+const ROUND_BORDER_COLUMNS = 1
+
+// The columns a card's border and side padding take together, which its
+// stage drawing leaves out. It is worked out from the two above, so a change
+// to the card's padding or border also changes the drawing's width.
+const CARD_FRAME_COLUMNS = 2 * (CARD_PADDING_X + ROUND_BORDER_COLUMNS)
 
 function drawingWidth(columns: number | undefined): number {
   return svgWidth(typeof columns === 'number' && Number.isFinite(columns) ? columns * PX_PER_COLUMN : Number.NaN)
@@ -479,7 +485,7 @@ function card(ui: Elements, v: View, row: SubRow, presses: PanePresses, columns:
   if (drawn && isRed) border = { borderStyle: 'round', borderColor: 'error' }
   else if (drawn) border = { borderStyle: 'round', borderDimColor: true }
   return (
-    <Box key={`card-${row.file}`} flexDirection="column" marginBottom={1} paddingX={drawn ? 1 : 0} {...border}>
+    <Box key={`card-${row.file}`} flexDirection="column" marginBottom={1} paddingX={drawn ? CARD_PADDING_X : 0} {...border}>
       <Box key={`card-top-${row.file}`} flexDirection="row" justifyContent="space-between">
         <Box key={`card-name-${row.file}`} flexDirection="row" flexShrink={1}>
           {isRed && !drawn ?<Box key={`alert-${row.file}`}><Text color="error" bold>! </Text></Box> : null}
@@ -589,7 +595,12 @@ function mergedSmallPrint(merged: Merged | null): string {
 export function tilesOf(v: View): Tile[] {
   const subs = v.subsSpent?.usd ?? null
   const own = v.ownSpent?.usd ?? null
-  const total = plusKnown(subs, own)
+  // When the ledger could not be read, the sub sessions' share is missing,
+  // so the total is unknown even when this session's own spend is known. The
+  // check is whether the ledger was read, not whether the sub sessions' sum
+  // is missing, because a ledger that reads with nothing spent yet has no sum
+  // either, and then this session's own spend is the whole total.
+  const total = v.isLedgerRead ? plusKnown(subs, own) : null
   const times = v.subsTime ?? TIMES_UNKNOWN
   const merged = v.merged
   return [

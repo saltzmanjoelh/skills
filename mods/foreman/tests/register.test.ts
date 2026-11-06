@@ -8,7 +8,7 @@ import { STATUS_CHANGED_TEXT } from '../hooks/notes'
 import { START_FOREMAN_FALLBACK, START_FOREMAN_OFF, startForemanText } from '../hooks/commands'
 import { heldLine, topUpLine } from '../hooks/held'
 import { newPairing, ticketsIn, ticketsKey, TICKETS_EMPTY } from '../hooks/tickets'
-import { CHANGED, CHANGED_AS_RECEIVED, CHANGED_ELEMENT, foreman, held, HOME, MINUTE, SECOND, SECRET, SURFACES, T0, leftInState, mountBoth, record, SENT, start, statusFolder, world } from './world'
+import { builderUsage, CHANGED, CHANGED_AS_RECEIVED, CHANGED_ELEMENT, foreman, held, HOME, MINUTE, SECOND, SECRET, SURFACES, T0, leftInState, mountBoth, record, SENT, start, statusFolder, world } from './world'
 
 // Two sub sessions: one working at the plan stage with three stages done and
 // a pull request, and one that needs the person.
@@ -545,15 +545,6 @@ const USAGE_WORDS = '4K in, 1K out, 90K cache read, 2K cache write · $1.75'
 async function linesOf(ui: Awaited<ReturnType<typeof mountBoth>>, head: string): Promise<string[]> {
   await ui.paneText()
   return (await ui.pane.findAll({ type: 'Text', text: new RegExp(`^${head}`) })).map(t => t.text)
-}
-
-// Answers foreman's reads of builder's `usage` state value with `value`, as
-// builder running in the same session would hold it.
-function builderUsage(on: On, value: unknown) {
-  on('state.get', ($, e, next) => {
-    if (e.plugin !== 'builder' || e.key !== 'usage') return next(e)
-    return { value: { value, version: 0 } } as never
-  })
 }
 
 test('each row shows its sub session\'s spending, and a row whose file carries none shows it as unknown, never as $0', async ($, on) => {
