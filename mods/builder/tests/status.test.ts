@@ -7,6 +7,7 @@ import {
   isForemanNudge, isProbablyHung, issueOf, keptTicketIn, keptTicketOf, memoOfKeptTicket, newMemo, oldestTaskOf, parentIn, recordOf, shownOrWithheld, startOf, startsBackgrounded, startsIn, startsPruned, startsSeen, startsWithout, STATE_RULES, stateOf,
   STATUS_CHANGED_TEXT, statusMemoIn, TASK_CHARS, taskKeyOf, taskKeyOfId, ticketIn, WITHHELD, type StatusFacts,
 } from '../hooks/status'
+import { isAbsolute } from '../hooks/text'
 import { afterPackage, afterStage, afterState, emptyTiming } from '../hooks/timing'
 import { afterCost, afterStep, emptyUsage } from '../hooks/usage'
 import type { AgentCard, BackgroundTask, StatusMemo } from '../types'
@@ -165,6 +166,13 @@ test('the configuration folder is CLAUDE_CONFIG_DIR when set, else .claude under
   expect(configDirOf('C:\\Users\\me\\.claude\\', undefined, undefined)).toBe('C:\\Users\\me\\.claude')
   expect(configDirOf(undefined, 'C:\\Users\\me', undefined)).toBe('C:\\Users\\me/.claude')
   expect(configDirOf('C:config', '/home/me', undefined)).toBeNull()
+})
+
+test('the shared absolute-path check accepts a leading slash or a drive letter with either slash, and nothing else', () => {
+  for (const path of ['C:\\x', 'C:/x', 'c:/x', 'c:\\x', '/x']) expect([path, isAbsolute(path)]).toEqual([path, true])
+  // A relative path, a drive letter with no slash after it, a UNC path and
+  // the empty string are all refused.
+  for (const path of ['x', '.\\x', 'C:x', '\\\\server\\share', '']) expect([path, isAbsolute(path)]).toEqual([path, false])
 })
 
 // Each row gives CLAUDE_CONFIG_DIR, HOME and USERPROFILE, and the folder the

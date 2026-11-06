@@ -1,5 +1,6 @@
 // Small text rules shared by the pane, the progress rules, the drawings, the
-// counsel and the review package.
+// counsel and the review package, and the one rule for whether a path is
+// absolute, which the status file, the watch tool and the base facts share.
 // This module imports nothing from the rest of the mod, so every other module
 // can import it without making two modules import each other.
 
@@ -21,6 +22,9 @@ export function printable(text: string, max = 80): string {
     .trim()
   return plain.length > max ? `${plain.slice(0, max - 1)}…` : plain
 }
+
+// Whether a path is absolute, on a Unix-like system or with a Windows drive.
+export const isAbsolute = (path: string) => path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path)
 
 // Names as a sentence lists them: a, a and b, or a, b and c.
 export function listed(names: readonly string[]): string {

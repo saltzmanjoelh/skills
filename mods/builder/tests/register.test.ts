@@ -2059,6 +2059,123 @@ test('when no worktree of the given checkout has the head branch, the refusal na
   expect(String(ran.result)).toContain(`${NOT_AT_HEAD} It compared /web, the checkout given to the watch tool, because no worktree has feature checked out.`)
 })
 
+// The sentence the watch tool adds when gh cannot read a checkout written in
+// the Git Bash form, such as /c/Users/me, which a Windows program reads as a
+// folder under C:\c rather than under C:\.
+const GIT_BASH_HINT = 'On Windows a path such as /c/Users/me is read as C:\\c\\Users\\me, so write a drive path as C:\\… or C:/… instead.'
+
+for (const folder of ['C:\\work\\api', 'C:/work/api']) {
+  test(`the watch tool accepts the Windows drive checkout ${folder} and runs gh and git in exactly that folder`, async ($, on) => {
+    mock.clock(on)
+    mock.store(on)
+    engine(on)
+    const world = fakeGitHub(on)
+    const files = fakeFiles(on)
+    sessionInAnotherRepository(world, files)
+    world.worktreesIn[folder] = [{ path: folder, branch: 'main' }]
+
+    const watched = await watchFromApi($, { repo: 'o/r', checkout: folder })
+
+    // Before the change the tool refused this checkout as not absolute,
+    // because it tested only for a leading slash.
+    expect(String(watched.result)).toContain('Watching this pull request.')
+    const folderOf = (prefix: string) => world.ran.filter(r => r.argv.startsWith(prefix)).map(r => r.cwd)
+    expect(folderOf('gh repo view')).toEqual([folder])
+    // The package is built only to show where the worktrees were listed.
+    // Whether it succeeds is not asserted, because its later steps join
+    // paths with a forward slash, which nobody has checked on Windows.
+    await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
+    expect(folderOf('git worktree list')).toEqual([folder])
+  })
+}
+
+test('the watch tool still refuses a relative checkout, and keeps the checkout watched before', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  sessionInAnotherRepository(world, files)
+  await watchFromApi($, { repo: 'o/r', checkout: '/web' })
+
+  for (const given of ['work/api', '.\\work\\api', 'C:work']) {
+    const watched = await loose($)({ tool: 'mcp__builder__watch', number: 7, repo: 'o/r', checkout: given })
+    expect(String(watched.result)).toContain(`The checkout must be an absolute path, and ${given} is not.`)
+  }
+
+  // The earlier watch, with its checkout, is still the one the package uses.
+  const ran = await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
+  expect(String(ran.result)).toContain(`Head: ${C}`)
+})
+
+for (const given of ['/c/work/api', '/c']) {
+  test(`when gh cannot read the Git Bash form checkout ${given}, the refusal says how Windows reads it and keeps the earlier watch`, async ($, on) => {
+    mock.clock(on)
+    mock.store(on)
+    engine(on)
+    const world = fakeGitHub(on)
+    const files = fakeFiles(on)
+    sessionInAnotherRepository(world, files)
+    world.reposIn[given] = ''
+    await watchFromApi($, { repo: 'o/r', checkout: '/web' })
+
+    const watched = await loose($)({ tool: 'mcp__builder__watch', number: 7, repo: 'o/r', checkout: given })
+
+    expect(String(watched.result)).toContain(`Could not read the repository of ${given}; is it a checkout? ${GIT_BASH_HINT}`)
+    // The path was given to gh as it was written, never rewritten.
+    expect(world.ran.filter(r => r.argv.startsWith('gh repo view')).map(r => r.cwd)).toContain(given)
+    const ran = await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
+    expect(String(ran.result)).toContain(`Head: ${C}`)
+  })
+}
+
+test('a Git Bash form checkout that gh can read is watched with no added sentence', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  sessionInAnotherRepository(world, files)
+
+  const watched = await watchFromApi($, { repo: 'o/r', checkout: '/c/work/api' })
+
+  expect(String(watched.result)).toContain('Watching this pull request.')
+  expect(String(watched.result)).not.toContain('On Windows')
+})
+
+test('an unreadable checkout whose first part is longer than one letter is refused with no added sentence', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  sessionInAnotherRepository(world, files)
+  await watchFromApi($, { repo: 'o/r', checkout: '/web' })
+
+  for (const given of ['/cd/work', '/work/api']) {
+    world.reposIn[given] = ''
+    const watched = await loose($)({ tool: 'mcp__builder__watch', number: 7, repo: 'o/r', checkout: given })
+    expect(String(watched.result)).toContain(`Could not read the repository of ${given}; is it a checkout?`)
+    expect(String(watched.result)).not.toContain('On Windows')
+  }
+})
+
+test('a Git Bash form checkout of another repository than the one named gets the other-repository refusal with no added sentence', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  sessionInAnotherRepository(world, files)
+  world.reposIn['/c/work/api'] = 'o/api'
+  await watchFromApi($, { repo: 'o/r', checkout: '/web' })
+
+  const watched = await loose($)({ tool: 'mcp__builder__watch', number: 7, repo: 'o/r', checkout: '/c/work/api' })
+
+  expect(String(watched.result)).toContain('/c/work/api is a checkout of o/api, not of o/r; still watching what was watched before.')
+  expect(String(watched.result)).not.toContain('On Windows')
+})
+
 test('a subagent cannot build a package or post a review', async ($, on) => {
   mock.clock(on)
   mock.store(on)
@@ -10687,6 +10804,36 @@ test('the base facts come from the session folder\'s base branch when the watch 
   expect(world.ran).toContainEqual({ argv: 'git show origin/main:CLAUDE.md', cwd: '/repo' })
   expect(String(ran.result)).toContain('The step that applies: Both verdicts approve at this head, merge.')
   expect(String(ran.result)).toContain(`gh pr merge 7 --merge --match-head-commit ${C}`)
+})
+
+test('the base facts come from a Windows drive session folder\'s base branch when the watch took its repository from that folder', async ($, on) => {
+  mock.clock(on)
+  mock.env(on, {})
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr = approvedWithoutChecks()
+  world.baseClaude = 'Checks: none\n'
+  await $.session.start({ cwd: 'C:\\work\\repo', surface: null, isInteractive: true })
+  const ran = await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  // Before the change this folder failed the leading-slash test, so the base
+  // facts counted as unread and the step asked before merging without checks.
+  expect(world.ran).toContainEqual({ argv: 'git show origin/main:CLAUDE.md', cwd: 'C:\\work\\repo' })
+  expect(String(ran.result)).toContain('The step that applies: Both verdicts approve at this head, merge.')
+})
+
+test('a relative session folder still reads no base facts, even when the watch took its repository from that folder', async ($, on) => {
+  mock.clock(on)
+  mock.env(on, {})
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr = approvedWithoutChecks()
+  world.baseClaude = 'Checks: none\n'
+  await $.session.start({ cwd: 'work/repo', surface: null, isInteractive: true })
+  const ran = await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  expect(world.ran.some(r => r.argv.startsWith('git show origin/main:CLAUDE.md') && r.cwd === 'work/repo')).toBe(false)
+  expect(String(ran.result)).toContain('The step that applies: Both verdicts approve at this head, with no checks.')
 })
 
 // The CLAUDE.md in the user's configuration folder at a look: read with its
