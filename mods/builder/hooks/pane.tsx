@@ -284,9 +284,11 @@ function lineAbove(v: View, width: number | undefined): string | null {
 export const STALE_WARNING = 'builder changed on disk since this session loaded it; restart this session to load it'
 
 // What the pane says when the session holds a foreman ticket but builder can
-// work out no folder for its status file. It names the variables builder
-// looked at and never their values.
-export const NO_STATUS_FILE = 'builder found a foreman ticket but cannot write its status file, because none of CLAUDE_CONFIG_DIR, HOME and USERPROFILE gives an absolute folder'
+// work out no folder for its status file. Builder refuses a CLAUDE_CONFIG_DIR
+// that is set but not absolute without looking at HOME or USERPROFILE, so the
+// sentence covers that case as well as the one where all three fail. It names
+// the variables builder looked at and never their values.
+export const NO_STATUS_FILE = 'builder found a foreman ticket but cannot write its status file, because CLAUDE_CONFIG_DIR is set but not absolute, or it is unset and neither HOME nor USERPROFILE is absolute'
 
 const SEPARATOR = ' · '
 // How every line above the prompt begins. withWarning drops it after the

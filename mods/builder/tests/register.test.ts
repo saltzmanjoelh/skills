@@ -12282,6 +12282,20 @@ test('a ticket with no usable configuration folder writes nothing, sends nothing
   expect(drawn).not.toContain('Users\\\\me')
 })
 
+test('a ticket with a relative CLAUDE_CONFIG_DIR and an absolute HOME writes nothing and shows the pane line without either value', async ($, on) => {
+  const s = foremanSession(on, { env: { CLAUDE_CONFIG_DIR: 'relative/config', HOME: '/home/me' } })
+  const pane = await noStatusFileReader($)
+  await firstPrompt($, s.clock)
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await s.clock.advance(2 * MINUTE)
+
+  expect(s.files.writes.log.filter(path => path.includes('/foreman/'))).toEqual([])
+  const { row, drawn } = await pane()
+  expect(row?.text).toBe(NO_STATUS_FILE)
+  expect(drawn).not.toContain('relative/config')
+  expect(drawn).not.toContain('/home/me')
+})
+
 test('a session with no ticket shows no line about the status file, whatever the variables', async ($, on) => {
   const s = foremanSession(on, { env: {} })
   const pane = await noStatusFileReader($)
