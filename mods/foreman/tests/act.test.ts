@@ -1385,7 +1385,7 @@ test('the top-up count is never below zero, even with more busy sub sessions tha
   expect(topUp(ids.map(went), ids.map(busy), 1)).toBe(0)
 })
 
-test('the top-up count never asks for more than five starts on one turn', () => {
+test('one top-up line never asks for more than five starts', () => {
   expect(TOP_UP_MAX).toBe(5)
   expect(topUp([], [], 3)).toBe(5)
   expect(topUp([], [], 20)).toBe(5)

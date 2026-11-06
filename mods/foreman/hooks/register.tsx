@@ -1387,10 +1387,10 @@ const isStartForeman = (e: PromptSubmitInput) => e.command?.name === COMMAND || 
 // leaves out the starts made on that turn, and the line says that its number
 // replaces an earlier one's. The line is left out of a typed /start-foreman,
 // because the text that replaces the skill gives the count on that turn. A
-// failed count leaves the line out and keeps the
-// held line. Whose prompt it is is checked first, so a plugin's prompt,
-// foreman's own wake among them, reads no state here. The parent setting and
-// the ledger are each read once, for both lines.
+// failed count leaves the line out and keeps the held line. Whose prompt it
+// is is checked first, so a plugin's prompt, foreman's own wake among them,
+// reads no state here. The parent setting and the ledger are each read once,
+// for both lines.
 async function withForemanLines($: $, e: PromptSubmitInput): Promise<PromptSubmitInput> {
   if (!isPersonPrompt(e)) return e
   const settings = parentIn(await read($, parent))

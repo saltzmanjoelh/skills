@@ -119,8 +119,9 @@ without bringing up the permission card.
   this change it carried none; its count is taken from the ledger and is
   smaller after a start has been recorded; it is capped at 5; it uses the new
   shared wording; it is still absent at the target, on a plugin's prompt and
-  on a typed `/start-foreman`; and the `/start-foreman` text and the wake
-  skill's heading use the same sentence.
+  on a typed `/start-foreman`; and the `/start-foreman` text uses the same
+  sentence. No test can read the wake skill, so a search of the skill for the
+  one-issue sentence checks that its heading uses it too.
 - The gates in the project's `CLAUDE.md` pass.
 - Not verified by the gates: that the real desktop app accepts a start made
   on a turn after a mid-turn typed message. The live check is that the owner
