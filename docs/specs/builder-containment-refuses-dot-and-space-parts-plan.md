@@ -38,12 +38,13 @@ The order of the counsel tool's messages lives in one small named function,
 `outsideRefusal`, placed just above `serveCounsel` in `register.tsx`:
 
 1. A Windows-shaped path gets today's Windows-form message.
-2. A path that starts with `/`, has an exact `..` part, or has no dot and
-   space part gets today's "leads outside the checkout" message. The last of
-   these is a link that resolves outside, which is the only other way
-   `placeOf` returns `outside`, and the existing test of such a link covers
-   this fallback.
-3. Any other path gets the new message, written exactly as the spec gives it.
+2. A path that has a dot and space part, and neither starts with `/` nor has
+   an exact `..` part, gets the new message, written exactly as the spec
+   gives it.
+3. Any other path gets today's "leads outside the checkout" message. That
+   covers a path that starts with `/` or has an exact `..` part, and a link
+   that resolves outside, which is the only other way `placeOf` returns
+   `outside`. The existing test of such a link covers this fallback.
 
 The fallback is "leads outside" rather than the new message, so a reason for
 `outside` added later gets today's general answer, never a wrong specific one.
