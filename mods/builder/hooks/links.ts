@@ -60,8 +60,9 @@ export function linkOf(address: string | null, key: string | null): string | nul
 // Whether a path starts with a Windows drive letter, a colon and a slash of
 // either kind, such as `C:\x` or `c:/x`. With a leading `/`, this is the same
 // absolute rule as builder's isAbsolute in hooks/text.ts, which this module
-// cannot import.
-const DRIVE = /^[A-Za-z]:[\\/]/
+// cannot import. It is exported so that builder's update of the linked
+// checkout uses the same rule rather than a copy of it.
+export const DRIVE = /^[A-Za-z]:[\\/]/
 
 // A path resolved against a folder: an absolute path, one that starts with `/`
 // or with a drive letter, a colon and a slash, as it is, and a relative one

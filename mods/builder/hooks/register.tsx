@@ -391,8 +391,10 @@ async function linkedFor($: $, r: SnapshotTarget, live: GhPullRequest): Promise<
     const key = linkedKey(r.repo, r.number)
     const merge = live.mergeCommit?.oid
     if (typeof merge !== 'string' || !isFullSha(merge)) return (await recordedLinked($, key)) ?? 'unread'
-    const home = await $.env.get('HOME')
-    return await linkedCheckout($, key, { home, repo: r.repo, base: live.baseRefName ?? '', merge, now: await $.clock.now() })
+    // The variables that give Claude Code's configuration folder, where the
+    // links are found (see configDirOf in status.ts).
+    const [configDir, home, userProfile] = await Promise.all([$.env.get('CLAUDE_CONFIG_DIR'), $.env.get('HOME'), $.env.get('USERPROFILE')])
+    return await linkedCheckout($, key, { configDir, home, userProfile, repo: r.repo, base: live.baseRefName ?? '', merge, now: await $.clock.now() })
   } catch {
     return null
   }
@@ -5438,18 +5440,36 @@ export const register: Register = on => {
   // session's own runs, the mod reports the merge stage. A subagent's call that
   // started a background task records that task for the agent's batch.
   // However the call ends, its return closes one permission prompt of its
-  // loop and tool for the status file.
+  // loop and tool for the status file. A call whose result is an error, the
+  // session's own, a subagent's or one of the mod's own tools, counts in the
+  // status file's cleanup record once the cleanup skill has started. A
+  // refusal is not an error result, so it does not count.
   on('tool.call', async ($, e, next) => {
     try {
+      let ran: ToolCallResult
       if (e.agentId !== undefined) {
-        const ran = await route($, e, next)
+        ran = await route($, e, next)
         await noteTask($, e.agentId, ran)
-        return ran
+      } else if (UNNAMED_TOOLS.has(String(e.tool))) {
+        ran = await route($, e, next)
+      } else {
+        if (e.tool === 'Bash' && isMerge(String(e.command), mergePattern)) await reportSeen($, 'merge')
+        ran = await foreground($, e, () => route($, e, next))
+        if (e.tool === 'Bash' && succeeded(ran) && isPushOrMerge(String(e.command), mergePattern)) armCommandLooks($)
       }
-      if (UNNAMED_TOOLS.has(String(e.tool))) return await route($, e, next)
-      if (e.tool === 'Bash' && isMerge(String(e.command), mergePattern)) await reportSeen($, 'merge')
-      const ran = await foreground($, e, () => route($, e, next))
-      if (e.tool === 'Bash' && succeeded(ran) && isPushOrMerge(String(e.command), mergePattern)) armCommandLooks($)
+      if (ran.isError === true) {
+        // The error's text is what the model read, which core may have
+        // wrapped, so its last line can differ from the classic hook's error.
+        // A result of the mod's own carries no text, so its result is read.
+        // The count must never change the call's result. Without the catch, a
+        // failed memo write would reach the outer catch below. For a call
+        // that went on, that hands back the result again through `next(e)`,
+        // which is safe to call twice. For one of the mod's own tools, which
+        // never calls `next`, it would pass the call on to the hooks beneath,
+        // or refuse a subagent's call, in place of the mod's own answer.
+        const failed = ran
+        await changeMemo($, memo => afterFailedCall(memo, failed.text ?? failed.result)).catch(() => undefined)
+      }
       return ran
     } finally {
       await changeMemo($, memo => afterCallReturn(memo, e.agentId ?? '', String(e.tool))).catch(() => undefined)
@@ -5804,13 +5824,6 @@ export const register: Register = on => {
   // the tool and never copies its input.
   on('classic.PermissionRequest', async ($, e, next) => {
     await changeMemo($, memo => afterPermissionRequest(memo, e.agent_id ?? '', String(e.tool_name)))
-    return next(e)
-  }).catch(($, e, next) => next(e))
-
-  // Every failed call, the session's own and its subagents', counts in the
-  // status file's cleanup record once the cleanup skill has started.
-  on('classic.PostToolUseFailure', async ($, e, next) => {
-    await changeMemo($, memo => afterFailedCall(memo, e.error))
     return next(e)
   }).catch(($, e, next) => next(e))
 

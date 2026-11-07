@@ -7,7 +7,7 @@ whose Non-goals left this job out on purpose).
 ## Goal
 
 After a pull request merges, the session still updates the main checkout that
-`~/.claude` links into by hand, following the roughly 260-line section
+the links in Claude Code's configuration folder lead into by hand, following the roughly 260-line section
 "Updating the linked checkout" of `skills/implement/SKILL.md`. The builder mod
 already knows the repository, the base branch, the merge commit and the
 merged state, so it runs that procedure itself and hands the session only the
@@ -48,8 +48,10 @@ holds today, with the same commands and the same rules, as
 `docs/specs/merged-updates-linked-checkout.md` and
 `docs/specs/linked-checkout-any-machine.md` describe it:
 
-1. **Find the links** in `~/.claude/skills`, `~/.claude/agents` and
-   `~/.claude/commands`, with `HOME` read from the environment, including a
+1. **Find the links** in the `skills`, `agents` and `commands` folders of
+   Claude Code's configuration folder, which is `CLAUDE_CONFIG_DIR` when it is set
+   and otherwise `.claude` under `HOME`, or else under `USERPROFILE`, read
+   from the environment, including a
    folder that is itself a link and every link directly inside each folder,
    and find the main checkout and the tree each link lies in. No folder that
    is a link and no link inside one gives **no links found**.
@@ -139,7 +141,7 @@ text points at.
   runs nothing and records nothing on that look, and the step says the merge
   commit could not be read yet; a later look runs the update once the commit
   can be read.
-- The merged repository is not linked from `~/.claude`: not linked, and
+- The merged repository is not linked from Claude Code's configuration folder: not linked, and
   nothing is moved.
 - A session that started before this change merges with the old mod: the old
   skill it loaded still holds the full procedure, so it updates by hand.
@@ -151,7 +153,8 @@ text points at.
 - Telling a session that is already running that its mod is out of date.
 - Retrying a failed update, other than the one retry after a lock.
 - Detecting skills or mods loaded through settings, `--plugin-dir` or a copy.
-- Updating checkouts of repositories that no `~/.claude` link points into.
+- Updating checkouts of repositories that no link in Claude Code's configuration folder
+  points into.
 - Changing what the procedure does: its commands, its checks and its outcomes
   stay as the two earlier specs describe them.
 

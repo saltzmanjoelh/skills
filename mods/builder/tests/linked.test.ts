@@ -9,33 +9,56 @@ import { LINKED_KEPT, linkedCheckout, linkedKey, linkedRecordIn, namesRepository
 // answers its calls in turn, the last one repeating. A command the script
 // does not name exits 1, and `unexpected` lists it, so a test sees every
 // command the update ran that it did not expect.
+//
+// The file calls `fs.stat` and `fs.list` answer from the same script, under
+// the keys `stat <path>` and `list <path>`, and each call is recorded in
+// `fsCalls`. A stat answers a value or rejects with a message, and a listing
+// answers its entries or rejects. A path the script does not name is listed
+// in `unexpected` too and rejects with an ENOENT message, as a missing path
+// does. Every command named `test`, `realpath` or `find` is listed in
+// `forbidden`, because the update must never run one.
 
 const HOME = '/h'
+const CONFIG = `${HOME}/.claude`
 const MERGE = 'f'.repeat(40)
 const MERGE_TREE = '1'.repeat(40)
 const HEAD_TREE = '0'.repeat(40)
 const MISSING = 'b'.repeat(40)
-const INPUT = { home: HOME, repo: 'o/r', base: 'main', merge: MERGE }
+type Input = { configDir: string | undefined; home: string | undefined; userProfile: string | undefined; repo: string; base: string; merge: string }
+const INPUT: Input = { configDir: undefined, home: HOME, userProfile: undefined, repo: 'o/r', base: 'main', merge: MERGE }
 
 type Answer = { exitCode?: number; stdout?: string; stderr?: string; throws?: boolean; isStdoutTruncated?: boolean }
-type Script = Record<string, Answer | Answer[]>
+type StatAnswer = { kind: 'file' | 'dir' | 'other'; isLink: boolean; realPath?: string }
+type EntryAnswer = { name: string; kind?: 'file' | 'dir' | 'other'; isLink: boolean }
+type FsAnswer = { stat: StatAnswer } | { entries: EntryAnswer[] } | { rejects: string; code?: string }
+type Script = Record<string, Answer | Answer[] | FsAnswer>
 type Call = { argv: string[]; cwd?: string; env?: Record<string, string>; stdin?: string; timeoutMs?: number }
 
 const ok = (stdout = ''): Answer => ({ exitCode: 0, stdout })
 const exit = (exitCode: number, stderr = ''): Answer => ({ exitCode, stderr })
+const rejected = (answer: { rejects: string; code?: string }) => Object.assign(new Error(answer.rejects), answer.code === undefined ? {} : { code: answer.code })
 
 function ioFrom(script: Script, store = new Map<string, unknown>()) {
   const calls: Call[] = []
+  const fsCalls: string[] = []
   const used: Record<string, number> = {}
   const unexpected: string[] = []
+  const forbidden: string[] = []
+  const fsAnswer = (key: string): FsAnswer => {
+    const entry = script[key] as FsAnswer | undefined
+    if (entry !== undefined) return entry
+    unexpected.push(key)
+    return { rejects: `ENOENT: no such file or directory, ${key.split(' ')[0]} '${key.slice(key.indexOf(' ') + 1)}'` }
+  }
   const io: LinkedIo = {
     process: {
       run: async (argv, init) => {
         calls.push({ argv: [...argv], cwd: init?.cwd, env: init?.env, stdin: init?.stdin, timeoutMs: init?.timeoutMs })
+        if (['test', 'realpath', 'find'].includes(argv[0]!)) forbidden.push(argv.join(' '))
         const plain = argv.join(' ')
         const inFolder = init?.cwd === undefined ? undefined : `${init.cwd}$ ${plain}`
         const key = inFolder !== undefined && script[inFolder] !== undefined ? inFolder : plain
-        const entry = script[key]
+        const entry = script[key] as Answer | Answer[] | undefined
         if (entry === undefined) {
           unexpected.push(plain)
           return { exitCode: 1, stdout: '', stderr: `unexpected: ${plain}`, isStdoutTruncated: false, isStderrTruncated: false }
@@ -48,16 +71,34 @@ function ioFrom(script: Script, store = new Map<string, unknown>()) {
         return { exitCode: answer.exitCode ?? 0, stdout: answer.stdout ?? '', stderr: answer.stderr ?? '', isStdoutTruncated: answer.isStdoutTruncated ?? false, isStderrTruncated: false }
       },
     },
+    fs: {
+      stat: async (path, options) => {
+        fsCalls.push(`stat ${path}${options?.resolve === true ? ' resolve' : ''}`)
+        const answer = fsAnswer(`stat ${path}`)
+        if ('rejects' in answer) throw rejected(answer)
+        if (!('stat' in answer)) throw new Error(`the script answers a listing for stat ${path}`)
+        const { realPath, ...rest } = answer.stat
+        return { size: 1, mtimeMs: 0, ...rest, ...(options?.resolve === true && realPath !== undefined ? { realPath } : {}) }
+      },
+      list: async path => {
+        fsCalls.push(`list ${String(path)}`)
+        const answer = fsAnswer(`list ${String(path)}`)
+        if ('rejects' in answer) throw rejected(answer)
+        if (!('entries' in answer)) throw new Error(`the script answers a stat for list ${String(path)}`)
+        return answer.entries.map(entry => ({ kind: entry.kind ?? 'other', size: 0, mtimeMs: 0, ...entry }))
+      },
+    },
     store: {
       get: async key => store.get(key),
       set: async (key, value) => { store.set(key, JSON.parse(JSON.stringify(value))) },
     },
   }
   const ran = (prefix: string) => calls.filter(call => call.argv.join(' ').startsWith(prefix))
-  return { io, calls, store, unexpected, ran }
+  return { io, calls, fsCalls, store, unexpected, forbidden, ran }
 }
 
-const git = (...args: string[]) => ['git', '-C', '/repo', ...args].join(' ')
+const gitAt = (dir: string, ...args: string[]) => ['git', '-C', dir, ...args].join(' ')
+const git = (...args: string[]) => gitAt('/repo', ...args)
 const FETCH = git('fetch', '--no-write-fetch-head', 'origin', MERGE, '+refs/heads/main:refs/remotes/origin/main')
 const FETCH_BY_ADDRESS = git('fetch', '--no-write-fetch-head', 'https://github.com/o/r', MERGE)
 const LISTING = git('rev-list', '--objects', '--quiet', '--missing=print', MERGE_TREE, '--not', HEAD_TREE)
@@ -69,16 +110,21 @@ const BRANCH = git('branch', '--show-current')
 const STATUS = git('status', '--porcelain', '--untracked-files=no')
 const REV_PARSE = (folder: string) => `git -C ${folder} rev-parse --path-format=absolute --git-common-dir --show-toplevel`
 const LOCK = "fatal: Unable to create '/repo/.git/index.lock': File exists."
+const LOOK_UP = 'gh repo view --json nameWithOwner --jq .nameWithOwner'
 
-// The links one folder under ~/.claude holds: none when the folder is
-// missing, or the paths `find` prints.
-function folder(name: 'skills' | 'agents' | 'commands', links: string[] | null): Script {
-  const path = `${HOME}/.claude/${name}`
-  if (links === null) return { [`test -L ${path}`]: exit(1), [`test -d ${path}`]: exit(1) }
+// A path that is not there: its stat rejects as a missing path does.
+const missingAt = (path: string): Script => ({ [`stat ${path}`]: { rejects: `ENOENT: no such file or directory, stat '${path}'`, code: 'ENOENT' } })
+
+// The links one folder of the configuration folder holds: none when the
+// folder is missing, or the links whose full paths are given, which the
+// listing names by their last part. `others` are entries of the folder that
+// are not links.
+function folder(name: 'skills' | 'agents' | 'commands', links: string[] | null, config = CONFIG, others: EntryAnswer[] = []): Script {
+  const path = `${config}/${name}`
+  if (links === null) return missingAt(path)
   return {
-    [`test -L ${path}`]: exit(1),
-    [`test -d ${path}`]: ok(),
-    [`find ${path}/ -mindepth 1 -maxdepth 1 -type l -print0`]: ok(links.map(link => `${link}\0`).join('')),
+    [`stat ${path}`]: { stat: { kind: 'dir', isLink: false, realPath: path } },
+    [`list ${path}`]: { entries: [...others, ...links.map(link => ({ name: link.slice(link.lastIndexOf('/') + 1), isLink: true }))] },
   }
 }
 
@@ -86,43 +132,53 @@ function folder(name: 'skills' | 'agents' | 'commands', links: string[] | null):
 // repository whose shared git folder is `common`.
 function link(path: string, target: string, common = '/repo/.git', tree = '/repo'): Script {
   return {
-    [`test -e ${path}`]: ok(),
-    [`realpath ${path}`]: ok(`${target}\n`),
-    [`test -d ${target}`]: ok(),
+    [`stat ${path}`]: { stat: { kind: 'dir', isLink: true, realPath: target } },
     [REV_PARSE(target)]: ok(`${common}\n${tree}\n`),
   }
 }
 
-// The standard world: ~/.claude/skills holds one link into the main checkout
-// /repo of o/r, whose only remote is an ssh address of o/r, on the base, with
-// no tracked changes, behind the merge commit, and a full clone.
+// The commands of an update that fast-forwards the main checkout at `dir`:
+// it is o/r, its only remote is an ssh address of o/r, it is on the base,
+// with no tracked changes, behind the merge commit, and a full clone.
+function checkoutAt(dir: string): Script {
+  const g = (...args: string[]) => gitAt(dir, ...args)
+  return {
+    [`${dir}$ ${LOOK_UP}`]: ok('o/r\n'),
+    'gh repo view o/r --json url,defaultBranchRef': ok('{"url":"https://github.com/o/r","defaultBranchRef":{"name":"main"}}\n'),
+    [g('branch', '--show-current')]: ok('main\n'),
+    [g('merge-base', '--is-ancestor', MERGE, 'HEAD')]: [exit(1), ok()],
+    [g('remote')]: ok('origin\n'),
+    [g('remote', 'get-url', 'origin')]: ok('git@github.com:o/r.git\n'),
+    [g('fetch', '--no-write-fetch-head', 'origin', MERGE, '+refs/heads/main:refs/remotes/origin/main')]: ok(),
+    [g('cat-file', '-e', `${MERGE}^{commit}`)]: ok(),
+    [g('log', '-1', '--format=%T', MERGE)]: ok(`${MERGE_TREE}\n`),
+    [g('log', '-1', '--format=%T', 'HEAD')]: ok(`${HEAD_TREE}\n`),
+    [g('rev-list', '--objects', '--quiet', '--missing=print', MERGE_TREE, '--not', HEAD_TREE)]: ok(),
+    [g('status', '--porcelain', '--untracked-files=no')]: ok(),
+    [g('merge', '--ff-only', '--no-overwrite-ignore', MERGE)]: ok('Updating aaaaaaa..fffffff\nFast-forward\n'),
+    [g('rev-parse', 'HEAD')]: ok(`${MERGE}\n`),
+  }
+}
+
+// The standard world: the configuration folder's skills folder holds one
+// link into the main checkout /repo of o/r, which checkoutAt describes.
 function world(over: Script = {}): Script {
   return {
-    ...folder('skills', [`${HOME}/.claude/skills/implement`]),
+    ...folder('skills', [`${CONFIG}/skills/implement`]),
     ...folder('agents', null),
     ...folder('commands', null),
-    ...link(`${HOME}/.claude/skills/implement`, '/repo/skills/implement'),
-    '/repo$ gh repo view --json nameWithOwner --jq .nameWithOwner': ok('o/r\n'),
-    'gh repo view o/r --json url,defaultBranchRef': ok('{"url":"https://github.com/o/r","defaultBranchRef":{"name":"main"}}\n'),
-    [BRANCH]: ok('main\n'),
-    [ANCESTOR]: [exit(1), ok()],
-    [git('remote')]: ok('origin\n'),
-    [git('remote', 'get-url', 'origin')]: ok('git@github.com:o/r.git\n'),
-    [FETCH]: ok(),
-    [git('cat-file', '-e', `${MERGE}^{commit}`)]: ok(),
-    [git('log', '-1', '--format=%T', MERGE)]: ok(`${MERGE_TREE}\n`),
-    [git('log', '-1', '--format=%T', 'HEAD')]: ok(`${HEAD_TREE}\n`),
-    [LISTING]: ok(),
-    [STATUS]: ok(),
-    [MERGE_FF]: ok('Updating aaaaaaa..fffffff\nFast-forward\n'),
-    [git('rev-parse', 'HEAD')]: ok(`${MERGE}\n`),
+    ...link(`${CONFIG}/skills/implement`, '/repo/skills/implement'),
+    ...checkoutAt('/repo'),
     ...over,
   }
 }
 
-async function updated(script: Script, input: Partial<typeof INPUT> = {}) {
+async function updated(script: Script, input: Partial<Input> = {}) {
   const t = ioFrom(script)
   const lines = await updateLinkedCheckout(t.io, { ...INPUT, ...input })
+  // No test may see the update run a command that Windows is not known to
+  // have.
+  expect(t.forbidden).toEqual([])
   return { ...t, lines, text: lines.join('\n') }
 }
 
@@ -192,7 +248,7 @@ test('already updated with no remote naming the repository: nothing is fetched',
 })
 
 test('not linked: names the merged repository and the repositories the links point into, and moves nothing', async () => {
-  const t = await updated(world({ '/repo$ gh repo view --json nameWithOwner --jq .nameWithOwner': ok('x/y\n') }))
+  const t = await updated(world({ [`/repo$ ${LOOK_UP}`]: ok('x/y\n') }))
   expect(t.unexpected).toEqual([])
   expect(t.text).toContain('Not linked')
   expect(t.text).toContain('o/r')
@@ -212,24 +268,35 @@ test('no links found: names the three folders and the other ways skills load, an
   expect(t.calls.filter(call => call.argv[0] === 'git' || call.argv[0] === 'gh')).toEqual([])
 })
 
-test('a folder under ~/.claude that is itself a link counts as a link, and a link to a file counts by its folder', async () => {
+test('a folder of the configuration folder that is itself a link counts as a link and is listed through the link, and a link to a file counts by its folder', async () => {
   const t = await updated(world({
-    [`test -L ${HOME}/.claude/skills`]: ok(),
-    [`realpath ${HOME}/.claude/skills`]: ok('/repo/skills\n'),
-    'test -d /repo/skills': ok(),
-    [`find ${HOME}/.claude/skills/ -mindepth 1 -maxdepth 1 -type l -print0`]: ok(''),
+    [`stat ${CONFIG}/skills`]: { stat: { kind: 'dir', isLink: true, realPath: '/repo/skills' } },
+    [`list ${CONFIG}/skills`]: { entries: [{ name: 'implement', kind: 'dir', isLink: false }] },
     [REV_PARSE('/repo/skills')]: ok('/repo/.git\n/repo\n'),
-    ...folder('agents', [`${HOME}/.claude/agents/a.md`]),
-    [`test -e ${HOME}/.claude/agents/a.md`]: ok(),
-    [`realpath ${HOME}/.claude/agents/a.md`]: ok('/repo/agents/a.md\n'),
-    'test -d /repo/agents/a.md': exit(1),
+    ...folder('agents', [`${CONFIG}/agents/a.md`]),
+    [`stat ${CONFIG}/agents/a.md`]: { stat: { kind: 'file', isLink: true, realPath: '/repo/agents/a.md' } },
     [REV_PARSE('/repo/agents')]: ok('/repo/.git\n/repo\n'),
   }))
   expect(t.unexpected).toEqual([])
   expect(t.text).toContain('Updated')
+  // The folder that is a link is listed by its own path, which follows the
+  // link, and every stat asks where the path lands.
+  expect(t.fsCalls).toContain(`list ${CONFIG}/skills`)
+  expect(t.fsCalls.filter(call => call.startsWith('stat ')).every(call => call.endsWith(' resolve'))).toBe(true)
   // The checkout is looked up once, however many links lead into it.
   expect(t.ran('gh repo view --json nameWithOwner').length).toBe(1)
   expect(t.ran(MERGE_FF).length).toBe(1)
+})
+
+test('only the entries the listing marks as links are resolved, and a folder that is not a folder is skipped', async () => {
+  const t = await updated(world({
+    ...folder('skills', [`${CONFIG}/skills/implement`], CONFIG, [{ name: 'plain', kind: 'dir', isLink: false }, { name: 'notes.md', kind: 'file', isLink: false }]),
+    [`stat ${CONFIG}/commands`]: { stat: { kind: 'file', isLink: false, realPath: `${CONFIG}/commands` } },
+  }))
+  expect(t.unexpected).toEqual([])
+  expect(t.fsCalls).not.toContain(`stat ${CONFIG}/skills/plain resolve`)
+  expect(t.fsCalls).not.toContain(`list ${CONFIG}/commands`)
+  expect(t.text).toContain('Updated')
 })
 
 test('only worktrees linked: names the worktree, and the main checkout is not moved', async () => {
@@ -243,8 +310,8 @@ test('only worktrees linked: names the worktree, and the main checkout is not mo
 
 test('a worktree link of the merged repository beside a link into the main checkout is named, and the main checkout is updated', async () => {
   const t = await updated(world({
-    ...folder('skills', [`${HOME}/.claude/skills/implement`, `${HOME}/.claude/skills/spec`]),
-    ...link(`${HOME}/.claude/skills/spec`, '/work/tree/skills/spec', '/repo/.git', '/work/tree'),
+    ...folder('skills', [`${CONFIG}/skills/implement`, `${CONFIG}/skills/spec`]),
+    ...link(`${CONFIG}/skills/spec`, '/work/tree/skills/spec', '/repo/.git', '/work/tree'),
   }))
   expect(t.unexpected).toEqual([])
   expect(t.text).toContain('Updated')
@@ -370,15 +437,59 @@ test('left alone: a confirmation that finds the merge commit is not an ancestor 
 })
 
 test('left alone: a broken link when nothing matched, since it might have been the match', async () => {
-  const t = await updated(world({ [`test -e ${HOME}/.claude/skills/implement`]: exit(1) }))
+  for (const broken of [missingAt(`${CONFIG}/skills/implement`), { [`stat ${CONFIG}/skills/implement`]: { stat: { kind: 'other', isLink: true } } } as Script]) {
+    const t = await updated(world(broken))
+    expect(t.unexpected).toEqual([])
+    expect(t.text).toContain('Left alone')
+    expect(t.text).toContain('/h/.claude/skills/implement')
+    expect(t.text).toContain('is broken')
+    expect(t.text).not.toContain('Not linked')
+    expect(t.text).not.toContain('No links found')
+    expect(t.ran('git').length).toBe(0)
+  }
+})
+
+test('a folder that is itself a broken link is named as broken', async () => {
+  const t = await updated(world({
+    ...folder('skills', []),
+    [`stat ${CONFIG}/agents`]: { stat: { kind: 'other', isLink: true } },
+  }))
+  expect(t.unexpected).toEqual([])
   expect(t.text).toContain('Left alone')
-  expect(t.text).toContain('/h/.claude/skills/implement')
-  expect(t.text).not.toContain('Not linked')
-  expect(t.text).not.toContain('No links found')
+  expect(t.text).toContain(`the link ${CONFIG}/agents is broken`)
+  expect(t.fsCalls).not.toContain(`list ${CONFIG}/agents`)
+})
+
+test('a link whose stat is refused for a reason other than a missing path could not be resolved, quoting the error, and the other links go on', async () => {
+  const t = await updated(world({
+    ...folder('skills', [`${CONFIG}/skills/implement`, `${CONFIG}/skills/locked`]),
+    [`stat ${CONFIG}/skills/locked`]: { rejects: "EACCES: permission denied, stat '/h/.claude/skills/locked'", code: 'EACCES' },
+  }))
+  expect(t.unexpected).toEqual([])
+  expect(t.text).toContain('Updated')
+  expect(t.text).toContain(`the link ${CONFIG}/skills/locked could not be resolved`)
+  expect(t.text).toContain('EACCES: permission denied')
+  expect(t.text).not.toContain('broken')
+})
+
+test('a folder whose stat is refused for a reason other than a missing path counts as a failed lookup', async () => {
+  const t = await updated(world({ [`stat ${CONFIG}/agents`]: { rejects: 'EACCES: permission denied', code: 'EACCES' } }))
+  expect(t.unexpected).toEqual([])
+  expect(t.text).toContain('Updated')
+  expect(t.text).toContain(`the links inside ${CONFIG}/agents could not be listed`)
+  expect(t.text).toContain('EACCES: permission denied')
+})
+
+test('a missing path is known by an ENOENT code alone or by ENOENT in the message alone', async () => {
+  for (const rejection of [{ rejects: 'no such file or directory', code: 'ENOENT' }, { rejects: "ENOENT: no such file or directory, stat '/h/.claude/skills/implement'" }]) {
+    const t = await updated(world({ [`stat ${CONFIG}/skills/implement`]: rejection }))
+    expect(t.text).toContain('is broken')
+    expect(t.text).not.toContain('could not be resolved')
+  }
 })
 
 test('left alone: a failed lookup when nothing matched', async () => {
-  const t = await updated(world({ '/repo$ gh repo view --json nameWithOwner --jq .nameWithOwner': exit(1, 'HTTP 502') }))
+  const t = await updated(world({ [`/repo$ ${LOOK_UP}`]: exit(1, 'HTTP 502') }))
   expect(t.text).toContain('Left alone')
   expect(t.text).toContain('HTTP 502')
   expect(t.text).not.toContain('Not linked')
@@ -386,9 +497,10 @@ test('left alone: a failed lookup when nothing matched', async () => {
 
 test('a broken link elsewhere, when one checkout matched, is named in one sentence and does not stop the update', async () => {
   const t = await updated(world({
-    ...folder('skills', [`${HOME}/.claude/skills/implement`, `${HOME}/.claude/skills/gone`]),
-    [`test -e ${HOME}/.claude/skills/gone`]: exit(1),
+    ...folder('skills', [`${CONFIG}/skills/implement`, `${CONFIG}/skills/gone`]),
+    ...missingAt(`${CONFIG}/skills/gone`),
   }))
+  expect(t.unexpected).toEqual([])
   expect(t.text).toContain('Updated')
   expect(t.text).toContain('/h/.claude/skills/gone')
   expect(t.text).toContain('broken')
@@ -396,8 +508,8 @@ test('a broken link elsewhere, when one checkout matched, is named in one senten
 
 test('a link outside any git repository points into no checkout and is skipped', async () => {
   const t = await updated(world({
-    ...folder('skills', [`${HOME}/.claude/skills/implement`, `${HOME}/.claude/skills/loose`]),
-    ...link(`${HOME}/.claude/skills/loose`, '/loose'),
+    ...folder('skills', [`${CONFIG}/skills/implement`, `${CONFIG}/skills/loose`]),
+    ...link(`${CONFIG}/skills/loose`, '/loose'),
     [REV_PARSE('/loose')]: exit(128, 'fatal: not a git repository (or any of the parent directories): .git'),
   }))
   expect(t.text).toContain('Updated')
@@ -410,15 +522,12 @@ test('a command that throws, as one past its time limit does, counts as failed a
   expect(t.text).toContain('time limit')
 })
 
-test('left alone: a listing of links whose output was cut off counts as a failed lookup, and nothing is fast-forwarded', async () => {
-  // The cut-off listing still names the one good link, so only the check on
-  // cut-off output keeps the update from going on to the fast-forward.
-  const t = await updated(world({
-    [`find ${HOME}/.claude/skills/ -mindepth 1 -maxdepth 1 -type l -print0`]: { exitCode: 0, stdout: `${HOME}/.claude/skills/implement\0`, isStdoutTruncated: true },
-  }))
+test('left alone: a listing of links that is refused counts as a failed lookup, quoting the error, and nothing is fast-forwarded', async () => {
+  const t = await updated(world({ [`list ${CONFIG}/skills`]: { rejects: 'EMFILE: too many open files', code: 'EMFILE' } }))
+  expect(t.unexpected).toEqual([])
   expect(t.text).toContain('Left alone')
-  expect(t.text).toContain('could not be listed')
-  expect(t.text).toContain('its output was cut off')
+  expect(t.text).toContain(`the links inside ${CONFIG}/skills could not be listed`)
+  expect(t.text).toContain('EMFILE: too many open files')
   expect(t.text).not.toContain('Updated')
   expect(t.ran(git('fetch')).length).toBe(0)
   expect(t.ran(MERGE_FF).length).toBe(0)
@@ -437,13 +546,173 @@ test('left alone: an address from GitHub that carries credentials is never fetch
   expect(t.ran(MERGE_FF).length).toBe(0)
 })
 
-test('left alone, with no command run, when HOME is not set', async () => {
+// An update that finds no configuration folder: one sentence, and no command
+// or file call at all.
+async function folderless(input: Partial<Input>) {
   const t = ioFrom(world())
-  const lines = await updateLinkedCheckout(t.io, { ...INPUT, home: undefined })
-  expect(lines.join('\n')).toContain('Left alone')
-  expect(lines.join('\n')).toContain('HOME')
+  const lines = await updateLinkedCheckout(t.io, { ...INPUT, ...input })
   expect(t.calls).toEqual([])
+  expect(t.fsCalls).toEqual([])
+  expect(lines.length).toBe(1)
+  expect(lines[0]).toContain('Left alone: no linked checkout was updated')
+  return lines[0]!
+}
+
+test('left alone, with no command or file call, when CLAUDE_CONFIG_DIR, HOME and USERPROFILE are all unset or empty', async () => {
+  for (const input of [{ home: undefined }, { configDir: '', home: '', userProfile: '' }, { configDir: undefined, home: '', userProfile: undefined }]) {
+    const line = await folderless(input)
+    expect(line).toContain("Claude Code's configuration folder could not be found")
+    expect(line).toContain('CLAUDE_CONFIG_DIR, HOME and USERPROFILE are all unset or empty')
+    expect(line).not.toContain('~/.claude')
+  }
 })
+
+test('left alone, with no command or file call, when CLAUDE_CONFIG_DIR is a relative path, naming its value, even with HOME set', async () => {
+  const line = await folderless({ configDir: 'conf/claude', home: HOME })
+  expect(line).toContain('CLAUDE_CONFIG_DIR is set to conf/claude, which is not an absolute path')
+  expect(line).toContain("Claude Code's configuration folder could not be found")
+})
+
+test('left alone, with no command or file call, when CLAUDE_CONFIG_DIR is only slashes, which names no folder rather than a relative path', async () => {
+  const line = await folderless({ configDir: '/', home: HOME })
+  expect(line).toContain('CLAUDE_CONFIG_DIR is set to /')
+  expect(line).toContain('names no folder')
+  expect(line).not.toContain('not an absolute path')
+})
+
+test('left alone, with no command or file call, when HOME is a relative path and USERPROFILE is not set', async () => {
+  const line = await folderless({ home: 'h', userProfile: undefined })
+  expect(line).toContain('CLAUDE_CONFIG_DIR is unset or empty, and neither HOME nor USERPROFILE is set to an absolute path')
+})
+
+test('the update never runs test, realpath or find, and finds the links with stat and list alone', async () => {
+  const t = await updated(world())
+  expect(t.calls.filter(call => ['test', 'realpath', 'find'].includes(call.argv[0]!))).toEqual([])
+  expect(t.fsCalls).toEqual([
+    `stat ${CONFIG}/skills resolve`, `list ${CONFIG}/skills`, `stat ${CONFIG}/skills/implement resolve`,
+    `stat ${CONFIG}/agents resolve`, `stat ${CONFIG}/commands resolve`,
+  ])
+  expect(t.text).toContain('Updated')
+})
+
+test('CLAUDE_CONFIG_DIR, with its trailing slashes dropped, is searched instead of HOME, and the not-linked sentence names it', async () => {
+  const at = (over: Script = {}): Script => ({
+    ...folder('skills', ['/c/skills/implement'], '/c'),
+    ...folder('agents', null, '/c'),
+    ...folder('commands', null, '/c'),
+    ...link('/c/skills/implement', '/repo/skills/implement'),
+    ...checkoutAt('/repo'),
+    ...over,
+  })
+  const t = await updated(at(), { configDir: '/c//', home: HOME })
+  expect(t.unexpected).toEqual([])
+  expect(t.text).toContain('Updated')
+  expect(t.fsCalls.some(call => call.startsWith(`stat ${CONFIG}`))).toBe(false)
+
+  const other = await updated(at({ [`/repo$ ${LOOK_UP}`]: ok('x/y\n') }), { configDir: '/c', home: HOME })
+  expect(other.text).toContain('Not linked: o/r merged, and the links under /c point into x/y')
+})
+
+test('HOME is searched before USERPROFILE, and USERPROFILE when HOME is unset', async () => {
+  const first = await updated(world(), { home: HOME, userProfile: '/u' })
+  expect(first.unexpected).toEqual([])
+  expect(first.text).toContain('Updated')
+
+  const t = await updated({
+    ...folder('skills', ['/u/.claude/skills/implement'], '/u/.claude'),
+    ...folder('agents', null, '/u/.claude'),
+    ...folder('commands', null, '/u/.claude'),
+    ...link('/u/.claude/skills/implement', '/repo/skills/implement'),
+    ...checkoutAt('/repo'),
+  }, { home: undefined, userProfile: '/u' })
+  expect(t.unexpected).toEqual([])
+  expect(t.text).toContain('Updated')
+})
+
+// The configuration folder that USERPROFILE gives on Windows, and a world of
+// links in it.
+const WIN = 'C:\\Users\\me'
+const WIN_CONFIG = `${WIN}/.claude`
+function windows(over: Script): Script {
+  return {
+    ...folder('skills', [`${WIN_CONFIG}/skills/implement`], WIN_CONFIG),
+    ...folder('agents', null, WIN_CONFIG),
+    ...folder('commands', null, WIN_CONFIG),
+    ...over,
+  }
+}
+const onWindows = { home: undefined, userProfile: WIN }
+
+test('on a drive, a target with backslashes and a lower-case drive and git output with an upper-case drive and slashes are matched, and git runs on each path as written', async () => {
+  const t = await updated(windows({
+    ...link(`${WIN_CONFIG}/skills/implement`, 'c:\\repo\\skills\\implement', 'c:/repo/.git', 'C:\\repo\\'),
+    ...checkoutAt('c:/repo'),
+  }), onWindows)
+  expect(t.unexpected).toEqual([])
+  expect(t.fsCalls).toContain(`list ${WIN_CONFIG}/skills`)
+  expect(t.ran(REV_PARSE('c:\\repo\\skills\\implement')).length).toBe(1)
+  expect(t.text).toContain(`Updated: the linked checkout c:/repo now holds the merge commit ${MERGE}`)
+  expect(t.ran(gitAt('c:/repo', 'merge', '--ff-only', '--no-overwrite-ignore', MERGE)).length).toBe(1)
+})
+
+test('on a drive, two spellings of one main checkout are looked up and moved once, and two spellings of one target share one git lookup', async () => {
+  const t = await updated(windows({
+    ...folder('skills', [`${WIN_CONFIG}/skills/implement`, `${WIN_CONFIG}/skills/again`], WIN_CONFIG),
+    ...link(`${WIN_CONFIG}/skills/implement`, 'C:\\repo\\skills\\implement', 'C:/repo/.git', 'C:/repo'),
+    [`stat ${WIN_CONFIG}/skills/again`]: { stat: { kind: 'dir', isLink: true, realPath: 'c:/repo/skills/implement/' } },
+    ...folder('agents', [`${WIN_CONFIG}/agents/a.md`], WIN_CONFIG),
+    [`stat ${WIN_CONFIG}/agents/a.md`]: { stat: { kind: 'file', isLink: true, realPath: 'c:\\repo\\agents\\a.md' } },
+    [REV_PARSE('c:\\repo\\agents')]: ok('c:\\repo\\.git\nc:\\repo\n'),
+    ...checkoutAt('C:/repo'),
+  }), onWindows)
+  expect(t.unexpected).toEqual([])
+  expect(t.ran('git -C ').filter(call => call.argv.includes('rev-parse') && call.argv.includes('--git-common-dir')).length).toBe(2)
+  expect(t.ran(LOOK_UP).length).toBe(1)
+  expect(t.ran(LOOK_UP)[0]!.cwd).toBe('C:/repo')
+  expect(t.ran(gitAt('C:/repo', 'merge', '--ff-only', '--no-overwrite-ignore', MERGE)).length).toBe(1)
+  expect(t.text).toContain('Updated: the linked checkout C:/repo now holds')
+  expect(t.text).not.toContain('worktree')
+})
+
+test('on a drive, the rest of the path keeps its case, so a main checkout C:/a and a top folder C:/A are not the same checkout', async () => {
+  const t = await updated(windows({
+    ...link(`${WIN_CONFIG}/skills/implement`, 'C:\\a\\skills\\implement', 'C:/a/.git', 'C:/A'),
+    ...checkoutAt('C:/a'),
+  }), onWindows)
+  expect(t.unexpected).toEqual([])
+  expect(t.text).toContain('Only worktrees linked')
+  expect(t.text).toContain('C:/A')
+  expect(t.ran(gitAt('C:/a', 'merge')).length).toBe(0)
+  expect(t.ran(gitAt('C:/a', 'fetch')).length).toBe(0)
+})
+
+test('on a drive, a link to a file runs git in its parent folder, and one at the top of the drive in the top of the drive, never in a bare drive letter', async () => {
+  const t = await updated(windows({
+    ...folder('agents', [`${WIN_CONFIG}/agents/a.md`, `${WIN_CONFIG}/agents/top.md`], WIN_CONFIG),
+    [`stat ${WIN_CONFIG}/agents/a.md`]: { stat: { kind: 'file', isLink: true, realPath: 'C:\\repo\\agents\\a.md' } },
+    [`stat ${WIN_CONFIG}/agents/top.md`]: { stat: { kind: 'file', isLink: true, realPath: 'C:\\top.md' } },
+    [REV_PARSE('C:\\repo\\agents')]: ok('C:/repo/.git\nC:/repo\n'),
+    [REV_PARSE('C:\\')]: exit(128, 'fatal: not a git repository (or any of the parent directories): .git'),
+    ...link(`${WIN_CONFIG}/skills/implement`, 'C:\\repo\\skills\\implement', 'C:/repo/.git', 'C:/repo'),
+    ...checkoutAt('C:/repo'),
+  }), onWindows)
+  expect(t.unexpected).toEqual([])
+  expect(t.ran(REV_PARSE('C:\\repo\\agents')).length).toBe(1)
+  expect(t.ran(REV_PARSE('C:\\')).length).toBe(1)
+  expect(t.ran('git -C C: ').length).toBe(0)
+  expect(t.text).toContain('Updated: the linked checkout C:/repo')
+})
+
+test('on macOS, a target that resolves through /private matches the main checkout git gives for it', async () => {
+  const t = await updated(world({
+    ...link(`${CONFIG}/skills/implement`, '/private/var/t/repo/skills/implement', '/private/var/t/repo/.git', '/private/var/t/repo'),
+    ...checkoutAt('/private/var/t/repo'),
+  }))
+  expect(t.unexpected).toEqual([])
+  expect(t.text).toContain('Updated: the linked checkout /private/var/t/repo now holds')
+  expect(t.ran(gitAt('/private/var/t/repo', 'merge', '--ff-only', '--no-overwrite-ignore', MERGE)).length).toBe(1)
+})
+
 
 test('left alone, with no command run, for a repository, base or merge commit that is not safe to pass to git', async () => {
   for (const over of [{ repo: 'o/r; rm' }, { base: '--upload-pack=x' }, { merge: 'HEAD' }, { merge: 'f'.repeat(64) }]) {

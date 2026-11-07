@@ -167,18 +167,39 @@ const withoutTrailingSlashes = (path: string) => path.replace(/[\\/]+$/, '')
 // home folder is HOME when it is set and absolute, and otherwise USERPROFILE
 // when it is set and absolute, because Windows keeps the home folder in
 // USERPROFILE and does not normally set HOME. A CLAUDE_CONFIG_DIR that is set
-// but relative gives null, and so does a home folder that neither variable
-// gives, so nothing is written rather than written somewhere that depends on
-// the folder the session runs in. Trailing slashes and backslashes are
-// dropped. Foreman keeps its own copy of this rule, held to the same answers.
-export function configDirOf(configDir: string | undefined, home: string | undefined, userProfile: string | undefined): string | null {
-  if (configDir !== undefined && configDir !== '') {
-    if (!isAbsolute(configDir)) return null
+// but relative gives no folder, and so does a home folder that neither
+// variable gives, so nothing is written rather than written somewhere that
+// depends on the folder the session runs in. Trailing slashes and backslashes
+// are dropped. When there is no folder, the answer says why, so that a
+// sentence about it never works the rule out again somewhere else. Foreman
+// keeps its own copy of configDirOf, held to the same answers.
+export type ConfigFolder =
+  | { folder: string }
+  // CLAUDE_CONFIG_DIR is set, but is not an absolute path.
+  | { why: 'relative'; configDir: string }
+  // CLAUDE_CONFIG_DIR is absolute, but is only slashes, so it names no folder.
+  | { why: 'no folder'; configDir: string }
+  // CLAUDE_CONFIG_DIR, HOME and USERPROFILE are all unset or empty.
+  | { why: 'unset' }
+  // CLAUDE_CONFIG_DIR is unset or empty, and HOME or USERPROFILE is set but
+  // neither is an absolute path.
+  | { why: 'no absolute home' }
+
+export function configFolderOf(configDir: string | undefined, home: string | undefined, userProfile: string | undefined): ConfigFolder {
+  const isSet = (value: string | undefined): value is string => value !== undefined && value !== ''
+  if (isSet(configDir)) {
+    if (!isAbsolute(configDir)) return { why: 'relative', configDir }
     const trimmed = withoutTrailingSlashes(configDir)
-    return trimmed === '' ? null : trimmed
+    return trimmed === '' ? { why: 'no folder', configDir } : { folder: trimmed }
   }
-  const folder = [home, userProfile].find(value => value !== undefined && value !== '' && isAbsolute(value))
-  return folder === undefined ? null : `${withoutTrailingSlashes(folder)}/.claude`
+  const folder = [home, userProfile].find(value => isSet(value) && isAbsolute(value))
+  if (folder !== undefined) return { folder: `${withoutTrailingSlashes(folder)}/.claude` }
+  return isSet(home) || isSet(userProfile) ? { why: 'no absolute home' } : { why: 'unset' }
+}
+
+export function configDirOf(configDir: string | undefined, home: string | undefined, userProfile: string | undefined): string | null {
+  const found = configFolderOf(configDir, home, userProfile)
+  return 'folder' in found ? found.folder : null
 }
 
 // A session id that can name a file inside the builds folder and nothing
@@ -802,8 +823,9 @@ export function afterCleanupSkill(memo: StatusMemo): StatusMemo {
   return memo.cleanup === null ? { ...memo, cleanup: { failedCalls: 0, lastError: '' } } : memo
 }
 
-// A tool call failed. It is counted only once the cleanup skill has started,
-// and its error's last line replaces the one kept.
+// A tool call failed: the tool.call hook in register.tsx saw an error result.
+// It is counted only once the cleanup skill has started, and its error's last
+// line replaces the one kept.
 export function afterFailedCall(memo: StatusMemo, error: unknown): StatusMemo {
   if (memo.cleanup === null) return memo
   return { ...memo, cleanup: { failedCalls: memo.cleanup.failedCalls + 1, lastError: errorLineOf(error) } }

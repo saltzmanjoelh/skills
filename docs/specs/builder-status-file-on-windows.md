@@ -52,11 +52,12 @@ reads `/.claude/foreman/builds`, a folder at the root of the drive.
    hook. The ticket is taken up at session start, at a prompt and at a
    turn's start, and the file is rewritten at least once a minute by the
    clock, so a managed plugin that skips builder's classic hooks does not
-   stop the file. Three of the record's fields are fed by classic hooks and
-   can go stale when one is skipped: the wait on background work, which
-   `classic.Stop` and `classic.SubagentStop` update; the count of failed
-   cleanup calls and the last cleanup error, which `classic.PostToolUseFailure`
-   updates; and the permission-prompt state, which
+   stop the file. The count of failed cleanup calls and the last cleanup
+   error now come from the error results that builder's `tool.call` hook
+   sees (see `docs/specs/linked-checkout-on-windows-and-failed-calls-from-tool-call.md`).
+   Only two of the record's fields are fed by classic hooks and can go stale
+   when one is skipped: the wait on background work, which `classic.Stop`
+   and `classic.SubagentStop` update, and the permission-prompt state, which
    `classic.PermissionRequest` updates. Nothing has to be allowed in the
    security plugin for the status file to be written.
 
@@ -76,15 +77,13 @@ reads `/.claude/foreman/builds`, a folder at the root of the drive.
 
 ## Non-goals
 
-- The linked-checkout update after a merge (`linked.ts`) keeps finding
-  `~/.claude` from `HOME` alone, and keeps saying "HOME is not set" on
-  Windows. Its commands (`test`, `realpath`, `find`) and its `/`-based path
-  handling are not known to work on Windows; that is a follow-up.
-- Moving the classic `Stop`, `SubagentStop`, `PostToolUseFailure` and
-  `PermissionRequest` handlers onto engine events, so that a managed plugin
-  cannot leave those three fields stale, is a follow-up, because nobody has
-  checked that an engine event carries the same data or escapes the same
-  skip.
+- Moving the classic `Stop`, `SubagentStop` and `PermissionRequest`
+  handlers onto engine events. No engine event and no `$` call carries the
+  list of background tasks, and the ask decision of `tool.check` comes
+  before the permission mode settles it, so it does not say that a dialog
+  opened. Behaviour 7 of
+  `docs/specs/linked-checkout-on-windows-and-failed-calls-from-tool-call.md`
+  records these reasons.
 - Deleting the status file after a merge runs `rm -f`, which may be missing
   on Windows. That is not changed here.
 - Paths stay joined with `/`, so a Windows path comes out with mixed slashes,
