@@ -3,7 +3,7 @@
 // question and the votes, so the tests can check every rule without the engine.
 
 import type { AgentCard, CounselQuestion, CounselTally, CounselVote, Snapshot } from '../types'
-import { CHEAP_FIX_SUBJECT, secretIn } from './review'
+import { CHEAP_FIX_SUBJECT, hasDotAndSpacePart, isWindowsShaped, secretIn } from './review'
 import { OWNERS_ADVOCATE, REVIEWERS } from './state'
 import { listed, normalText, sameText } from './text'
 
@@ -137,18 +137,55 @@ export function briefFactsOf(q: CounselQuestion): BriefFacts {
   }
 }
 
-// The background and the files, as every brief lists them.
-function backgroundLines(q: BriefFacts, unwritten: readonly string[]): string[] {
+// Why the containment rule refused a path, and the counsel tool's whole
+// message for it, both built from one wording of the reason so that the two
+// never disagree. The reason is chosen in a fixed order. A path written in a
+// Windows form comes first. A path with a part made only of dots and spaces
+// comes next, unless it starts with `/` or has a part that is exactly `..`.
+// Every other refused path, including a link that resolves outside the
+// checkout, leads outside the checkout. It is meant only for a path the
+// containment rule refused.
+export function refusalOf(path: string): { reason: string; message: string } {
+  if (isWindowsShaped(path)) {
+    const reason = 'written in a Windows form'
+    return { reason, message: `Refused: ${path} is ${reason}; name paths relative to the checkout, written with forward slashes.` }
+  }
+  const climbs = path.startsWith('/') || path.split('/').includes('..')
+  if (hasDotAndSpacePart(path) && !climbs) {
+    const reason = 'has a part made only of dots and spaces, which Windows may read as ..'
+    return { reason, message: `Refused: ${path} ${reason}; name paths without such parts.` }
+  }
+  const reason = 'leads outside the checkout'
+  return { reason, message: `Refused: ${path} ${reason}; name paths inside it, relative to it.` }
+}
+
+// The sentence a rerun's answer starts with when its round-2 brief left out
+// paths that the containment rule now refuses, or nothing when it left out
+// none.
+export function leftOutSentence(paths: readonly string[]): string {
+  if (paths.length === 0) return ''
+  return `The round-2 brief leaves out ${listed(paths)}, which the containment rule now refuses, and lists ${paths.length === 1 ? 'it' : 'them'} under "Paths left out".\n`
+}
+
+// The background and the files, as every brief lists them. A path in
+// `refused` is left out of the files and listed with its reason in a section
+// of its own.
+function backgroundLines(q: BriefFacts, unwritten: readonly string[], refused: readonly string[] = []): string[] {
   const lines = ['## Background', '', q.background.trim() === '' ? 'None given.' : q.background.trim()]
   lines.push('', '## Files the question touches', '')
+  const kept = q.paths.filter(path => !refused.includes(path))
   if (q.paths.length === 0) lines.push('None named.')
-  for (const path of q.paths) lines.push(unwritten.includes(path) ? `- ${path} (not written yet)` : `- ${path}`)
+  else if (kept.length === 0) lines.push('None left; every path the question named is listed under Paths left out.')
+  for (const path of kept) lines.push(unwritten.includes(path) ? `- ${path} (not written yet)` : `- ${path}`)
+  if (refused.length > 0) lines.push('', '## Paths left out', '', ...refused.map(path => `- ${path}: ${refusalOf(path).reason}`))
   return lines
 }
 
 // The brief a member reads. `unwritten` names the paths that do not exist
-// yet, as a spec during its own interview does not.
-export function briefText(q: BriefFacts, unwritten: readonly string[]): string {
+// yet, as a spec during its own interview does not. `refused` names the
+// stored paths that the containment rule now refuses, which only a rerun's
+// round-2 brief passes; the brief leaves them out of its files.
+export function briefText(q: BriefFacts, unwritten: readonly string[], refused: readonly string[] = []): string {
   if (q.followUps !== undefined) return followUpsBriefText(q, q.followUps, unwritten)
   const isLast = q.round === 2
   const lines = [
@@ -162,7 +199,7 @@ export function briefText(q: BriefFacts, unwritten: readonly string[]): string {
   }
   lines.push('', '## The question', '', q.question.trim(), '', '## Options', '')
   q.options.forEach((option, i) => lines.push(`${i + 1}. ${option.trim()}`))
-  lines.push('', ...backgroundLines(q, unwritten))
+  lines.push('', ...backgroundLines(q, unwritten, refused))
   lines.push(
     '', '## Your answer', '',
     'End your report with these lines, the number being one option\'s from the list above:',

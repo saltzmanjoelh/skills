@@ -3522,34 +3522,137 @@ test('a rerun rewrites the brief as round two with the proposed option added', a
   expect(text).not.toContain('LEAN-MARKER')
 })
 
-test('a rerun of a question stored with a dot and space part keeps the notes of the paths after that part', async ($, on) => {
+// Once arm is called, the counsel questions read back as ones recorded before
+// a rule that now refuses some of their paths was loaded: each stored path
+// reads back as rewrite gives it.
+function storedEarlier(on: On, rewrite: (path: string) => string): { arm(): void } {
+  let armed = false
+  on('state.get', async ($, e, next) => {
+    const held = await next(e)
+    const stored = (held as { value?: { value?: unknown; version?: number } | null }).value
+    const value = stored?.value
+    if (!armed || e.plugin !== 'builder' || e.key !== 'counsel' || !Array.isArray(value)) return held
+    const rewritten = value.map((q: { paths: string[] }) => ({ ...q, paths: q.paths.map(rewrite) }))
+    return { value: { ...stored, value: rewritten } } as never
+  })
+  return { arm: () => { armed = true } }
+}
+
+const DOTS_REASON = 'has a part made only of dots and spaces, which Windows may read as ..'
+
+test('a rerun of a question stored with a dot and space part leaves that path out of the files and keeps the notes of the others', async ($, on) => {
   mock.clock(on)
   mock.store(on)
   engine(on)
   fakeGitHub(on)
   const files = fakeFiles(on)
-  // Once the question is put, it reads back as one recorded before the rule
-  // that refuses such a part was loaded, so its stored paths hold one.
-  let recordedEarlier = false
-  on('state.get', async ($, e, next) => {
-    const held = await next(e)
-    const stored = (held as { value?: { value?: unknown; version?: number } | null }).value
-    const value = stored?.value
-    if (!recordedEarlier || e.plugin !== 'builder' || e.key !== 'counsel' || !Array.isArray(value)) return held
-    const rewritten = value.map((q: { paths: string[] }) => ({ ...q, paths: q.paths.map(p => p === 'docs/x.md' ? 'docs/.. /x.md' : p) }))
-    return { value: { ...stored, value: rewritten } } as never
-  })
+  const earlier = storedEarlier(on, p => p === 'docs/x.md' ? 'docs/.. /x.md' : p)
   await startOnly($)
   await loose($)({ ...brief, paths: ['docs/x.md', 'docs/specs/poll.md'] })
-  recordedEarlier = true
+  earlier.arm()
 
   const ran = await loose($)({ tool: TALLY, id: 'c1', round: 1, votes: ballots(['1', '2', 'none', '2', '1', '2', '1'], 'only on events') })
   const text = files.get('/repo/.git/builder/counsel/session-1/c1/brief.md') ?? ''
 
   expect(String(ran.result)).toContain('round 2')
+  expect(String(ran.result)).toMatch(/^builder: The round-2 brief leaves out docs\/\.\. \/x\.md, .*"Paths left out"/)
   expect(text).toContain('round 2')
-  expect(text).toContain('- docs/.. /x.md\n')
-  expect(text).toContain('- docs/specs/poll.md (not written yet)')
+  expect(text).not.toContain('- docs/.. /x.md\n')
+  expect(text).not.toContain('docs/.. /x.md (not written yet)')
+  expect(text).toContain(`- docs/specs/poll.md (not written yet)\n\n## Paths left out\n\n- docs/.. /x.md: ${DOTS_REASON}\n\n## Your answer`)
+  expect(text).not.toContain('name paths')
+})
+
+test('a rerun leaves out a stored path that has since become a link outside the checkout', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  const files = fakeFiles(on)
+  await startOnly($)
+  await loose($)(brief)
+  files.links.set('/repo/docs/arch.md', '/home/someone/.secrets')
+
+  const ran = await loose($)({ tool: TALLY, id: 'c1', round: 1, votes: ballots(['1', '2', 'none', '2', '1', '2', '1'], 'only on events') })
+  const text = files.get('/repo/.git/builder/counsel/session-1/c1/brief.md') ?? ''
+
+  expect(text).not.toContain('- docs/arch.md\n')
+  expect(text).toContain('- docs/specs/poll.md (not written yet)\n\n## Paths left out\n\n- docs/arch.md: leads outside the checkout\n')
+  expect(String(ran.result)).toContain('leaves out docs/arch.md')
+})
+
+test('a rerun whose every stored path is refused says none are left rather than none named', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  const files = fakeFiles(on)
+  await startOnly($)
+  await loose($)({ ...brief, paths: ['docs/arch.md'] })
+  files.links.set('/repo/docs/arch.md', '/home/someone/.secrets')
+
+  await loose($)({ tool: TALLY, id: 'c1', round: 1, votes: ballots(['1', '2', 'none', '2', '1', '2', '1'], 'only on events') })
+  const text = files.get('/repo/.git/builder/counsel/session-1/c1/brief.md') ?? ''
+
+  expect(text).toContain('## Files the question touches\n\nNone left; every path the question named is listed under Paths left out.\n\n## Paths left out\n\n- docs/arch.md: leads outside the checkout\n')
+  expect(text).not.toContain('None named.')
+})
+
+test('a rerun lists two refused stored paths in the order the question named them', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  const files = fakeFiles(on)
+  const earlier = storedEarlier(on, p => p === 'docs/x.md' ? 'docs/.. /x.md' : p === 'docs/y.md' ? 'C:\\y' : p)
+  await startOnly($)
+  await loose($)({ ...brief, paths: ['docs/x.md', 'docs/arch.md', 'docs/y.md'] })
+  earlier.arm()
+
+  const ran = await loose($)({ tool: TALLY, id: 'c1', round: 1, votes: ballots(['1', '2', 'none', '2', '1', '2', '1'], 'only on events') })
+  const text = files.get('/repo/.git/builder/counsel/session-1/c1/brief.md') ?? ''
+
+  expect(text).toContain('## Files the question touches\n\n- docs/arch.md\n\n## Paths left out\n\n')
+  expect(text).toContain(`- docs/.. /x.md: ${DOTS_REASON}\n- C:\\y: written in a Windows form\n`)
+  expect(String(ran.result)).toContain('leaves out docs/.. /x.md and C:\\y,')
+})
+
+test('a rerun whose stored paths are all still fine adds no section to the brief and no sentence to the answer', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  const files = fakeFiles(on)
+  await startOnly($)
+  await loose($)(brief)
+
+  const ran = await loose($)({ tool: TALLY, id: 'c1', round: 1, votes: ballots(['1', '2', 'none', '2', '1', '2', '1'], 'only on events') })
+  const text = files.get('/repo/.git/builder/counsel/session-1/c1/brief.md') ?? ''
+
+  expect(text).toContain('round 2')
+  expect(text).toContain('- docs/arch.md\n- docs/specs/poll.md (not written yet)\n\n## Your answer')
+  expect(text).not.toContain('Paths left out')
+  expect(String(ran.result)).toMatch(/^builder: Rerun:/)
+  expect(String(ran.result)).not.toContain('Paths left out')
+})
+
+test('when the round-2 brief of a rerun with a refused path cannot be written, the answer says only that it could not be rewritten', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  const files = fakeFiles(on)
+  await startOnly($)
+  await loose($)(brief)
+  files.links.set('/repo/docs/arch.md', '/home/someone/.secrets')
+
+  files.writes.refused = true
+  const ran = await loose($)({ tool: TALLY, id: 'c1', round: 1, votes: ballots(['1', 'none', '2', '2', '1', '2', '1'], 'only on events') })
+
+  expect(String(ran.result)).toMatch(/^builder: The brief could not be rewritten/)
+  expect(String(ran.result)).toContain('AskUserQuestion')
+  expect(String(ran.result)).not.toContain('Paths left out')
+  expect(String(ran.result)).not.toContain('leaves out')
 })
 
 test('a subagent cannot put a question to the counsel or tally one', async ($, on) => {
