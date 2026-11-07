@@ -35,7 +35,8 @@ sentence.
 1. **Brief the planners.** Each gets the spec, the project's CLAUDE.md, the
    architecture document (its invariants matter most) and the gotchas
    document, leaving out each one that does not exist, and your global
-   `~/.claude/CLAUDE.md`. Every planner gets the same brief.
+   `CLAUDE.md` in the Claude configuration folder (`CLAUDE_CONFIG_DIR`, or
+   `~/.claude` when that is unset). Every planner gets the same brief.
 2. **Fan out 3 planners in parallel** (Agent tool), each with a different
    prior it must honor:
    - **Simplest-thing**: smallest change that fully meets the spec. Bias:
@@ -51,8 +52,10 @@ sentence.
    what it deliberately does NOT do.
 3. **Judge.** A judge agent scores each plan against: the spec (does it
    fully satisfy Behavior + Edge cases + Verification?), the invariants in
-   the architecture document when there is one, and the owner's stated preferences in `~/.claude/CLAUDE.md`
-   (e.g. infra-shaped problems prefer battle-tested dependencies). For
+   the architecture document when there is one, and the owner's stated
+   preferences in their global `CLAUDE.md` in the Claude configuration
+   folder (`CLAUDE_CONFIG_DIR`, or `~/.claude` when that is unset), such as
+   that infra-shaped problems prefer battle-tested dependencies. For
    each plan, the judge counts the edge cases its state creates on a
    restart, a resumed or cleared session, a hot reload and two copies
    running at once, and weighs the plan by that count as well as by its

@@ -1230,18 +1230,29 @@ answer is not a question.
 A question about how the owner works is one whose answer is a habit or a
 choice of the person, such as whether they ever clear a parent session, run
 two copies of a tool at once or work offline, rather than a fact the code,
-the spec or the issue settles. When nothing the owner has written down
-settles it (their global `~/.claude/CLAUDE.md`, the project's `CLAUDE.md`,
-the specs with their "Decided by the person" sections, and the issue), ask
-the person directly. Never put it to the counsel, whose members can read
-only what the owner wrote, and never guess the answer or build for the case
-to be safe. Record the answer in the change's spec under "Decided by the
-person", in the next commit the session makes rather than in a commit of
-its own, because a commit is a push that counts toward the limit; in a
-review round with nothing else to commit, the second half's point 4 says
-where it goes. Then offer the owner one line for their personal global
-`~/.claude/CLAUDE.md`, written in generic words that name no project, and
-write it there only if they say yes.
+the spec or the issue settles. What the owner has written down is their
+global `CLAUDE.md` in the Claude configuration folder (`CLAUDE_CONFIG_DIR`,
+or `~/.claude` when that is unset), the project's `CLAUDE.md`, the specs
+with their "Decided by the person" sections, and the issue. When none of
+these settles it, ask the person directly. Never put it to the counsel,
+whose members can read only what the owner wrote, and never guess the
+answer or build for the case to be safe. Record the answer in the change's
+spec under "Decided by the person", in the next commit the session makes
+rather than in a commit of its own, because a commit is a push that counts
+toward the limit; in a review round with nothing else to commit, the second
+half's point 4 says where it goes. Then offer the owner one line for their
+personal global `CLAUDE.md`, written in generic words that name no project,
+and write it there only if they say yes. Before offering, read
+`CLAUDE_CONFIG_DIR` from the shell to find that file. When it is set to an
+absolute path, the file is `CLAUDE.md` in that folder, with no doubled
+slash when the value ends in one. When it is unset or empty, the file is
+`~/.claude/CLAUDE.md`, with the home folder written out. The offer names
+the file's full path, so that the owner's yes covers the file that is
+written, and a yes creates the file when it does not exist yet. When
+`CLAUDE_CONFIG_DIR` is a relative path, offer nothing and write nothing.
+Tell the owner in one sentence that the line cannot be saved because
+`CLAUDE_CONFIG_DIR` is a relative path, so the configuration folder cannot
+be found.
 
 Otherwise, put it to the counsel. Call `mcp__builder__counsel` with the
 question, two to four options, the background (the issue in a few lines,
