@@ -12060,19 +12060,97 @@ test('the session\'s own turn end closes its permission prompts, and a subagent\
   expect(s.statusAt()?.state).toBe('idle')
 })
 
-test('the cleanup record counts the failed calls since the skill started and keeps the newest error\'s last line, withholding a secret', async ($, on) => {
+// The calls reach a hook beneath the mod's that answers each one by its
+// tool_use_id: an error result for the ids `failing` names, the answer set in
+// `answers` for any other id named there, and a plain result otherwise.
+test('the cleanup record counts the error results of tool calls since the skill started, the session\'s own, a subagent\'s, an Agent call\'s and builder\'s own, and keeps the newest error\'s last line, withholding a secret', async ($, on) => {
   const s = foremanSession(on)
+  const answers = new Map<string, object>()
+  const reached: string[] = []
+  on('tool.call', ($, e) => {
+    reached.push(String(e.tool_use_id))
+    return (answers.get(String(e.tool_use_id)) ?? { result: 'done', text: 'done' }) as never
+  })
+  const failing = (id: string, text: string) => { answers.set(id, { result: text, text, isError: true }) }
+  const memoWrites = { refused: false }
+  on('state.set', ($, e, next) => memoWrites.refused && e.plugin === 'builder' && e.key === 'statusMemo' ? { deny: 'the state could not be written' } : next(e))
+  const cleanup = () => s.statusAt()?.cleanup
+  await spawnAgents($, on, ['Explore', 'builder:security-reviewer'])
   await firstPrompt($, s.clock)
-  await $.classic.PostToolUseFailure({ tool_name: 'Bash', tool_input: {}, tool_use_id: 'u0', error: 'before cleanup' } as never)
-  await $.skill.prompt({ skill: 'cleanup', text: 'clean' } as never)
-  await $.classic.PostToolUseFailure({ tool_name: 'Bash', tool_input: {}, tool_use_id: 'u1', error: 'first\nfatal: the worktree is dirty' } as never)
-  await $.classic.PostToolUseFailure({ tool_name: 'Bash', tool_input: {}, tool_use_id: 'u2', error: 'git push\nerror: branch is checked out\n\n', agent_id: 'agent-1' } as never)
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
   await s.clock.settle()
-  expect(s.statusAt()?.cleanup).toEqual({ failedCalls: 2, lastError: 'error: branch is checked out' })
 
-  await $.classic.PostToolUseFailure({ tool_name: 'Bash', tool_input: {}, tool_use_id: 'u3', error: `remote: ghp_${'A'.repeat(36)} is not valid` } as never)
+  // An error before the cleanup skill started is not counted.
+  failing('u0', 'before cleanup')
+  await loose($)({ tool: 'Bash', tool_use_id: 'u0', command: 'ls' })
+  await $.skill.prompt({ skill: 'cleanup', text: 'clean' } as never)
   await s.clock.settle()
-  expect(s.statusAt()?.cleanup).toEqual({ failedCalls: 3, lastError: '(withheld: it looks like a secret)' })
+  expect(cleanup()).toEqual({ failedCalls: 0, lastError: '' })
+
+  // The session's own error and a subagent's both count.
+  failing('u1', 'first\nfatal: the worktree is dirty')
+  await loose($)({ tool: 'Bash', tool_use_id: 'u1', command: 'git worktree remove x' })
+  failing('u2', 'git push\nerror: branch is checked out\n\n')
+  await loose($)({ tool: 'Bash', tool_use_id: 'u2', command: 'git push', agentId: 'agent-1' })
+  await s.clock.settle()
+  expect(cleanup()).toEqual({ failedCalls: 2, lastError: 'error: branch is checked out' })
+
+  // An Agent call's error counts.
+  failing('u3', 'the agent stopped early')
+  await loose($)({ tool: 'Agent', tool_use_id: 'u3', subagent_type: 'Explore', prompt: 'look', description: 'look' })
+  await s.clock.settle()
+  expect(cleanup()).toEqual({ failedCalls: 3, lastError: 'the agent stopped early' })
+
+  // Builder's own tool answers an error result with no text, which counts by
+  // its result.
+  s.stored.hold.setsRefused = 'state-label:'
+  const stuck = await loose($)({ tool: 'mcp__builder__set_stuck', tool_use_id: 'u4' }) as { isError?: boolean; text?: string }
+  s.stored.hold.setsRefused = null
+  await s.clock.settle()
+  expect(stuck.isError).toBe(true)
+  expect(stuck.text).toBe(undefined)
+  expect(cleanup()?.failedCalls).toBe(4)
+  expect(cleanup()?.lastError).toContain('the store refused to save the judgement')
+
+  // A refusal from a hook, the reviewer fence's refusal and a call that
+  // succeeded are not counted.
+  answers.set('u5', { deny: 'a hook refused it' })
+  const refused = await loose($)({ tool: 'Bash', tool_use_id: 'u5', command: 'rm -r x' })
+  const fenced = await loose($)({ ...edit, tool_use_id: 'u6', agentId: 'agent-2' })
+  await loose($)({ tool: 'Bash', tool_use_id: 'u7', command: 'ls' })
+  await s.clock.settle()
+  expect(refused.deny).toBe('a hook refused it')
+  expect(String(fenced.deny)).toContain('only reads')
+  expect(cleanup()?.failedCalls).toBe(4)
+
+  // A secret in the error is withheld.
+  failing('u8', `remote: ghp_${'A'.repeat(36)} is not valid`)
+  await loose($)({ tool: 'Bash', tool_use_id: 'u8', command: 'git push' })
+  await s.clock.settle()
+  expect(cleanup()).toEqual({ failedCalls: 5, lastError: '(withheld: it looks like a secret)' })
+
+  // A memo write that fails leaves the call's result as the tool gave it: a
+  // tool's error comes back once, from the one run, and the error of the
+  // mod's own tool comes back as the mod's answer, never passed on beneath.
+  failing('u9', 'fatal: one more')
+  memoWrites.refused = true
+  const kept = await loose($)({ tool: 'Bash', tool_use_id: 'u9', command: 'git push' })
+  s.stored.hold.setsRefused = 'state-label:'
+  const own = await loose($)({ tool: 'mcp__builder__set_stuck', tool_use_id: 'u11' }) as { isError?: boolean; result?: unknown }
+  s.stored.hold.setsRefused = null
+  memoWrites.refused = false
+  await s.clock.settle()
+  expect(kept).toMatchObject({ result: 'fatal: one more', text: 'fatal: one more', isError: true })
+  expect(reached.filter(id => id === 'u9').length).toBe(1)
+  expect(own.isError).toBe(true)
+  expect(String(own.result)).toContain('the store refused to save the judgement')
+  expect(reached).not.toContain('u11')
+  expect(cleanup()?.failedCalls).toBe(5)
+
+  // The classic hook no longer counts anything.
+  await $.classic.PostToolUseFailure({ tool_name: 'Bash', tool_input: {}, tool_use_id: 'u10', error: 'fatal: from the classic hook' } as never)
+  await s.clock.settle()
+  expect(cleanup()).toEqual({ failedCalls: 5, lastError: '(withheld: it looks like a secret)' })
 })
 
 test('a minute later the file is written again with a new write time and the same state time, and an event that changes nothing writes nothing', async ($, on) => {
