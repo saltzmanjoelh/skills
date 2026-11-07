@@ -3204,18 +3204,15 @@ async function counselDestination($: $, named: unknown): Promise<ReturnType<type
 
 // The counsel tool's message for a path that placeOf refused, chosen in a
 // fixed order. A path written in a Windows form gets the Windows-form message.
-// A path that starts with `/`, has a part that is exactly `..`, or has no part
-// made only of dots and spaces gets the message for leading outside the
-// checkout. The last of these is a link that resolves outside the checkout,
-// the only other way placeOf refuses a path, which the test of a counsel path
-// committed as a link to a file outside the checkout covers. Any other path
-// has a part made only of dots and spaces and gets a message of its own. The
-// fallback is the general message, so a reason added to placeOf later gets
-// that answer rather than a wrong specific one.
+// A path with a part made only of dots and spaces gets a message of its own,
+// unless it starts with `/` or has a part that is exactly `..`. Every other
+// path, including a link that resolves outside the checkout, gets the general
+// message for leading outside the checkout.
 function outsideRefusal(path: string): string {
   if (isWindowsShaped(path)) return `Refused: ${path} is written in a Windows form; name paths relative to the checkout, written with forward slashes.`
-  if (path.startsWith('/') || path.split('/').includes('..') || !hasDotAndSpacePart(path)) return `Refused: ${path} leads outside the checkout; name paths inside it, relative to it.`
-  return `Refused: ${path} has a part made only of dots and spaces, which Windows may read as ..; name paths without such parts.`
+  const climbs = path.startsWith('/') || path.split('/').includes('..')
+  if (hasDotAndSpacePart(path) && !climbs) return `Refused: ${path} has a part made only of dots and spaces, which Windows may read as ..; name paths without such parts.`
+  return `Refused: ${path} leads outside the checkout; name paths inside it, relative to it.`
 }
 
 // Writes the brief, then records the question; a refusal or a failed write
