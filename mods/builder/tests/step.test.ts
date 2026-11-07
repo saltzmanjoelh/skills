@@ -901,6 +901,26 @@ test('a stored label record reads back only in the shape the mod writes, with a 
   }
 })
 
+test('a stored judgement keeps the marker that its label came from a step only when the marker is exactly true', () => {
+  expect(labelRecordIn({ label: 'in-review', at: 5, judgement: { label: 'in-review', at: 9, fromStep: true } }))
+    .toEqual({ label: 'in-review', at: 5, judgement: { label: 'in-review', at: 9, fromStep: true } })
+  // Any other value, or none, reads as unmarked and keeps the judgement
+  // itself. The keys are checked directly, because toEqual ignores a field
+  // whose value is undefined.
+  for (const fromStep of [false, 'true', 1, null, {}, undefined]) {
+    const record = labelRecordIn({ label: 'in-review', at: 5, judgement: { label: 'in-review', at: 9, fromStep } })
+    expect(record).toEqual({ label: 'in-review', at: 5, judgement: { label: 'in-review', at: 9 } })
+    expect(Object.keys(record?.judgement ?? {}).sort()).toEqual(['at', 'label'])
+  }
+  const record = labelRecordIn({ label: 'in-review', at: 5, judgement: { label: 'in-review', at: 9 } })
+  expect(Object.keys(record?.judgement ?? {}).sort()).toEqual(['at', 'label'])
+  // A judgement whose label or time is of the wrong shape is still left out,
+  // even when it carries the marker.
+  for (const judgement of [{ label: 'stuck', at: 9, fromStep: true }, { label: 'bug', at: 9, fromStep: true }, { label: 'in-review', fromStep: true }]) {
+    expect(labelRecordIn({ label: 'in-review', at: 5, judgement })).toEqual({ label: 'in-review', at: 5 })
+  }
+})
+
 test('only the merge steps and the Merged step need the listing of commits the pull request lacks', () => {
   const listed = EVERY_STEP.filter(needsListing).map(step => step.kind)
   expect([...new Set(listed)].sort()).toEqual(['ask-merge', 'merge', 'merged'])

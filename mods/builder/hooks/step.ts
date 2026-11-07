@@ -396,7 +396,19 @@ export function otherStateLabelsOf(kept: StateLabel, liveLabels: readonly string
 // and a judgement of any other shape is left out. The `note` and `derived`
 // fields of records written before the judgement are never read, so such a
 // record reads as one with no judgement, and the next save drops them.
-export type StuckJudgement = { label: StateLabel; at: number }
+//
+// A judgement carries `fromStep: true` when its label came from a step: the
+// tool writes it when the step it read gave the label, and a judgement it
+// makes again under the label of a stored one keeps that one's marker. The
+// field is left out otherwise, never stored as false. A state label job that
+// started from an older snapshot never moves a marked judgement onto its new
+// label, because the step of a newer snapshot gave that judgement's label;
+// see saveLabelRecord in register.tsx. A judgement it does move is stored
+// without the marker. The parser keeps the marker only when it is exactly
+// `true` and reads any other value, or none, as unmarked, keeping the
+// judgement itself, so a judgement stored before the marker existed is
+// unmarked and is treated as it was then.
+export type StuckJudgement = { label: StateLabel; at: number; fromStep?: true }
 export type LabelRecord = { label: StateLabel; at: number; judgement?: StuckJudgement }
 
 export function labelRecordIn(raw: unknown): LabelRecord | null {
@@ -409,13 +421,13 @@ export function labelRecordIn(raw: unknown): LabelRecord | null {
 }
 
 // The judgement a stored record holds, or null when it holds none or one of
-// another shape.
+// another shape. The marker is kept only when it is exactly `true`.
 function judgementIn(raw: unknown): StuckJudgement | null {
   if (typeof raw !== 'object' || raw === null) return null
   const j = raw as Record<string, unknown>
   const label = STATE_LABELS.find(name => name === j.label && name !== 'stuck')
   if (label === undefined || !isTime(j.at)) return null
-  return { label, at: j.at }
+  return j.fromStep === true ? { label, at: j.at, fromStep: true } : { label, at: j.at }
 }
 
 const isTime = (raw: unknown): raw is number => typeof raw === 'number' && Number.isFinite(raw)
