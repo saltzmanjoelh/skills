@@ -241,6 +241,9 @@ export function chooseStep(s: Snapshot, isAsking: boolean): Step {
   // the person decides whether to ask again. The limits are measured against
   // the time of the look that made the snapshot, so the chooser needs no
   // clock, and a request time that could not be read sets no limit.
+  // overdueAtLimitStep in github.ts repeats by hand the conditions checked
+  // above, so that the fingerprint counts an overdue reviewer only where this
+  // block is reached. A change to those conditions changes it too.
   const requested = inState('requested')
   if (requested.length > 0) {
     const overdue = overdueOf(s)

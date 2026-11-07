@@ -613,10 +613,11 @@ test('a reviewer past two hours is in the arrival list only, so reviewer-working
   expect(changesBetween(labelled, unlabelled)).toEqual(['The pull request changed in a way the lines below show.'])
 })
 
-// chooseStep names the /code-review pass, a conflict, a failed check and an
-// outside reviewer's feedback before the limit steps, so a reviewer past a
-// limit counts only where a limit step can be named, and crossing a limit
-// while another step applies leaves the fingerprint as it was.
+// chooseStep names the /code-review pass, a conflict, a failed check or run,
+// an outside reviewer's feedback and a review still to request before the
+// limit steps, so a reviewer past a limit counts only where a limit step can
+// be named, and crossing a limit while another step applies leaves the
+// fingerprint as it was.
 test('the overdue reviewers count only where the step chooser can name a limit step', () => {
   const approved = requestedFor(ARRIVAL_MS)
   const none = { arrival: [], pickUp: [] }
@@ -631,7 +632,9 @@ test('the overdue reviewers count only where the step chooser can name a limit s
     unreviewed(approved),
     { ...approved, mergeable: 'CONFLICTING' as const },
     { ...approved, checks: [{ name: 'build', state: 'failed' as const }] },
+    { ...approved, headRuns: [{ ...passedRun, conclusion: 'failure' }] },
     { ...approved, outside: [{ login: 'bob', state: 'feedback' as const }, ...(approved.outside ?? [])] },
+    { ...approved, outside: [{ login: 'bob', state: 'unrequested' as const }, ...(approved.outside ?? [])] },
   ]
   for (const s of elsewhere) {
     expect(chooseStep(s, false).kind).not.toBe('review-not-arrived')
