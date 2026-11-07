@@ -637,20 +637,59 @@ export function overdueOf(s: Pick<Snapshot, 'outside' | 'labels' | 'lookedAt'>):
   return overdue
 }
 
+// The facts a base branch's CLAUDE.md that could not be read gives, and a
+// snapshot an older build stored, which has none. `Checks:` leans to
+// expected, so a project that needs checks is never merged as if it had
+// none, and the merge command is read by the session from the base itself.
+export const UNREAD_FACTS: BaseFacts = { maxPushes: 8, maxRounds: 5, checks: 'expected', merge: 'unread', isClaudeRead: false }
+
+// The facts a snapshot holds, or the unread ones when it holds none or does
+// not say the file was read, as for any other damaged field.
+export function factsOf(s: Pick<Snapshot, 'facts'>): BaseFacts {
+  const f = s.facts as Partial<BaseFacts> | undefined
+  if (typeof f !== 'object' || f === null) return UNREAD_FACTS
+  const merge = f.merge === 'default' || f.merge === 'custom' ? f.merge : 'unread'
+  if (f.isClaudeRead !== true) return UNREAD_FACTS
+  const isCount = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0
+  return {
+    maxPushes: isCount(f.maxPushes) ? f.maxPushes : UNREAD_FACTS.maxPushes,
+    maxRounds: isCount(f.maxRounds) ? f.maxRounds : UNREAD_FACTS.maxRounds,
+    checks: f.checks === 'none' ? 'none' : 'expected',
+    merge,
+    isClaudeRead: true,
+  }
+}
+
+export type Limit = { which: 'pushes' | 'rounds'; count: number; max: number }
+
+// The pushes and rounds limits the pull request is past, read from the facts
+// the snapshot holds. The step chooser names the over-limit step when any is
+// passed, and the overdue guard below reads the same list, so the two never
+// parse the facts apart.
+export function limitsPassedIn(s: Pick<Snapshot, 'facts' | 'pushesSinceVerdict' | 'headsReviewed' | 'verdicts'>): Limit[] {
+  const facts = factsOf(s)
+  const limits: Limit[] = []
+  if (s.pushesSinceVerdict > facts.maxPushes) limits.push({ which: 'pushes', count: s.pushesSinceVerdict, max: facts.maxPushes })
+  const round = roundInProgress(s)
+  if (round > facts.maxRounds) limits.push({ which: 'rounds', count: round, max: facts.maxRounds })
+  return limits
+}
+
 // The requested reviewers past each limit, counted only where the step
-// chooser can reach the two limit steps: both verdicts approve at the head,
-// the /code-review pass is recorded there, the pull request does not
-// conflict, no check or run at the head failed, and no outside reviewer has
-// feedback or lacks a request, since chooseStep names each of those steps
-// first. Anywhere else both lists are empty, so crossing a limit while another
-// step applies starts no turn, and the look at which a limit step first
-// applies is handed over as a change. The pushes and rounds limits are left
-// out, because they are read from the base facts the step module parses, and
-// a pull request over either is already stuck. The fingerprint and the change
-// sentences both read the lists through it, so a sentence is written exactly
-// when that part of the fingerprint moves.
-export function overdueAtLimitStep(s: Pick<Snapshot, 'verdicts' | 'outside' | 'labels' | 'lookedAt' | 'codeReviewed' | 'mergeable' | 'checks' | 'headRuns'>): Overdue {
+// chooser can reach the two limit steps: the pull request is past no pushes
+// or rounds limit, both verdicts approve at the head, the /code-review pass is
+// recorded there, the pull request does not conflict, no check or run at the
+// head failed, and no outside reviewer has feedback or lacks a request, since
+// chooseStep names each of those steps first. Anywhere else both lists are
+// empty, so crossing a limit while another step applies starts no turn, and
+// the look at which a limit step first applies is handed over as a change.
+// The open question is left out, because a change during a question is held
+// until the turn that asks it ends, and that turn settles the question. The
+// fingerprint and the change sentences both read the lists through it, so a
+// sentence is written exactly when that part of the fingerprint moves.
+export function overdueAtLimitStep(s: Omit<Snapshot, 'fingerprint'>): Overdue {
   const none: Overdue = { arrival: [], pickUp: [] }
+  if (limitsPassedIn(s).length > 0) return none
   if (!bothApprove(s.verdicts) || s.codeReviewed !== true || s.mergeable === 'CONFLICTING') return none
   if (failedCheckNames(s.checks).length > 0 || failedRunsOf(headRunsIn(s) ?? []).length > 0) return none
   if (outsideIn(s.outside).some(r => r.state === 'feedback' || r.state === 'unrequested')) return none

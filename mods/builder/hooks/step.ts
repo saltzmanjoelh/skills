@@ -12,12 +12,12 @@
 // what to do, and the mod never does it.
 
 import type { BaseFacts, OutsideState, Snapshot, Unpushed } from '../types'
-import { ciOf, countingRuns, failedCheckNames, failedRunsOf, headRunsIn, isChangesRequested, isLogin, isUnfinished, othersIn, outsideIn, overdueOf, roundInProgress, STATE_LABELS, WORKING_LABEL, type StateLabel } from './github'
+import { ciOf, countingRuns, failedCheckNames, failedRunsOf, headRunsIn, isChangesRequested, isLogin, isUnfinished, othersIn, outsideIn, factsOf, limitsPassedIn, overdueOf, STATE_LABELS, UNREAD_FACTS, WORKING_LABEL, type Limit, type StateLabel } from './github'
 import { LINKED_KEPT } from './linked'
 import { factIn, isFullSha } from './review'
 import { isPlainRepo, listed, printable } from './text'
 
-export type Limit = { which: 'pushes' | 'rounds'; count: number; max: number }
+export type { Limit }
 
 // The merge steps and the Merged step carry `unpushed`, the commits the head
 // branch's worktree holds that the head lacks, as the look listed them. The
@@ -84,11 +84,6 @@ export type RunRef = { id: number; attempt: number }
 // The merge command a project gets when its CLAUDE.md names none.
 export const DEFAULT_MERGE_COMMAND = 'gh pr merge <n> --merge --match-head-commit <sha>'
 
-// The facts a base branch's CLAUDE.md that could not be read gives, and a
-// snapshot an older build stored, which has none. `Checks:` leans to
-// expected, so a project that needs checks is never merged as if it had
-// none, and the merge command is read by the session from the base itself.
-export const UNREAD_FACTS: BaseFacts = { maxPushes: 8, maxRounds: 5, checks: 'expected', merge: 'unread', isClaudeRead: false }
 
 // The facts in the text of a base branch's CLAUDE.md. A limit that is
 // missing or not a whole number takes its default. A file without a
@@ -171,23 +166,6 @@ function limitIn(claude: string, label: string, fallback: number): number {
   return value !== null && /^\d+$/.test(value) ? Number(value) : fallback
 }
 
-// The facts a snapshot holds, or the unread ones when it holds none or does
-// not say the file was read, as for any other damaged field.
-function factsOf(s: Snapshot): BaseFacts {
-  const f = s.facts as Partial<BaseFacts> | undefined
-  if (typeof f !== 'object' || f === null) return UNREAD_FACTS
-  const merge = f.merge === 'default' || f.merge === 'custom' ? f.merge : 'unread'
-  if (f.isClaudeRead !== true) return UNREAD_FACTS
-  const isCount = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0
-  return {
-    maxPushes: isCount(f.maxPushes) ? f.maxPushes : UNREAD_FACTS.maxPushes,
-    maxRounds: isCount(f.maxRounds) ? f.maxRounds : UNREAD_FACTS.maxRounds,
-    checks: f.checks === 'none' ? 'none' : 'expected',
-    merge,
-    isClaudeRead: true,
-  }
-}
-
 // The repository when it is a plain owner and name, which is safe to put in
 // a text, and null otherwise.
 function plainRepoOf(repo: unknown): string | null {
@@ -203,10 +181,7 @@ export function chooseStep(s: Snapshot, isAsking: boolean): Step {
   if (s.state === 'CLOSED') return { kind: 'closed' }
   if (isAsking) return { kind: 'question' }
   const facts = factsOf(s)
-  const limits: Limit[] = []
-  if (s.pushesSinceVerdict > facts.maxPushes) limits.push({ which: 'pushes', count: s.pushesSinceVerdict, max: facts.maxPushes })
-  const round = roundInProgress(s)
-  if (round > facts.maxRounds) limits.push({ which: 'rounds', count: round, max: facts.maxRounds })
+  const limits = limitsPassedIn(s)
   if (limits.length > 0) return { kind: 'over-limit', limits }
   if (s.mergeable === 'CONFLICTING') return { kind: 'conflicting' }
   const headRuns = headRunsIn(s)
@@ -242,8 +217,9 @@ export function chooseStep(s: Snapshot, isAsking: boolean): Step {
   // the time of the look that made the snapshot, so the chooser needs no
   // clock, and a request time that could not be read sets no limit.
   // overdueAtLimitStep in github.ts repeats by hand the conditions checked
-  // above, so that the fingerprint counts an overdue reviewer only where this
-  // block is reached. A change to those conditions changes it too.
+  // above, apart from the open question, so that the fingerprint counts an
+  // overdue reviewer only where this block is reached. A change to those
+  // conditions changes it too.
   const requested = inState('requested')
   if (requested.length > 0) {
     const overdue = overdueOf(s)
@@ -310,7 +286,7 @@ export function unpushedIn(raw: unknown): Unpushed {
 
 // How many sentences of the update's outcome a step keeps, which the update
 // itself never exceeds, and how long each one may be.
-export { LINKED_KEPT }
+export { LINKED_KEPT, UNREAD_FACTS }
 const LINKED_LINE_MAX = 2000
 
 // The outcome of the update of the linked checkout as a step carries it.
