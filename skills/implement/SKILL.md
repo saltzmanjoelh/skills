@@ -185,9 +185,10 @@ no `Frontend paths:` line. When `git ls-tree` fails too, or prints
 read gives an answer, the line is read in one of three ways:
 
 - When its value is the word `none`, in any case and alone on the line apart
-  from spaces, no change is frontend: run no command below, and open the pull
-  request the plain way, as the paragraph that begins "Check the diff against
-  the base" says. Everywhere in this skill and in `frontend.md`, the base branch's
+  from spaces, no change is frontend: skip the second read, which is the
+  `git diff` command below, and open the pull request the plain way, as the
+  paragraph that begins "Check the diff against the base" says.
+  Everywhere in this skill and in `frontend.md`, the base branch's
   `CLAUDE.md` "says `Frontend paths: none`" when it has this line, and only
   then. A read of that file that gives no answer, here or wherever else this
   skill or `frontend.md` reads it, does not say it, so every condition that
@@ -231,11 +232,12 @@ adds, modifies, deletes or renames counts, because each of them changes what a
 person can see. Without `--no-renames`, git reports a rename only under its new
 path, so a file moved out of a frontend path would not count.
 
-When either read gives no answer, run `git fetch origin <base>` again,
-whether or not the first fetch succeeded, and then run both reads again,
-once, so the read that failed is repeated with a fresh `CLAUDE.md`. This is
-the only retry in one pass through step 7. When a read still gives no
-answer, push nothing and open no pull request. Ask the person with
+When a read that ran gives no answer, run `git fetch origin <base>` again,
+whether or not the first fetch succeeded, and then
+run the reads again, as the paragraphs above say, once, so the read that
+failed is repeated with a fresh `CLAUDE.md`. This is the only retry in one
+pass through step 7. When a read that ran still gives no answer, push
+nothing and open no pull request. Ask the person with
 `AskUserQuestion`, in the form "Questions" gives, without putting the
 question to the counsel. The question names the command that failed and
 gives what git printed on its standard error. Its options, in this order, are:
