@@ -3240,7 +3240,7 @@ test('the counsel tool refuses a path written in a Windows form, asks for forwar
   expect([...files.keys()].some(path => path.includes('/counsel/'))).toBe(false)
 })
 
-test('the first refused counsel path decides the message, so a climbing path before a Windows one gets the message for leaving the checkout', async ($, on) => {
+test('the first refused counsel path decides the message, in either order of a climbing path and a Windows one', async ($, on) => {
   mock.clock(on)
   mock.store(on)
   engine(on)
@@ -3248,10 +3248,15 @@ test('the first refused counsel path decides the message, so a climbing path bef
   const files = fakeFiles(on)
   await startOnly($)
 
-  const ran = await loose($)({ ...brief, paths: ['../x', 'C:\\y'] })
+  const climbingFirst = await loose($)({ ...brief, paths: ['../x', 'C:\\y'] })
 
-  expect(String(ran.result)).toContain('Refused: ../x leads outside the checkout; name paths inside it, relative to it.')
-  expect(String(ran.result)).not.toContain('Windows')
+  expect(String(climbingFirst.result)).toContain('Refused: ../x leads outside the checkout; name paths inside it, relative to it.')
+  expect(String(climbingFirst.result)).not.toContain('Windows')
+
+  const windowsFirst = await loose($)({ ...brief, paths: ['C:\\y', '../x'] })
+
+  expect(String(windowsFirst.result)).toContain('Refused: C:\\y is written in a Windows form; name paths relative to the checkout, written with forward slashes.')
+  expect(String(windowsFirst.result)).not.toContain('leads outside')
   expect([...files.keys()].some(path => path.includes('/counsel/'))).toBe(false)
 })
 
