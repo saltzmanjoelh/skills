@@ -332,7 +332,7 @@ holds the merge, give `ready-to-merge`; **Over a limit**, **Closed**, and the
 two steps where a requested outside review ran past its limit (**Both
 verdicts approve at this head, but the outside review was not picked up within
 ten minutes** and **Both verdicts approve at this head, but the outside review
-did not arrive within two hours**) give `stuck`. The session
+has not arrived within two hours**) give `stuck`. The session
 puts `stuck` on by its own judgement only when a step's text asks for it, such
 as a failure outside the code or a person declining to merge without checks,
 and then only by calling `mcp__builder__set_stuck`. It never edits a state
@@ -460,7 +460,7 @@ waiting on checks, merging, or asking whether to merge without checks:
   outside reviewer is in the Unrequested state. It gives `waiting-on-reviewer`. Run
   `gh pr edit <n> --add-reviewer <logins>`, and then call
   `mcp__builder__watch` and follow the step it names.
-- **Both verdicts approve at this head, but the outside review did not arrive
+- **Both verdicts approve at this head, but the outside review has not arrived
   within two hours**, when an outside reviewer is still in the Requested state
   two hours after the newest request, whether or not the pull request carries
   `reviewer-working`. It gives `stuck`.
