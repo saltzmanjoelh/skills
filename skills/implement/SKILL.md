@@ -1079,16 +1079,18 @@ is not a package reviewer.
 
 ### Updating the linked checkout
 
-Skills, agents and the builder mod load through symlinks under `~/.claude`
-into a repository's main checkout, not from this worktree, so a session
-started a moment after the merge runs whatever that checkout holds. The
-builder mod keeps that checkout current itself: on the first look that
-chooses the step **Merged**, it finds the links in `~/.claude/skills`,
-`~/.claude/agents` and `~/.claude/commands`, and fast-forwards the main
-checkout of the merged repository to the merge commit when that is safe. It
-runs the update once for each merged pull request, never forces a checkout,
-and never retries a failed update, except once after a lock. The session
-runs none of this itself and never works in a main checkout.
+Skills, agents and the builder mod load through symlinks that live in the
+Claude configuration folder (`CLAUDE_CONFIG_DIR`, or `~/.claude` when that
+is unset) and point into a repository's main checkout, not into this
+worktree, so a session started a moment after the merge runs whatever that
+checkout holds. The builder mod keeps that checkout current itself: on the
+first look that chooses the step **Merged**, it finds the links in the
+`skills`, `agents` and `commands` folders inside the configuration folder,
+and fast-forwards the main checkout of the merged repository to the merge
+commit when that is safe. It runs the update once for each merged pull
+request, never forces a checkout, and never retries a failed update, except
+once after a lock. The session runs none of this itself and never works in
+a main checkout.
 
 The step's text states the outcome, one sentence for each checkout, which
 begins with one of these:
@@ -1108,7 +1110,11 @@ begins with one of these:
 - **Left alone:** the checkout's path or the broken link, what stopped it,
   and that new sessions will run the old code until someone updates it.
   This includes an update that started and did not finish, because the mod
-  stopped in the middle of it.
+  stopped in the middle of it. It also includes the case where the mod
+  cannot find the Claude configuration folder at all, such as when
+  `CLAUDE_CONFIG_DIR` is a relative path. Then the outcome names no
+  checkout and no link, only the reason the folder could not be found and
+  that new sessions will run the old code.
 
 The outcome can add sentences of its own: links of the merged repository
 that lie in worktrees, a broken link or a failed lookup elsewhere, with
