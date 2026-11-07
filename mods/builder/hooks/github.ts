@@ -366,9 +366,14 @@ export function pullRequestStateIn(out: string | null): Snapshot['state'] | null
 // whether the runs read failed so they were carried over, the facts of the
 // base branch's CLAUDE.md, and, at a look that chose a merge step or the
 // Merged step, the commits the worktree holds that the head lacks.
-export type SnapshotExtras = Pick<Snapshot, 'headRuns' | 'runsCarriedOver' | 'facts' | 'unpushed'>
+// It also carries the time of the look itself, which the step chooser
+// measures a requested review's wait against.
+export type SnapshotExtras = Pick<Snapshot, 'headRuns' | 'runsCarriedOver' | 'facts' | 'unpushed' | 'lookedAt'>
 
-export function snapshotOf(repo: string, pr: GhPullRequest, login: string, runs: WorkflowRun[] = [], extras: SnapshotExtras = {}): Snapshot {
+// `requestTimes` holds when each reviewer's review was last requested, keyed by
+// the login in lower case, as requestTimesOf reads it. A look that did not
+// read them, or whose read failed, passes none.
+export function snapshotOf(repo: string, pr: GhPullRequest, login: string, runs: WorkflowRun[] = [], extras: SnapshotExtras = {}, requestTimes: ReadonlyMap<string, string> = new Map()): Snapshot {
   const head = pr.headRefOid
   const commits = (pr.commits ?? []).map(commit => commit.oid)
   // Only verdict reviews this login posted count: a review anyone else posts
@@ -415,7 +420,7 @@ export function snapshotOf(repo: string, pr: GhPullRequest, login: string, runs:
   if (since !== undefined) snapshot.codeReviewSince = since
   const named = extras.facts?.reviewers ?? []
   const newest = newestReviewsOf(pr, login)
-  const outside = outsideOf(pr, login, named, newest)
+  const outside = outsideOf(pr, login, named, newest, requestTimes)
   if (outside.length > 0) snapshot.outside = outside
   const others = othersOf(pr, login, named, newest, outside)
   if (others.length > 0) snapshot.others = others
@@ -475,8 +480,16 @@ function newestReviewsOf(pr: Pick<GhPullRequest, 'reviews'>, login: string): New
 // gave where it gave one.
 //
 // The caller may pass the newest reviews it has already read from the same
-// pull request, so they are read only once.
-export function outsideOf(pr: Pick<GhPullRequest, 'reviews' | 'reviewRequests'>, login: string, named: readonly string[], newest: NewestReviews = newestReviewsOf(pr, login)): OutsideReviewer[] {
+// pull request, so they are read only once. A reviewer in the Requested state
+// carries the time of their newest request from `requestTimes`, keyed by the
+// login in lower case, when it holds one, and no other reviewer carries it.
+export function outsideOf(
+  pr: Pick<GhPullRequest, 'reviews' | 'reviewRequests'>,
+  login: string,
+  named: readonly string[],
+  newest: NewestReviews = newestReviewsOf(pr, login),
+  requestTimes: ReadonlyMap<string, string> = new Map(),
+): OutsideReviewer[] {
   const self = login.toLowerCase()
   const isOutside = (name: unknown): name is string => isLogin(name) && name.toLowerCase() !== self
   const spelled = new Map<string, string>()
@@ -501,8 +514,77 @@ export function outsideOf(pr: Pick<GhPullRequest, 'reviews' | 'reviewRequests'>,
       const review = newest.get(key)
       const state = outsideStateOf(requested.has(key), review)
       const at = review?.submittedAt
-      return typeof at === 'string' && at !== '' ? { login: name, state, at } : { login: name, state }
+      const reviewer: OutsideReviewer = typeof at === 'string' && at !== '' ? { login: name, state, at } : { login: name, state }
+      const requestedAt = requestTimes.get(key)
+      return state === 'requested' && requestedAt !== undefined ? { ...reviewer, requestedAt } : reviewer
     })
+}
+
+// The GraphQL query for the newest 100 review-request events in the pull
+// request's timeline, with the login each was for. A request for a team has
+// no login. GitHub keeps every request in the timeline, so the newest event
+// for a login is when that reviewer was last asked.
+export const REQUEST_TIMES_QUERY = 'query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { timelineItems(last: 100, itemTypes: [REVIEW_REQUESTED_EVENT]) { nodes { ... on ReviewRequestedEvent { createdAt requestedReviewer { ... on User { login } } } } } } } }'
+
+// When each reviewer's review was last requested, keyed by the login in lower
+// case, from what the query above printed. Only the newest time for each login
+// is kept, compared as times, so asking a reviewer again counts from the new
+// request. An event whose login does not pass isLogin, or whose time cannot be
+// read, is left out. Output that is missing or cannot be parsed gives no
+// times, so no time limit applies at that look, and the next look reads again.
+export function requestTimesOf(out: string | null): Map<string, string> {
+  const times = new Map<string, string>()
+  if (out === null) return times
+  let raw: unknown
+  try {
+    raw = JSON.parse(out)
+  } catch {
+    return times
+  }
+  const nodes = (raw as { data?: { repository?: { pullRequest?: { timelineItems?: { nodes?: unknown } } } } } | null)
+    ?.data?.repository?.pullRequest?.timelineItems?.nodes
+  if (!Array.isArray(nodes)) return times
+  for (const node of nodes) {
+    if (typeof node !== 'object' || node === null) continue
+    const n = node as { createdAt?: unknown; requestedReviewer?: { login?: unknown } | null }
+    const login = n.requestedReviewer?.login
+    if (!isLogin(login) || typeof n.createdAt !== 'string' || Number.isNaN(Date.parse(n.createdAt))) continue
+    const key = login.toLowerCase()
+    const seen = times.get(key)
+    if (seen === undefined || Date.parse(seen) < Date.parse(n.createdAt)) times.set(key, n.createdAt)
+  }
+  return times
+}
+
+// The time limits on a requested review. A reviewer still requested ten
+// minutes after the request, while the pull request does not carry
+// reviewer-working, has not picked the request up. A reviewer still requested
+// two hours after the request, whether or not the label is on, has not given
+// the review. The same limits apply to every outside reviewer, person or bot.
+export const PICK_UP_MS = 10 * 60_000
+export const ARRIVAL_MS = 2 * 60 * 60_000
+
+// The requested reviewers past each limit at the look that made the snapshot,
+// by login, in the order the snapshot lists them. A reviewer whose request
+// time could not be read, and every reviewer of a snapshot that holds no time
+// of its look, is in neither list, so no limit ever rests on a time that was
+// not read. A reviewer past two hours with the label off is in both.
+export type Overdue = { arrival: string[]; pickUp: string[] }
+
+export function overdueOf(s: Pick<Snapshot, 'outside' | 'labels' | 'lookedAt'>): Overdue {
+  const overdue: Overdue = { arrival: [], pickUp: [] }
+  const now = s.lookedAt
+  if (typeof now !== 'number' || !Number.isFinite(now)) return overdue
+  const isWorking = Array.isArray(s.labels) && s.labels.includes(WORKING_LABEL)
+  for (const r of outsideIn(s.outside)) {
+    if (r.state !== 'requested' || r.requestedAt === undefined) continue
+    const asked = Date.parse(r.requestedAt)
+    if (Number.isNaN(asked)) continue
+    const waited = now - asked
+    if (waited >= ARRIVAL_MS) overdue.arrival.push(r.login)
+    if (waited >= PICK_UP_MS && !isWorking) overdue.pickUp.push(r.login)
+  }
+  return overdue
 }
 
 // Every state an outside reviewer can be in, in the order OutsideState lists
@@ -577,6 +659,14 @@ function committedAfter(createdAt: string | undefined, commits: readonly { commi
 // question, and takes off once the question is answered.
 export const DECISION_LABEL = 'needs-decision'
 
+// The label an automated outside reviewer puts on the pull request when it
+// picks a review request up. It is not a state label: it sits beside them and
+// never replaces waiting-on-reviewer. The mod reads it at every look, creates
+// it when the session asks for an outside review and the repository lacks it,
+// and takes it off when it sets any state label other than
+// waiting-on-reviewer, so a reviewer that forgets cannot leave it behind.
+export const WORKING_LABEL = 'reviewer-working'
+
 // The state labels /implement moves between. The pull request carries one of
 // them at a time, and the session never edits them itself. The mod sets the
 // one that follows from the step it chose, and it sets `stuck` when the
@@ -587,12 +677,13 @@ export const DECISION_LABEL = 'needs-decision'
 export const STATE_LABELS = ['in-review', 'waiting-on-author', 'waiting-on-reviewer', 'ready-to-merge', 'stuck'] as const
 export type StateLabel = typeof STATE_LABELS[number]
 
-// The labels the workflow sets on the pull request itself: the state labels
-// and the mod's own decision label. A change to them is the mod's or the
+// The labels the workflow sets on the pull request itself: the state labels,
+// the mod's own decision label, and the label a reviewer puts on when it
+// picks a request up. A change to them is the mod's or the
 // session's own doing, or a person's by hand, and /implement never decides
 // from them, so it is not news to hand the session. The snapshot still keeps
 // them, because the poll interval and the pane read them.
-export const WORKFLOW_LABELS: ReadonlySet<string> = new Set([...STATE_LABELS, DECISION_LABEL])
+export const WORKFLOW_LABELS: ReadonlySet<string> = new Set([...STATE_LABELS, DECISION_LABEL, WORKING_LABEL])
 
 // The labels that count as a change to the pull request: every label but the
 // workflow's own.
@@ -654,6 +745,19 @@ export function fingerprintOf(s: Omit<Snapshot, 'fingerprint'>): string {
   // theirs arriving, or a newer one, is news.
   const others = othersIn(s.others)
   if (others.length > 0) parts.push(`others:${others.map(r => `${r.login.toLowerCase()}@${r.at ?? ''}`).join(',')}`)
+  // The requested reviewers past a time limit, added only while both
+  // verdicts approve at the head, where the step chooser names a step for
+  // them, and only when there are any. So crossing the ten-minute limit is
+  // news, and crossing the two-hour limit is news again even when the person
+  // said to keep waiting at ten minutes. The request time itself stays out, so
+  // a reviewer asked again starts no turn until a limit passes again.
+  if (s.verdicts !== null && !isChangesRequested(s.verdicts)) {
+    const overdue = overdueOf(s)
+    if (overdue.arrival.length > 0 || overdue.pickUp.length > 0) {
+      const logins = (list: readonly string[]) => list.map(login => login.toLowerCase()).join(',')
+      parts.push(`overdue:${logins(overdue.arrival)}/${logins(overdue.pickUp)}`)
+    }
+  }
   return parts.join('|')
 }
 
@@ -768,6 +872,7 @@ export function changesBetween(before: Snapshot | null, after: Snapshot): string
   if (added.length > 0) changes.push(`Labels added: ${quoted(added)}.`)
   if (removed.length > 0) changes.push(`Labels removed: ${quoted(removed)}.`)
   changes.push(...outsideSentences(outsideIn(before.outside), outsideIn(after.outside)))
+  changes.push(...overdueSentences(before, after))
   changes.push(...otherSentences(othersIn(before.others), othersIn(after.others)))
   if (JSON.stringify(before.verdicts) !== JSON.stringify(after.verdicts)) {
     changes.push(after.verdicts
@@ -793,8 +898,11 @@ export function outsideIn(raw: unknown): OutsideReviewer[] {
     const r = entry as Record<string, unknown>
     const state = OUTSIDE_STATES.find(s => s === r.state)
     if (!isLogin(r.login) || state === undefined) return []
-    const reviewer: OutsideReviewer = { login: r.login, state }
-    return typeof r.at === 'string' && r.at !== '' ? [{ ...reviewer, at: r.at }] : [reviewer]
+    const reviewer: OutsideReviewer = typeof r.at === 'string' && r.at !== '' ? { login: r.login, state, at: r.at } : { login: r.login, state }
+    // The request time is kept, because the label job and the set_stuck tool
+    // choose the step again from the stored snapshot and must agree with the
+    // look that stored it.
+    return typeof r.requestedAt === 'string' && r.requestedAt !== '' ? [{ ...reviewer, requestedAt: r.requestedAt }] : [reviewer]
   })
 }
 
@@ -834,6 +942,25 @@ function outsideSentences(before: readonly OutsideReviewer[], after: readonly Ou
     }
   }
   return sentences
+}
+
+// One sentence per reviewer who is past a time limit now and was not before,
+// read under the same guard as the fingerprint, so a sentence is written
+// exactly when that part of the fingerprint moves. When the lists only
+// shrank, as when reviewer-working went on after the ten-minute limit, one
+// sentence says so.
+function overdueSentences(before: Snapshot, after: Snapshot): string[] {
+  const of = (s: Snapshot): Overdue => s.verdicts !== null && !isChangesRequested(s.verdicts) ? overdueOf(s) : { arrival: [], pickUp: [] }
+  const was = of(before)
+  const now = of(after)
+  const isNew = (list: readonly string[], login: string) => !list.some(l => l.toLowerCase() === login.toLowerCase())
+  const sentences = [
+    ...now.arrival.filter(login => isNew(was.arrival, login)).map(login => `The review of ${login} has not arrived two hours after it was requested.`),
+    ...now.pickUp.filter(login => isNew(was.pickUp, login)).map(login => `${login} has not picked up the review request ten minutes after it was made, and the pull request does not carry ${WORKING_LABEL}.`),
+  ]
+  if (sentences.length > 0) return sentences
+  const isShorter = now.arrival.length < was.arrival.length || now.pickUp.length < was.pickUp.length
+  return isShorter ? ['Fewer requested reviews are past a time limit than at the last look.'] : []
 }
 
 // One sentence per other reviewer whose review with comments is new, or

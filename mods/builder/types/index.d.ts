@@ -52,7 +52,11 @@ export type BaseFacts = { maxPushes: number; maxRounds: number; checks: 'none' |
 // were never asked, or their newest review was dismissed.
 export type OutsideState = 'requested' | 'approved' | 'feedback' | 'unrequested'
 // `at` is when their newest review was submitted, absent when they have none.
-export type OutsideReviewer = { login: string; state: OutsideState; at?: string }
+// `requestedAt` is when their review was last requested, as GitHub recorded it,
+// set only on a reviewer in the Requested state whose request time the look
+// could read. A snapshot an older build stored has none, and no time limit
+// then applies to the request.
+export type OutsideReviewer = { login: string; state: OutsideState; at?: string; requestedAt?: string }
 // A reviewer other than the session's own login who is not an outside
 // reviewer, such as a GitHub app's automatic review or a stranger on a public
 // repository, whose newest review comments or requests changes. `at` is when
@@ -126,6 +130,12 @@ export type Snapshot = {
   // starts. A snapshot with no such head has no field, and the next pass then
   // reads the whole pull request.
   codeReviewSince?: string
+  // When the look that made this snapshot happened, in milliseconds since the
+  // epoch, by the mod's clock. The step chooser measures how long a requested
+  // review has waited against it, so the chooser needs no clock of its own. A
+  // snapshot an older build stored has none, and no time limit then applies.
+  // The fingerprint never reads it.
+  lookedAt?: number
   fingerprint: string
 }
 

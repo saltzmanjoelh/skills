@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { changesBetween, isLogin, othersIn, othersOf, outsideIn, outsideOf, PR_FIELDS, snapshotOf, type GhPullRequest } from '../hooks/github'
+import { ARRIVAL_MS, changesBetween, fingerprintOf, isLogin, othersIn, othersOf, outsideIn, outsideOf, overdueOf, PICK_UP_MS, PR_FIELDS, requestTimesOf, snapshotIn, snapshotOf, STATE_LABELS, WORKFLOW_LABELS, WORKING_LABEL, type GhPullRequest } from '../hooks/github'
 import { pollFor, POLL_MS, waitingOn } from '../hooks/state'
 import { chooseStep, labelFor, reviewersOf, stepLines, type Step } from '../hooks/step'
 import type { BaseFacts, HeadRun, Snapshot } from '../types'
@@ -467,4 +467,116 @@ test('every merge and ask-merge text stops the merge when the fetched CLAUDE.md 
     // the reviewer off is not held by a reviewer the user's own file names.
     expect(text).toContain('The `Reviewer:` fact is the fetched base branch\'s `Reviewer:` line when that file has one, and the user\'s own `Reviewer:` line only when it has none. A line that says `none` names nobody, so `Reviewer: none` in the base branch turns the user\'s line off, and the branch\'s own CLAUDE.md never counts here.')
   }
+})
+
+// The time limits on a requested review (see
+// docs/specs/pr-comments-ends-every-comment.md). The request was made at
+// REQUESTED, and each snapshot is looked at a fixed time after it, so the
+// tests need no clock.
+
+const REQUESTED = '2026-11-05T10:00:00Z'
+const REQUESTED_MS = Date.parse(REQUESTED)
+
+// What the GraphQL read of the review-request events printed, oldest first,
+// as GitHub answers it. A request for a team has no login.
+function requestEvents(events: { login?: string; at: string }[]): string {
+  const nodes = events.map(e => ({ createdAt: e.at, requestedReviewer: e.login === undefined ? {} : { login: e.login } }))
+  return JSON.stringify({ data: { repository: { pullRequest: { timelineItems: { nodes } } } } })
+}
+
+// A snapshot where both verdicts approve and ann's review is requested,
+// looked at `after` milliseconds after the request.
+function requestedFor(after: number, labels: string[] = [], times: ReadonlyMap<string, string> = new Map([['ann', REQUESTED]])): Snapshot {
+  return snapshotOf('o/r', pullRequest({ reviewRequests: [{ __typename: 'User', login: 'ann' }], labels: labels.map(name => ({ name })) }), ME, [], {
+    headRuns: [passedRun], facts: FACTS, lookedAt: REQUESTED_MS + after,
+  }, times)
+}
+
+test('the request times keep the newest request for each login, so a new request after an earlier one counts from the new one', () => {
+  const times = requestTimesOf(requestEvents([
+    { login: 'Ann', at: '2026-11-05T09:00:00Z' },
+    { login: 'bob', at: '2026-11-05T09:30:00Z' },
+    { at: '2026-11-05T09:45:00Z' },
+    { login: 'ann', at: REQUESTED },
+    { login: 'bob', at: '2026-11-05T09:10:00Z' },
+  ]))
+  expect([...times.entries()]).toEqual([['ann', REQUESTED], ['bob', '2026-11-05T09:30:00Z']])
+})
+
+test('request times that could not be read, or that are not times, give none', () => {
+  expect(requestTimesOf(null).size).toBe(0)
+  expect(requestTimesOf('not json').size).toBe(0)
+  expect(requestTimesOf('{"data":null}').size).toBe(0)
+  expect(requestTimesOf(requestEvents([{ login: 'ann', at: 'yesterday' }])).size).toBe(0)
+  expect(requestTimesOf(requestEvents([{ login: 'not a login', at: REQUESTED }])).size).toBe(0)
+})
+
+test('only a reviewer in the Requested state carries the time of the request', () => {
+  const s = snapshotOf('o/r', pullRequest({
+    reviews: [approvedBySession, outsideReview('bob', 'APPROVED')],
+    reviewRequests: [{ __typename: 'User', login: 'Ann' }],
+  }), ME, [], { headRuns: [passedRun], facts: FACTS }, new Map([['ann', REQUESTED], ['bob', REQUESTED]]))
+  expect(s.outside).toEqual([{ login: 'Ann', state: 'requested', requestedAt: REQUESTED }, { login: 'bob', state: 'approved', at: T1 }])
+})
+
+test('reviewer-working is a workflow label and not a state label', () => {
+  expect(WORKING_LABEL).toBe('reviewer-working')
+  expect(WORKFLOW_LABELS.has(WORKING_LABEL)).toBe(true)
+  expect((STATE_LABELS as readonly string[]).includes(WORKING_LABEL)).toBe(false)
+})
+
+test('reviewer-working going on or coming off leaves the fingerprint unchanged and names no change', () => {
+  const off = requestedFor(60_000)
+  const on = requestedFor(60_000, [WORKING_LABEL])
+  expect(on.fingerprint).toBe(off.fingerprint)
+  expect(changesBetween(off, on)).toEqual(['The pull request changed in a way the lines below show.'])
+})
+
+test('the time of the request and of the look stay out of the fingerprint until a limit passes', () => {
+  const early = requestedFor(60_000)
+  const later = requestedFor(PICK_UP_MS - 1, [], new Map([['ann', '2026-11-05T10:00:30Z']]))
+  expect(later.fingerprint).toBe(early.fingerprint)
+  expect(fingerprintOf({ ...early, outside: [{ login: 'ann', state: 'requested' }] })).toBe(early.fingerprint)
+})
+
+test('crossing the ten-minute limit and then the two-hour limit each change the fingerprint and name the change', () => {
+  const before = requestedFor(PICK_UP_MS - 1, [WORKING_LABEL])
+  const pickUp = requestedFor(PICK_UP_MS)
+  const working = requestedFor(PICK_UP_MS, [WORKING_LABEL])
+  const arrival = requestedFor(ARRIVAL_MS, [WORKING_LABEL])
+  expect(new Set([before, pickUp, arrival].map(s => s.fingerprint)).size).toBe(3)
+  expect(working.fingerprint).toBe(before.fingerprint)
+  expect(changesBetween(before, pickUp)).toEqual(['ann has not picked up the review request ten minutes after it was made, and the pull request does not carry reviewer-working.'])
+  expect(changesBetween(working, arrival)).toEqual(['The review of ann has not arrived two hours after it was requested.'])
+})
+
+test('a limit changes the fingerprint only while both verdicts approve', () => {
+  const pending = (after: number) => snapshotOf('o/r', pullRequest({ reviews: [], reviewRequests: [{ __typename: 'User', login: 'ann' }] }), ME, [], {
+    headRuns: [passedRun], facts: FACTS, lookedAt: REQUESTED_MS + after,
+  }, new Map([['ann', REQUESTED]]))
+  expect(pending(ARRIVAL_MS).fingerprint).toBe(pending(0).fingerprint)
+})
+
+test('the overdue reviewers: ten minutes without reviewer-working to pick up, two hours to arrive with or without it', () => {
+  expect(overdueOf(requestedFor(PICK_UP_MS - 1))).toEqual({ arrival: [], pickUp: [] })
+  expect(overdueOf(requestedFor(PICK_UP_MS))).toEqual({ arrival: [], pickUp: ['ann'] })
+  expect(overdueOf(requestedFor(PICK_UP_MS, [WORKING_LABEL]))).toEqual({ arrival: [], pickUp: [] })
+  expect(overdueOf(requestedFor(ARRIVAL_MS, [WORKING_LABEL]))).toEqual({ arrival: ['ann'], pickUp: [] })
+  expect(overdueOf(requestedFor(ARRIVAL_MS))).toEqual({ arrival: ['ann'], pickUp: ['ann'] })
+})
+
+test('a request time that could not be read, or a snapshot with no time of its look, is never overdue', () => {
+  expect(overdueOf(requestedFor(ARRIVAL_MS, [], new Map()))).toEqual({ arrival: [], pickUp: [] })
+  const { lookedAt: _, ...unlooked } = requestedFor(ARRIVAL_MS)
+  expect(overdueOf(unlooked)).toEqual({ arrival: [], pickUp: [] })
+  expect(overdueOf({ ...requestedFor(ARRIVAL_MS), outside: [{ login: 'ann', state: 'requested', requestedAt: 'yesterday' }] })).toEqual({ arrival: [], pickUp: [] })
+})
+
+test('a stored snapshot keeps the time of each request and of the look', () => {
+  const s = requestedFor(ARRIVAL_MS)
+  const stored = JSON.parse(JSON.stringify(s)) as unknown
+  expect(snapshotIn(stored)?.lookedAt).toBe(REQUESTED_MS + ARRIVAL_MS)
+  expect(outsideIn((stored as Snapshot).outside)).toEqual([{ login: 'ann', state: 'requested', requestedAt: REQUESTED }])
+  expect(outsideIn([{ login: 'ann', state: 'requested', requestedAt: 7 }])).toEqual([{ login: 'ann', state: 'requested' }])
+  expect(overdueOf(snapshotIn(stored)!)).toEqual({ arrival: ['ann'], pickUp: ['ann'] })
 })
