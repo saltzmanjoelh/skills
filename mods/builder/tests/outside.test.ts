@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { changesBetween, isLogin, othersIn, othersOf, outsideIn, outsideOf, PR_FIELDS, snapshotOf, type GhPullRequest } from '../hooks/github'
+import { ARRIVAL_MS, changesBetween, fingerprintOf, isLogin, othersIn, othersOf, outsideIn, outsideOf, overdueAtLimitStep, overdueOf, PICK_UP_MS, PR_FIELDS, requestedUsersOf, requestTimesOf, carriedRequestTimes, snapshotIn, snapshotOf, STATE_LABELS, WORKFLOW_LABELS, WORKING_LABEL, type GhPullRequest } from '../hooks/github'
 import { pollFor, POLL_MS, waitingOn } from '../hooks/state'
 import { chooseStep, labelFor, reviewersOf, stepLines, type Step } from '../hooks/step'
 import type { BaseFacts, HeadRun, Snapshot } from '../types'
@@ -467,4 +467,199 @@ test('every merge and ask-merge text stops the merge when the fetched CLAUDE.md 
     // the reviewer off is not held by a reviewer the user's own file names.
     expect(text).toContain('The `Reviewer:` fact is the fetched base branch\'s `Reviewer:` line when that file has one, and the user\'s own `Reviewer:` line only when it has none. A line that says `none` names nobody, so `Reviewer: none` in the base branch turns the user\'s line off, and the branch\'s own CLAUDE.md never counts here.')
   }
+})
+
+// The time limits on a requested review (see
+// docs/specs/pr-comments-ends-every-comment.md). The request was made at
+// REQUESTED, and each snapshot is looked at a fixed time after it, so the
+// tests need no clock.
+
+const REQUESTED = '2026-11-05T10:00:00Z'
+const REQUESTED_MS = Date.parse(REQUESTED)
+
+// What the GraphQL read of the review-request events printed, oldest first,
+// as GitHub answers it. A request for a team has no login.
+function requestEvents(events: { login?: string; at: string }[]): string {
+  const nodes = events.map(e => ({ createdAt: e.at, requestedReviewer: e.login === undefined ? {} : { login: e.login } }))
+  return JSON.stringify({ data: { repository: { pullRequest: { timelineItems: { nodes } } } } })
+}
+
+// A snapshot where both verdicts approve and ann's review is requested,
+// looked at `after` milliseconds after the request.
+function requestedFor(after: number, labels: string[] = [], times: ReadonlyMap<string, string> = new Map([['ann', REQUESTED]])): Snapshot {
+  return snapshotOf('o/r', pullRequest({ reviewRequests: [{ __typename: 'User', login: 'ann' }], labels: labels.map(name => ({ name })) }), ME, [], {
+    headRuns: [passedRun], facts: FACTS, lookedAt: REQUESTED_MS + after,
+  }, times)
+}
+
+test('the request times keep the newest request for each login, so a new request after an earlier one counts from the new one', () => {
+  const times = requestTimesOf(requestEvents([
+    { login: 'Ann', at: '2026-11-05T09:00:00Z' },
+    { login: 'bob', at: '2026-11-05T09:30:00Z' },
+    { at: '2026-11-05T09:45:00Z' },
+    { login: 'ann', at: REQUESTED },
+    { login: 'bob', at: '2026-11-05T09:10:00Z' },
+  ]))
+  expect([...(times ?? new Map()).entries()]).toEqual([['ann', REQUESTED], ['bob', '2026-11-05T09:30:00Z']])
+})
+
+test('request times that could not be read give null, and events that are not times give none', () => {
+  expect(requestTimesOf(null)).toBeNull()
+  expect(requestTimesOf('not json')).toBeNull()
+  expect(requestTimesOf('{"data":null}')).toBeNull()
+  expect(requestTimesOf(requestEvents([]))?.size).toBe(0)
+  expect(requestTimesOf(requestEvents([{ login: 'ann', at: 'yesterday' }]))?.size).toBe(0)
+  expect(requestTimesOf(requestEvents([{ login: 'not a login', at: REQUESTED }]))?.size).toBe(0)
+})
+
+// A failed read keeps the times the stored snapshot holds at the same head,
+// so a pull request past a limit stays past it, and a stored snapshot of
+// another head or pull request keeps none.
+test('the kept request times are those the stored snapshot holds at the same head, and none for another head or pull request', () => {
+  const stored = requestedFor(3 * 60 * 60_000)
+  const kept = carriedRequestTimes(stored, stored.repo, stored.number, stored.head)
+  expect([...kept.entries()]).toEqual([['ann', REQUESTED]])
+  expect(overdueOf(requestedFor(3 * 60 * 60_000, [], kept)).arrival).toEqual(['ann'])
+  expect(carriedRequestTimes(stored, stored.repo, stored.number, 'f'.repeat(40)).size).toBe(0)
+  expect(carriedRequestTimes(stored, stored.repo, stored.number + 1, stored.head).size).toBe(0)
+  expect(carriedRequestTimes(null, stored.repo, stored.number, stored.head).size).toBe(0)
+  expect(carriedRequestTimes(requestedFor(0, [], new Map()), stored.repo, stored.number, stored.head).size).toBe(0)
+})
+
+test('the requested users leave out a team, a bot and the session\'s own login, and key the rest by the login in lower case', () => {
+  const users = requestedUsersOf([
+    { __typename: 'Team' },
+    { __typename: 'Bot', login: 'helper' },
+    { __typename: 'User', login: ME.toUpperCase() },
+    { __typename: 'User', login: 'Ann' },
+    { login: 'bob' },
+    { __typename: 'User', login: 'not a login' },
+  ], ME)
+  expect([...users.entries()]).toEqual([['ann', 'Ann'], ['bob', 'bob']])
+  expect(requestedUsersOf(undefined, ME).size).toBe(0)
+})
+
+test('only a reviewer in the Requested state carries the time of the request', () => {
+  const s = snapshotOf('o/r', pullRequest({
+    reviews: [approvedBySession, outsideReview('bob', 'APPROVED')],
+    reviewRequests: [{ __typename: 'User', login: 'Ann' }],
+  }), ME, [], { headRuns: [passedRun], facts: FACTS }, new Map([['ann', REQUESTED], ['bob', REQUESTED]]))
+  expect(s.outside).toEqual([{ login: 'Ann', state: 'requested', requestedAt: REQUESTED }, { login: 'bob', state: 'approved', at: T1 }])
+})
+
+test('reviewer-working is a workflow label and not a state label', () => {
+  expect(WORKING_LABEL).toBe('reviewer-working')
+  expect(WORKFLOW_LABELS.has(WORKING_LABEL)).toBe(true)
+  expect((STATE_LABELS as readonly string[]).includes(WORKING_LABEL)).toBe(false)
+})
+
+test('reviewer-working going on or coming off leaves the fingerprint unchanged and names no change', () => {
+  const off = requestedFor(60_000)
+  const on = requestedFor(60_000, [WORKING_LABEL])
+  expect(on.fingerprint).toBe(off.fingerprint)
+  expect(changesBetween(off, on)).toEqual(['The pull request changed in a way the lines below show.'])
+})
+
+test('the time of the request and of the look stay out of the fingerprint until a limit passes', () => {
+  const early = requestedFor(60_000)
+  const later = requestedFor(PICK_UP_MS - 1, [], new Map([['ann', '2026-11-05T10:00:30Z']]))
+  expect(later.fingerprint).toBe(early.fingerprint)
+  expect(fingerprintOf({ ...early, outside: [{ login: 'ann', state: 'requested' }] })).toBe(early.fingerprint)
+})
+
+test('crossing the ten-minute limit and then the two-hour limit each change the fingerprint and name the change', () => {
+  const before = requestedFor(PICK_UP_MS - 1, [WORKING_LABEL])
+  const pickUp = requestedFor(PICK_UP_MS)
+  const working = requestedFor(PICK_UP_MS, [WORKING_LABEL])
+  const arrival = requestedFor(ARRIVAL_MS, [WORKING_LABEL])
+  expect(new Set([before, pickUp, arrival].map(s => s.fingerprint)).size).toBe(3)
+  expect(working.fingerprint).toBe(before.fingerprint)
+  expect(changesBetween(before, pickUp)).toEqual(['ann has not picked up the review request ten minutes after it was made, and the pull request does not carry reviewer-working.'])
+  expect(changesBetween(working, arrival)).toEqual(['The review of ann has not arrived two hours after it was requested.'])
+})
+
+test('a reviewer leaving a time limit\'s list, with none joining one, is named as fewer reviews past a limit', () => {
+  const pickUp = requestedFor(PICK_UP_MS)
+  const working = requestedFor(PICK_UP_MS, [WORKING_LABEL])
+  expect(changesBetween(pickUp, working)).toContain('Fewer requested reviews are past a time limit than at the last look.')
+  expect(changesBetween(working, working)).not.toContain('Fewer requested reviews are past a time limit than at the last look.')
+})
+
+test('a limit changes the fingerprint only while both verdicts approve', () => {
+  const pending = (after: number) => snapshotOf('o/r', pullRequest({ reviews: [], reviewRequests: [{ __typename: 'User', login: 'ann' }] }), ME, [], {
+    headRuns: [passedRun], facts: FACTS, lookedAt: REQUESTED_MS + after,
+  }, new Map([['ann', REQUESTED]]))
+  expect(pending(ARRIVAL_MS).fingerprint).toBe(pending(0).fingerprint)
+})
+
+test('the overdue reviewers: ten minutes without reviewer-working to pick up, two hours to arrive with or without it', () => {
+  expect(overdueOf(requestedFor(PICK_UP_MS - 1))).toEqual({ arrival: [], pickUp: [] })
+  expect(overdueOf(requestedFor(PICK_UP_MS))).toEqual({ arrival: [], pickUp: ['ann'] })
+  expect(overdueOf(requestedFor(PICK_UP_MS, [WORKING_LABEL]))).toEqual({ arrival: [], pickUp: [] })
+  expect(overdueOf(requestedFor(ARRIVAL_MS, [WORKING_LABEL]))).toEqual({ arrival: ['ann'], pickUp: [] })
+  expect(overdueOf(requestedFor(ARRIVAL_MS))).toEqual({ arrival: ['ann'], pickUp: [] })
+})
+
+// The stuck label that the two-hour step gives takes reviewer-working off, so
+// the look after that one sees a reviewer past two hours without the label. A
+// reviewer past the two-hour limit is in the arrival list only, so that look
+// neither says the reviewer has not picked the request up nor wakes the
+// session again.
+test('a reviewer past two hours is in the arrival list only, so reviewer-working coming off then changes nothing', () => {
+  const labelled = requestedFor(ARRIVAL_MS, [WORKING_LABEL])
+  const unlabelled = requestedFor(ARRIVAL_MS + 10 * 60_000)
+  expect(overdueOf(unlabelled)).toEqual({ arrival: ['ann'], pickUp: [] })
+  expect(unlabelled.fingerprint).toBe(labelled.fingerprint)
+  expect(changesBetween(labelled, unlabelled)).toEqual(['The pull request changed in a way the lines below show.'])
+})
+
+// chooseStep names the over-limit step, the /code-review pass, a conflict, a
+// failed check or run, an outside reviewer's feedback and a review still to
+// request before the limit steps, so a reviewer past a limit counts only
+// where a limit step can be named, and crossing a limit while another step
+// applies leaves the fingerprint as it was.
+test('the overdue reviewers count only where the step chooser can name a limit step', () => {
+  const approved = requestedFor(ARRIVAL_MS)
+  const none = { arrival: [], pickUp: [] }
+  const unreviewed = (snapshot: Snapshot): Snapshot => {
+    const { codeReviewed: _, ...rest } = snapshot
+    return rest
+  }
+  expect(chooseStep(approved, false).kind).toBe('review-not-arrived')
+  expect(overdueAtLimitStep(approved)).toEqual({ arrival: ['ann'], pickUp: [] })
+  const elsewhere: Snapshot[] = [
+    { ...approved, facts: { ...FACTS, maxPushes: 0 }, pushesSinceVerdict: 1 },
+    { ...approved, facts: { ...FACTS, maxRounds: 0 }, headsReviewed: 1 },
+    { ...approved, verdicts: null },
+    unreviewed(approved),
+    { ...approved, mergeable: 'CONFLICTING' as const },
+    { ...approved, checks: [{ name: 'build', state: 'failed' as const }] },
+    { ...approved, headRuns: [{ ...passedRun, conclusion: 'failure' }] },
+    { ...approved, outside: [{ login: 'bob', state: 'feedback' as const }, ...(approved.outside ?? [])] },
+    { ...approved, outside: [{ login: 'bob', state: 'unrequested' as const }, ...(approved.outside ?? [])] },
+  ]
+  for (const s of elsewhere) {
+    expect(chooseStep(s, false).kind).not.toBe('review-not-arrived')
+    expect(overdueAtLimitStep(s)).toEqual(none)
+  }
+  const beforeLimit = unreviewed(requestedFor(PICK_UP_MS - 1))
+  const afterLimit = unreviewed(requestedFor(ARRIVAL_MS))
+  expect(chooseStep(afterLimit, false).kind).toBe('code-review')
+  expect(fingerprintOf(afterLimit)).toBe(fingerprintOf(beforeLimit))
+})
+
+test('a request time that could not be read, or a snapshot with no time of its look, is never overdue', () => {
+  expect(overdueOf(requestedFor(ARRIVAL_MS, [], new Map()))).toEqual({ arrival: [], pickUp: [] })
+  const { lookedAt: _, ...unlooked } = requestedFor(ARRIVAL_MS)
+  expect(overdueOf(unlooked)).toEqual({ arrival: [], pickUp: [] })
+  expect(overdueOf({ ...requestedFor(ARRIVAL_MS), outside: [{ login: 'ann', state: 'requested', requestedAt: 'yesterday' }] })).toEqual({ arrival: [], pickUp: [] })
+})
+
+test('a stored snapshot keeps the time of each request and of the look', () => {
+  const s = requestedFor(ARRIVAL_MS)
+  const stored = JSON.parse(JSON.stringify(s)) as unknown
+  expect(snapshotIn(stored)?.lookedAt).toBe(REQUESTED_MS + ARRIVAL_MS)
+  expect(outsideIn((stored as Snapshot).outside)).toEqual([{ login: 'ann', state: 'requested', requestedAt: REQUESTED }])
+  expect(outsideIn([{ login: 'ann', state: 'requested', requestedAt: 7 }])).toEqual([{ login: 'ann', state: 'requested' }])
+  expect(overdueOf(snapshotIn(stored)!)).toEqual({ arrival: ['ann'], pickUp: [] })
 })

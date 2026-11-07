@@ -379,8 +379,11 @@ head** give `in-review`; the failed, conflicting and changes-requested steps, an
 address, give `waiting-on-author`; the steps that request the outside review
 and wait on it give `waiting-on-reviewer`, because an outside reviewer holds
 the merge there; the other steps where both verdicts approve, where nobody
-holds the merge, give `ready-to-merge`; **Over a limit** and **Closed** give
-`stuck`. The session
+holds the merge, give `ready-to-merge`; **Over a limit**, **Closed**, and the
+two steps where a requested outside review ran past its limit (**Both
+verdicts approve at this head, but the outside review was not picked up within
+ten minutes** and **Both verdicts approve at this head, but the outside review
+has not arrived within two hours**) give `stuck`. The session
 puts `stuck` on by its own judgement only when a step's text asks for it, such
 as a failure outside the code or a person declining to merge without checks,
 and then only by calling `mcp__builder__set_stuck`. It never edits a state
@@ -417,6 +420,23 @@ follows from the step changes. The mod manages `needs-decision` itself; it is no
 tell who put that label on, so a `needs-decision` label that a person or
 another tool put on also comes off once the session's question is
 answered.
+
+`reviewer-working` is not a state label either. It sits beside the state
+labels, as `needs-decision` does, and never replaces `waiting-on-reviewer`. An
+automated outside reviewer puts it on when it picks a review request up, to
+show that it is working on the review, and the mod reads it at every look.
+The mod never removes it while the label that follows from the step is
+`waiting-on-reviewer`. When the mod sets any other state label, it also takes
+`reviewer-working` off, so a reviewer that forgets to remove it cannot leave
+it behind. When the session asks for an outside review, the mod creates the
+label if the repository lacks it, as it does for the state labels, so the
+reviewer can put it on. Like the other workflow labels, it is not itself part
+of the pull request's fingerprint, the summary of its state that the mod
+compares between looks, so putting it on or taking it off starts no turn, with
+one exception: once ten minutes have passed since the request, while the mod
+can name the ten-minute step, the label moves a reviewer into or out of that
+step, and that change starts a turn. The session never puts it on or takes it
+off.
 
 ### Outside reviewers
 
@@ -464,7 +484,7 @@ Each outside reviewer is in one of four states, decided in this order:
 The outside reviewers matter only once both of the session's own verdicts
 approve at the head. Before that, their reviews wait until the session's own
 review round has finished, so the two never interleave. Once both verdicts
-approve, the mod chooses the first of these three steps that applies, before
+approve, the mod chooses the first of these five steps that applies, before
 waiting on checks, merging, or asking whether to merge without checks:
 
 - **Both verdicts approve at this head, and an outside review has feedback to
@@ -474,9 +494,18 @@ waiting on checks, merging, or asking whether to merge without checks:
   reviews, and the pull request's conversation comments. Verify each one,
   prove a real one with a failing test, fix it, push, reply in the thread with
   the fix commit, resolve the threads that are closed, and push back with
-  evidence on the wrong ones. A comment that asks for work outside the spec
-  gets a reply that says so, and goes on the `To file:` list of the next
-  verdict review. Then ask for their review again with
+  evidence on the wrong ones. A wrong comment is disproved with a passing test
+  as step 8 of `/pr-comments` says, and a rejected comment that the reviewer
+  raises again goes to the counsel, or to the person, for a ruling as its
+  step 9 says. When a ruling goes against an outside reviewer, follow that
+  step's rule for a reviewer who holds the merge: never override, dismiss or
+  work around their review, ask for it again, and ask the person whether to
+  keep waiting or to override or dismiss it themselves on GitHub. A question
+  the session asked in a thread that still has no answer when this reviewer's
+  next review arrives goes to the person, as the same step says. A comment
+  that asks for work outside the spec gets a reply that says so, and goes on
+  the `To file:` list of the next verdict review. Then ask for their review
+  again with
   `gh pr edit <n> --add-reviewer <logins>`, the logins separated by commas,
   such as `alice,bob`. After a push, go on as after any push, so the
   session's own review round reviews the new head. With nothing pushed, call
@@ -485,12 +514,62 @@ waiting on checks, merging, or asking whether to merge without checks:
   outside reviewer is in the Unrequested state. It gives `waiting-on-reviewer`. Run
   `gh pr edit <n> --add-reviewer <logins>`, and then call
   `mcp__builder__watch` and follow the step it names.
+- **Both verdicts approve at this head, but the outside review has not arrived
+  within two hours**, when an outside reviewer is still in the Requested state
+  two hours after the newest request, whether or not the pull request carries
+  `reviewer-working`. It gives `stuck`.
+- **Both verdicts approve at this head, but the outside review was not picked
+  up within ten minutes**, when an outside reviewer is still in the Requested
+  state ten minutes after the newest request and the pull request does not
+  carry `reviewer-working`. It gives `stuck`.
 - **Both verdicts approve at this head, waiting on the outside review**, when
-  any outside reviewer is in the Requested state. It gives `waiting-on-reviewer`.
+  any outside reviewer is in the Requested state and neither limit has
+  passed. It gives `waiting-on-reviewer`.
   Say whose review the session waits on and end the turn. While a review is
   requested, or the pull request carries `waiting-on-reviewer`, the mod looks
   at the pull request every 5 minutes, and it starts a turn when the review
   arrives.
+
+**The limits on a requested review.** No pull request waits forever on a
+review that never comes. While an outside reviewer is in the Requested state,
+the mod counts from the newest time that reviewer's review was requested, as
+GitHub records it, and applies two limits:
+
+- **Ten minutes to pick up.** A reviewer that picks the request up puts
+  `reviewer-working` on the pull request, as "State labels" describes. When
+  the label is not on ten minutes after the request, the mod names the
+  pick-up step. The limit counts from the request, so a label that goes on
+  and comes off again with no review does not restart it.
+- **Two hours to arrive.** When the review has not arrived two hours after the
+  request, the mod names the arrival step, whether or not the label is on, so
+  a reviewer that put the label on and then stopped cannot hold the pull
+  request forever.
+
+Both limits are the same for every outside reviewer, person or bot, because
+the mod cannot reliably tell the two apart. The mod cannot tell who put
+`reviewer-working` on, so when two outside reviewers are requested, the label
+counts as picked up for both, and the two-hour limit still applies to each. A
+reviewer who posts a review leaves the Requested state, so no limit applies to
+them any more. When the mod cannot read the request times, it keeps the time
+an earlier look read for that reviewer at the same head and applies the limits
+from it, so a pull request already past a limit stays `stuck`. A reviewer
+whose request time no look has read gets no limit at that look, so the mod
+never names either step on a time it never read. The mod looks every five minutes while a review is
+requested, so either step can come up to five minutes after its limit passes.
+
+On either step, the step's text names the reviewer and the limit that passed.
+Ask the person, in one question, whether to ask for the review again or to
+leave it to them on GitHub. Asking again means removing the request and
+adding it back, which GitHub records as a new request, so both limits count
+afresh from it: run `gh pr edit <n> --remove-reviewer <login>`, then
+`gh pr edit <n> --add-reviewer <login>`, and then call `mcp__builder__watch`
+and follow the step it names. When the person has already said to keep
+waiting on this request, say so and end the turn without asking again. The
+mod starts one turn when the ten-minute limit passes and another when the
+two-hour limit passes, so a person who said to keep waiting at ten minutes is
+asked again at two hours. A question the session asked this reviewer in a
+thread that still has no answer when either step comes up goes to the person
+in the same question, as step 9 of `/pr-comments` says.
 
 Only when every outside reviewer approves, or there are none, does the mod go
 on to the other steps where both verdicts approve.
@@ -521,11 +600,20 @@ approved, merge nothing and end the turn. A look that could not read the file
 left out a reviewer whom only the project names, and the next look that reads
 it names them again.
 
+Before merging, also read the pull request's review threads, as step 1 of
+`/pr-comments` does, and check for a question the session asked an other
+reviewer that still has no answer. An other reviewer is never asked for their
+review again, so nothing else would bring that question back. When one is
+open, ask the person, naming the thread and the question, and do not merge
+unless they say to. The merge steps' text names this check too.
+
 The mod sets the state label for each of these steps, as "State labels" says.
 So when an outside review arrives the label becomes `waiting-on-author`,
 whether or not the reviewer moved it by hand, and once the session has
 answered and asked again the label goes back to `waiting-on-reviewer`. It
-becomes `ready-to-merge` only once every outside reviewer approves. The session
+becomes `ready-to-merge` only once every outside reviewer approves. On the two
+steps where a requested review ran past its limit, the mod puts `stuck` on
+itself, and the session sets nothing. The session
 sets no state label for any of this, except `stuck` in three cases, where it
 sets it with `mcp__builder__set_stuck` as "State labels" says and asks the person, so that it never asks for
 a review in a loop:
