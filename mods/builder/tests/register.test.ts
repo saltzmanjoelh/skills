@@ -3374,7 +3374,7 @@ test('the first refused counsel path decides the message, in either order of a d
   expect([...files.keys()].some(path => path.includes('/counsel/'))).toBe(false)
 })
 
-test('a counsel path with a part made only of dots and spaces is refused before its link is followed, so it gets the dotted message', async ($, on) => {
+test('a counsel path with a part made only of dots and spaces that is also a link outside the checkout gets the dotted message, not the message for leading outside', async ($, on) => {
   mock.clock(on)
   mock.store(on)
   engine(on)
