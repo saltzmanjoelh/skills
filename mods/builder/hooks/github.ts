@@ -561,20 +561,21 @@ export const REQUEST_TIMES_QUERY = 'query($owner: String!, $name: String!, $numb
 // case, from what the query above printed. Only the newest time for each login
 // is kept, compared as times, so asking a reviewer again counts from the new
 // request. An event whose login does not pass isLogin, or whose time cannot be
-// read, is left out. Output that is missing or cannot be parsed gives no
-// times, so no time limit applies at that look, and the next look reads again.
-export function requestTimesOf(out: string | null): Map<string, string> {
-  const times = new Map<string, string>()
-  if (out === null) return times
+// read, is left out. Output that is missing, cannot be parsed or holds no list
+// of events is a read that failed, and gives null, so the look can keep the
+// times an earlier look read (see carriedRequestTimes).
+export function requestTimesOf(out: string | null): Map<string, string> | null {
+  if (out === null) return null
   let raw: unknown
   try {
     raw = JSON.parse(out)
   } catch {
-    return times
+    return null
   }
   const nodes = (raw as { data?: { repository?: { pullRequest?: { timelineItems?: { nodes?: unknown } } } } } | null)
     ?.data?.repository?.pullRequest?.timelineItems?.nodes
-  if (!Array.isArray(nodes)) return times
+  if (!Array.isArray(nodes)) return null
+  const times = new Map<string, string>()
   for (const node of nodes) {
     if (typeof node !== 'object' || node === null) continue
     const n = node as { createdAt?: unknown; requestedReviewer?: { login?: unknown } | null }
@@ -583,6 +584,21 @@ export function requestTimesOf(out: string | null): Map<string, string> {
     const key = login.toLowerCase()
     const seen = times.get(key)
     if (seen === undefined || Date.parse(seen) < Date.parse(n.createdAt)) times.set(key, n.createdAt)
+  }
+  return times
+}
+
+// The request times a look keeps when its read of them failed: those the
+// stored snapshot of the same pull request at the same head holds (see
+// sameHeadSnapshot), keyed by the login in lower case, and otherwise none.
+// The stored snapshot holds a time only for a reviewer who was requested at
+// that look, and outsideOf attaches a kept time only to a reviewer who is
+// still requested, so a reviewer whose time no look ever read gets no limit.
+// The next read that succeeds replaces the kept times.
+export function carriedRequestTimes(stored: unknown, repo: string, number: number, head: string): Map<string, string> {
+  const times = new Map<string, string>()
+  for (const r of sameHeadSnapshot(stored, repo, number, head)?.outside ?? []) {
+    if (typeof r.requestedAt === 'string' && r.requestedAt !== '') times.set(r.login.toLowerCase(), r.requestedAt)
   }
   return times
 }

@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { ARRIVAL_MS, changesBetween, fingerprintOf, isLogin, othersIn, othersOf, outsideIn, outsideOf, overdueOf, overdueWhileApproved, PICK_UP_MS, PR_FIELDS, requestedUsersOf, requestTimesOf, snapshotIn, snapshotOf, STATE_LABELS, WORKFLOW_LABELS, WORKING_LABEL, type GhPullRequest } from '../hooks/github'
+import { ARRIVAL_MS, changesBetween, fingerprintOf, isLogin, othersIn, othersOf, outsideIn, outsideOf, overdueOf, overdueWhileApproved, PICK_UP_MS, PR_FIELDS, requestedUsersOf, requestTimesOf, carriedRequestTimes, snapshotIn, snapshotOf, STATE_LABELS, WORKFLOW_LABELS, WORKING_LABEL, type GhPullRequest } from '../hooks/github'
 import { pollFor, POLL_MS, waitingOn } from '../hooks/state'
 import { chooseStep, labelFor, reviewersOf, stepLines, type Step } from '../hooks/step'
 import type { BaseFacts, HeadRun, Snapshot } from '../types'
@@ -500,15 +500,30 @@ test('the request times keep the newest request for each login, so a new request
     { login: 'ann', at: REQUESTED },
     { login: 'bob', at: '2026-11-05T09:10:00Z' },
   ]))
-  expect([...times.entries()]).toEqual([['ann', REQUESTED], ['bob', '2026-11-05T09:30:00Z']])
+  expect([...(times ?? new Map()).entries()]).toEqual([['ann', REQUESTED], ['bob', '2026-11-05T09:30:00Z']])
 })
 
-test('request times that could not be read, or that are not times, give none', () => {
-  expect(requestTimesOf(null).size).toBe(0)
-  expect(requestTimesOf('not json').size).toBe(0)
-  expect(requestTimesOf('{"data":null}').size).toBe(0)
-  expect(requestTimesOf(requestEvents([{ login: 'ann', at: 'yesterday' }])).size).toBe(0)
-  expect(requestTimesOf(requestEvents([{ login: 'not a login', at: REQUESTED }])).size).toBe(0)
+test('request times that could not be read give null, and events that are not times give none', () => {
+  expect(requestTimesOf(null)).toBeNull()
+  expect(requestTimesOf('not json')).toBeNull()
+  expect(requestTimesOf('{"data":null}')).toBeNull()
+  expect(requestTimesOf(requestEvents([]))?.size).toBe(0)
+  expect(requestTimesOf(requestEvents([{ login: 'ann', at: 'yesterday' }]))?.size).toBe(0)
+  expect(requestTimesOf(requestEvents([{ login: 'not a login', at: REQUESTED }]))?.size).toBe(0)
+})
+
+// A failed read keeps the times the stored snapshot holds at the same head,
+// so a pull request past a limit stays past it, and a stored snapshot of
+// another head or pull request keeps none.
+test('the kept request times are those the stored snapshot holds at the same head, and none for another head or pull request', () => {
+  const stored = requestedFor(3 * 60 * 60_000)
+  const kept = carriedRequestTimes(stored, stored.repo, stored.number, stored.head)
+  expect([...kept.entries()]).toEqual([['ann', REQUESTED]])
+  expect(overdueOf(requestedFor(3 * 60 * 60_000, [], kept)).arrival).toEqual(['ann'])
+  expect(carriedRequestTimes(stored, stored.repo, stored.number, 'f'.repeat(40)).size).toBe(0)
+  expect(carriedRequestTimes(stored, stored.repo, stored.number + 1, stored.head).size).toBe(0)
+  expect(carriedRequestTimes(null, stored.repo, stored.number, stored.head).size).toBe(0)
+  expect(carriedRequestTimes(requestedFor(0, [], new Map()), stored.repo, stored.number, stored.head).size).toBe(0)
 })
 
 test('the requested users leave out a team, a bot and the session\'s own login, and key the rest by the login in lower case', () => {

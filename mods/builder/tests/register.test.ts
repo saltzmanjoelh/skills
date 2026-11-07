@@ -17607,6 +17607,28 @@ test('a request time that could not be read sets no stuck, and once it is read t
   expect(labelNames(world)).toEqual(['stuck'])
 })
 
+// A read of the request times that fails after a limit passed keeps the time
+// an earlier look read, so the pull request stays stuck and the labels are
+// not edited back and forth.
+test('a request time read that fails after a limit passed keeps stuck and edits no label', async ($, on) => {
+  const clock = mock.clock(on)
+  memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  atAwaitingStep(world)
+  world.requestEvents = [{ login: 'ann', at: new Date(clock.now() - 3 * 60 * 60_000).toISOString() }]
+  await watch($)
+  await clock.settle()
+  expect(labelNames(world)).toEqual(['stuck'])
+  const edits = labelEdits(world).length
+
+  world.requestTimesFail = true
+  await clock.advance(10 * 60_000)
+  expect(timelineReads(world).length).toBeGreaterThan(1)
+  expect(labelNames(world)).toEqual(['stuck'])
+  expect(labelEdits(world).length).toBe(edits)
+})
+
 test('a review requested from nobody reads no request times', async ($, on) => {
   const clock = mock.clock(on)
   memoryStore(on)

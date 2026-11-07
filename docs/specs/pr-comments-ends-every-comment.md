@@ -218,9 +218,13 @@ on purpose, what it waits on.
 - **The threads cannot be read when a package is built.** The package says so,
   and the session's reviewers may raise a ruled point again; the session drops
   it as a repeat by reading the thread itself.
-- **The request time cannot be read.** The mod applies no limit at that look
-  and tries again at the next one; it never sets `stuck` on a time it could not
-  read.
+- **The request time cannot be read.** The mod keeps the request time that an
+  earlier look read for that reviewer at the same head, and applies the limits
+  from it, so a pull request already past a limit stays `stuck` and no turn
+  starts for a passing failure. A reviewer whose request time no look has read
+  gets no limit at that look, so the mod never sets `stuck` on a time it never
+  read. The next look reads again, and a read that succeeds replaces the kept
+  time.
 - **Creating `reviewer-working` fails.** The mod tries again at its next look,
   as for a state label; a reviewer that cannot put the label on runs into the
   ten-minute limit and the session asks the person.
@@ -237,6 +241,7 @@ on purpose, what it waits on.
 - When the counsel or the person rules on a disputed comment from an outside or other reviewer, where is the ruling recorded so that the package's `## Already decided` section lists it, and the same point cannot come back from the session's own reviewers or the outside reviewer without new evidence? The counsel chose: In the thread itself: the session's reply that records a ruling starts with a fixed line such as `Ruling: <the ruling>`, and the mod reads the pull request's review threads when it builds a package and lists each such reply in `## Already decided` beside the commit and review lists. Needs mod code and a GraphQL read of the threads, but costs no push and is listed at once. 5 of 7 members voted for it.
 - When the session asks a reviewer a question in a review thread (a comment it cannot classify, or a request for the evidence behind a repeated claim) and the reviewer does not answer, when does that question go to the person? The counsel chose: No clock of its own. For an outside reviewer, the question goes to the person when that reviewer's next review arrives with no reply in the thread, or when the requested-review limits (ten minutes to pick up, two hours to arrive) set stuck. For an other reviewer, who is never asked again, it goes to the person at the merge step, before merging. Only skill text changes. 6 of 7 members voted for it.
 - What does this change leave out, and does it ship all four parts of the issue in one pull request? The counsel chose: All four parts in one pull request (disproving tests, the tie-breaker, closing decided threads with Ruling: replies read into Already decided, and the requested-review limits with the reviewer-working label). Left out: a project setting that marks a reviewer as one that never holds the merge; the session overriding or dismissing an outside review itself (it only asks the person); any change to the foreman mod; any change to how the session's own builder reviewers handle repeats, which already works. 5 of 7 members voted for it.
+- When the mod cannot read a requested review's request time at one look, while the pull request already carries `stuck` because a time limit passed, what should that look do? The counsel chose: Amend the failure mode so a failed read keeps the request time stored from an earlier look and applies the limits from it; only a time never read applies no limit. 5 of 7 members voted for it.
 
 ## Verification
 
@@ -249,8 +254,10 @@ on purpose, what it waits on.
   clock: before ten minutes, the waiting step; after ten minutes without the
   label, the pick-up step; after ten minutes with the label, the waiting step;
   after two hours with the label, the arrival step; a new request after an
-  earlier one counts from the new one; a request time that could not be read
-  gives the waiting step. Both new steps give `stuck`.
+  earlier one counts from the new one; a request time that no look has read
+  gives the waiting step; a failed read after a limit passed keeps the time an
+  earlier look read, so the pull request stays `stuck`. Both new steps give
+  `stuck`.
 - Unit tests for `reviewer-working`: it is a workflow label and not a state
   label, it leaves the fingerprint unchanged, setting `waiting-on-reviewer`
   keeps it, and setting any other state label removes it.

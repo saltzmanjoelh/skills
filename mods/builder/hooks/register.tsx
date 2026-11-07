@@ -10,7 +10,7 @@ import { checkoutSentence, otherRepositorySentence, worktreeWithBranch, type Che
 // handed to the session.
 import { afterCompaction, afterFailure, checkoutIn, compactionFacts, compactionsIn, isDue, measureIn, measureOf, owing, told as afterReloadTold, withFacts, type UsageRead } from './context'
 import { afterAskAgain, afterTally, askAgainAnswer, briefAnswer, briefFactsOf, briefRefusal, briefText, counselAnswer, decisionLine, destinationOf, endedDecisionLines, FOLLOW_UP_OPTIONS, followUpAnswer, followUpAskAgainAnswer, followUpsInput, followUpsRefusal, followUpStepOf, followUpVotesOf, keepCounsel, MAX_BRIEF_OPTIONS, MAX_FOLLOW_UPS, MIN_OPTIONS, neverStartedCandidatesOf, neverStartedOf, type PullRequestRef, reviewParagraph, stepOf, type UnreadableVote, votesOf } from './counsel'
-import { bothApprove, carriedHeadRuns, carriedRuns, changesBetween, DECISION_LABEL, headRunsOf, headVerdictsOf, isChangesRequested, isCiMonitorEvent, isSameState, JOBS_JQ, needsJobs, PR_FIELDS, pullRequestStateIn, realWorkOf, REQUEST_TIMES_QUERY, requestedUsersOf, requestTimesOf, roundInProgress, RUNS_JQ, sessionVerdictsOf, snapshotIn, snapshotOf, unfinishedOf, verdictsOf, WORKING_LABEL, type BaseFacts, type GhPullRequest, type HeadRun, type Snapshot, type SnapshotExtras, type StateLabel, type Unpushed, type Verdict } from './github'
+import { bothApprove, carriedHeadRuns, carriedRequestTimes, carriedRuns, changesBetween, DECISION_LABEL, headRunsOf, headVerdictsOf, isChangesRequested, isCiMonitorEvent, isSameState, JOBS_JQ, needsJobs, PR_FIELDS, pullRequestStateIn, realWorkOf, REQUEST_TIMES_QUERY, requestedUsersOf, requestTimesOf, roundInProgress, RUNS_JQ, sessionVerdictsOf, snapshotIn, snapshotOf, unfinishedOf, verdictsOf, WORKING_LABEL, type BaseFacts, type GhPullRequest, type HeadRun, type Snapshot, type SnapshotExtras, type StateLabel, type Unpushed, type Verdict } from './github'
 import { isLinkedStale, LINKED_PREFIX, linkedCheckout, linkedKey, recordedLinked } from './linked'
 import { ignoredLine, readIssueLink } from './links'
 import { afterComparison, afterLoad, dueComparisons, isStale, LOADED_PATHS, loadBegunAs, loadBegunIn, loadedIn, type Found } from './loaded'
@@ -454,13 +454,19 @@ async function carriedSnapshot($: $, r: SnapshotTarget, live: GhPullRequest, ext
 // The verdicts are worked out from the same read of the pull request that
 // snapshotOf works them out from, so the two never differ. A repository that
 // is not a plain owner and name, a failed read and output that cannot be
-// parsed all give no times, so no limit applies at that look and the next
-// look reads again. It never throws, because gh answers null on any failure.
+// parsed all keep the times the stored snapshot holds for the same head (see
+// carriedRequestTimes), so a pull request already past a limit stays stuck,
+// and a reviewer whose time no look has read gets no limit at that look. The
+// next look reads again. It never throws, because gh answers null on any
+// failure and a store that cannot be read keeps no times.
 async function readRequestTimes($: $, r: SnapshotTarget, live: GhPullRequest): Promise<Map<string, string>> {
   if (!bothApprove(headVerdictsOf(sessionVerdictsOf(live, r.login), live.headRefOid))) return new Map()
   if (requestedUsersOf(live.reviewRequests, r.login).size === 0) return new Map()
   const out = await pullRequestGraphql($, r.cwd, r.repo, live.number, REQUEST_TIMES_QUERY)
-  return requestTimesOf(out)
+  const times = requestTimesOf(out)
+  if (times !== null) return times
+  const stored = await read($, pr).catch(() => null)
+  return carriedRequestTimes(stored, r.repo, live.number, live.headRefOid)
 }
 
 // Runs one GraphQL query about a pull request, giving it the repository's
@@ -3646,7 +3652,7 @@ async function settleStateLabel($: $, { expected, trustsSnapshotLabels }: { expe
     if (!(await addLabel($, r, derived, action.remove))) return 'failed'
     // From here the new label is on, so the judgement has ended on the pull
     // request even when what follows fails and the next look ends it again.
-    if (!(await removeOtherStateLabels($, r, derived))) return 'ended'
+    if (!(await removeLabelsBeside($, r, derived))) return 'ended'
   }
   if (action.kind === 'record' && action.remove.length > 0 && !(await removeLabels($, r, action.remove))) return 'ended'
   try {
@@ -3707,7 +3713,7 @@ async function saveLabelRecord($: $, key: string, replaced: StateLabel | undefin
 // the removal succeeded, and false when either failed, so the record is not
 // saved and the next look tries again. The labels removed are on the pull
 // request, so they exist in the repository.
-async function removeOtherStateLabels($: $, r: BuilderRun, added: StateLabel): Promise<boolean> {
+async function removeLabelsBeside($: $, r: BuilderRun, added: StateLabel): Promise<boolean> {
   const live = await liveLabelNames($, r)
   if (live === null) return false
   const others = labelsRemovedWith(added, added, live)

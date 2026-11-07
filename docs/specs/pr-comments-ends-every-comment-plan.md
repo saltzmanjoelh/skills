@@ -74,7 +74,7 @@ the time the look happened, so the tests get a fixed clock without a fake.
   `otherStateLabelsOf` itself is unchanged, so the `isStuckAloneInSnapshot`
   shortcut keeps working and the mod never fights a reviewer that put the
   label on.
-- `labelActionOf`'s write, keep and record paths and `removeOtherStateLabels`
+- `labelActionOf`'s write, keep and record paths and `removeLabelsBeside`
   use the new helper. `LabelAction.remove` stays a list. A label is removed
   only when the live read saw it, because removing a label the repository
   lacks fails the whole edit. A failed removal saves no record, so the next
@@ -184,7 +184,7 @@ the time the look happened, so the tests get a fixed clock without a fake.
 4. `review.ts`: `rulingsOf`, `decidedItems` and `decidedSection`, each test
    first.
 5. `register.tsx`: the request-time read, `ensureWorkingLabel`, the label
-   queue, `removeOtherStateLabels` and the thread read in `servePackage`,
+   queue, `removeLabelsBeside` and the thread read in `servePackage`,
    with the fake made to track missing labels by name and to answer the two
    new reads.
 6. The skill text and the README.
