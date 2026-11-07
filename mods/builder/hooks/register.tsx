@@ -10,7 +10,7 @@ import { checkoutSentence, otherRepositorySentence, worktreeWithBranch, type Che
 // handed to the session.
 import { afterCompaction, afterFailure, checkoutIn, compactionFacts, compactionsIn, isDue, measureIn, measureOf, owing, told as afterReloadTold, withFacts, type UsageRead } from './context'
 import { afterAskAgain, afterTally, askAgainAnswer, briefAnswer, briefFactsOf, briefRefusal, briefText, counselAnswer, decisionLine, destinationOf, endedDecisionLines, FOLLOW_UP_OPTIONS, followUpAnswer, followUpAskAgainAnswer, followUpsInput, followUpsRefusal, followUpStepOf, followUpVotesOf, keepCounsel, MAX_BRIEF_OPTIONS, MAX_FOLLOW_UPS, MIN_OPTIONS, neverStartedCandidatesOf, neverStartedOf, type PullRequestRef, reviewParagraph, stepOf, type UnreadableVote, votesOf } from './counsel'
-import { bothApprove, carriedHeadRuns, carriedRequestTimes, carriedRuns, changesBetween, DECISION_LABEL, headRunsOf, headVerdictsOf, isChangesRequested, isCiMonitorEvent, isSameState, JOBS_JQ, needsJobs, PR_FIELDS, pullRequestStateIn, realWorkOf, REQUEST_TIMES_QUERY, requestedUsersOf, requestTimesOf, roundInProgress, RUNS_JQ, sessionVerdictsOf, snapshotIn, snapshotOf, unfinishedOf, UNREAD_FACTS, verdictsOf, WORKING_LABEL, type BaseFacts, type GhPullRequest, type HeadRun, type Snapshot, type SnapshotExtras, type StateLabel, type Unpushed, type Verdict } from './github'
+import { bothApprove, carriedHeadRuns, carriedRequestTimes, carriedRuns, changesBetween, DECISION_LABEL, headRunsOf, headVerdictsOf, isChangesRequested, isCiMonitorEvent, isSameState, JOBS_JQ, needsJobs, outsideIn, PR_FIELDS, pullRequestStateIn, realWorkOf, REQUEST_TIMES_QUERY, requestedUsersOf, requestTimesOf, roundInProgress, RUNS_JQ, sessionVerdictsOf, snapshotIn, snapshotOf, unfinishedOf, UNREAD_FACTS, verdictsOf, WORKING_LABEL, type BaseFacts, type GhPullRequest, type HeadRun, type Snapshot, type SnapshotExtras, type StateLabel, type Unpushed, type Verdict } from './github'
 import { isLinkedStale, LINKED_PREFIX, linkedCheckout, linkedKey, recordedLinked } from './linked'
 import { ignoredLine, readIssueLink } from './links'
 import { afterComparison, afterLoad, dueComparisons, isStale, LOADED_PATHS, loadBegunAs, loadBegunIn, loadedIn, type Found } from './loaded'
@@ -3543,13 +3543,25 @@ function requestStateLabel($: $) {
   })
 }
 
-// The repositories this copy of the module knows to have reviewer-working, so
-// a look at a repository that has it reads nothing more while the step stays
-// on an outside review. A repository is forgotten at the first look whose step
-// needs no label, so each new request checks the label once again, and a label
-// someone deleted in between is created again. A reload forgets them too,
-// which costs one read of the label at the next such look.
-const reposWithWorkingLabel = new Set<string>()
+// The repositories this copy of the module knows to have reviewer-working,
+// each with the review requests it last checked the label for (see
+// requestsKeyOf), so a look at a repository that has it reads nothing more
+// while those requests stand. A request made again, a reviewer added or
+// removed, or a step that needs no label in between checks the label once
+// more, and a label someone deleted meanwhile is created again. A reload
+// forgets them too, which costs one read of the label at the next such look.
+const reposWithWorkingLabel = new Map<string, string>()
+
+// The outside reviewers the snapshot holds who are requested or lack a
+// request, with the time of each request where the look read one, as one
+// text. Asking a reviewer again gives a new request time, so it changes.
+function requestsKeyOf(s: Snapshot): string {
+  return outsideIn(s.outside)
+    .filter(r => r.state === 'requested' || r.state === 'unrequested')
+    .map(r => `${r.login.toLowerCase()}:${r.state}@${r.requestedAt ?? ''}`)
+    .sort()
+    .join(',')
+}
 
 // Makes sure the watched repository has reviewer-working while the stored
 // snapshot's step asks for an outside review or waits on one. It reads the one
@@ -3566,14 +3578,15 @@ async function ensureWorkingLabel($: $) {
     reposWithWorkingLabel.delete(r.repo)
     return
   }
-  if (reposWithWorkingLabel.has(r.repo) || !isPlainRepo(r.repo)) return
+  const requests = requestsKeyOf(s)
+  if (reposWithWorkingLabel.get(r.repo) === requests || !isPlainRepo(r.repo)) return
   const label = await gh($, r.cwd, ['api', `repos/${r.repo}/labels/${WORKING_LABEL}`])
   if (label !== null) {
-    reposWithWorkingLabel.add(r.repo)
+    reposWithWorkingLabel.set(r.repo, requests)
     return
   }
   const created = await gh($, r.cwd, ['label', 'create', WORKING_LABEL, '--repo', r.repo])
-  if (created !== null) reposWithWorkingLabel.add(r.repo)
+  if (created !== null) reposWithWorkingLabel.set(r.repo, requests)
 }
 
 // What a state label job did, which the set_stuck tool answers from. Each

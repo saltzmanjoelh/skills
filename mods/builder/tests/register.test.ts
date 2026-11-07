@@ -17545,6 +17545,30 @@ test('a label deleted after the request is created again at the next request, on
   expect(world.labelsMissing.has('reviewer-working')).toBe(false)
 })
 
+test('a label deleted while a review is awaited is created again when the review is asked for again', async ($, on) => {
+  const clock = mock.clock(on)
+  memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  atAwaitingStep(world)
+  world.requestEvents = [{ login: 'ann', at: new Date(clock.now() - 60_000).toISOString() }]
+  await watch($)
+  await clock.settle()
+  expect(countOf(world, WORKING_READ)).toBe(1)
+
+  // Someone deletes the label, and a look with the same request reads nothing.
+  world.labelsMissing.add('reviewer-working')
+  await clock.advance(10 * 60_000)
+  expect(countOf(world, WORKING_READ)).toBe(1)
+
+  // The session asks ann again, which GitHub records as a new request.
+  world.requestEvents = [...world.requestEvents, { login: 'ann', at: new Date(clock.now()).toISOString() }]
+  await clock.advance(10 * 60_000)
+  expect(countOf(world, WORKING_READ)).toBe(2)
+  expect(countOf(world, WORKING_CREATE)).toBe(1)
+  expect(world.labelsMissing.has('reviewer-working')).toBe(false)
+})
+
 test('a step that waits on no outside review neither reads nor creates reviewer-working', async ($, on) => {
   const clock = mock.clock(on)
   memoryStore(on)
