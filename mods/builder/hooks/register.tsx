@@ -10,7 +10,7 @@ import { checkoutSentence, otherRepositorySentence, worktreeWithBranch, type Che
 // handed to the session.
 import { afterCompaction, afterFailure, checkoutIn, compactionFacts, compactionsIn, isDue, measureIn, measureOf, owing, told as afterReloadTold, withFacts, type UsageRead } from './context'
 import { afterAskAgain, afterTally, askAgainAnswer, briefAnswer, briefFactsOf, briefRefusal, briefText, counselAnswer, decisionLine, destinationOf, endedDecisionLines, FOLLOW_UP_OPTIONS, followUpAnswer, followUpAskAgainAnswer, followUpsInput, followUpsRefusal, followUpStepOf, followUpVotesOf, keepCounsel, MAX_BRIEF_OPTIONS, MAX_FOLLOW_UPS, MIN_OPTIONS, neverStartedCandidatesOf, neverStartedOf, type PullRequestRef, reviewParagraph, stepOf, type UnreadableVote, votesOf } from './counsel'
-import { carriedHeadRuns, carriedRuns, changesBetween, DECISION_LABEL, headRunsOf, isChangesRequested, isCiMonitorEvent, isLogin, isSameState, JOBS_JQ, needsJobs, PR_FIELDS, pullRequestStateIn, realWorkOf, REQUEST_TIMES_QUERY, requestTimesOf, roundInProgress, RUNS_JQ, snapshotIn, snapshotOf, unfinishedOf, verdictsOf, WORKING_LABEL, type BaseFacts, type GhPullRequest, type HeadRun, type Snapshot, type SnapshotExtras, type StateLabel, type Unpushed, type Verdict } from './github'
+import { bothApprove, carriedHeadRuns, carriedRuns, changesBetween, DECISION_LABEL, headRunsOf, headVerdictsOf, isChangesRequested, isCiMonitorEvent, isSameState, JOBS_JQ, needsJobs, PR_FIELDS, pullRequestStateIn, realWorkOf, REQUEST_TIMES_QUERY, requestedUsersOf, requestTimesOf, roundInProgress, RUNS_JQ, sessionVerdictsOf, snapshotIn, snapshotOf, unfinishedOf, verdictsOf, WORKING_LABEL, type BaseFacts, type GhPullRequest, type HeadRun, type Snapshot, type SnapshotExtras, type StateLabel, type Unpushed, type Verdict } from './github'
 import { isLinkedStale, LINKED_PREFIX, linkedCheckout, linkedKey, recordedLinked } from './linked'
 import { ignoredLine, readIssueLink } from './links'
 import { afterComparison, afterLoad, dueComparisons, isStale, LOADED_PATHS, loadBegunAs, loadBegunIn, loadedIn, type Found } from './loaded'
@@ -352,9 +352,10 @@ async function gh($: $, dir: string | null, args: string[]): Promise<string | nu
 // relisted). The step is chosen with no question open, which is safe: Merged
 // comes before the question, and a question step renders no listing.
 //
-// The look also stores when it happened, by the mod's clock, and, when the
-// pull request has a review request for a user other than the session's own
-// login, when each reviewer's review was last requested, read beside the runs
+// The look also stores when it happened, by the mod's clock, and, when both
+// of the session's verdicts approve at the head and the pull request has a
+// review request for a user other than the session's own login, when each
+// reviewer's review was last requested, read beside the runs
 // and the facts (see readRequestTimes). The step chooser measures a requested
 // review's wait from the two, so it stays a pure function of the snapshot.
 //
@@ -444,18 +445,20 @@ async function carriedSnapshot($: $, r: SnapshotTarget, live: GhPullRequest, ext
 
 // When each reviewer's review was last requested, read with one GraphQL query
 // for the newest review-request events in the pull request's timeline (see
-// requestTimesOf). It reads only when the pull request has a review request
-// for a user other than the session's own login, which is when a time limit
-// can apply, so every other look costs no extra call. A request with no type
-// counts as one for a user, as outsideOf counts it. A repository that is not a
-// plain owner and name, a failed read and output that cannot be parsed all
-// give no times, so no limit applies at that look and the next look reads
-// again. It never throws, because gh answers null on any failure.
+// requestTimesOf). It reads only when a time limit can apply: the session's
+// newest verdicts at the head both approve, which is the only time the step
+// chooser and the fingerprint use the times, and the pull request has a
+// review request for a user other than the session's own login, decided by
+// the rule outsideOf uses (see requestedUsersOf). Every other look costs no
+// extra call, and the first look after both verdicts approve reads the times.
+// The verdicts are worked out from the same read of the pull request that
+// snapshotOf works them out from, so the two never differ. A repository that
+// is not a plain owner and name, a failed read and output that cannot be
+// parsed all give no times, so no limit applies at that look and the next
+// look reads again. It never throws, because gh answers null on any failure.
 async function readRequestTimes($: $, r: SnapshotTarget, live: GhPullRequest): Promise<Map<string, string>> {
-  const self = r.login.toLowerCase()
-  const isAsked = (live.reviewRequests ?? []).some(request =>
-    (request.__typename === undefined || request.__typename === 'User') && isLogin(request.login) && request.login.toLowerCase() !== self)
-  if (!isAsked) return new Map()
+  if (!bothApprove(headVerdictsOf(sessionVerdictsOf(live, r.login), live.headRefOid))) return new Map()
+  if (requestedUsersOf(live.reviewRequests, r.login).size === 0) return new Map()
   const out = await pullRequestGraphql($, r.cwd, r.repo, live.number, REQUEST_TIMES_QUERY)
   return requestTimesOf(out)
 }

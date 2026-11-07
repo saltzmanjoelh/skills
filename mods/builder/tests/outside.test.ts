@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { ARRIVAL_MS, changesBetween, fingerprintOf, isLogin, othersIn, othersOf, outsideIn, outsideOf, overdueOf, overdueWhileApproved, PICK_UP_MS, PR_FIELDS, requestTimesOf, snapshotIn, snapshotOf, STATE_LABELS, WORKFLOW_LABELS, WORKING_LABEL, type GhPullRequest } from '../hooks/github'
+import { ARRIVAL_MS, changesBetween, fingerprintOf, isLogin, othersIn, othersOf, outsideIn, outsideOf, overdueOf, overdueWhileApproved, PICK_UP_MS, PR_FIELDS, requestedUsersOf, requestTimesOf, snapshotIn, snapshotOf, STATE_LABELS, WORKFLOW_LABELS, WORKING_LABEL, type GhPullRequest } from '../hooks/github'
 import { pollFor, POLL_MS, waitingOn } from '../hooks/state'
 import { chooseStep, labelFor, reviewersOf, stepLines, type Step } from '../hooks/step'
 import type { BaseFacts, HeadRun, Snapshot } from '../types'
@@ -511,6 +511,19 @@ test('request times that could not be read, or that are not times, give none', (
   expect(requestTimesOf(requestEvents([{ login: 'not a login', at: REQUESTED }])).size).toBe(0)
 })
 
+test('the requested users leave out a team, a bot and the session\'s own login, and key the rest by the login in lower case', () => {
+  const users = requestedUsersOf([
+    { __typename: 'Team' },
+    { __typename: 'Bot', login: 'helper' },
+    { __typename: 'User', login: ME.toUpperCase() },
+    { __typename: 'User', login: 'Ann' },
+    { login: 'bob' },
+    { __typename: 'User', login: 'not a login' },
+  ], ME)
+  expect([...users.entries()]).toEqual([['ann', 'Ann'], ['bob', 'bob']])
+  expect(requestedUsersOf(undefined, ME).size).toBe(0)
+})
+
 test('only a reviewer in the Requested state carries the time of the request', () => {
   const s = snapshotOf('o/r', pullRequest({
     reviews: [approvedBySession, outsideReview('bob', 'APPROVED')],
@@ -569,12 +582,25 @@ test('the overdue reviewers: ten minutes without reviewer-working to pick up, tw
   expect(overdueOf(requestedFor(PICK_UP_MS))).toEqual({ arrival: [], pickUp: ['ann'] })
   expect(overdueOf(requestedFor(PICK_UP_MS, [WORKING_LABEL]))).toEqual({ arrival: [], pickUp: [] })
   expect(overdueOf(requestedFor(ARRIVAL_MS, [WORKING_LABEL]))).toEqual({ arrival: ['ann'], pickUp: [] })
-  expect(overdueOf(requestedFor(ARRIVAL_MS))).toEqual({ arrival: ['ann'], pickUp: ['ann'] })
+  expect(overdueOf(requestedFor(ARRIVAL_MS))).toEqual({ arrival: ['ann'], pickUp: [] })
+})
+
+// The stuck label that the two-hour step gives takes reviewer-working off, so
+// the look after that one sees a reviewer past two hours without the label. A
+// reviewer past the two-hour limit is in the arrival list only, so that look
+// neither says the reviewer has not picked the request up nor wakes the
+// session again.
+test('a reviewer past two hours is in the arrival list only, so reviewer-working coming off then changes nothing', () => {
+  const labelled = requestedFor(ARRIVAL_MS, [WORKING_LABEL])
+  const unlabelled = requestedFor(ARRIVAL_MS + 10 * 60_000)
+  expect(overdueOf(unlabelled)).toEqual({ arrival: ['ann'], pickUp: [] })
+  expect(unlabelled.fingerprint).toBe(labelled.fingerprint)
+  expect(changesBetween(labelled, unlabelled)).toEqual(['The pull request changed in a way the lines below show.'])
 })
 
 test('the overdue reviewers count only while both verdicts approve at the head', () => {
   const approved = requestedFor(ARRIVAL_MS)
-  expect(overdueWhileApproved(approved)).toEqual({ arrival: ['ann'], pickUp: ['ann'] })
+  expect(overdueWhileApproved(approved)).toEqual({ arrival: ['ann'], pickUp: [] })
   expect(overdueWhileApproved({ ...approved, verdicts: null })).toEqual({ arrival: [], pickUp: [] })
 })
 
@@ -591,5 +617,5 @@ test('a stored snapshot keeps the time of each request and of the look', () => {
   expect(snapshotIn(stored)?.lookedAt).toBe(REQUESTED_MS + ARRIVAL_MS)
   expect(outsideIn((stored as Snapshot).outside)).toEqual([{ login: 'ann', state: 'requested', requestedAt: REQUESTED }])
   expect(outsideIn([{ login: 'ann', state: 'requested', requestedAt: 7 }])).toEqual([{ login: 'ann', state: 'requested' }])
-  expect(overdueOf(snapshotIn(stored)!)).toEqual({ arrival: ['ann'], pickUp: ['ann'] })
+  expect(overdueOf(snapshotIn(stored)!)).toEqual({ arrival: ['ann'], pickUp: [] })
 })

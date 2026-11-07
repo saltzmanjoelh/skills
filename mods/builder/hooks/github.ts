@@ -370,20 +370,36 @@ export function pullRequestStateIn(out: string | null): Snapshot['state'] | null
 // measures a requested review's wait against.
 export type SnapshotExtras = Pick<Snapshot, 'headRuns' | 'runsCarriedOver' | 'facts' | 'unpushed' | 'lookedAt'>
 
+// The verdicts of every verdict review the session's own login posted, in the
+// order GitHub lists the reviews. Only verdict reviews this login posted
+// count: a review anyone else posts with the same first line is not one the
+// session wrote.
+export function sessionVerdictsOf(pr: Pick<GhPullRequest, 'reviews'>, login: string): Verdicts[] {
+  return (pr.reviews ?? [])
+    .filter(review => review.author?.login === login)
+    .map(verdictsOf)
+    .filter((verdicts): verdicts is Verdicts => verdicts !== null)
+}
+
+// The newest of the session's verdicts at the head, or null when it posted
+// none there. These are the verdicts a snapshot holds.
+export function headVerdictsOf(verdictReviews: readonly Verdicts[], head: string): Verdicts | null {
+  return verdictReviews.filter(verdicts => verdicts.sha === head).at(-1) ?? null
+}
+
+// Whether both verdicts approve: there are verdicts, and neither requests
+// changes.
+export function bothApprove(verdicts: Verdicts | null): verdicts is Verdicts {
+  return verdicts !== null && !isChangesRequested(verdicts)
+}
+
 // `requestTimes` holds when each reviewer's review was last requested, keyed by
 // the login in lower case, as requestTimesOf reads it. A look that did not
 // read them, or whose read failed, passes none.
 export function snapshotOf(repo: string, pr: GhPullRequest, login: string, runs: WorkflowRun[] = [], extras: SnapshotExtras = {}, requestTimes: ReadonlyMap<string, string> = new Map()): Snapshot {
   const head = pr.headRefOid
   const commits = (pr.commits ?? []).map(commit => commit.oid)
-  // Only verdict reviews this login posted count: a review anyone else posts
-  // with the same first line is not one the session wrote.
-  const verdictReviews = (pr.reviews ?? [])
-    .filter(review => review.author?.login === login)
-    .map(verdictsOf)
-    .filter((verdicts): verdicts is Verdicts => verdicts !== null)
-
-  const atHead = verdictReviews.filter(verdicts => verdicts.sha === head)
+  const verdictReviews = sessionVerdictsOf(pr, login)
   const changesRequested = verdictReviews.filter(isChangesRequested)
   const headsReviewed = new Set(verdictReviews.map(verdicts => verdicts.sha)).size
   const lastChangesRequested = changesRequested.at(-1)?.sha
@@ -400,7 +416,7 @@ export function snapshotOf(repo: string, pr: GhPullRequest, login: string, runs:
     labels: (pr.labels ?? []).map(label => plainName(label.name)).sort(),
     mergeable: pr.mergeable === 'MERGEABLE' || pr.mergeable === 'CONFLICTING' ? pr.mergeable : 'UNKNOWN',
     checks: (pr.statusCheckRollup ?? []).map(checkOf).sort(compareChecks),
-    verdicts: atHead.at(-1) ?? null,
+    verdicts: headVerdictsOf(verdictReviews, head),
     headsReviewed,
     pushesSinceVerdict,
     runs,
@@ -496,13 +512,9 @@ export function outsideOf(
   for (const [key, review] of newest) {
     if (HOLDING.has(review.authorAssociation ?? '')) spelled.set(key, review.author.login)
   }
-  const requested = new Set<string>()
-  for (const request of pr.reviewRequests ?? []) {
-    if (request.__typename !== undefined && request.__typename !== 'User') continue
-    if (!isOutside(request.login)) continue
-    const key = request.login.toLowerCase()
-    requested.add(key)
-    if (!spelled.has(key)) spelled.set(key, newest.get(key)?.author.login ?? request.login)
+  const requested = requestedUsersOf(pr.reviewRequests, login)
+  for (const [key, name] of requested) {
+    if (!spelled.has(key)) spelled.set(key, newest.get(key)?.author.login ?? name)
   }
   for (const name of named) {
     const key = name.toLowerCase()
@@ -518,6 +530,25 @@ export function outsideOf(
       const requestedAt = requestTimes.get(key)
       return state === 'requested' && requestedAt !== undefined ? { ...reviewer, requestedAt } : reviewer
     })
+}
+
+// The users whose review is requested now, other than the session's own
+// login, keyed by the login in lower case, because GitHub compares logins
+// without regard to case, with the login as GitHub spelled it. Which requests
+// count as requests for a user is said in the comment on
+// GhPullRequest.reviewRequests, and only a login that passes isLogin counts.
+// outsideOf decides who is requested by it, and the look decides by it
+// whether to read the request times, so the two never differ.
+export function requestedUsersOf(requests: GhPullRequest['reviewRequests'], login: string): Map<string, string> {
+  const self = login.toLowerCase()
+  const users = new Map<string, string>()
+  for (const request of requests ?? []) {
+    if (request.__typename !== undefined && request.__typename !== 'User') continue
+    if (!isLogin(request.login) || request.login.toLowerCase() === self) continue
+    const key = request.login.toLowerCase()
+    if (!users.has(key)) users.set(key, request.login)
+  }
+  return users
 }
 
 // The GraphQL query for the newest 100 review-request events in the pull
@@ -568,7 +599,10 @@ export const ARRIVAL_MS = 2 * 60 * 60_000
 // by login, in the order the snapshot lists them. A reviewer whose request
 // time could not be read, and every reviewer of a snapshot that holds no time
 // of its look, is in neither list, so no limit ever rests on a time that was
-// not read. A reviewer past two hours with the label off is in both.
+// not read. A reviewer past two hours is in the arrival list only, with the
+// label on or off, because the stuck label that the two-hour step gives takes
+// reviewer-working off, and the look after it must not then say the reviewer
+// has not picked the request up.
 export type Overdue = { arrival: string[]; pickUp: string[] }
 
 export function overdueOf(s: Pick<Snapshot, 'outside' | 'labels' | 'lookedAt'>): Overdue {
@@ -582,7 +616,7 @@ export function overdueOf(s: Pick<Snapshot, 'outside' | 'labels' | 'lookedAt'>):
     if (Number.isNaN(asked)) continue
     const waited = now - asked
     if (waited >= ARRIVAL_MS) overdue.arrival.push(r.login)
-    if (waited >= PICK_UP_MS && !isWorking) overdue.pickUp.push(r.login)
+    else if (waited >= PICK_UP_MS && !isWorking) overdue.pickUp.push(r.login)
   }
   return overdue
 }
@@ -594,7 +628,7 @@ export function overdueOf(s: Pick<Snapshot, 'outside' | 'labels' | 'lookedAt'>):
 // it, so a sentence is written exactly when that part of the fingerprint
 // moves.
 export function overdueWhileApproved(s: Pick<Snapshot, 'verdicts' | 'outside' | 'labels' | 'lookedAt'>): Overdue {
-  if (s.verdicts === null || isChangesRequested(s.verdicts)) return { arrival: [], pickUp: [] }
+  if (!bothApprove(s.verdicts)) return { arrival: [], pickUp: [] }
   return overdueOf(s)
 }
 

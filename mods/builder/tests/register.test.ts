@@ -17619,6 +17619,49 @@ test('a review requested from nobody reads no request times', async ($, on) => {
   expect(timelineReads(world)).toEqual([])
 })
 
+// The request times are used only once both verdicts approve at the head, so
+// a look before that reads none, and the first look after the approval reads
+// them.
+test('a look with another user requested reads no request times until both verdicts approve at the head', async ($, on) => {
+  const clock = mock.clock(on)
+  memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const ann = [{ __typename: 'User', login: 'ann' }]
+  world.pr = openPullRequest({ statusCheckRollup: [], reviews: [], reviewRequests: ann })
+  world.baseClaude = 'Checks: none\n'
+  await watch($)
+  await clock.settle()
+  expect(timelineReads(world)).toEqual([])
+
+  world.pr = openPullRequest({ statusCheckRollup: [], reviews: [verdictReview(C, 'APPROVE', 'REQUEST_CHANGES')], reviewRequests: ann })
+  await clock.advance(10 * 60_000)
+  expect(timelineReads(world)).toEqual([])
+
+  world.pr = openPullRequest({ statusCheckRollup: [], reviews: [...codeReviewedAt(C)], reviewRequests: ann })
+  await clock.advance(10 * 60_000)
+  expect(timelineReads(world).length).toBeGreaterThan(0)
+})
+
+// Only a request for a user other than the session's own login can carry a
+// time limit, so a request for a team or for the session's own login reads no
+// request times, while another user's request does.
+test('a team request and a request for the session\'s own login read no request times, and another user\'s request does', async ($, on) => {
+  const clock = mock.clock(on)
+  memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr = openPullRequest({ statusCheckRollup: [], reviews: [...codeReviewedAt(C)], reviewRequests: [{ __typename: 'Team' }, { __typename: 'User', login: 'Owner' }] })
+  world.baseClaude = 'Checks: none\n'
+  await watch($)
+  await clock.settle()
+  expect(timelineReads(world)).toEqual([])
+
+  world.pr = openPullRequest({ statusCheckRollup: [], reviews: [...codeReviewedAt(C)], reviewRequests: [{ __typename: 'Team' }, { __typename: 'User', login: 'Owner' }, { __typename: 'User', login: 'ann' }] })
+  await clock.advance(10 * 60_000)
+  expect(timelineReads(world).length).toBeGreaterThan(0)
+})
+
 test('the package lists a ruling read from the review threads, and says when the threads could not be read', async ($, on) => {
   mock.clock(on)
   mock.store(on)
