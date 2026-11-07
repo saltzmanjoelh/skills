@@ -1,9 +1,9 @@
 import { expect, test } from 'claude-code/testing'
 
 import {
-  abstainerReason, afterAskAgain, afterTally, askAgainAnswer, askOrder, briefAnswer, briefFactsOf, briefRefusal, briefText, COUNSEL_KEPT, counselAnswer, decisionLine, destinationOf, endedDecisionLines,
+  abstainerReason, afterAskAgain, afterTally, askAgainAnswer, askOrder, briefAnswer, briefFactsOf, briefRefusal, briefText, containmentRefusal, COUNSEL_KEPT, counselAnswer, decisionLine, destinationOf, endedDecisionLines,
   FOLLOW_UP_OPTIONS, FOLLOW_UP_PATTERNS, FOLLOW_UP_WORDS, followUpAnswer, followUpAskAgainAnswer, followUpOutcomes, followUpsInput, followUpsRefusal, followUpStepOf, followUpTally, followUpVotesOf, optionsAllowed,
-  keepCounsel, MAX_FOLLOW_UPS, MAX_OPTIONS, neededOf, neverStartedCandidatesOf, neverStartedOf, noOptionCount, QUOTE_CHARS, quoteVote, READABLE_FOLLOW_UP_VOTE, READABLE_VOTE, readVote, reviewParagraph, stepOf, tally, turnoutOf,
+  keepCounsel, leftOutSentence, MAX_FOLLOW_UPS, MAX_OPTIONS, neededOf, neverStartedCandidatesOf, neverStartedOf, noOptionCount, QUOTE_CHARS, quoteVote, READABLE_FOLLOW_UP_VOTE, READABLE_VOTE, readVote, reviewParagraph, stepOf, tally, turnoutOf,
   votesOf, type WatchedState, WITHHELD_REASON, WITHHELD_VOTE,
 } from '../hooks/counsel'
 import { CHEAP_FIX_SUBJECT } from '../hooks/review'
@@ -139,6 +139,73 @@ test('a path that is not written yet is listed as such in the brief', () => {
   const text = briefText(briefFactsOf(question({ paths: ['docs/specs/poll.md', 'hooks/a.ts'] })), ['docs/specs/poll.md'])
   expect(text).toContain('- docs/specs/poll.md (not written yet)')
   expect(text).toContain('- hooks/a.ts\n')
+})
+
+test('a brief with no refused path lists its files exactly as before, in a first round, a rerun and a follow-ups question', () => {
+  const paths = ['docs/specs/poll.md', 'hooks/a.ts']
+  const files = '## Files the question touches\n\n- docs/specs/poll.md (not written yet)\n- hooks/a.ts\n\n'
+  const first = question({ paths })
+  const t = tally(first, [vote(0, 1), vote(1, 2), vote(2, N), vote(3, 1), vote(4, 2), vote(5, 3), vote(6, 3)])
+  const texts = [
+    briefText(briefFactsOf(first), ['docs/specs/poll.md']),
+    briefText(briefFactsOf(afterTally(first, t)), ['docs/specs/poll.md'], []),
+  ]
+  for (const text of texts) expect(text).toContain(`${files}## Your answer`)
+  const followUps = briefText(briefFactsOf(followUpsQuestion({ paths })), ['docs/specs/poll.md'])
+  expect(followUps).toContain(`${files}## Follow-ups`)
+  for (const text of [...texts, followUps]) {
+    expect(text).not.toContain('Paths left out')
+    expect(text).not.toContain('None left')
+  }
+})
+
+test('a brief leaves refused paths out of its files and lists each one with its reason in a section of its own', () => {
+  const paths = ['docs/.. /x.md', 'hooks/a.ts', 'C:\\y', 'docs/specs/poll.md', '../z']
+  const text = briefText(briefFactsOf(question({ paths })), ['docs/specs/poll.md'], ['docs/.. /x.md', 'C:\\y', '../z'])
+  expect(text).toContain([
+    '## Files the question touches', '',
+    '- hooks/a.ts',
+    '- docs/specs/poll.md (not written yet)', '',
+    '## Paths left out', '',
+    '- docs/.. /x.md: has a part made only of dots and spaces, which Windows may read as ..',
+    '- C:\\y: written in a Windows form',
+    '- ../z: leads outside the checkout', '',
+    '## Your answer',
+  ].join('\n'))
+  expect(text).not.toContain('name paths')
+})
+
+test('a brief whose every path is refused says none are left, and one that named no paths still says none named', () => {
+  const all = briefText(briefFactsOf(question({ paths: ['docs/.. /x.md'] })), [], ['docs/.. /x.md'])
+  expect(all).toContain('## Files the question touches\n\nNone left; every path the question named is listed under Paths left out.\n\n## Paths left out\n\n- docs/.. /x.md: ')
+  expect(all).not.toContain('None named.')
+  const none = briefText(briefFactsOf(question({ paths: [] })), [])
+  expect(none).toContain('## Files the question touches\n\nNone named.\n')
+  expect(none).not.toContain('None left')
+})
+
+test('containmentRefusal picks the reason in a fixed order and builds the counsel tool\'s message from that reason', () => {
+  const WINDOWS = 'written in a Windows form'
+  const DOTS = 'has a part made only of dots and spaces, which Windows may read as ..'
+  const OUTSIDE = 'leads outside the checkout'
+  const cases: [string, string][] = [
+    ['C:\\y', WINDOWS], ['docs\\.. \\x', WINDOWS], ['docs\\.. /x', WINDOWS],
+    ['docs/.. /x', DOTS], ['a/... /x', DOTS],
+    ['../x', OUTSIDE], ['/a/.. /b', OUTSIDE], ['../.. /x', OUTSIDE], ['docs/../.. /x', OUTSIDE], ['docs/arch.md', OUTSIDE],
+  ]
+  for (const [path, reason] of cases) {
+    const refusal = containmentRefusal(path)
+    expect(refusal.reason).toBe(reason)
+    expect(refusal.message).toContain(`Refused: ${path} `)
+    expect(refusal.message).toContain(reason)
+  }
+})
+
+test('leftOutSentence says nothing when no path is left out and names every left-out path once otherwise', () => {
+  expect(leftOutSentence([])).toBe('')
+  expect(leftOutSentence(['docs/.. /x.md'])).toBe('The round-2 brief leaves out docs/.. /x.md, which the containment rule now refuses, and lists it under "Paths left out".\n')
+  expect(leftOutSentence(['docs/.. /x.md', 'docs/.. /x.md'])).toBe('The round-2 brief leaves out docs/.. /x.md, which the containment rule now refuses, and lists it under "Paths left out".\n')
+  expect(leftOutSentence(['docs/.. /x.md', 'C:\\y'])).toBe('The round-2 brief leaves out docs/.. /x.md and C:\\y, which the containment rule now refuses, and lists them under "Paths left out".\n')
 })
 
 test('the ask order is by votes, most first, at most four, with the last round\'s proposals while there is room', () => {

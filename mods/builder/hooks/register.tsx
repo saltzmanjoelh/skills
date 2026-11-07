@@ -9,7 +9,7 @@ import { checkoutSentence, otherRepositorySentence, worktreeWithBranch, type Che
 // announced; it is renamed here because `told` below is the snapshot last
 // handed to the session.
 import { afterCompaction, afterFailure, checkoutIn, compactionFacts, compactionsIn, isDue, measureIn, measureOf, owing, told as afterReloadTold, withFacts, type UsageRead } from './context'
-import { afterAskAgain, afterTally, askAgainAnswer, briefAnswer, briefFactsOf, briefRefusal, briefText, counselAnswer, decisionLine, destinationOf, endedDecisionLines, FOLLOW_UP_OPTIONS, followUpAnswer, followUpAskAgainAnswer, followUpsInput, followUpsRefusal, followUpStepOf, followUpVotesOf, keepCounsel, MAX_BRIEF_OPTIONS, MAX_FOLLOW_UPS, MIN_OPTIONS, neverStartedCandidatesOf, neverStartedOf, type PullRequestRef, reviewParagraph, stepOf, type UnreadableVote, votesOf } from './counsel'
+import { afterAskAgain, afterTally, askAgainAnswer, briefAnswer, briefFactsOf, briefRefusal, briefText, containmentRefusal, counselAnswer, decisionLine, destinationOf, endedDecisionLines, FOLLOW_UP_OPTIONS, followUpAnswer, followUpAskAgainAnswer, followUpsInput, followUpsRefusal, followUpStepOf, followUpVotesOf, keepCounsel, leftOutSentence, MAX_BRIEF_OPTIONS, MAX_FOLLOW_UPS, MIN_OPTIONS, neverStartedCandidatesOf, neverStartedOf, type PullRequestRef, reviewParagraph, stepOf, type UnreadableVote, votesOf } from './counsel'
 import { bothApprove, carriedHeadRuns, carriedRequestTimes, carriedRuns, changesBetween, DECISION_LABEL, headRunsOf, headVerdictsOf, isChangesRequested, isCiMonitorEvent, isSameState, JOBS_JQ, needsJobs, outsideIn, PR_FIELDS, pullRequestStateIn, realWorkOf, REQUEST_TIMES_QUERY, requestedUsersOf, requestTimesOf, roundInProgress, RUNS_JQ, sessionVerdictsOf, snapshotIn, snapshotOf, unfinishedOf, UNREAD_FACTS, verdictsOf, WORKING_LABEL, type BaseFacts, type GhPullRequest, type HeadRun, type Snapshot, type SnapshotExtras, type StateLabel, type Unpushed, type Verdict } from './github'
 import { isLinkedStale, LINKED_PREFIX, linkedCheckout, linkedKey, recordedLinked } from './linked'
 import { ignoredLine, readIssueLink } from './links'
@@ -2820,20 +2820,22 @@ async function placeOf($: $, dir: string, root: string | undefined, path: string
   return file.kind === 'file' ? 'file' : 'other'
 }
 
-// Which of the named paths do not exist yet, and the first one that leads
-// outside the checkout. It goes on past a refused path, so that a rerun of a
-// question stored before a rule that now refuses one of its paths still
-// notes every later path that is not written yet.
-async function unwrittenPaths($: $, dir: string, paths: readonly string[]): Promise<{ unwritten: string[]; outside: string | null }> {
+// Which of the named paths do not exist yet, and every path that the
+// containment rule refuses, in the order they were named. It goes on past a
+// refused path, so that a rerun of a question stored before a rule that now
+// refuses one of its paths still notes every later path that is not written
+// yet. A refused path is never checked on the file system, so it is never
+// also listed as not written yet.
+async function unwrittenPaths($: $, dir: string, paths: readonly string[]): Promise<{ unwritten: string[]; refused: string[] }> {
   const unwritten: string[] = []
-  let outside: string | null = null
+  const refused: string[] = []
   const root = await checkoutPath($, dir)
   for (const path of paths) {
     const place = await placeOf($, dir, root, path)
-    if (place === 'outside') outside ??= path
+    if (place === 'outside') refused.push(path)
     if (place === 'missing') unwritten.push(path)
   }
-  return { unwritten, outside }
+  return { unwritten, refused }
 }
 
 // The checkout's git folder, or null when git cannot say.
@@ -3268,19 +3270,6 @@ async function counselDestination($: $, named: unknown): Promise<ReturnType<type
   return destinationOf(named, watched, state)
 }
 
-// The counsel tool's message for a path that placeOf refused, chosen in a
-// fixed order. A path written in a Windows form gets the Windows-form message.
-// A path with a part made only of dots and spaces gets a message of its own,
-// unless it starts with `/` or has a part that is exactly `..`. Every other
-// path, including a link that resolves outside the checkout, gets the general
-// message for leading outside the checkout.
-function outsideRefusal(path: string): string {
-  if (isWindowsShaped(path)) return `Refused: ${path} is written in a Windows form; name paths relative to the checkout, written with forward slashes.`
-  const climbs = path.startsWith('/') || path.split('/').includes('..')
-  if (hasDotAndSpacePart(path) && !climbs) return `Refused: ${path} has a part made only of dots and spaces, which Windows may read as ..; name paths without such parts.`
-  return `Refused: ${path} leads outside the checkout; name paths inside it, relative to it.`
-}
-
 // Writes the brief, then records the question; a refusal or a failed write
 // records nothing. Where a decision goes is settled first, before an id is
 // taken or anything is written, and when the question is put, not when it is
@@ -3308,10 +3297,10 @@ async function serveCounsel($: $, input: CounselInput): Promise<string> {
   const paths = Array.isArray(input.paths) ? (input.paths as unknown[]).filter((p): p is string => typeof p === 'string' && p.trim() !== '').map(p => p.trim()) : []
   const dir = await read($, cwd)
   if (dir === null) return couldNotSit('the mod does not know the session folder.')
-  const { unwritten, outside } = await unwrittenPaths($, dir, paths)
-  // unwrittenPaths gives back the first refused path as it was named, so
-  // testing that path tells why it was refused.
-  if (outside !== null) return outsideRefusal(outside)
+  const { unwritten, refused } = await unwrittenPaths($, dir, paths)
+  // unwrittenPaths gives back the refused paths as they were named, and the
+  // first of them decides the message.
+  if (refused.length > 0) return containmentRefusal(refused[0]!).message
 
   const briefs = await counselDir($, dir)
   if (briefs === null) return couldNotSit('git could not find the checkout\'s git folder for the brief.')
@@ -3355,8 +3344,10 @@ async function recordAskedAgain($: $, id: string, members: readonly string[]): P
 
 // Counts a round and records it. A round with members that have no vote, none
 // of them asked again yet, is refused, and only those members are recorded as
-// asked again. A rerun rewrites the brief as round 2 first; if that write
-// fails, the question goes to the person instead.
+// asked again. A rerun rewrites the brief as round 2 first, leaving out any
+// stored path that the containment rule now refuses, and its answer then
+// names those paths; if that write fails, the question goes to the person
+// instead, and the answer says only that the brief could not be rewritten.
 async function serveTally($: $, input: TallyInput): Promise<string> {
   const q = (await read($, counsel)).find(question => question.id === input.id)
   if (q === undefined) return `Refused: there is no counsel question ${String(input.id)} in this session.`
@@ -3373,9 +3364,11 @@ async function serveTally($: $, input: TallyInput): Promise<string> {
   let note = ''
   if (t.outcome === 'rerun') {
     const dir = await read($, cwd)
-    const { unwritten } = dir === null ? { unwritten: [] } : await unwrittenPaths($, dir, recorded.paths)
+    // With no known folder, nothing can be checked, so every path is listed.
+    const { unwritten, refused } = dir === null ? { unwritten: [], refused: [] } : await unwrittenPaths($, dir, recorded.paths)
     try {
-      await $.fs.write(`${q.folder}/brief.md`, briefText(briefFactsOf(recorded), unwritten))
+      await $.fs.write(`${q.folder}/brief.md`, briefText(briefFactsOf(recorded), unwritten, refused))
+      note = leftOutSentence(refused)
     } catch {
       t = { ...t, outcome: 'ask' }
       recorded = afterTally(q, t)
