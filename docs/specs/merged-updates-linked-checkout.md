@@ -12,7 +12,7 @@ started a moment later loads the merged code.
 ## Users and trigger
 
 Every later session on this Mac. Skills, agents and the pilot mod load
-through symlinks under `~/.claude` (for example `~/.claude/skills/pilot`
+through symlinks in Claude Code's configuration folder (for example `~/.claude/skills/pilot`
 points at `~/Projects/skills/mods/pilot`), so a session runs whatever the
 main checkout holds when it starts, not what its own worktree holds. The
 trigger seen on 2026-10-07: a pull request merged at 21:07, a
@@ -26,9 +26,10 @@ The change is to the **Merged** step of `skills/implement/SKILL.md` only.
 Its new first action, before moving the issue, filing follow-ups, running
 `/cleanup` or reporting, is to update the linked checkout:
 
-1. **Find the linked checkouts.** Resolve every symlink directly under
-   `~/.claude/skills`, `~/.claude/agents` and `~/.claude/commands` to its
-   real target. For each target, the main checkout is the parent of
+1. **Find the linked checkouts.** Resolve every symlink directly inside the
+   `skills`, `agents` and `commands` folders of Claude Code's configuration folder
+   to its real target. That folder is `CLAUDE_CONFIG_DIR` when it is set, and
+   otherwise `.claude` under `HOME`, or else under `USERPROFILE`. For each target, the main checkout is the parent of
    `git -C <target> rev-parse --path-format=absolute --git-common-dir`.
    Several links into one checkout give one checkout, which is looked at
    once. A link into a worktree (its target's `--show-toplevel` is not
@@ -92,7 +93,7 @@ Its new first action, before moving the issue, filing follow-ups, running
 
 ## Edge cases
 
-- The merged repository is not linked from `~/.claude` (a project
+- The merged repository is not linked from Claude Code's configuration folder (a project
   repository, a tool's own repository): nothing is moved, and the
   one sentence in step 2 says so.
 - A checkout already on the base that contains the merge commit (someone
@@ -112,7 +113,7 @@ Its new first action, before moving the issue, filing follow-ups, running
   That is a separate issue, waiting on the change that
   `pilot-shows-what-runs.md` describes.
 - Other repositories' checkouts, which their own gates
-  govern. No `~/.claude` link points into them today. If one ever did, the
+  govern. No link in Claude Code's configuration folder points into them today. If one ever did, the
   step would treat that checkout like any other linked checkout, under the
   same guards; there is no per-project switch to turn the update off.
 - Changing `/cleanup` (`generic-skills.md` owns it) or `mods/pilot` (the

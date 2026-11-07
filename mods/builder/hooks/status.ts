@@ -802,8 +802,9 @@ export function afterCleanupSkill(memo: StatusMemo): StatusMemo {
   return memo.cleanup === null ? { ...memo, cleanup: { failedCalls: 0, lastError: '' } } : memo
 }
 
-// A tool call failed. It is counted only once the cleanup skill has started,
-// and its error's last line replaces the one kept.
+// A tool call failed: the tool.call hook in register.tsx saw an error result.
+// It is counted only once the cleanup skill has started, and its error's last
+// line replaces the one kept.
 export function afterFailedCall(memo: StatusMemo, error: unknown): StatusMemo {
   if (memo.cleanup === null) return memo
   return { ...memo, cleanup: { failedCalls: memo.cleanup.failedCalls + 1, lastError: errorLineOf(error) } }
