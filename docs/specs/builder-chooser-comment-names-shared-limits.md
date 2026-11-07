@@ -23,10 +23,12 @@ review-request block, and reads the comment to learn what else must change.
 
 - The comment in `step.ts` says that `overdueAtLimitStep` reads the pushes
   and rounds limits through `limitsPassedIn`, as `chooseStep` does.
-- It says that `overdueAtLimitStep` repeats by hand only the other
+- It says that `overdueAtLimitStep` repeats by hand only these of the
   conditions above the block: both verdicts approve, the `/code-review` pass
   is recorded, the pull request does not conflict, no check or run at the
-  head failed, and no outside reviewer has feedback or lacks a request.
+  head failed, and no outside reviewer has feedback or lacks a request. It
+  also says that `overdueAtLimitStep` does not check whether the pull
+  request is merged or closed, which `chooseStep` checks first.
 - It keeps the existing points that the open question is left out, that
   the purpose is for the fingerprint to count an overdue reviewer only where
   the block is reached, and that a change to the copied conditions must
