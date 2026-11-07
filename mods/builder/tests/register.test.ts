@@ -17041,25 +17041,45 @@ test('the pane shows the session\'s times with a pull request watched and withou
 
 // The update of the linked checkout after a merge, through the real look: the
 // merge commit of #7, and the commands of an update that fast-forwards the
-// main checkout /main, which ~/.claude/skills links into, from its remote
-// origin. The checkout lacks the merge commit until the fast-forward runs.
+// main checkout /main, which the configuration folder's skills folder links
+// into, from its remote origin. The checkout lacks the merge commit until the
+// fast-forward runs. The configuration folder is /h/.claude unless a test
+// names another. The fakes of `fs.stat` and `fs.list` answer the paths of
+// that folder, a missing agents and commands folder with an ENOENT refusal,
+// and pass every other path on, such as the stat of the mod's own folder.
+// `stats` and `lists` may be changed by a test, and every file call they
+// answer is recorded for linkedCalls.
 const MERGE_COMMIT = 'f'.repeat(40)
 const LINKED_KEY = 'linked-checkout:o/r#7'
+const linkedFsCalls = new WeakMap<object, string[]>()
 
-function linkedScript(world: ReturnType<typeof fakeGitHub>) {
+function linkedScript(on: On, world: ReturnType<typeof fakeGitHub>, config = '/h/.claude') {
   const git = (...args: string[]) => ['git', '-C', '/main', ...args].join(' ')
   const ancestry = git('merge-base', '--is-ancestor', MERGE_COMMIT, 'HEAD')
+  const fsCalls: string[] = []
+  linkedFsCalls.set(world, fsCalls)
+  const stats = new Map<string, { kind: 'file' | 'dir' | 'other'; isLink: boolean; realPath?: string } | 'missing'>([
+    [`${config}/skills`, { kind: 'dir', isLink: false, realPath: `${config}/skills` }],
+    [`${config}/skills/implement`, { kind: 'dir', isLink: true, realPath: '/main/skills/implement' }],
+    [`${config}/agents`, 'missing'],
+    [`${config}/commands`, 'missing'],
+  ])
+  const lists = new Map<string, string[]>([[`${config}/skills`, ['implement']]])
+  on('fs.stat', ($, e, next) => {
+    const stat = stats.get(e.path)
+    if (stat === undefined) return next(e)
+    fsCalls.push(`stat ${e.path}`)
+    if (stat === 'missing') return { deny: `ENOENT: no such file or directory, stat '${e.path}'` }
+    const { realPath, ...rest } = stat
+    return { value: { size: 1, mtimeMs: 0, ...rest, ...(e.resolve && realPath !== undefined ? { realPath } : {}) } }
+  })
+  on('fs.list', ($, e, next) => {
+    const names = lists.get(String(e.path))
+    if (names === undefined) return next(e)
+    fsCalls.push(`list ${String(e.path)}`)
+    return { value: names.map(name => ({ name, kind: 'other' as const, size: 0, mtimeMs: 0, isLink: true })) }
+  })
   world.linked = {
-    'test -L /h/.claude/skills': { exitCode: 1 },
-    'test -d /h/.claude/skills': {},
-    'find /h/.claude/skills/ -mindepth 1 -maxdepth 1 -type l -print0': { stdout: '/h/.claude/skills/implement\0' },
-    'test -L /h/.claude/agents': { exitCode: 1 },
-    'test -d /h/.claude/agents': { exitCode: 1 },
-    'test -L /h/.claude/commands': { exitCode: 1 },
-    'test -d /h/.claude/commands': { exitCode: 1 },
-    'test -e /h/.claude/skills/implement': {},
-    'realpath /h/.claude/skills/implement': { stdout: '/main/skills/implement\n' },
-    'test -d /main/skills/implement': {},
     'git -C /main/skills/implement rev-parse --path-format=absolute --git-common-dir --show-toplevel': { stdout: '/main/.git\n/main\n' },
     'gh repo view o/r --json url,defaultBranchRef': { stdout: '{"url":"https://github.com/o/r","defaultBranchRef":{"name":"main"}}' },
     [git('branch', '--show-current')]: { stdout: 'main\n' },
@@ -17076,11 +17096,14 @@ function linkedScript(world: ReturnType<typeof fakeGitHub>) {
     [git('rev-parse', 'HEAD')]: { stdout: `${MERGE_COMMIT}\n` },
   }
   world.onFastForward = () => { world.linked[ancestry] = {} }
+  return { stats, lists }
 }
 
-// The commands only the update of the linked checkout runs.
-const linkedCalls = (world: ReturnType<typeof fakeGitHub>) => world.calls.filter(argv =>
-  argv.startsWith('git -C ') || argv.startsWith('test ') || argv.startsWith('realpath ') || argv.startsWith('find ') || argv.startsWith('gh repo view o/r '))
+// The commands and file calls only the update of the linked checkout runs.
+const linkedCalls = (world: ReturnType<typeof fakeGitHub>) => [
+  ...world.calls.filter(argv => argv.startsWith('git -C ') || argv.startsWith('test ') || argv.startsWith('realpath ') || argv.startsWith('find ') || argv.startsWith('gh repo view o/r ')),
+  ...(linkedFsCalls.get(world) ?? []),
+]
 const fastForwards = (world: ReturnType<typeof fakeGitHub>) => world.calls.filter(argv => argv.includes(' merge --ff-only ')).length
 const UPDATED_LINE = `Updated: the linked checkout /main now holds the merge commit ${MERGE_COMMIT}`
 
@@ -17090,7 +17113,7 @@ test('the look that first chooses Merged updates the linked checkout once, recor
   mock.env(on, { HOME: '/h' })
   engine(on)
   const world = fakeGitHub(on)
-  linkedScript(world)
+  linkedScript(on, world)
   await watch($)
   await clock.settle()
 
@@ -17107,13 +17130,55 @@ test('the look that first chooses Merged updates the linked checkout once, recor
   expect(world.calls.filter(argv => argv.startsWith('gh pr view 7 ') && argv.includes('--json number,')).every(argv => argv.includes('mergeCommit'))).toBe(true)
 })
 
+// The look that first chooses Merged, with the given variables, and the
+// configuration folder the links are scripted in.
+async function mergedLookWith($: Engine, on: On, env: Record<string, string>, config: string) {
+  const clock = mock.clock(on)
+  memoryStore(on)
+  mock.env(on, env)
+  engine(on)
+  const world = fakeGitHub(on)
+  linkedScript(on, world, config)
+  await watch($)
+  await clock.settle()
+  world.pr = openPullRequest({ state: 'MERGED', mergeCommit: { oid: MERGE_COMMIT } })
+  const answer = String((await loose($)({ tool: 'mcp__builder__watch', number: 7 })).result)
+  return { answer, world }
+}
+
+test('the update searches CLAUDE_CONFIG_DIR before HOME', async ($, on) => {
+  const { answer, world } = await mergedLookWith($, on, { CLAUDE_CONFIG_DIR: '/c', HOME: '/h' }, '/c')
+  expect(answer).toContain(UPDATED_LINE)
+  expect(linkedCalls(world)).toContain('stat /c/skills')
+  expect(fastForwards(world)).toBe(1)
+})
+
+test('the update searches .claude under HOME when CLAUDE_CONFIG_DIR is not set', async ($, on) => {
+  const { answer, world } = await mergedLookWith($, on, { HOME: '/h', USERPROFILE: '/u' }, '/h/.claude')
+  expect(answer).toContain(UPDATED_LINE)
+  expect(linkedCalls(world)).toContain('stat /h/.claude/skills')
+})
+
+test('the update searches .claude under USERPROFILE when CLAUDE_CONFIG_DIR and HOME are not set', async ($, on) => {
+  const { answer, world } = await mergedLookWith($, on, { USERPROFILE: '/u' }, '/u/.claude')
+  expect(answer).toContain(UPDATED_LINE)
+  expect(linkedCalls(world)).toContain('stat /u/.claude/skills')
+})
+
+test('with CLAUDE_CONFIG_DIR, HOME and USERPROFILE all unset the update says so and runs nothing', async ($, on) => {
+  const { answer, world } = await mergedLookWith($, on, {}, '/h/.claude')
+  expect(answer).toContain("Claude Code's configuration folder could not be found, since CLAUDE_CONFIG_DIR, HOME and USERPROFILE are all unset or empty")
+  expect(linkedCalls(world)).toEqual([])
+  expect(fastForwards(world)).toBe(0)
+})
+
 test('two looks held at once run the fast-forward once, and both get its outcome', async ($, on) => {
   const clock = mock.clock(on)
   const stored = memoryStore(on)
   mock.env(on, { HOME: '/h' })
   engine(on)
   const world = fakeGitHub(on)
-  linkedScript(world)
+  linkedScript(on, world)
   on('command.run', () => ({ text: '' }))
   await watch($)
   await clock.settle()
@@ -17143,7 +17208,7 @@ test('later looks, by the watch tool and by /builder poll, run no git for a reco
   mock.env(on, { HOME: '/h' })
   engine(on)
   const world = fakeGitHub(on)
-  linkedScript(world)
+  linkedScript(on, world)
   on('command.run', () => ({ text: '' }))
   await watch($)
   await clock.settle()
@@ -17167,7 +17232,7 @@ test('a record of an update that started and did not finish reads as left alone,
   mock.env(on, { HOME: '/h' })
   engine(on)
   const world = fakeGitHub(on)
-  linkedScript(world)
+  linkedScript(on, world)
   await watch($)
   await clock.settle()
 
@@ -17184,7 +17249,7 @@ test('a pull request merged with no merge commit yet records nothing and runs no
   mock.env(on, { HOME: '/h' })
   engine(on)
   const world = fakeGitHub(on)
-  linkedScript(world)
+  linkedScript(on, world)
   await watch($)
   await clock.settle()
 
@@ -17256,7 +17321,7 @@ async function resumeOnMergedSnapshot($: Engine, on: On, before: object, after: 
   mock.env(on, { HOME: '/h' })
   engine(on)
   const world = fakeGitHub(on)
-  linkedScript(world)
+  linkedScript(on, world)
   sessionTurns(on)
   on('command.run', () => ({ text: '' }))
   const usage = usageAnswers(on)
@@ -17326,7 +17391,7 @@ test('an error of the mod\'s own around the update gives the Merged step that sa
   on('env.get', () => { throw new Error('the environment could not be read') })
   engine(on)
   const world = fakeGitHub(on)
-  linkedScript(world)
+  linkedScript(on, world)
   await watch($)
   await clock.settle()
 
@@ -17344,10 +17409,10 @@ test('an update with forty broken links beside a checkout it updated still state
   mock.env(on, { HOME: '/h' })
   engine(on)
   const world = fakeGitHub(on)
-  linkedScript(world)
-  const broken = Array.from({ length: 40 }, (_, i) => `/h/.claude/skills/broken-${i}`)
-  world.linked['find /h/.claude/skills/ -mindepth 1 -maxdepth 1 -type l -print0'] = { stdout: ['/h/.claude/skills/implement', ...broken].map(link => `${link}\0`).join('') }
-  for (const link of broken) world.linked[`test -e ${link}`] = { exitCode: 1 }
+  const { stats, lists } = linkedScript(on, world)
+  const broken = Array.from({ length: 40 }, (_, i) => `broken-${i}`)
+  lists.set('/h/.claude/skills', ['implement', ...broken])
+  for (const name of broken) stats.set(`/h/.claude/skills/${name}`, 'missing')
   await watch($)
   await clock.settle()
 

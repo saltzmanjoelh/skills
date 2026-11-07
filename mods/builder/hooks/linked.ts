@@ -1,36 +1,45 @@
 // The update of the linked checkout after a merge. Skills, agents and this
-// mod load through links under ~/.claude into a repository's main checkout,
+// mod load through links in Claude Code's configuration folder into a
+// repository's main checkout,
 // so a session started a moment after a merge runs whatever that checkout
 // holds. When a look first chooses the Merged step, the mod fast-forwards that
 // checkout to the merge commit, once, and the Merged step states the outcome.
 //
 // The procedure is the one docs/specs/merged-updates-linked-checkout.md and
-// docs/specs/linked-checkout-any-machine.md describe, with the same commands,
-// checks and outcomes: find the links, match the merged repository, check the
+// docs/specs/linked-checkout-any-machine.md describe, with the same checks
+// and outcomes: find the links, match the merged repository, check the
 // base, choose where to fetch from, fetch the merge commit and what it needs,
 // check it is safe and fast-forward, and confirm. It never moves a checkout
 // that is on another branch or has changes to tracked files, and it never
 // forces, resets or retries, except once after a lock.
 //
-// Every command runs through `process.run` as an argument vector, never
-// through a shell, with a time limit. The module imports only types from the
-// engine, so a script can load it and run it against real repositories.
+// The links are found and resolved with the engine's `fs.stat` and `fs.list`
+// calls rather than with commands, so the same code runs on Windows, and a
+// path that starts with a drive letter is split on both kinds of slash (see
+// the path helpers below). Every command runs through `process.run` as an
+// argument vector, never through a shell, with a time limit. The module
+// imports only types from the engine, so a script can load it and run it
+// against real repositories.
 
 import type { EngineInterface } from 'claude-code'
+import { DRIVE } from './links'
 import { isFullSha, SECRET_SHAPES } from './review'
-import { isPlainRepo, listed, printable } from './text'
+import { configDirOf } from './status'
+import { isAbsolute, isPlainRepo, listed, printable } from './text'
 
-// What the update needs from the engine: commands, and the store for the
-// record of each update.
+// What the update needs from the engine: commands, the file calls that find
+// and resolve the links, and the store for the record of each update.
 export type LinkedIo = {
   process: Pick<EngineInterface['process'], 'run'>
+  fs: Pick<EngineInterface['fs'], 'stat' | 'list'>
   store: Pick<EngineInterface['store'], 'get' | 'set'>
 }
 
-// `home` is the HOME variable, read by the caller, and undefined when it is
-// not set. `repo` is the merged repository as owner and name, `base` the
-// branch the pull request merged into, and `merge` its merge commit.
-export type LinkedInput = { home: string | undefined; repo: string; base: string; merge: string }
+// `configDir`, `home` and `userProfile` are the CLAUDE_CONFIG_DIR, HOME and
+// USERPROFILE variables, read by the caller, each undefined when it is not
+// set. `repo` is the merged repository as owner and name, `base` the branch
+// the pull request merged into, and `merge` its merge commit.
+export type LinkedInput = { configDir: string | undefined; home: string | undefined; userProfile: string | undefined; repo: string; base: string; merge: string }
 
 // A command's time limit, and the longer one for a fetch and for the
 // fast-forward, which may download or write many files.
@@ -117,12 +126,90 @@ function gitIn($: LinkedIo, dir: string, args: string[], timeoutMs = COMMAND_MS,
 const firstLine = (text: string) => text.split('\n')[0]!.trim()
 // A branch name that is safe in a git argument: never an option or a range.
 const isPlainBranch = (name: string) => name.length <= 200 && !name.startsWith('-') && !name.includes('..') && /^[A-Za-z0-9._/-]+$/.test(name)
-const parentOf = (path: string) => {
-  const trimmed = path.replace(/\/+$/, '')
-  const at = trimmed.lastIndexOf('/')
-  return at <= 0 ? '/' : trimmed.slice(0, at)
-}
 const unique = <T>(items: T[]) => [...new Set(items)]
+
+// ----- Paths -----
+
+// A path that starts with a drive letter, a colon and a slash, such as
+// `C:\a\b` or `c:/a/b`, is split on both `/` and `\`, by the rule that
+// `resolved` in links.ts uses. Every other path, and so every path that
+// starts with `/`, is split on `/` alone, exactly as before, so a `\` stays
+// part of a name, as it may on macOS and Linux.
+const isDrivePath = (path: string) => DRIVE.test(path)
+
+// A path with its trailing separators dropped. A drive path keeps the slash
+// after its drive letter, so it never becomes a bare `C:`, which names the
+// drive's current folder rather than its top.
+function trimmed(path: string): string {
+  if (!isDrivePath(path)) return path.replace(/\/+$/, '')
+  const cut = path.replace(/[\\/]+$/, '')
+  return cut.length <= 2 ? path.slice(0, 3) : cut
+}
+
+// The folder a path lies in, spelled as the path spells it: `/` for a path
+// directly under `/`, and the top of the drive, such as `C:\`, for a path
+// directly under it.
+function parentOf(path: string): string {
+  const plain = trimmed(path)
+  if (!isDrivePath(plain)) {
+    const at = plain.lastIndexOf('/')
+    return at <= 0 ? '/' : plain.slice(0, at)
+  }
+  const at = Math.max(plain.lastIndexOf('/'), plain.lastIndexOf('\\'))
+  return at <= 2 ? plain.slice(0, 3) : plain.slice(0, at)
+}
+
+// The form in which two checkout paths are compared. A drive path has its
+// drive letter in upper case and every `\` written as `/`, so `c:\a` and
+// `C:/a` are the same checkout, while the rest keeps its case, so `C:/a` and
+// `C:/A` are not. Any other path is compared as written, without its
+// trailing slashes. The form is used only to compare: every path is shown and
+// passed to git as it was written.
+function comparedForm(path: string): string {
+  const plain = trimmed(path)
+  return isDrivePath(plain) ? `${plain[0]!.toUpperCase()}:${plain.slice(2).replace(/\\/g, '/')}` : plain
+}
+
+const samePath = (a: string, b: string) => comparedForm(a) === comparedForm(b)
+
+// The paths with each one kept once by its compared form, in the spelling
+// that came first.
+function uniquePaths(paths: string[]): string[] {
+  const seen = new Set<string>()
+  return paths.filter(path => {
+    const key = comparedForm(path)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+// The message of an error from a file call, or an empty one.
+function messageOf(error: unknown): string {
+  if (typeof error === 'string') return error
+  const message = typeof error === 'object' && error !== null ? (error as { message?: unknown }).message : undefined
+  return typeof message === 'string' ? message : ''
+}
+
+// Whether a file call rejected because the path is not there. How the engine
+// shapes that rejection is not written down, so either an ENOENT code or
+// ENOENT in the message counts.
+function isMissing(error: unknown): boolean {
+  const code = typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : undefined
+  return code === 'ENOENT' || /\bENOENT\b/.test(messageOf(error))
+}
+
+type Stat = Awaited<ReturnType<LinkedIo['fs']['stat']>>
+
+// What a path leads to, with where it lands: its stat, or that it is missing,
+// or that the call failed with a message.
+async function statOf($: LinkedIo, path: string): Promise<{ kind: 'found'; stat: Stat } | { kind: 'missing' } | { kind: 'failed'; message: string }> {
+  try {
+    return { kind: 'found', stat: await $.fs.stat(path, { resolve: true }) }
+  } catch (error) {
+    return isMissing(error) ? { kind: 'missing' } : { kind: 'failed', message: messageOf(error) }
+  }
+}
 
 // ----- Choosing the source -----
 
@@ -165,9 +252,10 @@ export function updatedLine(o: { path: string; merge: string; head: string | nul
   return `Updated: the linked checkout ${shown(o.path)} ${held}, and ${head}. ${source}`
 }
 
-export function notLinkedLine(repo: string, home: string, names: string[]): string {
+// `config` is the configuration folder that was searched.
+export function notLinkedLine(repo: string, config: string, names: string[]): string {
   const into = names.length === 0 ? 'no git checkout' : listed(names)
-  return `Not linked: ${repo} merged, and the links under ${shown(home)}/.claude point into ${into}, none of which is ${repo}, so no checkout was moved.`
+  return `Not linked: ${repo} merged, and the links under ${shown(config)} point into ${into}, none of which is ${repo}, so no checkout was moved.`
 }
 
 export function noLinksLine(folders: string[]): string[] {
@@ -197,53 +285,64 @@ type Found =
   | { kind: 'broken'; link: string }
   | { kind: 'failed'; link: string; what: string; message: string }
 
-// The links in ~/.claude/skills, agents and commands: a folder that is itself
-// a link, and every link directly inside each folder. A target outside any
-// git repository points into no checkout and is left out; `isAny` still says
-// whether any link was found at all.
+// The links in the configuration folder's skills, agents and commands
+// folders: a folder that is itself a link, and every link directly inside
+// each folder, listed through the folder when it is a link. A missing folder
+// is skipped. A link whose stat finds it missing, or gives no `realPath`, is
+// broken, and one whose stat fails otherwise could not be resolved. A target
+// outside any git repository points into no checkout and is left out; `isAny`
+// still says whether any link was found at all.
 async function findLinks($: LinkedIo, folders: string[]): Promise<{ found: Found[]; isAny: boolean }> {
   const found: Found[] = []
-  const targets: { link: string; target: string }[] = []
+  const targets: { link: string; target: string; isDir: boolean }[] = []
   for (const folder of folders) {
-    // Without a trailing slash, since one would follow the link.
-    if ((await run($, ['test', '-L', folder])).ok) {
-      const real = await run($, ['realpath', folder])
-      const target = firstLine(real.stdout)
-      if (!real.ok || target === '') {
+    const own = await statOf($, folder)
+    if (own.kind === 'missing') continue
+    if (own.kind === 'failed') {
+      found.push({ kind: 'failed', link: folder, what: `the links inside ${shown(folder)} could not be listed`, message: own.message })
+      continue
+    }
+    if (own.stat.isLink) {
+      const target = own.stat.realPath
+      if (target === undefined || target === '') {
         found.push({ kind: 'broken', link: folder })
         continue
       }
-      targets.push({ link: folder, target })
-    } else if (!(await run($, ['test', '-d', folder])).ok) {
+      targets.push({ link: folder, target, isDir: own.stat.kind === 'dir' })
+    }
+    if (own.stat.kind !== 'dir') continue
+    let entries: Awaited<ReturnType<LinkedIo['fs']['list']>>
+    try {
+      entries = await $.fs.list(folder)
+    } catch (error) {
+      found.push({ kind: 'failed', link: folder, what: `the links inside ${shown(folder)} could not be listed`, message: messageOf(error) })
       continue
     }
-    // The trailing slash makes `find` look inside a folder that is a link.
-    const inside = await run($, ['find', `${folder}/`, '-mindepth', '1', '-maxdepth', '1', '-type', 'l', '-print0'])
-    if (!inside.ok) {
-      found.push({ kind: 'failed', link: folder, what: `the links inside ${shown(folder)} could not be listed`, message: inside.message })
-      continue
-    }
-    for (const link of inside.stdout.split('\0').filter(path => path !== '')) {
-      if (!(await run($, ['test', '-e', link])).ok) {
+    for (const entry of entries.filter(entry => entry.isLink)) {
+      const link = `${folder}/${entry.name}`
+      const looked = await statOf($, link)
+      if (looked.kind === 'failed') {
+        found.push({ kind: 'failed', link, what: `the link ${shown(link)} could not be resolved`, message: looked.message })
+        continue
+      }
+      const target = looked.kind === 'found' ? looked.stat.realPath : undefined
+      if (looked.kind === 'missing' || target === undefined || target === '') {
         found.push({ kind: 'broken', link })
         continue
       }
-      const real = await run($, ['realpath', link])
-      const target = firstLine(real.stdout)
-      if (!real.ok || target === '') {
-        found.push({ kind: 'failed', link, what: `the link ${shown(link)} could not be resolved`, message: real.message })
-        continue
-      }
-      targets.push({ link, target })
+      targets.push({ link, target, isDir: looked.stat.kind === 'dir' })
     }
   }
   const isAny = found.length > 0 || targets.length > 0
+  // Git is asked once for each folder, by its compared form, and runs in the
+  // folder as the first link spelled it.
   const trees = new Map<string, Promise<Ran>>()
-  for (const { link, target } of targets) {
+  for (const { link, target, isDir } of targets) {
     // A link under agents points at a file, which counts by its folder.
-    const dir = (await run($, ['test', '-d', target])).ok ? target : parentOf(target)
-    if (!trees.has(dir)) trees.set(dir, gitIn($, dir, ['rev-parse', '--path-format=absolute', '--git-common-dir', '--show-toplevel']))
-    const parsed = await trees.get(dir)!
+    const dir = isDir ? target : parentOf(target)
+    const key = comparedForm(dir)
+    if (!trees.has(key)) trees.set(key, gitIn($, dir, ['rev-parse', '--path-format=absolute', '--git-common-dir', '--show-toplevel']))
+    const parsed = await trees.get(key)!
     if (!parsed.ok) {
       if (parsed.exitCode === 128 && /not a git repository/i.test(parsed.message)) continue
       found.push({ kind: 'failed', link, what: `the checkout that ${shown(link)} leads into could not be found`, message: parsed.message })
@@ -255,7 +354,7 @@ async function findLinks($: LinkedIo, folders: string[]): Promise<{ found: Found
       continue
     }
     // The main checkout is the parent of the shared git folder.
-    found.push({ kind: 'linked', link, tree: tree.replace(/\/+$/, ''), main: parentOf(common) })
+    found.push({ kind: 'linked', link, tree: trimmed(tree), main: parentOf(common) })
   }
   return { found, isAny }
 }
@@ -294,23 +393,43 @@ function shownProblems(problems: Problem[]): Problem[] {
   return [...problems.slice(0, PROBLEMS_SHOWN), { short: what, sentence: `Also, ${what}, and they are not listed here.` }]
 }
 
+// Why no configuration folder was found, which configDirOf in status.ts
+// answers only with null. It treats an empty value as unset, and a
+// CLAUDE_CONFIG_DIR made only of slashes trims to nothing, so that one is
+// said to name no folder rather than to be relative.
+function noConfigReason(input: LinkedInput): string {
+  const none = "Claude Code's configuration folder could not be found"
+  const isUnset = (value: string | undefined) => value === undefined || value === ''
+  if (!isUnset(input.configDir)) {
+    const value = shown(input.configDir!)
+    return isAbsolute(input.configDir!)
+      ? `CLAUDE_CONFIG_DIR is set to ${value}, which names no folder once its trailing slashes are dropped, so ${none}`
+      : `CLAUDE_CONFIG_DIR is set to ${value}, which is not an absolute path, so ${none}`
+  }
+  if (isUnset(input.home) && isUnset(input.userProfile)) return `${none}, since CLAUDE_CONFIG_DIR, HOME and USERPROFILE are all unset or empty`
+  return `CLAUDE_CONFIG_DIR is unset or empty, and neither HOME nor USERPROFILE is set to an absolute path, so ${none}`
+}
+
 async function updateAll($: LinkedIo, input: LinkedInput): Promise<string[]> {
-  const { home, repo, base, merge } = input
-  if (home === undefined || home === '') return [leftAloneAll('HOME is not set, so the links under ~/.claude could not be found')]
+  const { repo, base, merge } = input
+  // The folder Claude Code loads user skills, agents and commands from.
+  const config = configDirOf(input.configDir, input.home, input.userProfile)
+  if (config === null) return [leftAloneAll(noConfigReason(input))]
   if (!isPlainRepo(repo) || !isPlainBranch(base) || !isFullSha(merge)) {
     return [leftAloneAll('the repository, the base branch or the merge commit that GitHub gave is not safe to pass to git')]
   }
-  const folders = ['skills', 'agents', 'commands'].map(name => `${home.replace(/\/+$/, '')}/.claude/${name}`)
+  const folders = ['skills', 'agents', 'commands'].map(name => `${config}/${name}`)
   const { found, isAny } = await findLinks($, folders)
   if (!isAny) return noLinksLine(folders)
 
-  // Step 2: look at each main checkout once, however many links lead into it.
+  // Step 2: look at each main checkout once, however many links lead into it
+  // and however they spell it.
   const linked = found.filter((f): f is Extract<Found, { kind: 'linked' }> => f.kind === 'linked')
   const names = new Map<string, string>()
   const problems: Problem[] = found.filter(f => f.kind !== 'linked').map(f => f.kind === 'broken'
     ? { short: `the link ${shown(f.link)} is broken`, sentence: `The link ${shown(f.link)} is broken, so whatever it pointed into was not looked at.` }
     : { short: `${f.what}${quote(f.message)}`, sentence: `Also, ${f.what}${quote(f.message)}.` })
-  for (const main of unique(linked.map(f => f.main))) {
+  for (const main of uniquePaths(linked.map(f => f.main))) {
     const looked = await run($, ['gh', 'repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner'], { cwd: main })
     const name = firstLine(looked.stdout)
     if (!looked.ok || name === '') {
@@ -324,14 +443,14 @@ async function updateAll($: LinkedIo, input: LinkedInput): Promise<string[]> {
   const matched = [...names].filter(([, name]) => name.toLowerCase() === repo.toLowerCase()).map(([main]) => main)
   if (matched.length === 0) {
     if (named.length > 0) return [leftAloneAll(`no linked checkout is ${repo}, and ${named.map(p => p.short).join('; ')}, which might have been it`)]
-    return [notLinkedLine(repo, home, unique([...names.values()]))]
+    return [notLinkedLine(repo, config, unique([...names.values()]))]
   }
 
   // A link whose tree is not the main checkout lies in a worktree, which is
   // someone's branch and is never moved.
-  const isMatched = (f: { main: string }) => matched.includes(f.main)
-  const worktrees = unique(linked.filter(f => isMatched(f) && f.tree !== f.main).map(f => f.tree))
-  const toUpdate = matched.filter(main => linked.some(f => f.main === main && f.tree === main))
+  const isMatched = (f: { main: string }) => matched.some(main => samePath(main, f.main))
+  const worktrees = uniquePaths(linked.filter(f => isMatched(f) && !samePath(f.tree, f.main)).map(f => f.tree))
+  const toUpdate = matched.filter(main => linked.some(f => samePath(f.main, main) && samePath(f.tree, main)))
   const extras = [...(worktrees.length > 0 && toUpdate.length > 0 ? [worktreesLine(repo, worktrees)] : []), ...named.map(p => p.sentence)]
   if (toUpdate.length === 0) return [onlyWorktreesLine(repo, worktrees), ...extras]
 

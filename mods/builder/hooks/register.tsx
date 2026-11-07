@@ -391,8 +391,10 @@ async function linkedFor($: $, r: SnapshotTarget, live: GhPullRequest): Promise<
     const key = linkedKey(r.repo, r.number)
     const merge = live.mergeCommit?.oid
     if (typeof merge !== 'string' || !isFullSha(merge)) return (await recordedLinked($, key)) ?? 'unread'
-    const home = await $.env.get('HOME')
-    return await linkedCheckout($, key, { home, repo: r.repo, base: live.baseRefName ?? '', merge, now: await $.clock.now() })
+    // The variables that give Claude Code's configuration folder, where the
+    // links are found (see configDirOf in status.ts).
+    const [configDir, home, userProfile] = await Promise.all([$.env.get('CLAUDE_CONFIG_DIR'), $.env.get('HOME'), $.env.get('USERPROFILE')])
+    return await linkedCheckout($, key, { configDir, home, userProfile, repo: r.repo, base: live.baseRefName ?? '', merge, now: await $.clock.now() })
   } catch {
     return null
   }
