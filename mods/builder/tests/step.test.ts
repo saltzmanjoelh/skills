@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import { countingRuns, failedRunsOf, hasFailed, isReplaced, isUnfinished, needsJobs, snapshotOf, type GhPullRequest } from '../hooks/github'
-import { baseFactsOf, chooseStep, CLEANUP_SECTIONS, DEFAULT_MERGE_COMMAND, isJudgementKept, labelActionOf, LINKED_KEPT, linkedIn, labelFor, labelRecordIn, needsListing, otherStateLabelsOf, reviewerFactOf, SKILL_POINTS, SKILL_SECTIONS, stepFor, stepLines, UNREAD_FACTS, unpushedIn, type Step } from '../hooks/step'
+import { ARRIVAL_MS, countingRuns, failedRunsOf, hasFailed, isReplaced, isUnfinished, needsJobs, PICK_UP_MS, snapshotOf, STATE_LABELS, WORKING_LABEL, type GhPullRequest } from '../hooks/github'
+import { baseFactsOf, chooseStep, CLEANUP_SECTIONS, DEFAULT_MERGE_COMMAND, isJudgementKept, labelActionOf, labelsRemovedWith, LINKED_KEPT, linkedIn, labelFor, labelRecordIn, needsListing, otherStateLabelsOf, reviewerFactOf, SKILL_POINTS, SKILL_SECTIONS, stepFor, stepLines, UNREAD_FACTS, unpushedIn, type Step } from '../hooks/step'
 import type { BaseFacts, HeadRun, Snapshot, Unpushed } from '../types'
 
 const ME = 'owner'
@@ -504,6 +504,10 @@ const EVERY_STEP: Step[] = [
   { kind: 'request-review', number: 7, reviewers: ['dan', 'eve'] },
   { kind: 'awaiting-review', reviewers: ['cat'], others: ['review-app', 'passerby'] },
   { kind: 'awaiting-review', reviewers: ['cat'] },
+  { kind: 'review-not-picked-up', number: 7, reviewers: ['cat'], others: ['review-app'] },
+  { kind: 'review-not-picked-up', number: 7, reviewers: ['cat', 'dan'] },
+  { kind: 'review-not-arrived', number: 7, reviewers: ['cat'], others: ['review-app'] },
+  { kind: 'review-not-arrived', number: 7, reviewers: ['cat', 'dan'] },
 ]
 
 const textOf = (step: Step) => stepLines(step).join('\n')
@@ -781,6 +785,8 @@ test('each step gives the state label that follows from it, and Merged, An open 
     'outside-feedback': 'waiting-on-author',
     'request-review': 'waiting-on-reviewer',
     'awaiting-review': 'waiting-on-reviewer',
+    'review-not-picked-up': 'stuck',
+    'review-not-arrived': 'stuck',
     'user-claude-unread': null,
     'runs-unread': null,
     waiting: 'ready-to-merge',
@@ -1028,4 +1034,117 @@ test('every chooser fixture with no outside reviewer chooses what it did before'
 test('a solo snapshot fingerprints exactly as it did before outside reviewers were read', () => {
   const s = snapshot({ reviews: approvedOnly, labels: [{ name: 'docs' }] }, [headRun()])
   expect(s.fingerprint).toBe(`OPEN|cccccccccccc|docs|APPROVE/APPROVE@cccccccc|tests:passed|no-conflict|`)
+})
+
+// The time limits on a requested outside review, with a fixed time of the look
+// (see docs/specs/pr-comments-ends-every-comment.md).
+
+const REQUESTED = '2026-11-05T10:00:00Z'
+
+// The session's record review where both verdicts approve at the head and the
+// /code-review pass ran, so the steps for outside reviewers are chosen.
+const approvedAtHead = recordReview(C, `CODE-REVIEW ${C.slice(0, 8)} since=base`)
+const FACTS_NONE: BaseFacts = { maxPushes: 8, maxRounds: 5, checks: 'none', merge: 'default', isClaudeRead: true }
+
+// Ann's review is requested at REQUESTED, and the look happened `after`
+// milliseconds later. `times` is what the read of the request times gave.
+function requestedAfter(after: number, labels: string[] = [], times: ReadonlyMap<string, string> = new Map([['ann', REQUESTED]]), over: Partial<GhPullRequest> = {}): Snapshot {
+  const pr = pullRequest({
+    statusCheckRollup: [], reviews: [approvedAtHead], reviewRequests: [{ __typename: 'User', login: 'ann' }],
+    labels: labels.map(name => ({ name })), ...over,
+  })
+  return snapshotOf('o/r', pr, ME, [], { headRuns: [headRun()], facts: FACTS_NONE, lookedAt: Date.parse(REQUESTED) + after }, times)
+}
+
+test('a requested review waits before ten minutes, and without reviewer-working the pick-up step comes after them', () => {
+  expect(chooseStep(requestedAfter(PICK_UP_MS - 1), false)).toEqual({ kind: 'awaiting-review', reviewers: ['ann'] })
+  expect(chooseStep(requestedAfter(PICK_UP_MS), false)).toEqual({ kind: 'review-not-picked-up', number: 7, reviewers: ['ann'] })
+})
+
+test('with reviewer-working on, the review waits past ten minutes, and the arrival step comes after two hours', () => {
+  expect(chooseStep(requestedAfter(PICK_UP_MS, [WORKING_LABEL]), false).kind).toBe('awaiting-review')
+  expect(chooseStep(requestedAfter(ARRIVAL_MS - 1, [WORKING_LABEL]), false).kind).toBe('awaiting-review')
+  expect(chooseStep(requestedAfter(ARRIVAL_MS, [WORKING_LABEL]), false)).toEqual({ kind: 'review-not-arrived', number: 7, reviewers: ['ann'] })
+  // Past two hours with the label off, the arrival step comes first.
+  expect(chooseStep(requestedAfter(ARRIVAL_MS), false).kind).toBe('review-not-arrived')
+})
+
+test('a request time that could not be read, or a snapshot with no time of its look, gives the waiting step', () => {
+  expect(chooseStep(requestedAfter(ARRIVAL_MS, [], new Map()), false).kind).toBe('awaiting-review')
+  const { lookedAt: _, ...unlooked } = requestedAfter(ARRIVAL_MS)
+  expect(chooseStep(unlooked as Snapshot, false).kind).toBe('awaiting-review')
+})
+
+test('a new request after an earlier one counts from the new one', () => {
+  // The earlier request was made two hours before the look, and the new one
+  // five minutes before it, so neither limit has passed.
+  const asked = new Map([['ann', new Date(Date.parse(REQUESTED) + ARRIVAL_MS - 5 * 60_000).toISOString()]])
+  expect(chooseStep(requestedAfter(ARRIVAL_MS, [], asked), false).kind).toBe('awaiting-review')
+})
+
+test('feedback and a reviewer not yet asked still come before an overdue request', () => {
+  const feedback = requestedAfter(ARRIVAL_MS, [], undefined, {
+    reviews: [approvedAtHead, { author: { login: 'bob' }, state: 'COMMENTED', body: '', commit: { oid: C }, submittedAt: REQUESTED, authorAssociation: 'COLLABORATOR' }],
+  })
+  expect(chooseStep(feedback, false).kind).toBe('outside-feedback')
+  const unrequested = snapshotOf('o/r', pullRequest({ statusCheckRollup: [], reviews: [approvedAtHead], reviewRequests: [{ __typename: 'User', login: 'ann' }] }), ME, [], {
+    headRuns: [headRun()], facts: { ...FACTS_NONE, reviewers: ['dan'] }, lookedAt: Date.parse(REQUESTED) + ARRIVAL_MS,
+  }, new Map([['ann', REQUESTED]]))
+  expect(chooseStep(unrequested, false).kind).toBe('request-review')
+})
+
+test('both limit steps give stuck, and their texts name the reviewers, the limit and how to ask again', () => {
+  const pickUp: Step = { kind: 'review-not-picked-up', number: 7, reviewers: ['ann', 'bob'] }
+  const arrival: Step = { kind: 'review-not-arrived', number: 7, reviewers: ['ann'] }
+  expect(labelFor(pickUp)).toBe('stuck')
+  expect(labelFor(arrival)).toBe('stuck')
+  const pickUpText = textOf(pickUp)
+  expect(pickUpText).toContain('ann and bob')
+  expect(pickUpText).toContain('ten minutes')
+  expect(pickUpText).toContain('`reviewer-working`')
+  expect(pickUpText).toContain('`gh pr edit 7 --remove-reviewer ann,bob`')
+  expect(pickUpText).toContain('`gh pr edit 7 --add-reviewer ann,bob`')
+  expect(pickUpText).toContain('`mcp__builder__watch`')
+  expect(pickUpText).toContain('in one question')
+  expect(pickUpText).toContain('already said to keep waiting')
+  const arrivalText = textOf(arrival)
+  expect(arrivalText).toContain('two hours')
+  expect(arrivalText).toContain('`gh pr edit 7 --remove-reviewer ann`')
+  expect(arrivalText).toContain('An answer to keep waiting given at the ten-minute limit does not cover this one.')
+})
+
+test('the merge steps name the check for questions to a reviewer that wait for an answer', () => {
+  for (const step of EVERY_STEP.filter(step => step.kind === 'merge' || step.kind === 'ask-merge')) {
+    expect(textOf(step)).toContain('If a question the session asked a reviewer in a review thread is still waiting for an answer, ask the person about it before merging, and do not merge while it is open unless the person says to.')
+  }
+})
+
+test('setting waiting-on-reviewer keeps reviewer-working, and setting any other state label removes it', () => {
+  const live = ['bug', 'in-review', WORKING_LABEL]
+  expect(labelsRemovedWith('waiting-on-reviewer', 'waiting-on-reviewer', live)).toEqual(['in-review'])
+  for (const label of STATE_LABELS.filter(label => label !== 'waiting-on-reviewer')) {
+    expect(labelsRemovedWith(label, label, [WORKING_LABEL])).toEqual([WORKING_LABEL])
+  }
+  expect(labelActionOf('ready-to-merge', 'waiting-on-reviewer', ['waiting-on-reviewer', WORKING_LABEL])).toEqual({ kind: 'write', remove: ['waiting-on-reviewer', WORKING_LABEL] })
+  expect(labelActionOf('waiting-on-reviewer', 'in-review', ['in-review', WORKING_LABEL])).toEqual({ kind: 'write', remove: ['in-review'] })
+})
+
+test('reviewer-working is removed only when the live read saw it', () => {
+  expect(labelsRemovedWith('in-review', 'in-review', ['stuck'])).toEqual(['stuck'])
+  expect(labelActionOf('stuck', 'waiting-on-reviewer', ['waiting-on-reviewer'])).toEqual({ kind: 'write', remove: ['waiting-on-reviewer'] })
+})
+
+test('a kept stuck judgement, or a stuck only recorded, keeps reviewer-working while the step gives waiting-on-reviewer', () => {
+  expect(labelActionOf('waiting-on-reviewer', 'waiting-on-reviewer', ['waiting-on-reviewer', WORKING_LABEL], 'waiting-on-reviewer')).toEqual({ kind: 'keep', add: true, remove: ['waiting-on-reviewer'] })
+  expect(labelActionOf('waiting-on-reviewer', null, ['stuck', WORKING_LABEL])).toEqual({ kind: 'record', remove: [] })
+  // Under any other label the same paths take it off.
+  expect(labelActionOf('in-review', 'in-review', ['stuck', WORKING_LABEL], 'in-review')).toEqual({ kind: 'keep', add: false, remove: [WORKING_LABEL] })
+  expect(labelActionOf('in-review', null, ['stuck', WORKING_LABEL])).toEqual({ kind: 'record', remove: [WORKING_LABEL] })
+  // A step that gives no label, as while a question is open, sets no state
+  // label of its own, so the label stays.
+  expect(labelActionOf(null, 'waiting-on-reviewer', ['stuck', WORKING_LABEL], 'waiting-on-reviewer')).toEqual({ kind: 'keep', add: false, remove: [] })
+})
+
+test('the list of state labels the shortcut reads is unchanged by reviewer-working', () => {
+  expect(otherStateLabelsOf('stuck', ['stuck', WORKING_LABEL])).toEqual([])
 })
