@@ -2323,6 +2323,26 @@ test('a document path written with forward slashes is still named, while the sam
   expect(text).toContain('- Gotchas document: none in this project')
 })
 
+// The fake file system holds a file at the literal path with the dotted part,
+// so a check that let such a path through would name it.
+test('a document path in CLAUDE.md with a part made only of dots and spaces is not named in the package, while a plain one still is', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  const files = fakeFiles(on)
+  files.set('/repo/CLAUDE.md', 'Architecture document: docs/.. /x.md\nGotchas document: docs/arch.md\n')
+  files.set('/repo/docs/.. /x.md', 'secret')
+  files.set('/repo/docs/arch.md', 'x')
+  await watch($)
+
+  await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
+  const text = files.get('/repo/.git/builder/cccccccc/package.md') ?? ''
+
+  expect(text).toContain('- Architecture document: none in this project')
+  expect(text).toContain('- Gotchas document: docs/arch.md')
+})
+
 test('a quiet session keeps its record fresh, so another session starting two weeks on does not prune it', async ($, on) => {
   // The 30-second redraw is refused here: fifteen days of it is some forty
   // thousand timer periods, and it plays no part in keeping the record seen.
@@ -3244,6 +3264,7 @@ test('the counsel tool refuses a path outside the checkout and writes no brief',
 
   expect(String(ran.result)).toContain('Refused: ../../.env leads outside the checkout; name paths inside it, relative to it.')
   expect(String(ran.result)).not.toContain('Windows')
+  expect(String(ran.result)).not.toContain('dots and spaces')
   expect([...files.keys()].some(path => path.includes('/counsel/'))).toBe(false)
 })
 
@@ -3262,6 +3283,7 @@ test('the counsel tool refuses a path written in a Windows form, asks for forwar
 
     expect(String(ran.result)).toContain(`Refused: ${windows} is written in a Windows form; name paths relative to the checkout, written with forward slashes.`)
     expect(String(ran.result)).not.toContain('leads outside')
+    expect(String(ran.result)).not.toContain('dots and spaces')
   }
   expect([...files.keys()].some(path => path.includes('/counsel/'))).toBe(false)
 })
@@ -3299,6 +3321,101 @@ test('a counsel path committed as a link to a file outside the checkout gets the
 
   expect(String(ran.result)).toContain('Refused: docs/arch.md leads outside the checkout; name paths inside it, relative to it.')
   expect(String(ran.result)).not.toContain('Windows')
+  expect([...files.keys()].some(path => path.includes('/counsel/'))).toBe(false)
+})
+
+test('the counsel tool refuses a path with a part made only of dots and spaces with a message of its own, and writes no brief', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  const files = fakeFiles(on)
+  await startOnly($)
+
+  for (const dotted of ['docs/.. /x', 'docs/... /x']) {
+    const ran = await loose($)({ ...brief, paths: [dotted] })
+
+    expect(String(ran.result)).toContain(`Refused: ${dotted} has a part made only of dots and spaces, which Windows may read as ..; name paths without such parts.`)
+    expect(String(ran.result)).not.toContain('leads outside')
+    expect(String(ran.result)).not.toContain('Windows form')
+  }
+  expect([...files.keys()].some(path => path.includes('/counsel/'))).toBe(false)
+})
+
+test('a counsel path that climbs out or is written in a Windows form keeps its message, even with a part made only of dots and spaces', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  const files = fakeFiles(on)
+  await startOnly($)
+
+  for (const climbing of ['../../.env', '../.. /x', '/docs/.. /x']) {
+    const ran = await loose($)({ ...brief, paths: [climbing] })
+
+    expect(String(ran.result)).toContain(`Refused: ${climbing} leads outside the checkout; name paths inside it, relative to it.`)
+    expect(String(ran.result)).not.toContain('dots and spaces')
+  }
+
+  // The backslash is written doubled, so the value holds one backslash.
+  const windows = await loose($)({ ...brief, paths: ['C:\\x'] })
+
+  expect(String(windows.result)).toContain('Refused: C:\\x is written in a Windows form; name paths relative to the checkout, written with forward slashes.')
+  expect(String(windows.result)).not.toContain('dots and spaces')
+  expect([...files.keys()].some(path => path.includes('/counsel/'))).toBe(false)
+})
+
+test('a counsel path is trimmed before it is checked, so a trailing space after a climbing part gets the message for leaving the checkout', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  const files = fakeFiles(on)
+  await startOnly($)
+
+  const ran = await loose($)({ ...brief, paths: ['docs/.. '] })
+
+  expect(String(ran.result)).toContain('Refused: docs/.. leads outside the checkout; name paths inside it, relative to it.')
+  expect(String(ran.result)).not.toContain('dots and spaces')
+  expect([...files.keys()].some(path => path.includes('/counsel/'))).toBe(false)
+})
+
+test('the first refused counsel path decides the message, in either order of a dotted path and a climbing one', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  const files = fakeFiles(on)
+  await startOnly($)
+
+  const dottedFirst = await loose($)({ ...brief, paths: ['docs/.. /x', '../y'] })
+
+  expect(String(dottedFirst.result)).toContain('Refused: docs/.. /x has a part made only of dots and spaces, which Windows may read as ..; name paths without such parts.')
+  expect(String(dottedFirst.result)).not.toContain('leads outside')
+
+  const climbingFirst = await loose($)({ ...brief, paths: ['../y', 'docs/.. /x'] })
+
+  expect(String(climbingFirst.result)).toContain('Refused: ../y leads outside the checkout; name paths inside it, relative to it.')
+  expect(String(climbingFirst.result)).not.toContain('dots and spaces')
+  expect([...files.keys()].some(path => path.includes('/counsel/'))).toBe(false)
+})
+
+test('a counsel path with a part made only of dots and spaces that is also a link outside the checkout gets the dotted message, not the message for leading outside', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  const files = fakeFiles(on)
+  // The fake file system finds a path only when a file is stored there, so
+  // the link gets a file at its path, as docs/arch.md has one by default.
+  files.set('/repo/docs/.. /x', 'x')
+  files.links.set('/repo/docs/.. /x', '/home/someone/.secrets')
+  await startOnly($)
+
+  const ran = await loose($)({ ...brief, paths: ['docs/.. /x'] })
+
+  expect(String(ran.result)).toContain('Refused: docs/.. /x has a part made only of dots and spaces, which Windows may read as ..; name paths without such parts.')
+  expect(String(ran.result)).not.toContain('leads outside')
   expect([...files.keys()].some(path => path.includes('/counsel/'))).toBe(false)
 })
 
@@ -3403,6 +3520,36 @@ test('a rerun rewrites the brief as round two with the proposed option added', a
   expect(text).toContain('3. only on events')
   expect(text).not.toContain('reason 0')
   expect(text).not.toContain('LEAN-MARKER')
+})
+
+test('a rerun of a question stored with a dot and space part keeps the notes of the paths after that part', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  const files = fakeFiles(on)
+  // Once the question is put, it reads back as one recorded before the rule
+  // that refuses such a part was loaded, so its stored paths hold one.
+  let recordedEarlier = false
+  on('state.get', async ($, e, next) => {
+    const held = await next(e)
+    const stored = (held as { value?: { value?: unknown; version?: number } | null }).value
+    const value = stored?.value
+    if (!recordedEarlier || e.plugin !== 'builder' || e.key !== 'counsel' || !Array.isArray(value)) return held
+    const rewritten = value.map((q: { paths: string[] }) => ({ ...q, paths: q.paths.map(p => p === 'docs/x.md' ? 'docs/.. /x.md' : p) }))
+    return { value: { ...stored, value: rewritten } } as never
+  })
+  await startOnly($)
+  await loose($)({ ...brief, paths: ['docs/x.md', 'docs/specs/poll.md'] })
+  recordedEarlier = true
+
+  const ran = await loose($)({ tool: TALLY, id: 'c1', round: 1, votes: ballots(['1', '2', 'none', '2', '1', '2', '1'], 'only on events') })
+  const text = files.get('/repo/.git/builder/counsel/session-1/c1/brief.md') ?? ''
+
+  expect(String(ran.result)).toContain('round 2')
+  expect(text).toContain('round 2')
+  expect(text).toContain('- docs/.. /x.md\n')
+  expect(text).toContain('- docs/specs/poll.md (not written yet)')
 })
 
 test('a subagent cannot put a question to the counsel or tally one', async ($, on) => {

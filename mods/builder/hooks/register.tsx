@@ -17,7 +17,7 @@ import { afterComparison, afterLoad, dueComparisons, isStale, LOADED_PATHS, load
 import { AGENT_PANE, agentPaneTree, bandTree, isDrawable, messagesReadOf, NAMED_AFTER_MS, PANE, paneTree, secondRow, type Elements, type MessagesRead, type View } from './pane'
 import { ADVERSARIAL_REVIEWER, afterReport, afterSeen, endedOf, FOCUSED_REVIEWERS, focusedReviewersFor, plannedOf, progressIn, reportAnswer, reportOf, stageLabel, STAGES, type ReportInput, type StageId } from './progress'
 import { changePrompt, ciEventContext, GITHUB_NAMES_LINE, resumePrompt, stateLines, stuckPrompt } from './prompts'
-import { changedKinds, codeReviewLine, commitRecordsOf, decidedItems, factIn, INSTRUCTION_PATHSPECS, instructionFileIsLink, isFullSha, isUpForCheck, isWindowsShaped, LATER_CONTEXT_LINES, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pluginRootsOf, reviewedHeadOf, rulingsOf, secretIn, specDirOf, THREADS_JQ, THREADS_QUERY, trendOf, trendStopLine, underRoot, verdictHeadOf, verdictsLine, type CodeReviewRecord, type CommitRecord, type EarlierRound, type FileKind, type PackageInput } from './review'
+import { changedKinds, codeReviewLine, commitRecordsOf, decidedItems, factIn, hasDotAndSpacePart, INSTRUCTION_PATHSPECS, instructionFileIsLink, isFullSha, isUpForCheck, isWindowsShaped, LATER_CONTEXT_LINES, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pluginRootsOf, reviewedHeadOf, rulingsOf, secretIn, specDirOf, THREADS_JQ, THREADS_QUERY, trendOf, trendStopLine, underRoot, verdictHeadOf, verdictsLine, type CodeReviewRecord, type CommitRecord, type EarlierRound, type FileKind, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, backgroundTaskIdOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isMerge, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
 import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isFolderless, isForemanNudge, keptTicketIn, keptTicketOf, memoOfKeptTicket, newMemo, parentIn, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, STATUS_CHANGED_TEXT, stateOf, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type KeptTicket, type Starts, type StatusFacts } from './status'
 import { afterSend, emptySends, sendOutcomeOf, sendsIn, sendsKey, sendsNewest, SENDS_KEPT_MS, SENDS_PREFIX, type SendOutcome, type SendSettled, type SendsRecord } from './sends'
@@ -2806,11 +2806,12 @@ async function checkoutPath($: $, dir: string): Promise<string | undefined> {
 }
 
 // Where a relative path leads: a file or something else inside the checkout,
-// nowhere yet, or outside the checkout. A path written in a Windows form counts
-// as outside before the file system is asked. `root` is the checkout's
+// nowhere yet, or outside the checkout. A path written in a Windows form, or
+// one with a part made only of dots and spaces, which covers a `..` part,
+// counts as outside before the file system is asked. `root` is the checkout's
 // resolved path, from checkoutPath.
 async function placeOf($: $, dir: string, root: string | undefined, path: string): Promise<'file' | 'other' | 'missing' | 'outside'> {
-  if (isWindowsShaped(path) || path.startsWith('/') || path.split('/').includes('..')) return 'outside'
+  if (isWindowsShaped(path) || path.startsWith('/') || hasDotAndSpacePart(path)) return 'outside'
   if (!(await $.fs.exists(`${dir}/${path}`))) return 'missing'
   // Resolved, so a link committed on the branch cannot point outside either.
   const file = await $.fs.stat(`${dir}/${path}`, { resolve: true })
@@ -2819,17 +2820,20 @@ async function placeOf($: $, dir: string, root: string | undefined, path: string
   return file.kind === 'file' ? 'file' : 'other'
 }
 
-// Which of the named paths do not exist yet, or the first one that leads
-// outside the checkout.
+// Which of the named paths do not exist yet, and the first one that leads
+// outside the checkout. It goes on past a refused path, so that a rerun of a
+// question stored before a rule that now refuses one of its paths still
+// notes every later path that is not written yet.
 async function unwrittenPaths($: $, dir: string, paths: readonly string[]): Promise<{ unwritten: string[]; outside: string | null }> {
   const unwritten: string[] = []
+  let outside: string | null = null
   const root = await checkoutPath($, dir)
   for (const path of paths) {
     const place = await placeOf($, dir, root, path)
-    if (place === 'outside') return { unwritten, outside: path }
+    if (place === 'outside') outside ??= path
     if (place === 'missing') unwritten.push(path)
   }
-  return { unwritten, outside: null }
+  return { unwritten, outside }
 }
 
 // The checkout's git folder, or null when git cannot say.
@@ -3264,6 +3268,19 @@ async function counselDestination($: $, named: unknown): Promise<ReturnType<type
   return destinationOf(named, watched, state)
 }
 
+// The counsel tool's message for a path that placeOf refused, chosen in a
+// fixed order. A path written in a Windows form gets the Windows-form message.
+// A path with a part made only of dots and spaces gets a message of its own,
+// unless it starts with `/` or has a part that is exactly `..`. Every other
+// path, including a link that resolves outside the checkout, gets the general
+// message for leading outside the checkout.
+function outsideRefusal(path: string): string {
+  if (isWindowsShaped(path)) return `Refused: ${path} is written in a Windows form; name paths relative to the checkout, written with forward slashes.`
+  const climbs = path.startsWith('/') || path.split('/').includes('..')
+  if (hasDotAndSpacePart(path) && !climbs) return `Refused: ${path} has a part made only of dots and spaces, which Windows may read as ..; name paths without such parts.`
+  return `Refused: ${path} leads outside the checkout; name paths inside it, relative to it.`
+}
+
 // Writes the brief, then records the question; a refusal or a failed write
 // records nothing. Where a decision goes is settled first, before an id is
 // taken or anything is written, and when the question is put, not when it is
@@ -3292,12 +3309,9 @@ async function serveCounsel($: $, input: CounselInput): Promise<string> {
   const dir = await read($, cwd)
   if (dir === null) return couldNotSit('the mod does not know the session folder.')
   const { unwritten, outside } = await unwrittenPaths($, dir, paths)
-  // placeOf refuses every path written in a Windows form at its first line,
-  // and unwrittenPaths gives back the first refused path as it was named, so
-  // testing that path tells exactly why it was refused.
-  if (outside !== null) return isWindowsShaped(outside)
-    ? `Refused: ${outside} is written in a Windows form; name paths relative to the checkout, written with forward slashes.`
-    : `Refused: ${outside} leads outside the checkout; name paths inside it, relative to it.`
+  // unwrittenPaths gives back the first refused path as it was named, so
+  // testing that path tells why it was refused.
+  if (outside !== null) return outsideRefusal(outside)
 
   const briefs = await counselDir($, dir)
   if (briefs === null) return couldNotSit('git could not find the checkout\'s git folder for the brief.')

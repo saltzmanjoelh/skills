@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { verdictsOf } from '../hooks/github'
-import { CHEAP_FIX_SUBJECT, changedKinds, codeReviewLine, commitRecordsOf, DECIDED_HEADINGS, DECIDED_ITEM_CHARS, decidedItems, decidedSection, DEFAULT_SPEC_DIR, factIn, INSTRUCTION_PATHSPECS, instructionFileImportsMarkdown, instructionFileIsLink, isFullSha, isUpForCheck, isWindowsShaped, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pathKind, pluginRootsOf, recordItems, reviewedHeadOf, rulingsOf, secretIn, specDirOf, STREAK_STOP, THREADS_JQ, trendOf, trendSection, trendStopLine, underRoot, verdictHeadOf, verdictsLine } from '../hooks/review'
+import { CHEAP_FIX_SUBJECT, changedKinds, codeReviewLine, commitRecordsOf, DECIDED_HEADINGS, DECIDED_ITEM_CHARS, decidedItems, decidedSection, DEFAULT_SPEC_DIR, factIn, hasDotAndSpacePart, INSTRUCTION_PATHSPECS, instructionFileImportsMarkdown, instructionFileIsLink, isFullSha, isUpForCheck, isWindowsShaped, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pathKind, pluginRootsOf, recordItems, reviewedHeadOf, rulingsOf, secretIn, specDirOf, STREAK_STOP, THREADS_JQ, trendOf, trendSection, trendStopLine, underRoot, verdictHeadOf, verdictsLine } from '../hooks/review'
 
 const facts = {
   repo: 'o/r',
@@ -574,11 +574,31 @@ test('a value is written in a Windows form when it holds a backslash anywhere or
     expect(isWindowsShaped(windows)).toBe(true)
   }
   // `docs/.. /x` holds a part made only of dots and spaces, which Windows may
-  // read as `..`. Refusing it is a Non-goal of this change and is left to a
-  // follow-up, which will change this answer on purpose.
+  // read as `..`. It is not written in a Windows form, and hasDotAndSpacePart
+  // refuses it instead.
   for (const plain of ['design/specs/', './design/specs', 'docs/a:b', 'docs/a:b.md', '/c/x', '../specs', '/etc/specs', './mods/a', 'docs/.. /x', '1:x', 'ab:x', '']) {
     expect(isWindowsShaped(plain)).toBe(false)
   }
+})
+
+test('a value has a dot and space part when a part between forward slashes is made only of dots and spaces and is not exactly a dot', () => {
+  for (const dotted of ['docs/.. /x', 'a/... /x', 'docs/. ./x', 'docs/. /x', 'docs/ /x', 'docs/ ../x', '../x']) {
+    expect(hasDotAndSpacePart(dotted)).toBe(true)
+  }
+  for (const plain of ['docs/specs', './design/specs', 'docs//specs', 'docs/x./y', 'docs/docs /y', 'docs/a:b', '']) {
+    expect(hasDotAndSpacePart(plain)).toBe(false)
+  }
+})
+
+// Each value below is written in backticks, because the fact is read with
+// its surrounding spaces trimmed, and the backticks keep a space inside the
+// value where it was written.
+test('a spec directory with a part made only of dots and spaces gives the default, and a plain value gives what it gave before', () => {
+  for (const dotted of ['docs/.. /x', 'a/... /x', 'docs/. /x', 'docs/ /x']) {
+    expect(specDirOf(`Spec directory: \`${dotted}\`\n`)).toBe(DEFAULT_SPEC_DIR)
+  }
+  expect(specDirOf('Spec directory: ./design/specs\n')).toBe('design/specs/')
+  expect(specDirOf('Spec directory: design/specs/\n')).toBe('design/specs/')
 })
 
 test('a spec directory written in a Windows form gives the default, and a forward-slash value gives what it gave before', () => {
@@ -683,6 +703,17 @@ test('a marketplace with a plugin source written in a Windows form names no fold
   for (const windows of ['..\\a', '.\\mods\\a', 'mods/..\\..\\a', 'C:\\a', 'C:a', '\\\\server\\a', '\\a']) {
     expect(marketplaceRootsOf(market([{ name: 'a', source: windows }]), at)).toBeNull()
     expect(marketplaceRootsOf(market([good, { name: 'a', source: windows }]), at)).toBeNull()
+  }
+  expect(marketplaceRootsOf(market([good]), at)).toEqual(['mods/a'])
+})
+
+test('a marketplace with a plugin source that has a part made only of dots and spaces names no folders for certain, even beside a good source', () => {
+  const market = (plugins: unknown) => JSON.stringify({ name: 'm', plugins })
+  const at = '.claude-plugin/marketplace.json'
+  const good = { name: 'good', source: './mods/a' }
+  for (const dotted of ['./mods/.. /a', 'a/... /x', './ /a']) {
+    expect(marketplaceRootsOf(market([{ name: 'a', source: dotted }]), at)).toBeNull()
+    expect(marketplaceRootsOf(market([good, { name: 'a', source: dotted }]), at)).toBeNull()
   }
   expect(marketplaceRootsOf(market([good]), at)).toEqual(['mods/a'])
 })
