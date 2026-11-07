@@ -42,7 +42,11 @@ GitHub. The person reads the label on the pull request.
    is newer than the one the job started from, and the judgement is under
    the label the job is replacing or the label of the job's starting
    judgement:
-   - a marked judgement is carried unchanged, with its marker;
+   - a marked judgement is carried unchanged, with its marker, unless the
+     job's starting judgement was also marked and has the same label;
+   - in that case the newer judgement may be a copy of the starting one,
+     made again while the step gave no label, so it is moved onto the new
+     record's label, unmarked, as today;
    - an unmarked judgement is moved onto the new record's label, as today,
      and the moved judgement is unmarked;
    - when the new record's label is `stuck`, the judgement is carried
@@ -69,8 +73,18 @@ GitHub. The person reads the label on the pull request.
   unchanged onto the record of `waiting-on-author`, and the tool's own job,
   which reads the newer snapshot, keeps `stuck` on.
 - The runs cannot be read and the tool is called again after a marked
-  judgement: the new judgement keeps the marker, so a stale job replacing
-  its label does not move it.
+  judgement made while a stale job waited: the new judgement keeps the
+  marker, so that job, which started without it, does not move it.
+- A job starts from a marked judgement and replaces its label, and while it
+  waits the runs cannot be read and the tool judges again under that label:
+  the copy is marked, but the job started from a marked judgement under the
+  same label, so its save moves the copy onto the new label, unmarked, and
+  `stuck` stays on once the step gives that label, as today.
+- The case left as today: a job starts from a marked judgement under a label
+  and ends it, a newer look's step gives that label again, and the tool
+  judges before the job saves. The save moves the fresh judgement, and the
+  next look takes `stuck` off, as on the base branch. Telling it apart from a
+  copy would need the marker to record which snapshot it came from.
 - The runs cannot be read and nothing marked is recorded: the judgement is
   unmarked and is moved onto the job's new label, as today, so `stuck`
   stays on once the step gives that label.
@@ -107,8 +121,8 @@ GitHub. The person reads the label on the pull request.
   - a judgement made again from a stored marked one while the runs cannot be
     read keeps `fromStep` and survives the same stale job;
   - the two existing tests where a judgement made while the runs could not
-    be read moves onto the job's new label still pass, and assert that the
-    moved judgement carries no `fromStep`.
+    be read moves onto the job's new label still pass unchanged, and assert
+    that the moved judgement carries no `fromStep`.
 - Unit tests in `mods/builder/tests/step.test.ts` of the parser:
   `fromStep: true` round trips, and any other value or none reads as
   unmarked and keeps the judgement.
@@ -121,3 +135,4 @@ GitHub. The person reads the label on the pull request.
 - What should this change deliberately leave out? The counsel chose: Narrow: only the marker and the carry rule in saveLabelRecord change, with the doc comments on the record, serveSetStuck and saveLabelRecord and the paragraph in docs/specs/builder-sets-judgement-stuck.md that the change contradicts. No change to which label each step gives, to the tool's answers or refusals, to labelActionOf or isJudgementKept, to the skill or step texts, to foreman, or to the label queue and record queue; no migration of old judgements, which read as unmarked; no fix for a look storing its snapshot outside the label queue. 7 of 7 members voted for it.
 - How should the marker be stored in the judgement, and how should the record parser treat a marker of the wrong shape? The counsel chose: An optional boolean field on the judgement, `fromStep: true`, written only when the judgement is marked and left out otherwise. The parser keeps `fromStep: true` and reads any other value, or its absence, as unmarked, keeping the judgement itself, so a malformed marker never drops a judgement and errs toward today's behaviour. 7 of 7 members voted for it.
 - How will we know the change works: which tests should the spec require? The counsel chose: Fake-world tests in mods/builder/tests/register.test.ts: the issue's race (a job replacing in-review with waiting-on-author waits before its save, a newer look's step gives in-review, the tool judges marked, and after the save stuck stays on, the record holds the marked judgement unchanged, and the tool answers that stuck is on); a re-made judgement from a stored marked one while the runs cannot be read keeps fromStep and survives the same stale job; the two existing move tests still pass and assert the moved judgement carries no fromStep. Unit tests in mods/builder/tests/step.test.ts of the parser: fromStep: true round trips, any other value or none reads as unmarked and keeps the judgement. Plus the four gates. 7 of 7 members voted for it.
+- The spec's carry rule conflicts with its own Verification section. A judgement is marked under in-review, a state label job starts from it and replaces in-review with waiting-on-author, and while that job waits before its save the runs become unreadable and set_stuck judges again under the stored judgement's label, keeping its marker. Under the spec's carry rule the job's save carries that marked judgement unchanged, so once the runs can be read and the step gives waiting-on-author, the judgement ends and stuck comes off, which breaks the existing test that expects it to move onto waiting-on-author and keep stuck. How should the spec resolve this? The counsel chose: Add one exception to the carry rule: a marked newer judgement is carried unchanged unless the job's starting judgement was also marked and has the same label, in which case it may be a re-made copy of that starting judgement and is moved onto the new label, unmarked, as on the base branch. The existing test near line 16444 keeps passing unchanged. One rare case stays as on the base branch: the job ends a marked judgement under a label, a newer look's step gives that label again, and the tool judges before the job saves. 7 of 7 members voted for it.
