@@ -17,8 +17,6 @@ import { LINKED_KEPT } from './linked'
 import { factIn, isFullSha } from './review'
 import { isPlainRepo, listed, printable } from './text'
 
-export type { Limit }
-
 // The merge steps and the Merged step carry `unpushed`, the commits the head
 // branch's worktree holds that the head lacks, as the look listed them. The
 // Merged step also carries `linked`, the outcome of the mod's update of the
@@ -83,7 +81,6 @@ export type RunRef = { id: number; attempt: number }
 
 // The merge command a project gets when its CLAUDE.md names none.
 export const DEFAULT_MERGE_COMMAND = 'gh pr merge <n> --merge --match-head-commit <sha>'
-
 
 // The facts in the text of a base branch's CLAUDE.md. A limit that is
 // missing or not a whole number takes its default. A file without a
@@ -286,7 +283,7 @@ export function unpushedIn(raw: unknown): Unpushed {
 
 // How many sentences of the update's outcome a step keeps, which the update
 // itself never exceeds, and how long each one may be.
-export { LINKED_KEPT, UNREAD_FACTS }
+export { LINKED_KEPT }
 const LINKED_LINE_MAX = 2000
 
 // The outcome of the update of the linked checkout as a step carries it.
