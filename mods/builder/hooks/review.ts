@@ -557,20 +557,31 @@ export function isWindowsShaped(value: string): boolean {
   return value.includes('\\') || /^[A-Za-z]:/.test(value)
 }
 
+// Whether a value has a part, between forward slashes, that is made only of
+// dots and spaces and is not exactly `.`, such as `..`, `.. `, `...` or ` `.
+// Windows strips trailing dots and spaces from a path part, so it may read
+// such a part as `..` and lead out of the repository past a check that
+// refuses only an exact `..`. An empty part does not count, and neither does
+// a name that only ends in a dot or a space, such as `x.` or `docs `.
+export function hasDotAndSpacePart(value: string): boolean {
+  return value.split('/').some(part => part !== '.' && /^[. ]+$/.test(part))
+}
+
 // The spec directory when the base branch's CLAUDE.md names none.
 export const DEFAULT_SPEC_DIR = 'docs/specs/'
 
 // The spec directory a `Spec directory:` line in the base branch's CLAUDE.md
 // names, as a relative path ending in a slash, or the default when there is no
 // CLAUDE.md, no such line, or a value that is absolute, is written in a
-// Windows form, climbs out with a `..` folder, or comes down to the root. A
+// Windows form, has a part made only of dots and spaces, which covers a `..`
+// folder that climbs out, or comes down to the root. A
 // value the rule cannot trust only costs reviewer runs, because a file outside
 // the spec directory is not documentation unless it is under docs/.
 export function specDirOf(claude: string | null): string {
   const value = claude === null ? null : factIn(claude, 'Spec directory')
-  if (value === null || value.startsWith('/') || isWindowsShaped(value)) return DEFAULT_SPEC_DIR
+  if (value === null || value.startsWith('/') || isWindowsShaped(value) || hasDotAndSpacePart(value)) return DEFAULT_SPEC_DIR
   const folders = value.split('/').filter(folder => folder !== '' && folder !== '.')
-  if (folders.length === 0 || folders.includes('..')) return DEFAULT_SPEC_DIR
+  if (folders.length === 0) return DEFAULT_SPEC_DIR
   return `${folders.join('/')}/`
 }
 
@@ -708,7 +719,8 @@ export function marketplacePathsOf(raw: string): string[] {
 // lies outside the repository. Null means the folders cannot be known for
 // certain: the manifest could not be read or parsed, it sets a `pluginRoot`
 // that changes how sources are read, or a source is absolute, is written in a
-// Windows form, or climbs out with `..`. A plugin can sit in such a folder
+// Windows form, or has a part made only of dots and spaces, which covers a
+// `..` part that climbs out. A plugin can sit in such a folder
 // without a `plugin.json` of its own, which is why the listing alone does not
 // find it.
 export function marketplaceRootsOf(text: string | null, path: string): string[] | null {
@@ -728,7 +740,7 @@ export function marketplaceRootsOf(text: string | null, path: string): string[] 
     const source: unknown = (plugin as { source?: unknown } | null)?.source
     if (typeof source !== 'string') continue
     const folders = source.split('/').filter(folder => folder !== '' && folder !== '.')
-    if (source.startsWith('/') || isWindowsShaped(source) || folders.includes('..')) return null
+    if (source.startsWith('/') || isWindowsShaped(source) || hasDotAndSpacePart(source)) return null
     roots.push([...base, ...folders].join('/'))
   }
   return roots
