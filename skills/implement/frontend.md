@@ -2,8 +2,10 @@
 
 Read this file only when step 7 of `SKILL.md` finds the change frontend, or
 when its check gave no answer and the person chose "Open as frontend", or
-when a pull request's body has a `## Screenshots` section and the base branch's
-`CLAUDE.md` does not say `Frontend paths: none`. The steps, points and sections
+when a pull request's body holds the marker `<!-- implement:screenshots -->` inside a `## Screenshots` section,
+as the section **Screenshots on a frontend pull request** below defines it,
+and the base branch's `CLAUDE.md` does not say `Frontend paths: none`. The
+steps, points and sections
 it names, such as step 7, "Rules", "A review round", "Commits the pull request
 lacks" or the second half's point 5, are those of `SKILL.md` beside this file.
 "The pathspecs of step 7" are the ones step 7 builds, from the project's own
@@ -15,6 +17,13 @@ below from the worktree's top folder. A note for whoever edits this file:
 the builder mod's merge step names this file and its own section "Screenshots
 on a frontend pull request" by these names, so renaming either means changing
 `FRONTEND_FILE` and `FRONTEND_SECTIONS` in `mods/builder/hooks/step.ts` too.
+The marker `<!-- implement:screenshots -->` is pinned there as
+`SCREENSHOTS_MARKER`, and the same text is written or read in
+`skills/storypr/SKILL.md`, `skills/implement/SKILL.md`, this file and
+`mods/builder/hooks/step.ts`. A copy that differs by one character makes new
+frontend pull requests plain without any warning, so a change to the marker
+has to be made in all four. A skill that starts writing or reading the marker
+joins that list, here and in the constant's comment.
 
 ## A frontend change
 
@@ -48,7 +57,10 @@ When `/storypr` returns a reason instead, it has committed nothing. Open the
 pull request the plain way, with `--title` and `--body-file`, the title quoted
 as above, and end the body
 with a `## Screenshots` section that says the change is frontend, that its
-screenshots are missing, and the reason. Read the base branch's `CLAUDE.md`
+screenshots are missing, and the reason. On the line directly under that
+section's heading, write the line `<!-- implement:screenshots -->` alone,
+without the backticks shown here, so that the rules below find the section.
+Read the base branch's `CLAUDE.md`
 again at this moment, rather than remembering what step 7 found, and apply
 step 7's three readings of its `Frontend paths:` line. Read it as step 7
 does, from the top folder: `git show origin/<base>:CLAUDE.md`, and when that
@@ -76,9 +88,24 @@ history are published for good.
 
 ## Screenshots on a frontend pull request
 
-**Screenshots on a frontend pull request.** A pull request was opened as
-frontend when its body has a `## Screenshots` section, which step 7 writes only
-for a frontend change. A pull request that step 7 opened with a plain body
+**Screenshots on a frontend pull request.** A `## Screenshots` section of a
+pull request body runs from its heading line to the next line that begins
+`## ` or `# `, or to the end of the body. The section is marked when the line
+`<!-- implement:screenshots -->` appears anywhere inside it, not only directly
+under the heading; `/storypr` and the fallback above write that line only for
+a frontend change. A pull request is frontend, for every rule below, when its
+body holds the marker `<!-- implement:screenshots -->` inside a `## Screenshots` section
+and the base branch's `CLAUDE.md` does not say `Frontend paths: none`. A
+`## Screenshots` section without the marker is never read, rewritten or
+counted, whatever it holds, because a project's own template or body rules
+may have put it there. Read the body with
+`gh pr view <n> --json body --jq .body` at each moment that a rule needs it,
+never from memory or from a compaction summary. When more than one
+`## Screenshots` section holds the marker, the body is unclear: the pull
+request still counts as frontend, so the check of each commit and the retakes
+below go on, but no section is rewritten, and the session tells the person in
+one sentence that two sections carry the marker and that it left the body
+alone. A pull request that step 7 opened with a plain body
 keeps it, even when a later fix touches a frontend path. The rules below apply
 only while the base branch's `CLAUDE.md` does not say `Frontend paths: none`.
 Once it says that, nothing below applies, whatever the body holds. While they
@@ -154,7 +181,7 @@ reason>`, so that the reason survives a restart before the push. The reason
 is written as step 7 says a published reason is written. Tell the person the
 same in one sentence, and carry on.
 
-After every push to a frontend pull request, bring its screenshot section up
+After every push to a frontend pull request, bring its marked section up
 to date. Bring it up to date as well on resuming, after a compaction, and
 before running the merge command, because a session that stopped between a
 push and the rewrite leaves no later push to do it. It is up to date when it
@@ -177,7 +204,9 @@ later commit of the pull request settles a line. Both are comparisons, so no
 name from a message goes into a command. A
 line for screens never captured is never settled. When the section is not up to date, write the body to a file in the
 scratchpad folder with `gh pr view <n> --json body --jq .body`, and rewrite
-only its `## Screenshots` section. Link each image by the full sha that
+only its marked section. Keep the marker line in it, and leave every other
+`## Screenshots` section and every other line of the body as it is. Link
+each image by the full sha that
 `git log` printed for it, and drop the line of each settled commit. For each
 listed commit that is not settled and that the section does not name,
 add one line that names the screenshots that may now be out of date, or the
@@ -189,9 +218,11 @@ the list. Those are the only links the session builds. Leave every other
 image link and every other line of the section as it is, because a person or
 the project's own body rules may have put them there, and the rewrite must
 never delete what someone else wrote. Just before posting, read the body again
-the same way, and when it differs from the copy that was rewritten, make the
-same rewrite on the fresh copy instead, so that an edit made in between is
-kept. Post the body with
+the same way, and find the marked sections in the fresh copy again. When it
+holds none, post nothing. When it holds more than one, post nothing and tell
+the person as the first paragraph of this section says. When it differs from
+the copy that was rewritten, make the same rewrite on the fresh copy instead,
+so that an edit made in between is kept. Post the body with
 `gh pr edit <n> --body-file <file>`, and check the links again as step 7 says.
 When the push fails, rewrite nothing: "Commits the pull request lacks" applies,
 and the push that does carry the commit brings the section up to date.

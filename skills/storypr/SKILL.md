@@ -202,7 +202,12 @@ to that skill.
 3. Write the body, laid out as step 4 says, to a file in the session's
    scratchpad folder, never to a shared folder such as `/tmp`. In every image
    link, put `<screenshot sha>` where step 4 puts the branch, so that the
-   calling skill can fill in the commit's full sha once it has pushed.
+   calling skill can fill in the commit's full sha once it has pushed. On the
+   line directly under the body's `## Screenshots` heading, write the line
+   `<!-- implement:screenshots -->` alone, without the backticks shown here.
+   That hidden line tells the calling skill that this section is the one it
+   keeps up to date, rather than a heading that the project's own template
+   put there. A person's direct run of this skill writes no such line.
 4. Return the body file's path, the commit's full sha and the list of
    screenshot paths.
 
