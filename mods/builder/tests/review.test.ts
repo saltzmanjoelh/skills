@@ -565,8 +565,8 @@ test('the spec directory is read from CLAUDE.md, and a missing, empty or unsafe 
 })
 
 // Every backslash below is written doubled, so the value holds one backslash
-// for each pair, and never inside String.raw, where `\x` and `\u` would still
-// be read as escapes inside a template.
+// for each pair. The tests write every backslash value the same way, so a
+// reader checks the escaping by one rule, which the first two lines confirm.
 test('a value is written in a Windows form when it holds a backslash anywhere or starts with a drive letter and a colon', () => {
   expect('\\\\server\\x'.startsWith('\\\\')).toBe(true)
   expect('\\\\server\\x'.length).toBe(10)

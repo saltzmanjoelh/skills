@@ -90,7 +90,8 @@ same way today, so nothing is migrated.
    refusal by resolved real path, which the follow-up issue will touch.
 6. Every backslash in a test is written doubled, never with `String.raw`, with
    one assertion that checks the escaping. Taken from the most-robust plan,
-   because `\x` and `\u` inside a template are read as escapes.
+   because one way of writing every backslash value lets a reviewer check the
+   escaping by a single rule.
 7. A test pins that `docs/.. /x` is still accepted, with a comment naming the
    Non-goal, so the follow-up changes that answer on purpose. Taken from the
    most-extensible plan.
