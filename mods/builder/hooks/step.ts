@@ -213,10 +213,17 @@ export function chooseStep(s: Snapshot, isAsking: boolean): Step {
   // the person decides whether to ask again. The limits are measured against
   // the time of the look that made the snapshot, so the chooser needs no
   // clock, and a request time that could not be read sets no limit.
-  // overdueAtLimitStep in github.ts repeats by hand the conditions checked
-  // above, apart from the open question, so that the fingerprint counts an
-  // overdue reviewer only where this block is reached. A change to those
-  // conditions changes it too.
+  // overdueAtLimitStep in github.ts reads the pushes and rounds limits
+  // through limitsPassedIn, as this function does, so those are not copied.
+  // overdueAtLimitStep repeats by hand only these of the conditions above:
+  // both verdicts approve, the /code-review pass is recorded, the pull
+  // request does not conflict, no check or run at the head failed, and no
+  // outside reviewer has feedback or lacks a request. It does not check
+  // whether the pull request is merged or closed. The open question is left
+  // out on purpose, so its absence from this list is not an omission. The
+  // aim is that the fingerprint counts an overdue reviewer only where this
+  // block is reached. A change to the copied conditions must change
+  // overdueAtLimitStep too.
   const requested = inState('requested')
   if (requested.length > 0) {
     const overdue = overdueOf(s)
