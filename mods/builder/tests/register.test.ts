@@ -3324,7 +3324,7 @@ test('a counsel path that climbs out or is written in a Windows form keeps its m
   const files = fakeFiles(on)
   await startOnly($)
 
-  for (const climbing of ['../../.env', '../.. /x']) {
+  for (const climbing of ['../../.env', '../.. /x', '/docs/.. /x']) {
     const ran = await loose($)({ ...brief, paths: [climbing] })
 
     expect(String(ran.result)).toContain(`Refused: ${climbing} leads outside the checkout; name paths inside it, relative to it.`)
