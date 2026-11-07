@@ -463,6 +463,17 @@ export const FRONTEND_SECTIONS = [
   'Screenshots on a frontend pull request',
 ] as const
 
+// The hidden line that marks a pull request body's `## Screenshots` section as
+// the one that /implement wrote and keeps up to date. The screenshot rules
+// apply only to a section that holds it, so a heading that a project's own
+// pull request template or body rules put there is left alone. The same text
+// is written or read in skills/storypr/SKILL.md, skills/implement/SKILL.md and
+// skills/implement/frontend.md, and a copy that differs by one character makes
+// new frontend pull requests plain without any warning, so a change to it has
+// to be made in all four files. A skill that starts writing or reading the
+// marker joins that list, here and in the editor's note of frontend.md.
+export const SCREENSHOTS_MARKER = '<!-- implement:screenshots -->'
+
 type SkillSection = typeof SKILL_SECTIONS[number]
 
 // How a text points to a section or a point of a skill. Only a pinned one can
