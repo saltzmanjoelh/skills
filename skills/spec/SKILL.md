@@ -43,13 +43,14 @@ trailing slash, so that no path contains `//`.
    question about how the person works is one whose answer is a habit or a
    choice of theirs, such as whether they ever clear a session, run two
    copies of a tool at once or work offline, rather than a fact the code,
-   the specs or the issue can settle. When nothing the person has written
-   down settles it (their global `~/.claude/CLAUDE.md`, the project's
-   `CLAUDE.md`, the specs and the issue), ask the person directly through
-   AskUserQuestion, because the counsel's members can read only what the
-   person wrote down. Never guess the answer, and never write the spec to
-   cover the case to be safe. The 5 to 10 questions count every question
-   put, whoever answered it.
+   the specs or the issue can settle. What the person has written down is
+   their global `CLAUDE.md` in the Claude configuration folder
+   (`CLAUDE_CONFIG_DIR`, or `~/.claude` when that is unset), the project's
+   `CLAUDE.md`, the specs and the issue. When none of these settles it, ask
+   the person directly through AskUserQuestion, because the counsel's
+   members can read only what the person wrote down. Never guess the
+   answer, and never write the spec to cover the case to be safe. The 5 to
+   10 questions count every question put, whoever answered it.
 2. **Follow the thread, not a checklist.** When an answer is vague or
    surprising, dig into it before moving on. Ask for the concrete case behind
    an abstraction, and do not accept "it depends" without asking "on what?".
@@ -90,7 +91,16 @@ giving the question and the answer. Keep the spec short: do not write
 sentences that merely count the document's own parts, and when a statement
 turns out wrong, edit it rather than adding a paragraph that narrates the
 correction. After writing it, offer the person one line, in generic words
-that name no project, to add to their personal global `~/.claude/CLAUDE.md`
-for each answer about how they work, and write it there only when they say
-yes. End by offering the next step: implement directly, or
+that name no project, to add to their personal global `CLAUDE.md` for each
+answer about how they work, and write it there only when they say yes.
+Before offering, read `CLAUDE_CONFIG_DIR` from the shell to find that file.
+When it is set to an absolute path, the file is `CLAUDE.md` in that folder,
+with no doubled slash when the value ends in one. When it is unset or
+empty, the file is `~/.claude/CLAUDE.md`, with the home folder written out.
+The offer names the file's full path, so that the person's yes covers the
+file that is written, and a yes creates the file when it does not exist
+yet. When `CLAUDE_CONFIG_DIR` is a relative path, offer nothing and write
+nothing. Tell the person in one sentence that the line cannot be saved
+because `CLAUDE_CONFIG_DIR` is a relative path, so the configuration folder
+cannot be found. End by offering the next step: implement directly, or
 `/plan-tournament` for a nontrivial feature.

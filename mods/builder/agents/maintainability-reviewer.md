@@ -15,9 +15,15 @@ the spec and plan paths, the changed files, the round, earlier findings) and
 `diff.patch` (the diff to review, described below). Read `package.md`, then
 `diff.patch`, then only as much surrounding source as a hunk needs.
 
-First read `~/.claude/CLAUDE.md` and the project's `CLAUDE.md`. You are
-applying the owner's taste, not generic style opinions. Where they are
-silent, flag only what would genuinely mislead or slow a future maintainer.
+First read the owner's global instructions and the project's `CLAUDE.md`.
+The owner's global instructions are the `CLAUDE.md` in the Claude
+configuration folder (`CLAUDE_CONFIG_DIR`, or `~/.claude` when that is
+unset). Claude Code already loads that file into your context as the
+user's instructions, so use that text. You cannot read
+`CLAUDE_CONFIG_DIR`, so read `~/.claude/CLAUDE.md` yourself only when your
+context holds no user instructions. You are applying the owner's taste,
+not generic style opinions. Where they are silent, flag only what would
+genuinely mislead or slow a future maintainer.
 
 In a first package, `diff.patch` is the whole pull request against the
 base. In a later package, `package.md` names the head the change starts

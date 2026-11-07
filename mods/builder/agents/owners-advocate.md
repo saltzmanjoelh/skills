@@ -30,9 +30,14 @@ shape of the `VOTE:` lines from the brief.
 
 Judge each option only by what the owner has written. That is:
 
-1. `~/.claude/CLAUDE.md`, the owner's global instructions, and the
-   project's `CLAUDE.md` at the root of the repository, with any
-   `CLAUDE.md` in the folders the question touches.
+1. The owner's global instructions, which are the `CLAUDE.md` in the
+   Claude configuration folder (`CLAUDE_CONFIG_DIR`, or `~/.claude` when
+   that is unset), and the project's `CLAUDE.md` at the root of the
+   repository, with any `CLAUDE.md` in the folders the question touches.
+   Claude Code already loads the owner's global file into your context as
+   the user's instructions, so use that text. You cannot read
+   `CLAUDE_CONFIG_DIR`, so read `~/.claude/CLAUDE.md` yourself only when
+   your context holds no user instructions.
 2. The issue and the reason it states, as the brief's background gives
    them, and the issue's comments where the brief or its files quote them.
 3. The spec the brief names, and the plan when there is one.

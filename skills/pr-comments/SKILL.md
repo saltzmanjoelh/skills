@@ -312,8 +312,9 @@ explicitly asked to be told about.
 ## How to write it up
 
 This applies to **both** the in-thread replies and the summary to the user.
-If the user's `~/.claude/CLAUDE.md` has writing rules, they apply in full;
-these are the ones that bite hardest here:
+If the user's global `CLAUDE.md`, in the Claude configuration folder
+(`CLAUDE_CONFIG_DIR`, or `~/.claude` when that is unset), has writing
+rules, they apply in full; these are the ones that bite hardest here:
 
 **Say what broke, in terms of what someone would see.** Not "a stale listener
 leaks on the pointer path". Say: "If your finger slid off the screen while
