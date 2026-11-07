@@ -8,7 +8,7 @@ import { NO_STATUS_FILE, NOTHING_WATCHED, STALE_WARNING } from '../hooks/pane'
 import { GITHUB_NAMES_LINE, RELOAD_LINE, REREAD_CLOSING } from '../hooks/prompts'
 import { INSTRUCTION_PATHSPECS } from '../hooks/review'
 import { FOREMAN_NUDGE_TEXTS, STATUS_CHANGED_TEXT } from '../hooks/status'
-import type { UserClaude } from '../hooks/step'
+import { SCREENSHOTS_MARKER, type UserClaude } from '../hooks/step'
 import type { BuildStatus, Compactions } from '../types'
 import { CROSS_SESSION_SHAPES } from './cross-session-fixture'
 
@@ -11096,10 +11096,12 @@ test('both merge texts bring a frontend pull request\'s screenshot section up to
     expect(at).toBeGreaterThan(text.indexOf('Before merging:'))
     expect(at).toBeLessThan(reread)
     const bullet = text.slice(at, reread)
-    for (const part of ['`## Screenshots`', 'does not say `Frontend paths: none`', '`skills/implement/frontend.md`', 'A pull request whose body has no such section skips this bullet.']) {
+    for (const part of ['`' + SCREENSHOTS_MARKER + '`', 'inside a `## Screenshots` section', 'does not say `Frontend paths: none`', '`skills/implement/frontend.md`', 'A pull request whose body holds no `## Screenshots` section with that marker skips this bullet, whatever other `## Screenshots` section it has.']) {
       expect(bullet).toContain(part)
     }
     expect(bullet).not.toContain('names at least one glob')
+    expect(bullet).not.toContain('whose body has a `## Screenshots` section')
+    expect(bullet).not.toContain('A pull request whose body has no such section skips this bullet.')
   }
 })
 

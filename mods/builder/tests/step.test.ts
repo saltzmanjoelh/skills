@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { countingRuns, failedRunsOf, hasFailed, isReplaced, isUnfinished, needsJobs, snapshotOf, type GhPullRequest } from '../hooks/github'
-import { baseFactsOf, chooseStep, CLEANUP_SECTIONS, DEFAULT_MERGE_COMMAND, FRONTEND_FILE, FRONTEND_SECTIONS, isJudgementKept, labelActionOf, LINKED_KEPT, linkedIn, labelFor, labelRecordIn, needsListing, otherStateLabelsOf, reviewerFactOf, SKILL_POINTS, SKILL_SECTIONS, stepFor, stepLines, UNREAD_FACTS, unpushedIn, type Step } from '../hooks/step'
+import { baseFactsOf, chooseStep, CLEANUP_SECTIONS, DEFAULT_MERGE_COMMAND, FRONTEND_FILE, FRONTEND_SECTIONS, isJudgementKept, labelActionOf, LINKED_KEPT, linkedIn, labelFor, labelRecordIn, needsListing, otherStateLabelsOf, reviewerFactOf, SCREENSHOTS_MARKER, SKILL_POINTS, SKILL_SECTIONS, stepFor, stepLines, UNREAD_FACTS, unpushedIn, type Step } from '../hooks/step'
 import type { BaseFacts, HeadRun, Snapshot, Unpushed } from '../types'
 
 const ME = 'owner'
@@ -767,6 +767,13 @@ test('every mention of frontend.md in a step text names a pinned section of the 
   expect(named.size).toBeGreaterThan(0)
   for (const name of named) expect(FRONTEND_SECTIONS).toContain(name)
   expect(FRONTEND_FILE).toBe('skills/implement/frontend.md')
+})
+
+// The skills write and read the screenshot marker as literal text, and no
+// test can read the skill files, so the constant is pinned here word for word.
+// A change to it has to be made in every file that its comment lists.
+test('the screenshot marker is pinned word for word', () => {
+  expect(SCREENSHOTS_MARKER).toBe('<!-- implement:screenshots -->')
 })
 
 // A text points to a numbered point of a skill only where the skill gives the

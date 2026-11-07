@@ -302,11 +302,12 @@ time with the pull request open. That turn first checks with `gh` whether
 what the session waits on is real; if the wait is real, the session ends
 the turn, and otherwise it follows the step the prompt names.
 
-**When a turn ends.** After any push to a pull request whose body has a
-`## Screenshots` section, when the base branch's `CLAUDE.md` does not say
-`Frontend paths: none`, first read the section **Screenshots on a frontend
-pull request** of `skills/implement/frontend.md` again and bring the screenshot
-section up to date as it says. After any push, what follows depends on `Checks:`.
+**When a turn ends.** After any push to a pull request
+whose body holds the marker `<!-- implement:screenshots -->` inside a `## Screenshots` section,
+when the base branch's `CLAUDE.md` does not say `Frontend paths: none`, first
+read the section **Screenshots on a frontend pull request** of
+`skills/implement/frontend.md` again and bring the marked section up to date
+as it says. After any push, what follows depends on `Checks:`.
 Either way the mod counts the pushes and rounds again from the new state,
 and names the step **Over a limit** when a limit is passed:
 
@@ -651,16 +652,19 @@ commit that is made, and until then the package keeps listing the `Tidied:`
 line as not corrected. There is no line that turns an `Area:` line into a
 `Tidied:` one.
 
-**Screenshots on a frontend pull request.** When a pull request's body has a
-`## Screenshots` section and the base branch's `CLAUDE.md` does not say
-`Frontend paths: none`, the rules for its screenshots are in the section
+**Screenshots on a frontend pull request.** When a pull request's
+body holds the marker `<!-- implement:screenshots -->` inside a `## Screenshots` section
+and the base branch's `CLAUDE.md` does not say `Frontend paths: none`, the
+rules for its screenshots are in the section
 **Screenshots on a frontend pull request** of `skills/implement/frontend.md`,
 in this skill's folder. Read that
 section again at each moment it applies, even when it was read earlier in the
 session, because a compaction or a restart drops it: before making a commit,
 after a push, on resuming, after a compaction, and before running the merge
-command. When the body has no such section, or the base branch's `CLAUDE.md`
-says `Frontend paths: none`, nothing here asks the session to read that file.
+command. When the body holds no `## Screenshots` section with that marker,
+whatever other `## Screenshots` section it has, or the base branch's
+`CLAUDE.md` says `Frontend paths: none`, nothing here asks the session to read
+that file.
 
 **A streak of 3.** When the package tool's first line says an area's
 streak has reached 3, launch no reviewer on that package. The stop always
@@ -1249,10 +1253,11 @@ watched first would never see its bar reach `merged`. Then find the pull
 request's branch and its worktree (make one from the branch if there is
 none), call `mcp__builder__watch`, and read the spec and plan paths from the
 spec directory on the branch (never from the pull request body). On a pull
-request whose body has a `## Screenshots` section, when the base branch's
-`CLAUDE.md` does not say `Frontend paths: none`, read the section **Screenshots on a
-frontend pull request** of `skills/implement/frontend.md` and bring the
-screenshot section up to date as it says. Then follow
+request whose body holds the marker `<!-- implement:screenshots -->` inside a `## Screenshots` section,
+when the base branch's `CLAUDE.md` does not say `Frontend paths: none`, read
+the section **Screenshots on a frontend pull request** of
+`skills/implement/frontend.md` and bring the marked section up to date as it
+says. Then follow
 the step that the watch tool's answer names, doing what "Commits the pull
 request lacks" says with the listing that a merge step's or the **Merged**
 step's text gives. A verdict review at the head means
@@ -1276,10 +1281,11 @@ again with the Skill tool before anything else. Do not repeat step 1: the
 pane, Remote Control and the watch are still there. Read the pull request's
 state with `mcp__builder__watch`, and when the summary does not name the
 spec and plan paths, read them from the spec directory on the branch. On a
-pull request whose body has a `## Screenshots` section, when the base branch's
-`CLAUDE.md` does not say `Frontend paths: none`, read the section **Screenshots on a
-frontend pull request** of `skills/implement/frontend.md` and bring the
-screenshot section up to date as it says. Then
+pull request whose body holds the marker `<!-- implement:screenshots -->` inside a `## Screenshots` section,
+when the base branch's `CLAUDE.md` does not say `Frontend paths: none`, read
+the section **Screenshots on a frontend pull request** of
+`skills/implement/frontend.md` and bring the marked section up to date as it
+says. Then
 follow the step that the watch tool's answer names, as "Resuming" says,
 counting a round's
 first half as run at a head only when a verdict review at that head names
