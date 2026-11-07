@@ -632,18 +632,28 @@ export function secretIn(text: string): string | null {
   return null
 }
 
+// Whether a value is written in a Windows form: it holds a backslash
+// anywhere, or it starts with a letter from A to Z, in either case, followed
+// by a colon, such as `C:x` or `C:\x`. On Windows either form can lead out of
+// the repository past a check that splits only on forward slashes, so the
+// containment checks refuse such a value whole and never rewrite it. A colon
+// later in the value, as in `docs/a:b.md`, does not count.
+export function isWindowsShaped(value: string): boolean {
+  return value.includes('\\') || /^[A-Za-z]:/.test(value)
+}
+
 // The spec directory when the base branch's CLAUDE.md names none.
 export const DEFAULT_SPEC_DIR = 'docs/specs/'
 
 // The spec directory a `Spec directory:` line in the base branch's CLAUDE.md
 // names, as a relative path ending in a slash, or the default when there is no
-// CLAUDE.md, no such line, or a value that is absolute, climbs out with a `..`
-// folder, or comes down to the root. A value the rule cannot trust only costs
-// reviewer runs, because a file outside the spec directory is not
-// documentation unless it is under docs/.
+// CLAUDE.md, no such line, or a value that is absolute, is written in a
+// Windows form, climbs out with a `..` folder, or comes down to the root. A
+// value the rule cannot trust only costs reviewer runs, because a file outside
+// the spec directory is not documentation unless it is under docs/.
 export function specDirOf(claude: string | null): string {
   const value = claude === null ? null : factIn(claude, 'Spec directory')
-  if (value === null || value.startsWith('/')) return DEFAULT_SPEC_DIR
+  if (value === null || value.startsWith('/') || isWindowsShaped(value)) return DEFAULT_SPEC_DIR
   const folders = value.split('/').filter(folder => folder !== '' && folder !== '.')
   if (folders.length === 0 || folders.includes('..')) return DEFAULT_SPEC_DIR
   return `${folders.join('/')}/`
@@ -782,9 +792,10 @@ export function marketplacePathsOf(raw: string): string[] {
 // the folder above the manifest's `.claude-plugin` folder; any other source
 // lies outside the repository. Null means the folders cannot be known for
 // certain: the manifest could not be read or parsed, it sets a `pluginRoot`
-// that changes how sources are read, or a source is absolute or climbs out
-// with `..`. A plugin can sit in such a folder without a `plugin.json` of its
-// own, which is why the listing alone does not find it.
+// that changes how sources are read, or a source is absolute, is written in a
+// Windows form, or climbs out with `..`. A plugin can sit in such a folder
+// without a `plugin.json` of its own, which is why the listing alone does not
+// find it.
 export function marketplaceRootsOf(text: string | null, path: string): string[] | null {
   if (text === null) return null
   let manifest: unknown
@@ -802,7 +813,7 @@ export function marketplaceRootsOf(text: string | null, path: string): string[] 
     const source: unknown = (plugin as { source?: unknown } | null)?.source
     if (typeof source !== 'string') continue
     const folders = source.split('/').filter(folder => folder !== '' && folder !== '.')
-    if (source.startsWith('/') || folders.includes('..')) return null
+    if (source.startsWith('/') || isWindowsShaped(source) || folders.includes('..')) return null
     roots.push([...base, ...folders].join('/'))
   }
   return roots

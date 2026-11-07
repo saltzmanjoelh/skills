@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { verdictsOf } from '../hooks/github'
-import { CHEAP_FIX_SUBJECT, changedKinds, codeReviewLine, commitRecordsOf, DECIDED_HEADINGS, DECIDED_ITEM_CHARS, decidedItems, decidedSection, DEFAULT_SPEC_DIR, factIn, INSTRUCTION_PATHSPECS, instructionFileImportsMarkdown, instructionFileIsLink, isFullSha, isUpForCheck, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pathKind, pluginRootsOf, recordItems, reviewedHeadOf, rulingsOf, secretIn, specDirOf, STREAK_STOP, trendOf, trendSection, trendStopLine, underRoot, verdictHeadOf, verdictsLine } from '../hooks/review'
+import { CHEAP_FIX_SUBJECT, changedKinds, codeReviewLine, commitRecordsOf, DECIDED_HEADINGS, DECIDED_ITEM_CHARS, decidedItems, decidedSection, DEFAULT_SPEC_DIR, factIn, INSTRUCTION_PATHSPECS, instructionFileImportsMarkdown, instructionFileIsLink, isFullSha, isUpForCheck, isWindowsShaped, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pathKind, pluginRootsOf, recordItems, reviewedHeadOf, rulingsOf, secretIn, specDirOf, STREAK_STOP, trendOf, trendSection, trendStopLine, underRoot, verdictHeadOf, verdictsLine } from '../hooks/review'
 
 const facts = {
   repo: 'o/r',
@@ -564,6 +564,32 @@ test('the spec directory is read from CLAUDE.md, and a missing, empty or unsafe 
   }
 })
 
+// Every backslash below is written doubled, so the value holds one backslash
+// for each pair. The tests write every backslash value the same way, so a
+// reader checks the escaping by one rule, which the first two lines confirm.
+test('a value is written in a Windows form when it holds a backslash anywhere or starts with a drive letter and a colon', () => {
+  expect('\\\\server\\x'.startsWith('\\\\')).toBe(true)
+  expect('\\\\server\\x'.length).toBe(10)
+  for (const windows of ['..\\specs', 'docs\\..\\..\\x', 'docs/..\\..\\x', 'docs\\specs', '.\\mods\\a', 'mods/..\\..\\a', 'C:\\specs', 'C:specs', 'C:a', 'c:/specs', 'c:x', 'a:notes.md', 'Z:', '\\\\server\\specs', '\\specs']) {
+    expect(isWindowsShaped(windows)).toBe(true)
+  }
+  // `docs/.. /x` holds a part made only of dots and spaces, which Windows may
+  // read as `..`. Refusing it is a Non-goal of this change and is left to a
+  // follow-up, which will change this answer on purpose.
+  for (const plain of ['design/specs/', './design/specs', 'docs/a:b', 'docs/a:b.md', '/c/x', '../specs', '/etc/specs', './mods/a', 'docs/.. /x', '1:x', 'ab:x', '']) {
+    expect(isWindowsShaped(plain)).toBe(false)
+  }
+})
+
+test('a spec directory written in a Windows form gives the default, and a forward-slash value gives what it gave before', () => {
+  for (const windows of ['..\\specs', 'docs\\..\\..\\x', 'docs/..\\..\\x', 'docs\\specs', 'C:\\specs', 'C:specs', 'c:/specs', '\\\\server\\specs', '\\specs']) {
+    expect(specDirOf(`Spec directory: ${windows}\n`)).toBe(DEFAULT_SPEC_DIR)
+  }
+  expect(specDirOf('Spec directory: design/specs/\n')).toBe('design/specs/')
+  expect(specDirOf('Spec directory: ./design/specs\n')).toBe('design/specs/')
+  expect(specDirOf('Spec directory: docs/a:b\n')).toBe('docs/a:b/')
+})
+
 test('the changed files are read from git diff --name-status -z output, and a rename counts as tests or documentation only when both paths agree', () => {
   const spec = DEFAULT_SPEC_DIR
   expect(changedKinds('M\0tests/a.test.ts\0A\0docs/specs/x.md\0D\0README.md\0T\0src/a.ts\0', spec)).toEqual(['test', 'documentation', 'documentation', 'other'])
@@ -648,6 +674,17 @@ test('a marketplace names the folders of its local plugins, relative to the fold
   expect(marketplaceRootsOf(market([{ name: 'a', source: '../a' }]), at)).toBeNull()
   expect(marketplaceRootsOf(market([{ name: 'a', source: '/abs' }]), at)).toBeNull()
   expect(marketplaceRootsOf(market([{ name: 'a', source: 'a' }], { metadata: { pluginRoot: './plugins' } }), at)).toBeNull()
+})
+
+test('a marketplace with a plugin source written in a Windows form names no folders for certain, even beside a good source', () => {
+  const market = (plugins: unknown) => JSON.stringify({ name: 'm', plugins })
+  const at = '.claude-plugin/marketplace.json'
+  const good = { name: 'good', source: './mods/a' }
+  for (const windows of ['..\\a', '.\\mods\\a', 'mods/..\\..\\a', 'C:\\a', 'C:a', '\\\\server\\a', '\\a']) {
+    expect(marketplaceRootsOf(market([{ name: 'a', source: windows }]), at)).toBeNull()
+    expect(marketplaceRootsOf(market([good, { name: 'a', source: windows }]), at)).toBeNull()
+  }
+  expect(marketplaceRootsOf(market([good]), at)).toEqual(['mods/a'])
 })
 
 test('the instruction pathspecs name every instruction file and folder, in any case and at any depth', () => {

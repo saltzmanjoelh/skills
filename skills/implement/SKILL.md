@@ -155,17 +155,44 @@ Every command started in the background runs under its own time limit (see
 
 ### 7. Open the pull request
 
-First find out whether the change is frontend, from the `Frontend paths:`
-line of the base branch's `CLAUDE.md`, read with
-`git show origin/<base>:CLAUDE.md`. A base branch with no `CLAUDE.md` counts as
-having no such line. The line is read in one of three ways:
+First find out whether the change is frontend. Run every command of this
+check from the worktree's top folder, because `git diff` and `git ls-tree`
+read their pathspecs relative to the current folder and, from a subfolder,
+succeed and print nothing. Begin with `git fetch origin <base>`. The reads
+below use the local copy of the base branch, which in a worktree made
+hours earlier can hold an old `Frontend paths:` line, and the answer would
+then be wrong with no sign of it. The fetch is there to prevent that, so
+keep it even though a failed read fetches again later. A fetch that fails
+here does not stop the step: the reads go ahead with the local copy, and
+only a read that fails counts.
+
+Two reads decide the answer, and each decides it only when it succeeds.
+Run each read as a command of its own, not piped into another command, so
+that the exit status is git's own. A read whose exit status is not zero
+gives no answer, whatever it printed. Its empty output never means that
+the base branch has no `CLAUDE.md`, that the file has no `Frontend paths:`
+line, or that the change is not frontend.
+
+The first read is the `Frontend paths:` line of the base branch's
+`CLAUDE.md`, read with `git show origin/<base>:CLAUDE.md`. That command
+fails both when the file is missing and when the base branch cannot be
+read. When it fails, run
+`git ls-tree --full-tree --name-only origin/<base> -- CLAUDE.md`, which
+succeeds and prints nothing when the file is missing. Only that outcome
+means the base branch has no `CLAUDE.md`, and such a base counts as having
+no `Frontend paths:` line. When `git ls-tree` fails too, or prints
+`CLAUDE.md` although `git show` failed, the read gives no answer. When the
+read gives an answer, the line is read in one of three ways:
 
 - When its value is the word `none`, in any case and alone on the line apart
-  from spaces, no change is frontend: run no command below, and open the pull
-  request the plain way, as the paragraph that begins "Check the diff against
-  the base" says. Everywhere in this skill and in `frontend.md`, the base branch's
+  from spaces, no change is frontend: skip the second read, which is the
+  `git diff` command below, and open the pull request the plain way, as the
+  paragraph that begins "Check the diff against the base" says.
+  Everywhere in this skill and in `frontend.md`, the base branch's
   `CLAUDE.md` "says `Frontend paths: none`" when it has this line, and only
-  then.
+  then. A read of that file that gives no answer, here or wherever else this
+  skill or `frontend.md` reads it, does not say it, so every condition that
+  turns on the phrase keeps the screenshot rules on when its read fails.
 - When its value holds at least one glob, it is the project's own
   comma-separated list of path globs, such as
   `Frontend paths: web/src/**, app/screens/**`. That list replaces the built-in
@@ -177,8 +204,10 @@ having no such line. The line is read in one of three ways:
 - When the line is missing, is empty, or holds only commas and spaces, the
   built-in list applies.
 
-The change is frontend when this command prints at least one path. With the
-built-in list, the command and its pathspecs are exactly these:
+The second read is the command below. When it succeeds, the change is
+frontend when it prints at least one path, and not frontend when it
+prints none. With the built-in list, the command and its pathspecs are
+exactly these:
 
 ```
 git diff --no-renames --name-only origin/<base>...HEAD -- \
@@ -203,12 +232,33 @@ adds, modifies, deletes or renames counts, because each of them changes what a
 person can see. Without `--no-renames`, git reports a rename only under its new
 path, so a file moved out of a frontend path would not count.
 
+When a read that ran gives no answer, run `git fetch origin <base>` again,
+whether or not the first fetch succeeded, and then
+run the reads again, as the paragraphs above say, once, so the read that
+failed is repeated with a fresh `CLAUDE.md`. This is the only retry in one
+pass through step 7. When a read that ran still gives no answer, push
+nothing and open no pull request. Ask the person with
+`AskUserQuestion`, in the form "Questions" gives, without putting the
+question to the counsel. The question names the command that failed and
+gives what git printed on its standard error. Its options, in this order, are:
+
+- "Wait, then check again", the recommended one: when the person says the
+  cause is fixed, run step 7 again from its first fetch.
+- "Open as frontend": treat the change as frontend and go on as the
+  paragraph that begins "When the change is frontend" says.
+- "Open the plain way": its description says that this skips the frontend
+  check. Open the pull request as the paragraph that begins "Check the
+  diff against the base" says, with nothing about screenshots in the body.
+
+No pull request exists yet, so no `needs-decision` label goes on anything.
+
 When the change is frontend, read the section **A frontend change** of
 `skills/implement/frontend.md`, in this skill's folder, before going on. A
 frontend change keeps the next paragraph's checks, its rules for the body and
 its watch call, and replaces only its push and its `gh pr create` with what
-that section says. When the command prints nothing, whichever list it used,
-the change is not frontend, and the next paragraph applies as written.
+that section says. When the command succeeds and prints nothing, whichever
+list it used, the change is not frontend, and the next paragraph applies as
+written.
 
 Check the diff against the base lists only this change's files, check it
 for credentials (see "Rules"), then push and open it with
@@ -252,11 +302,12 @@ time with the pull request open. That turn first checks with `gh` whether
 what the session waits on is real; if the wait is real, the session ends
 the turn, and otherwise it follows the step the prompt names.
 
-**When a turn ends.** After any push to a pull request whose body has a
-`## Screenshots` section, when the base branch's `CLAUDE.md` does not say
-`Frontend paths: none`, first read the section **Screenshots on a frontend
-pull request** of `skills/implement/frontend.md` again and bring the screenshot
-section up to date as it says. After any push, what follows depends on `Checks:`.
+**When a turn ends.** After any push to a pull request
+whose body holds the marker `<!-- implement:screenshots -->` inside a `## Screenshots` section,
+when the base branch's `CLAUDE.md` does not say `Frontend paths: none`, first
+read the section **Screenshots on a frontend pull request** of
+`skills/implement/frontend.md` again and bring the marked section up to date
+as it says. After any push, what follows depends on `Checks:`.
 Either way the mod counts the pushes and rounds again from the new state,
 and names the step **Over a limit** when a limit is passed:
 
@@ -684,16 +735,19 @@ commit that is made, and until then the package keeps listing the `Tidied:`
 line as not corrected. There is no line that turns an `Area:` line into a
 `Tidied:` one.
 
-**Screenshots on a frontend pull request.** When a pull request's body has a
-`## Screenshots` section and the base branch's `CLAUDE.md` does not say
-`Frontend paths: none`, the rules for its screenshots are in the section
+**Screenshots on a frontend pull request.** When a pull request's
+body holds the marker `<!-- implement:screenshots -->` inside a `## Screenshots` section
+and the base branch's `CLAUDE.md` does not say `Frontend paths: none`, the
+rules for its screenshots are in the section
 **Screenshots on a frontend pull request** of `skills/implement/frontend.md`,
 in this skill's folder. Read that
 section again at each moment it applies, even when it was read earlier in the
 session, because a compaction or a restart drops it: before making a commit,
 after a push, on resuming, after a compaction, and before running the merge
-command. When the body has no such section, or the base branch's `CLAUDE.md`
-says `Frontend paths: none`, nothing here asks the session to read that file.
+command. When the body holds no `## Screenshots` section with that marker,
+whatever other `## Screenshots` section it has, or the base branch's
+`CLAUDE.md` says `Frontend paths: none`, nothing here asks the session to read
+that file.
 
 **A streak of 3.** When the package tool's first line says an area's
 streak has reached 3, launch no reviewer on that package. The stop always
@@ -1256,10 +1310,13 @@ know, because its members read only what the owner has written down.
 - what to do when a limit on pushes or rounds is hit;
 - a check that failed for a reason outside the code;
 - a question about how the owner works, including a review finding that
-  depends on it.
+  depends on it;
+- a frontend check in step 7 that still gives no answer after a fetch and
+  one more try.
 
-Ask with `AskUserQuestion`; the mod adds `needs-decision` to the pull
-request while the question is open and takes it off when it is answered.
+Ask with `AskUserQuestion`; the mod adds `needs-decision` to the watched
+pull request, when there is one, while the question is open and takes it
+off when it is answered.
 Every question has:
 
 - one sentence saying what was tried and where;
@@ -1279,10 +1336,11 @@ watched first would never see its bar reach `merged`. Then find the pull
 request's branch and its worktree (make one from the branch if there is
 none), call `mcp__builder__watch`, and read the spec and plan paths from the
 spec directory on the branch (never from the pull request body). On a pull
-request whose body has a `## Screenshots` section, when the base branch's
-`CLAUDE.md` does not say `Frontend paths: none`, read the section **Screenshots on a
-frontend pull request** of `skills/implement/frontend.md` and bring the
-screenshot section up to date as it says. Then follow
+request whose body holds the marker `<!-- implement:screenshots -->` inside a `## Screenshots` section,
+when the base branch's `CLAUDE.md` does not say `Frontend paths: none`, read
+the section **Screenshots on a frontend pull request** of
+`skills/implement/frontend.md` and bring the marked section up to date as it
+says. Then follow
 the step that the watch tool's answer names, doing what "Commits the pull
 request lacks" says with the listing that a merge step's or the **Merged**
 step's text gives. A verdict review at the head means
@@ -1306,10 +1364,11 @@ again with the Skill tool before anything else. Do not repeat step 1: the
 pane, Remote Control and the watch are still there. Read the pull request's
 state with `mcp__builder__watch`, and when the summary does not name the
 spec and plan paths, read them from the spec directory on the branch. On a
-pull request whose body has a `## Screenshots` section, when the base branch's
-`CLAUDE.md` does not say `Frontend paths: none`, read the section **Screenshots on a
-frontend pull request** of `skills/implement/frontend.md` and bring the
-screenshot section up to date as it says. Then
+pull request whose body holds the marker `<!-- implement:screenshots -->` inside a `## Screenshots` section,
+when the base branch's `CLAUDE.md` does not say `Frontend paths: none`, read
+the section **Screenshots on a frontend pull request** of
+`skills/implement/frontend.md` and bring the marked section up to date as it
+says. Then
 follow the step that the watch tool's answer names, as "Resuming" says,
 counting a round's
 first half as run at a head only when a verdict review at that head names

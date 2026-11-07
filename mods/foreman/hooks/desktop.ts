@@ -134,16 +134,51 @@ export function savedPathIn(text: string): string | null {
   return SAVED_NOTICE.exec(text)?.[1] ?? null
 }
 
+// A path that begins with a drive letter, a colon and a slash of either kind.
+const DRIVE_PATH = /^[A-Za-z]:[\\/]/
+
+// A Windows path written with `/` alone and with its drive letter in lower
+// case, so that two ways of writing the same path compare equal. Its test for
+// a drive letter needs no slash after the colon, unlike DRIVE_PATH, because
+// it is also given the configuration folder, which is a bare `C:` when
+// CLAUDE_CONFIG_DIR is the root of a drive. The saved path it is given has
+// already passed DRIVE_PATH.
+function windowsForm(text: string): string {
+  const slashed = text.replace(/\\/g, '/')
+  return /^[A-Za-z]:/.test(slashed) ? slashed.charAt(0).toLowerCase() + slashed.slice(1) : slashed
+}
+
+// Whether Windows may read a part as something other than a plain name: one
+// made only of dots and spaces, such as `... `, which it may read as `..`, or
+// one with a colon, such as `x.json:stream`, which names a hidden alternate
+// data stream of a file.
+const unsafeOnWindows = (part: string) => /^[. ]+$/.test(part) || part.includes(':')
+
+// Whether one part of a saved path is a plain name: not empty, `.` or `..`,
+// and, on a drive-letter path, not a name that Windows reads otherwise.
+function plainName(part: string, onDrive: boolean): boolean {
+  if (part === '' || part === '.' || part === '..') return false
+  if (onDrive && unsafeOnWindows(part)) return false
+  return true
+}
+
 // Whether `path` lies in Claude Code's saved tool results under the
 // configuration folder `config`: exactly
 // <config>/projects/<folder>/<folder>/tool-results/<file>, each part one
-// segment that is not empty, `.` or `..`. The notice is text a tool answer
+// segment that is not empty, `.` or `..`. A path that starts with a drive
+// letter is compared with the folder in their Windows form, so either slash
+// and either case of the drive letter match, and no part may be one that
+// Windows reads as something other than a plain name. Any other path must
+// start with `/` and is checked as it is. The notice is text a tool answer
 // could imitate, so no other file is ever read for it.
 export function isSavedResult(path: string, config: string): boolean {
-  const root = `${config}/projects/`
-  if (!path.startsWith('/') || !path.startsWith(root)) return false
-  const parts = path.slice(root.length).split('/')
-  return parts.length === 4 && parts.every(p => p !== '' && p !== '.' && p !== '..') && parts[2] === 'tool-results'
+  const onDrive = DRIVE_PATH.test(path)
+  if (!onDrive && !path.startsWith('/')) return false
+  const seen = onDrive ? windowsForm(path) : path
+  const root = `${onDrive ? windowsForm(config) : config}/projects/`
+  if (!seen.startsWith(root)) return false
+  const parts = seen.slice(root.length).split('/')
+  return parts.length === 4 && parts.every(part => plainName(part, onDrive)) && parts[2] === 'tool-results'
 }
 
 // The entries of the saved copy at `path`, or why they could not be read.

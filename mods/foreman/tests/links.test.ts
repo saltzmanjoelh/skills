@@ -100,6 +100,50 @@ test('the main checkout is the folder that holds the common git folder', () => {
   expect(mainCheckoutOf('/main/.git/worktrees/wt', '  \n')).toBe(null)
 })
 
+test('a path that starts with a drive letter is resolved with either slash and written with /', () => {
+  expect(resolved('C:\\work\\repo', 'CLAUDE.md')).toBe('C:/work/repo/CLAUDE.md')
+  expect(resolved('C:/work/repo', 'CLAUDE.md')).toBe('C:/work/repo/CLAUDE.md')
+  expect(resolved('C:\\work\\repo\\', 'sub//x\\.\\y')).toBe('C:/work/repo/sub/x/y')
+  expect(resolved('C:\\work\\wt', '..\\main\\.git')).toBe('C:/work/main/.git')
+  expect(resolved('C:\\work\\repo', '.')).toBe('C:/work/repo')
+  expect(resolved('c:\\x', 'y')).toBe('c:/x/y')
+  expect(resolved('/work', 'C:/x')).toBe('C:/x')
+  expect(resolved('/work', 'C:\\x')).toBe('C:/x')
+  expect(resolved('D:\\a', 'C:\\b')).toBe('C:/b')
+  expect(resolved('C:\\work', 'C:x')).toBe('C:/work/C:x')
+})
+
+test('a .. never removes the drive letter', () => {
+  expect(resolved('C:/a', '../../..')).toBe('C:/')
+  expect(resolved('C:\\', '..')).toBe('C:/')
+  expect(resolved('C:\\a\\b', '..\\..\\..\\c')).toBe('C:/c')
+})
+
+test('a path without a drive letter is resolved as before, with a backslash kept as part of a name', () => {
+  expect(resolved('/work/repo', 'a\\b')).toBe('/work/repo/a\\b')
+  expect(resolved('/work/repo', '..\\x')).toBe('/work/repo/..\\x')
+  expect(resolved('C:\\work', '/x')).toBe('/x')
+  expect(resolved('C:\\work', '/x\\y')).toBe('/x\\y')
+  expect(resolved('/work', 'C:x')).toBe('/work/C:x')
+  expect(resolved('/c/x', 'y')).toBe('/c/x/y')
+  expect(resolved('\\\\server\\share', 'x')).toBe('/\\\\server\\share/x')
+  expect(resolved('', 'CLAUDE.md')).toBe('/CLAUDE.md')
+})
+
+test('a Windows worktree\'s .git file names its git folder with a drive letter', () => {
+  expect(gitDirOf('C:\\work\\wt', 'gitdir: C:/main/.git/worktrees/wt\n')).toBe('C:/main/.git/worktrees/wt')
+  expect(gitDirOf('C:\\main\\.claude\\worktrees\\wt', 'gitdir: ../../../.git/worktrees/wt')).toBe('C:/main/.git/worktrees/wt')
+  expect(gitDirOf('C:\\wt', 'gitdir: C:/main/.git/worktrees/wt\r\n')).toBe('C:/main/.git/worktrees/wt')
+  expect(gitDirOf('/wt', 'gitdir: c:\\main\\.git\\worktrees\\wt')).toBe('c:/main/.git/worktrees/wt')
+})
+
+test('a Windows main checkout is the folder that holds the common git folder', () => {
+  expect(mainCheckoutOf('C:/main/.git/worktrees/wt', '../..\n')).toBe('C:/main')
+  expect(mainCheckoutOf('C:/main/.git/worktrees/wt', 'C:/main/.git')).toBe('C:/main')
+  expect(mainCheckoutOf('C:\\main\\.git\\worktrees\\wt', '..\\..')).toBe('C:/main')
+  expect(mainCheckoutOf('C:/main/.git/worktrees/wt', '')).toBe(null)
+})
+
 test('the line the person is told names the mod and the reason', () => {
   expect(ignoredLine('builder', 'it has no {key}')).toBe('builder: the Issue link fact was ignored because it has no {key}')
 })
@@ -205,4 +249,57 @@ test('a main checkout whose CLAUDE.local.md has no fact gives no link', async ()
     '/main/CLAUDE.local.md': '# Notes',
   })
   expect(await readIssueLink(read, '/wt')).toEqual(NO_LINK)
+})
+
+test('a Windows worktree finds the fact in the main checkout\'s CLAUDE.local.md through an absolute gitdir', async () => {
+  const { read, asked } = reader({
+    'C:/main/.claude/worktrees/wt/CLAUDE.md': '# Project',
+    'C:/main/.claude/worktrees/wt/.git': 'gitdir: C:/main/.git/worktrees/wt\n',
+    'C:/main/.git/worktrees/wt/commondir': '../..\n',
+    'C:/main/CLAUDE.local.md': `Issue link: ${ADDRESS}\n`,
+  })
+  expect(await readIssueLink(read, 'C:\\main\\.claude\\worktrees\\wt')).toEqual({ address: ADDRESS, ignored: null })
+  expect(asked).toEqual([
+    'C:/main/.claude/worktrees/wt/CLAUDE.md',
+    'C:/main/.claude/worktrees/wt/CLAUDE.local.md',
+    'C:/main/.claude/worktrees/wt/.git',
+    'C:/main/.git/worktrees/wt/commondir',
+    'C:/main/CLAUDE.local.md',
+  ])
+})
+
+test('a Windows worktree finds the fact in the main checkout\'s CLAUDE.local.md through a relative gitdir', async () => {
+  const { read, asked } = reader({
+    'C:/main/.claude/worktrees/wt/.git': 'gitdir: ../../../.git/worktrees/wt\n',
+    'C:/main/.git/worktrees/wt/commondir': '../..\n',
+    'C:/main/CLAUDE.local.md': `Issue link: ${ADDRESS}`,
+  })
+  expect(await readIssueLink(read, 'C:\\main\\.claude\\worktrees\\wt')).toEqual({ address: ADDRESS, ignored: null })
+  expect(asked).toEqual([
+    'C:/main/.claude/worktrees/wt/CLAUDE.md',
+    'C:/main/.claude/worktrees/wt/CLAUDE.local.md',
+    'C:/main/.claude/worktrees/wt/.git',
+    'C:/main/.git/worktrees/wt/commondir',
+    'C:/main/CLAUDE.local.md',
+  ])
+})
+
+test('a Windows main checkout that is the working folder is not read a second time', async () => {
+  const { read, asked } = reader({
+    'C:/main/.git': 'gitdir: C:/main/.git/worktrees/self\n',
+    'C:/main/.git/worktrees/self/commondir': '../..\n',
+  })
+  expect(await readIssueLink(read, 'C:\\main\\')).toEqual(NO_LINK)
+  expect(asked).toEqual(['C:/main/CLAUDE.md', 'C:/main/CLAUDE.local.md', 'C:/main/.git', 'C:/main/.git/worktrees/self/commondir'])
+})
+
+test('a Windows main checkout that differs from the working folder only in its drive letter\'s case is read again and gives no link', async () => {
+  const { read, asked } = reader({
+    'c:/main/CLAUDE.local.md': '# Notes',
+    'c:/main/.git': 'gitdir: C:/main/.git/worktrees/self\n',
+    'C:/main/.git/worktrees/self/commondir': '../..\n',
+    'C:/main/CLAUDE.local.md': '# Notes',
+  })
+  expect(await readIssueLink(read, 'c:\\main')).toEqual(NO_LINK)
+  expect(asked).toEqual(['c:/main/CLAUDE.md', 'c:/main/CLAUDE.local.md', 'c:/main/.git', 'C:/main/.git/worktrees/self/commondir', 'C:/main/CLAUDE.local.md'])
 })

@@ -8,7 +8,7 @@ import { NO_STATUS_FILE, NOTHING_WATCHED, STALE_WARNING } from '../hooks/pane'
 import { GITHUB_NAMES_LINE, RELOAD_LINE, REREAD_CLOSING } from '../hooks/prompts'
 import { INSTRUCTION_PATHSPECS } from '../hooks/review'
 import { FOREMAN_NUDGE_TEXTS, STATUS_CHANGED_TEXT } from '../hooks/status'
-import type { UserClaude } from '../hooks/step'
+import { SCREENSHOTS_MARKER, type UserClaude } from '../hooks/step'
 import type { BuildStatus, Compactions } from '../types'
 import { CROSS_SESSION_SHAPES } from './cross-session-fixture'
 
@@ -1068,24 +1068,28 @@ function memoryStore(on: On, entries: [string, unknown][] = []) {
 // folders that exist, so a test can add another checkout beside `/repo`.
 // `refusedReads` holds paths that exist but whose read is refused, as a file
 // without read permission is, and `refusedExists` holds paths whose `exists`
-// call is itself refused.
+// call is itself refused. `notText` maps paths that exist, and whose read
+// gives a value that is not text, as a read of bytes does, to that value.
 function fakeFiles(on: On) {
   const files = new Map<string, string>([['/repo/CLAUDE.md', 'Architecture document: docs/arch.md\n'], ['/repo/docs/arch.md', 'x']])
   const links = new Map<string, string>()
   const dirs = new Set(['/repo'])
   const refusedReads = new Set<string>()
   const refusedExists = new Set<string>()
+  const notText = new Map<string, { base64: string }>()
   const writes = { refused: false, log: [] as string[], texts: [] as string[], hold: null as Promise<void> | null }
   // Every path read, in order, whether or not it is there.
   const reads: string[] = []
   on('fs.read', ($, e) => {
     reads.push(e.path)
     if (refusedReads.has(e.path)) return { deny: 'permission denied' }
+    const bytes = notText.get(e.path)
+    if (bytes !== undefined) return { value: bytes }
     return files.has(e.path) ? { value: files.get(e.path) as string } : { deny: 'missing' }
   })
   on('fs.exists', ($, e) => {
     if (refusedExists.has(e.path)) return { deny: 'the check could not be made' }
-    return { value: files.has(e.path) || dirs.has(e.path) || refusedReads.has(e.path) }
+    return { value: files.has(e.path) || dirs.has(e.path) || refusedReads.has(e.path) || notText.has(e.path) }
   })
   // `links` maps a path to where it really points. A path that is none of the
   // files, folders or links is refused, as the real file system refuses it.
@@ -1104,7 +1108,7 @@ function fakeFiles(on: On) {
     files.set(e.path, e.text)
     return { value: undefined }
   })
-  return Object.assign(files, { links, dirs, writes, reads, refusedReads, refusedExists })
+  return Object.assign(files, { links, dirs, writes, reads, refusedReads, refusedExists, notText })
 }
 
 // The mod loaded through a link into a checkout at `dir`: every stat resolves
@@ -2281,6 +2285,44 @@ test('a document path in CLAUDE.md that leaves the checkout is not named in the 
   expect(text).toContain('- Gotchas document: none in this project')
 })
 
+// Every backslash in these tests is written doubled, so the value holds one
+// backslash for each pair. The fake file system holds files at the literal
+// backslash paths, so a check that let such a path through would name it.
+test('a document path in CLAUDE.md written in a Windows form is not named in the package', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  const files = fakeFiles(on)
+  files.set('/repo/CLAUDE.md', 'Architecture document: ..\\..\\.env\nGotchas document: C:\\x\n')
+  files.set('/repo/..\\..\\.env', 'secret')
+  files.set('/repo/C:\\x', 'secret')
+  await watch($)
+
+  await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
+  const text = files.get('/repo/.git/builder/cccccccc/package.md') ?? ''
+
+  expect(text).toContain('- Architecture document: none in this project')
+  expect(text).toContain('- Gotchas document: none in this project')
+})
+
+test('a document path written with forward slashes is still named, while the same path written with a backslash is not', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  const files = fakeFiles(on)
+  files.set('/repo/CLAUDE.md', 'Architecture document: docs/arch.md\nGotchas document: docs\\arch.md\n')
+  files.set('/repo/docs\\arch.md', 'x')
+  await watch($)
+
+  await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
+  const text = files.get('/repo/.git/builder/cccccccc/package.md') ?? ''
+
+  expect(text).toContain('- Architecture document: docs/arch.md')
+  expect(text).toContain('- Gotchas document: none in this project')
+})
+
 test('a quiet session keeps its record fresh, so another session starting two weeks on does not prune it', async ($, on) => {
   // The 30-second redraw is refused here: fifteen days of it is some forty
   // thousand timer periods, and it plays no part in keeping the record seen.
@@ -3200,7 +3242,63 @@ test('the counsel tool refuses a path outside the checkout and writes no brief',
 
   const ran = await loose($)({ ...brief, paths: ['../../.env'] })
 
-  expect(String(ran.result)).toContain('Refused')
+  expect(String(ran.result)).toContain('Refused: ../../.env leads outside the checkout; name paths inside it, relative to it.')
+  expect(String(ran.result)).not.toContain('Windows')
+  expect([...files.keys()].some(path => path.includes('/counsel/'))).toBe(false)
+})
+
+// Every backslash below is written doubled, so the value holds one backslash
+// for each pair.
+test('the counsel tool refuses a path written in a Windows form, asks for forward slashes, and writes no brief', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  const files = fakeFiles(on)
+  await startOnly($)
+
+  for (const windows of ['..\\..\\.env', 'C:\\x', '\\\\server\\x']) {
+    const ran = await loose($)({ ...brief, paths: [windows] })
+
+    expect(String(ran.result)).toContain(`Refused: ${windows} is written in a Windows form; name paths relative to the checkout, written with forward slashes.`)
+    expect(String(ran.result)).not.toContain('leads outside')
+  }
+  expect([...files.keys()].some(path => path.includes('/counsel/'))).toBe(false)
+})
+
+test('the first refused counsel path decides the message, in either order of a climbing path and a Windows one', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  const files = fakeFiles(on)
+  await startOnly($)
+
+  const climbingFirst = await loose($)({ ...brief, paths: ['../x', 'C:\\y'] })
+
+  expect(String(climbingFirst.result)).toContain('Refused: ../x leads outside the checkout; name paths inside it, relative to it.')
+  expect(String(climbingFirst.result)).not.toContain('Windows')
+
+  const windowsFirst = await loose($)({ ...brief, paths: ['C:\\y', '../x'] })
+
+  expect(String(windowsFirst.result)).toContain('Refused: C:\\y is written in a Windows form; name paths relative to the checkout, written with forward slashes.')
+  expect(String(windowsFirst.result)).not.toContain('leads outside')
+  expect([...files.keys()].some(path => path.includes('/counsel/'))).toBe(false)
+})
+
+test('a counsel path committed as a link to a file outside the checkout gets the message for leaving the checkout', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  const files = fakeFiles(on)
+  files.links.set('/repo/docs/arch.md', '/home/someone/.secrets')
+  await startOnly($)
+
+  const ran = await loose($)({ ...brief, paths: ['docs/arch.md'] })
+
+  expect(String(ran.result)).toContain('Refused: docs/arch.md leads outside the checkout; name paths inside it, relative to it.')
+  expect(String(ran.result)).not.toContain('Windows')
   expect([...files.keys()].some(path => path.includes('/counsel/'))).toBe(false)
 })
 
@@ -10864,10 +10962,11 @@ test('a relative session folder still reads no base facts, even when the watch t
 
 // The CLAUDE.md in the user's configuration folder at a look: read with its
 // text, missing when it is not there, unreadable when it exists but its read
-// is refused, or exists-refused when the check whether it exists is itself
-// refused. Each case is tagged, so that a file whose text happens to be the
-// word unreadable is still a file that can be read.
-type UserClaudeSetup = UserClaude | { kind: 'exists-refused' }
+// is refused, exists-refused when the check whether it exists is itself
+// refused, or not-text when it exists but its read gives a value that is not
+// text. Each case is tagged, so that a file whose text happens to be the word
+// unreadable is still a file that can be read.
+type UserClaudeSetup = UserClaude | { kind: 'exists-refused' } | { kind: 'not-text' }
 
 const USER_ENV: Record<string, string> = { CLAUDE_CONFIG_DIR: '/config', HOME: '/home/me' }
 const USER_CLAUDE = '/config/CLAUDE.md'
@@ -10876,8 +10975,10 @@ function setUserClaude(files: ReturnType<typeof fakeFiles>, user: UserClaudeSetu
   files.delete(USER_CLAUDE)
   files.refusedReads.delete(USER_CLAUDE)
   files.refusedExists.delete(USER_CLAUDE)
+  files.notText.delete(USER_CLAUDE)
   if (user.kind === 'unreadable') files.refusedReads.add(USER_CLAUDE)
   else if (user.kind === 'exists-refused') files.refusedExists.add(USER_CLAUDE)
+  else if (user.kind === 'not-text') files.notText.set(USER_CLAUDE, { base64: 'AAEC' })
   else if (user.kind === 'read') files.set(USER_CLAUDE, user.text)
 }
 
@@ -10979,6 +11080,12 @@ test('a user CLAUDE.md that exists but cannot be read, with no Reviewer: line in
   expect(answer).toContain('Merge nothing')
   expect(answer).not.toContain('gh pr merge')
   expect(answer).not.toContain(USER_CLAUDE)
+})
+
+test('a user CLAUDE.md whose read gives no text, with no Reviewer: line in the base branch\'s, holds the merge', async ($, on) => {
+  const answer = await reviewerStep($, on, 'Checks: none\n', { kind: 'not-text' })
+  expect(answer).toContain(USER_CLAUDE_UNREAD_STEP)
+  expect(answer).not.toContain('gh pr merge')
 })
 
 test('an exists call for the user\'s CLAUDE.md that is itself refused holds the merge', async ($, on) => {
@@ -11109,10 +11216,12 @@ test('both merge texts bring a frontend pull request\'s screenshot section up to
     expect(at).toBeGreaterThan(text.indexOf('Before merging:'))
     expect(at).toBeLessThan(reread)
     const bullet = text.slice(at, reread)
-    for (const part of ['`## Screenshots`', 'does not say `Frontend paths: none`', '`skills/implement/frontend.md`', 'A pull request whose body has no such section skips this bullet.']) {
+    for (const part of ['`' + SCREENSHOTS_MARKER + '`', 'inside a `## Screenshots` section', 'does not say `Frontend paths: none`', '`skills/implement/frontend.md`', 'A pull request whose body holds no `## Screenshots` section with that marker skips this bullet, whatever other `## Screenshots` section it has.']) {
       expect(bullet).toContain(part)
     }
     expect(bullet).not.toContain('names at least one glob')
+    expect(bullet).not.toContain('whose body has a `## Screenshots` section')
+    expect(bullet).not.toContain('A pull request whose body has no such section skips this bullet.')
   }
 })
 

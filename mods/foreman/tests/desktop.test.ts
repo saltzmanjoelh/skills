@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { McpToolResult } from 'claude-code'
 
-import { BEGIN_TEXT, everySession, EVENTS_TOOL, failureLine, linkedFamily, LIST_LIMIT, listSessions, openSession, readHeader, REASONS, type DesktopCall, type SavedCopies } from '../hooks/desktop'
+import { BEGIN_TEXT, everySession, EVENTS_TOOL, failureLine, isSavedResult, linkedFamily, LIST_LIMIT, listSessions, openSession, readHeader, REASONS, type DesktopCall, type SavedCopies } from '../hooks/desktop'
 import { desktopApp, eventsAnswer, savedNotice } from './world'
 
 const SECRET = 'SECRET-ERROR-TEXT'
@@ -354,6 +354,78 @@ test('the saved copy is read only from a path in Claude Code\'s saved tool resul
     sessions: { reason: REASONS.savedOutside }, family: { reason: REASONS.savedOutside }, open: { reason: REASONS.savedOutside },
   })
   expect([noConfig.seen.reads, noConfig.seen.sizes]).toEqual([[], []])
+})
+
+// A Windows configuration folder as Claude Code may write it, with the
+// drive's backslashes and a forward slash before `.claude`.
+const WIN_CONFIG = 'C:\\Users\\me/.claude'
+
+// Each row's name, its saved path, its configuration folder and whether the
+// path counts as a saved tool result, checked together so a failure names
+// every row that is wrong.
+type SavedRow = [string, string, string, boolean]
+const checked = (rows: SavedRow[]) => [
+  rows.map(([name, path, config]) => [name, isSavedResult(path, config)]),
+  rows.map(([name, , , want]) => [name, want]),
+]
+
+test('a drive-letter saved path is accepted with either slash and a drive letter of either case', () => {
+  const [got, want] = checked([
+    ['backslashes throughout', 'C:\\Users\\me\\.claude\\projects\\p\\s\\tool-results\\x.json', WIN_CONFIG, true],
+    ['a lowercase drive letter in the path', 'c:\\Users\\me\\.claude\\projects\\p\\s\\tool-results\\x.json', WIN_CONFIG, true],
+    ['a lowercase drive letter in the configuration folder', 'C:\\Users\\me\\.claude\\projects\\p\\s\\tool-results\\x.json', 'c:\\Users\\me\\.claude', true],
+    ['forward slashes throughout', 'C:/Users/me/.claude/projects/p/s/tool-results/x.json', WIN_CONFIG, true],
+    ['both slashes mixed', 'C:\\Users\\me/.claude\\projects/-work-parent\\session-1/tool-results\\toolu_01.txt', 'C:/Users/me/.claude', true],
+    ['a configuration folder that is a bare drive', 'c:\\projects\\p\\s\\tool-results\\x.json', 'C:', true],
+  ])
+  expect(got).toEqual(want)
+})
+
+test('a drive-letter saved path is refused when a part could climb, hide a stream or name another place', () => {
+  const [got, want] = checked([
+    ['a .. written with backslashes', 'C:\\Users\\me\\.claude\\projects\\p\\..\\tool-results\\x.json', WIN_CONFIG, false],
+    ['a climb through tool-results', 'C:\\Users\\me\\.claude\\projects\\p\\s\\tool-results\\..\\..\\..\\..\\x.json', WIN_CONFIG, false],
+    ['a part of three dots and a space', 'C:\\Users\\me\\.claude\\projects\\p\\... \\tool-results\\x.json', WIN_CONFIG, false],
+    ['a part of two dots and a space', 'C:\\Users\\me\\.claude\\projects\\p\\.. \\tool-results\\x.json', WIN_CONFIG, false],
+    ['a part of one dot and a space', 'C:\\Users\\me\\.claude\\projects\\p\\s\\tool-results\\. ', WIN_CONFIG, false],
+    ['a part of three spaces', 'C:\\Users\\me\\.claude\\projects\\   \\s\\tool-results\\x.json', WIN_CONFIG, false],
+    ['a file name with a colon', 'C:\\Users\\me\\.claude\\projects\\p\\s\\tool-results\\x.json:stream', WIN_CONFIG, false],
+    ['a folder name with a colon', 'C:\\Users\\me\\.claude\\projects\\p:x\\s\\tool-results\\x.json', WIN_CONFIG, false],
+    ['tool-results in the wrong case', 'C:\\Users\\me\\.claude\\projects\\p\\s\\Tool-Results\\x.json', WIN_CONFIG, false],
+    ['a doubled backslash', 'C:\\Users\\me\\.claude\\projects\\p\\\\s\\tool-results\\x.json', WIN_CONFIG, false],
+    ['a drive letter with no slash', 'C:Users\\me\\.claude\\projects\\p\\s\\tool-results\\x.json', WIN_CONFIG, false],
+    ['another drive', 'D:\\Users\\me\\.claude\\projects\\p\\s\\tool-results\\x.json', WIN_CONFIG, false],
+    ['a configuration folder that starts with /', 'C:\\cfg\\projects\\p\\s\\tool-results\\x.json', '/cfg', false],
+    ['a / path against a drive-letter configuration folder', '/Users/me/.claude/projects/p/s/tool-results/x.json', WIN_CONFIG, false],
+    ['a relative path', 'Users\\me\\.claude\\projects\\p\\s\\tool-results\\x.json', WIN_CONFIG, false],
+  ])
+  expect(got).toEqual(want)
+})
+
+test('a saved path that starts with / is checked as before, so dots, spaces, colons and backslashes stay part of a name', () => {
+  const [got, want] = checked([
+    ['a part of three dots and a space', '/cfg/projects/p/... /tool-results/x.json', '/cfg', true],
+    ['a part of two dots and a space', '/cfg/projects/p/.. /tool-results/x.json', '/cfg', true],
+    ['a part of three spaces', '/cfg/projects/   /s/tool-results/x.json', '/cfg', true],
+    ['a file name with a colon', '/cfg/projects/p/s/tool-results/x.json:stream', '/cfg', true],
+    ['a backslash in a part', '/cfg/projects/p/..\\s/tool-results/x.json', '/cfg', true],
+    ['a backslash in place of a slash', '/cfg/projects/p/s\\tool-results/x.json', '/cfg', false],
+    ['a .. part', '/cfg/projects/p/../tool-results/x.json', '/cfg', false],
+    ['a relative path', 'cfg/projects/p/s/tool-results/x.txt', 'cfg', false],
+  ])
+  expect(got).toEqual(want)
+})
+
+test('a saved copy on a Windows drive is read from the path the notice names, as the notice wrote it', async () => {
+  const path = 'C:\\Users\\me\\.claude\\projects\\-work-parent\\session-1\\tool-results\\toolu_01.txt'
+  const c = copies({ [path]: JSON.stringify([{ sessionId: 'local_b', cwd: '/work/b' }]) }, { config: async () => WIN_CONFIG })
+  expect(await allThree(replaced(path), c.saved)).toEqual({
+    sessions: { sessions: [{ sessionId: 'local_b', isArchived: false, isRunning: true, title: null, surelyUnarchived: false }], complete: true },
+    family: { ids: ['local_b'], complete: true },
+    open: { opened: 'local_b' },
+  })
+  expect(c.seen.reads).toEqual([path, path, path])
+  expect(c.seen.sizes).toEqual([])
 })
 
 test('a saved copy that is missing, too large or not a list of sessions answers its own reason, never the path or the file\'s text', async () => {
