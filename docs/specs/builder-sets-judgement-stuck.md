@@ -51,8 +51,12 @@ could not be listed. The person reads the label on the pull request.
    last recorded is `stuck`, so the tool records the judgement again under
    that label and keeps `stuck` on.
 4. **Record first.** The tool saves a judgement in the state label record:
-   the label it is judged under and the time. With no record yet, it saves a
-   record whose label is that label, with the judgement. When the store
+   the label it is judged under and the time. The judgement also carries a
+   marker, `fromStep: true`, when its label came from a step, so that a
+   state label job that started from an older snapshot never moves it onto
+   its new label (see `docs/specs/builder-keeps-judgement-from-newer-snapshot.md`).
+   With no record yet, it saves a record whose label is that label, with the
+   judgement. When the store
    refuses the save, the tool answers with an error, which the session
    reports to the person, and it edits nothing.
 5. **Then edit, and wait.** After the save, the tool runs the state label job
@@ -109,7 +113,9 @@ could not be listed. The person reads the label on the pull request.
   label, so the job keeps `stuck`.
 - The session calls the tool while a state label job for an older step waits
   in the queue: the tool's job and the waiting one read the record and the
-  snapshot when they run, one at a time, so both see the judgement.
+  snapshot when they run, one at a time, so both see the judgement. A job
+  that is already running read them before the call, and how its save keeps
+  the judgement is in `docs/specs/builder-keeps-judgement-from-newer-snapshot.md`.
 - Someone takes `stuck` off by hand while the judgement holds: the next look
   puts it back.
 - The edit fails, then the step's label changes before any look succeeds:
@@ -123,7 +129,9 @@ could not be listed. The person reads the label on the pull request.
   step's label stays the recorded one and removed when it changes. The race
   this change cures still applies to such a session.
 - The session calls the tool twice under the same label: the second call
-  replaces the judgement's time and changes nothing else.
+  replaces the judgement's time and changes nothing else, except that it
+  can also add the marker that the judgement's label came from a step (see
+  `docs/specs/builder-keeps-judgement-from-newer-snapshot.md`).
 - A restart keeps the record and its judgement, because both are in the
   store.
 
