@@ -3496,6 +3496,36 @@ test('a rerun rewrites the brief as round two with the proposed option added', a
   expect(text).not.toContain('LEAN-MARKER')
 })
 
+test('a rerun of a question stored with a dot and space part keeps the notes of the paths after that part', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  const files = fakeFiles(on)
+  // Once the question is put, it reads back as one recorded before the rule
+  // that refuses such a part was loaded, so its stored paths hold one.
+  let recordedEarlier = false
+  on('state.get', async ($, e, next) => {
+    const held = await next(e)
+    const stored = (held as { value?: { value?: unknown; version?: number } | null }).value
+    const value = stored?.value
+    if (!recordedEarlier || e.plugin !== 'builder' || e.key !== 'counsel' || !Array.isArray(value)) return held
+    const rewritten = value.map((q: { paths: string[] }) => ({ ...q, paths: q.paths.map(p => p === 'docs/x.md' ? 'docs/.. /x.md' : p) }))
+    return { value: { ...stored, value: rewritten } } as never
+  })
+  await startOnly($)
+  await loose($)({ ...brief, paths: ['docs/x.md', 'docs/specs/poll.md'] })
+  recordedEarlier = true
+
+  const ran = await loose($)({ tool: TALLY, id: 'c1', round: 1, votes: ballots(['1', '2', 'none', '2', '1', '2', '1'], 'only on events') })
+  const text = files.get('/repo/.git/builder/counsel/session-1/c1/brief.md') ?? ''
+
+  expect(String(ran.result)).toContain('round 2')
+  expect(text).toContain('round 2')
+  expect(text).toContain('- docs/.. /x.md\n')
+  expect(text).toContain('- docs/specs/poll.md (not written yet)')
+})
+
 test('a subagent cannot put a question to the counsel or tally one', async ($, on) => {
   mock.clock(on)
   mock.store(on)

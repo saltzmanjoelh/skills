@@ -85,11 +85,13 @@ and two copies running at once behave like a single fresh call.
 One stored value meets the new rule. When a counsel question is tallied again,
 `serveTally` runs `unwrittenPaths` on the paths that the stored question
 recorded. A question recorded before a hot reload of this change can hold a
-path such as `docs/.. /x`. After the reload, `unwrittenPaths` stops at that
-path, so the round-2 brief is still written but loses its "(not written yet)"
-notes for that path and every later one. This is harmless, the change that
-refused Windows-shaped values accepted the same consequence, and the spec
-keeps the change to the three checks, so it stays as it is.
+path such as `docs/.. /x`. After the reload, `placeOf` refuses that path, and
+an `unwrittenPaths` that stopped there would drop the "(not written yet)"
+notes of every later path from the round-2 brief, which the base still
+writes. So `unwrittenPaths` keeps the first refused path for the counsel
+tool's message but goes on gathering the paths that are not written yet. The
+counsel tool still refuses the call on that first path, so only the tally's
+rerun sees the difference.
 
 ## Step sequence
 

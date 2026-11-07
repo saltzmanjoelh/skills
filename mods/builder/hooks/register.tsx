@@ -2771,17 +2771,20 @@ async function placeOf($: $, dir: string, root: string | undefined, path: string
   return file.kind === 'file' ? 'file' : 'other'
 }
 
-// Which of the named paths do not exist yet, or the first one that leads
-// outside the checkout.
+// Which of the named paths do not exist yet, and the first one that leads
+// outside the checkout. It goes on past a refused path, so that a rerun of a
+// question stored before a rule that now refuses one of its paths still
+// notes every later path that is not written yet.
 async function unwrittenPaths($: $, dir: string, paths: readonly string[]): Promise<{ unwritten: string[]; outside: string | null }> {
   const unwritten: string[] = []
+  let outside: string | null = null
   const root = await checkoutPath($, dir)
   for (const path of paths) {
     const place = await placeOf($, dir, root, path)
-    if (place === 'outside') return { unwritten, outside: path }
+    if (place === 'outside') outside ??= path
     if (place === 'missing') unwritten.push(path)
   }
-  return { unwritten, outside: null }
+  return { unwritten, outside }
 }
 
 // The checkout's git folder, or null when git cannot say.
