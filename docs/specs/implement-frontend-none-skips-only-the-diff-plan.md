@@ -1,6 +1,6 @@
 # Plan: the `Frontend paths: none` bullet skips only the frontend `git diff`
 
-Date: 2026-11-07. Spec: `implement-frontend-none-skips-only-the-diff.md`.
+Date: 2026-11-06. Spec: `implement-frontend-none-skips-only-the-diff.md`.
 
 ## Chosen approach
 

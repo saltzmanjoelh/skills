@@ -1,6 +1,6 @@
 # The `Frontend paths: none` bullet skips only the frontend `git diff`
 
-Date: 2026-11-07. Seeded from an issue in the owner's tracker that the counsel
+Date: 2026-11-06. Seeded from an issue in the owner's tracker that the counsel
 filed, 4 of 7, in the review of the change that made frontend detection the
 default (see `implement-frontend-by-default.md`).
 
