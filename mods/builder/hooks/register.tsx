@@ -21,7 +21,7 @@ import { changedKinds, codeReviewLine, commitRecordsOf, decidedItems, factIn, IN
 import { AGENTS_KEPT, backgroundOf, backgroundTaskIdOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isMerge, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
 import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isFolderless, isForemanNudge, keptTicketIn, keptTicketOf, memoOfKeptTicket, newMemo, parentIn, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, STATUS_CHANGED_TEXT, stateOf, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type KeptTicket, type Starts, type StatusFacts } from './status'
 import { afterSend, emptySends, sendOutcomeOf, sendsIn, sendsKey, sendsNewest, SENDS_KEPT_MS, SENDS_PREFIX, type SendOutcome, type SendSettled, type SendsRecord } from './sends'
-import { baseFactsOf, chooseStep, isJudgementKept, labelActionOf, labelFor, labelRecordIn, labelsRemovedWith, needsListing, otherStateLabelsOf, reviewerFactOf, SHORT_HASH, stepFor, UNPUSHED_KEPT, UNREAD_FACTS, type LabelRecord, type StuckJudgement, type UserClaude } from './step'
+import { baseFactsOf, chooseStep, isJudgementKept, labelActionOf, labelFor, labelRecordIn, labelsRemovedWith, needsListing, needsWorkingLabel, otherStateLabelsOf, reviewerFactOf, SHORT_HASH, stepFor, UNPUSHED_KEPT, UNREAD_FACTS, type LabelRecord, type StuckJudgement, type UserClaude } from './step'
 import { isAbsolute, isPlainRepo, timeOfDay } from './text'
 import { afterPackage, afterPr, afterReview, afterStage, afterState, emptyTiming, timingIn, type PullRequestSeen } from './timing'
 import { afterCost, afterStep, emptyUsage, usageIn } from './usage'
@@ -455,10 +455,20 @@ async function readRequestTimes($: $, r: SnapshotTarget, live: GhPullRequest): P
   const self = r.login.toLowerCase()
   const isAsked = (live.reviewRequests ?? []).some(request =>
     (request.__typename === undefined || request.__typename === 'User') && isLogin(request.login) && request.login.toLowerCase() !== self)
-  if (!isAsked || !isPlainRepo(r.repo)) return new Map()
-  const [owner, name] = r.repo.split('/') as [string, string]
-  const out = await gh($, r.cwd, ['api', 'graphql', '-f', `query=${REQUEST_TIMES_QUERY}`, '-f', `owner=${owner}`, '-f', `name=${name}`, '-F', `number=${live.number}`])
+  if (!isAsked) return new Map()
+  const out = await pullRequestGraphql($, r.cwd, r.repo, live.number, REQUEST_TIMES_QUERY)
   return requestTimesOf(out)
+}
+
+// Runs one GraphQL query about a pull request, giving it the repository's
+// owner and name and the pull request's number as the variables `$owner`,
+// `$name` and `$number`, with any further arguments for gh after them. It
+// answers null for a repository that is not a plain owner and name, without
+// calling gh, and otherwise gh's output, which is null on any failure.
+async function pullRequestGraphql($: $, cwd: string | null, repo: string, number: number, query: string, extraArgs: readonly string[] = []): Promise<string | null> {
+  if (!isPlainRepo(repo)) return null
+  const [owner, name] = repo.split('/') as [string, string]
+  return gh($, cwd, ['api', 'graphql', '-f', `query=${query}`, '-f', `owner=${owner}`, '-f', `name=${name}`, '-F', `number=${number}`, ...extraArgs])
 }
 
 // The commits the worktree of the pull request's head branch holds that the
@@ -2987,9 +2997,7 @@ function reviewerLines(shape: PackageShape): string[] {
 // owner and name, the read failed or cut off, or its output is not whole (see
 // rulingsOf).
 async function readRulings($: $, r: BuilderRun) {
-  if (!isPlainRepo(r.repo)) return null
-  const [owner, name] = r.repo.split('/') as [string, string]
-  const out = await gh($, r.cwd, ['api', 'graphql', '--paginate', '-f', `query=${THREADS_QUERY}`, '-f', `owner=${owner}`, '-f', `name=${name}`, '-F', `number=${r.number}`, '--jq', THREADS_JQ])
+  const out = await pullRequestGraphql($, r.cwd, r.repo, r.number, THREADS_QUERY, ['--paginate', '--jq', THREADS_JQ])
   return out === null ? null : rulingsOf(out, r.login)
 }
 
@@ -3526,10 +3534,6 @@ function requestStateLabel($: $) {
   })
 }
 
-// The steps at which an outside review is asked for or waited on, where the
-// repository must have reviewer-working so the reviewer can put it on.
-const WORKING_LABEL_STEPS: ReadonlySet<string> = new Set(['request-review', 'awaiting-review', 'review-not-picked-up', 'review-not-arrived'])
-
 // The repositories this copy of the module knows to have reviewer-working, so
 // a look at a repository that has it reads nothing more. A reload forgets
 // them, which costs one read of the label at the next such look.
@@ -3547,9 +3551,14 @@ async function ensureWorkingLabel($: $) {
   const s = snapshotIn(await read($, pr))
   if (r === null || s === null || s.repo !== r.repo || s.number !== r.number) return
   if (reposWithWorkingLabel.has(r.repo) || !isPlainRepo(r.repo)) return
-  if (!WORKING_LABEL_STEPS.has(chooseStep(s, false).kind)) return
-  const isThere = (await gh($, r.cwd, ['api', `repos/${r.repo}/labels/${WORKING_LABEL}`])) !== null
-  if (isThere || (await gh($, r.cwd, ['label', 'create', WORKING_LABEL, '--repo', r.repo])) !== null) reposWithWorkingLabel.add(r.repo)
+  if (!needsWorkingLabel(chooseStep(s, false))) return
+  const label = await gh($, r.cwd, ['api', `repos/${r.repo}/labels/${WORKING_LABEL}`])
+  if (label !== null) {
+    reposWithWorkingLabel.add(r.repo)
+    return
+  }
+  const created = await gh($, r.cwd, ['label', 'create', WORKING_LABEL, '--repo', r.repo])
+  if (created !== null) reposWithWorkingLabel.add(r.repo)
 }
 
 // What a state label job did, which the set_stuck tool answers from. Each

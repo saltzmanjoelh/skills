@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { verdictsOf } from '../hooks/github'
-import { CHEAP_FIX_SUBJECT, changedKinds, codeReviewLine, commitRecordsOf, DECIDED_HEADINGS, DECIDED_ITEM_CHARS, decidedItems, decidedSection, DEFAULT_SPEC_DIR, factIn, INSTRUCTION_PATHSPECS, instructionFileImportsMarkdown, instructionFileIsLink, isFullSha, isUpForCheck, isWindowsShaped, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pathKind, pluginRootsOf, recordItems, reviewedHeadOf, rulingsOf, secretIn, specDirOf, STREAK_STOP, trendOf, trendSection, trendStopLine, underRoot, verdictHeadOf, verdictsLine } from '../hooks/review'
+import { CHEAP_FIX_SUBJECT, changedKinds, codeReviewLine, commitRecordsOf, DECIDED_HEADINGS, DECIDED_ITEM_CHARS, decidedItems, decidedSection, DEFAULT_SPEC_DIR, factIn, INSTRUCTION_PATHSPECS, instructionFileImportsMarkdown, instructionFileIsLink, isFullSha, isUpForCheck, isWindowsShaped, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pathKind, pluginRootsOf, recordItems, reviewedHeadOf, rulingsOf, secretIn, specDirOf, STREAK_STOP, THREADS_JQ, trendOf, trendSection, trendStopLine, underRoot, verdictHeadOf, verdictsLine } from '../hooks/review'
 
 const facts = {
   repo: 'o/r',
@@ -913,10 +913,16 @@ test('a later package up for the check after approval says so', () => {
 // docs/specs/pr-comments-ends-every-comment.md). Each thread is one line of
 // the read's output, as the jq filter prints it.
 
-type ThreadLine = { path: string; line?: number | null; originalLine?: number | null; total?: number; comments: { login: string | null; body: string }[] }
+// The filter keeps only the comments that may record a ruling, so `read`, the
+// number of comments the read fetched, defaults to how many are kept, and
+// `total`, the number the thread holds, to `read`.
+type ThreadLine = { path: string; line?: number | null; originalLine?: number | null; total?: number; read?: number; comments: { login: string | null; body: string }[] }
 
 function threadsOutput(threads: ThreadLine[]): string {
-  return threads.map(t => JSON.stringify({ path: t.path, line: t.line ?? null, originalLine: t.originalLine ?? null, total: t.total ?? t.comments.length, comments: t.comments })).join('\n')
+  return threads.map(t => {
+    const read = t.read ?? t.comments.length
+    return JSON.stringify({ path: t.path, line: t.line ?? null, originalLine: t.originalLine ?? null, total: t.total ?? read, read, comments: t.comments })
+  }).join('\n')
 }
 
 const RULING = 'Ruling: the counsel decided, 5 of 7, that the rejection stands.\n\nThe test shows the cache is cleared on every write.'
@@ -950,6 +956,19 @@ test('output that cannot be parsed, or a thread with more comments than were rea
   expect(rulingsOf('{"path":7}', 'owner')).toBeNull()
   expect(rulingsOf(threadsOutput([{ path: 'a.ts', line: 1, total: 101, comments: [{ login: 'owner', body: RULING }] }]), 'owner')).toBeNull()
   expect(rulingsOf('', 'owner')).toEqual([])
+})
+
+test('a thread whose comments were all read is whole, however few of them the filter kept', () => {
+  const kept = [{ login: 'owner', body: RULING }]
+  expect(rulingsOf(threadsOutput([{ path: 'a.ts', line: 1, total: 100, read: 100, comments: kept }]), 'owner')).toEqual([{ path: 'a.ts', line: 1, text: RULING }])
+  expect(rulingsOf(threadsOutput([{ path: 'a.ts', line: 1, total: 101, read: 100, comments: kept }]), 'owner')).toBeNull()
+  expect(rulingsOf(JSON.stringify({ path: 'a.ts', line: 1, originalLine: null, total: 1, comments: kept }), 'owner')).toBeNull()
+})
+
+test('the thread filter keeps only comments that start with Ruling: and counts every comment it read', () => {
+  expect(THREADS_JQ).toContain('read: (.comments.nodes | length)')
+  expect(THREADS_JQ).toContain('select(.body | test("^\\\\s*Ruling:"))')
+  expect(THREADS_JQ).not.toContain('comments: [.comments.nodes[] | {login: .author.login, body}]')
 })
 
 test('ruling numbers run on from the commit and review items', () => {

@@ -278,6 +278,12 @@ export function needsListing(step: Step): step is Extract<Step, { kind: 'merge' 
   return step.kind === 'merge' || step.kind === 'ask-merge' || step.kind === 'merged'
 }
 
+// Whether a step asks for an outside review or waits on one, where the
+// repository must have reviewer-working so the reviewer can put it on.
+export function needsWorkingLabel(step: Step): step is Extract<Step, { kind: 'request-review' | 'awaiting-review' | 'review-not-picked-up' | 'review-not-arrived' }> {
+  return step.kind === 'request-review' || step.kind === 'awaiting-review' || step.kind === 'review-not-picked-up' || step.kind === 'review-not-arrived'
+}
+
 // How many short hashes a listing keeps, and how long each one is.
 export const UNPUSHED_KEPT = 20
 export const SHORT_HASH = 12

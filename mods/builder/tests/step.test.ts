@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { ARRIVAL_MS, countingRuns, failedRunsOf, hasFailed, isReplaced, isUnfinished, needsJobs, PICK_UP_MS, snapshotOf, STATE_LABELS, WORKING_LABEL, type GhPullRequest } from '../hooks/github'
-import { baseFactsOf, chooseStep, CLEANUP_SECTIONS, DEFAULT_MERGE_COMMAND, FRONTEND_FILE, FRONTEND_SECTIONS, isJudgementKept, labelActionOf, labelsRemovedWith, LINKED_KEPT, linkedIn, labelFor, labelRecordIn, needsListing, otherStateLabelsOf, reviewerFactOf, SCREENSHOTS_MARKER, SKILL_POINTS, SKILL_SECTIONS, stepFor, stepLines, UNREAD_FACTS, unpushedIn, type Step } from '../hooks/step'
+import { baseFactsOf, chooseStep, CLEANUP_SECTIONS, DEFAULT_MERGE_COMMAND, FRONTEND_FILE, FRONTEND_SECTIONS, isJudgementKept, labelActionOf, labelsRemovedWith, LINKED_KEPT, linkedIn, labelFor, labelRecordIn, needsListing, needsWorkingLabel, otherStateLabelsOf, reviewerFactOf, SCREENSHOTS_MARKER, SKILL_POINTS, SKILL_SECTIONS, stepFor, stepLines, UNREAD_FACTS, unpushedIn, type Step } from '../hooks/step'
 import type { BaseFacts, HeadRun, Snapshot, Unpushed } from '../types'
 
 const ME = 'owner'
@@ -910,6 +910,11 @@ test('a stored label record reads back only in the shape the mod writes, with a 
 test('only the merge steps and the Merged step need the listing of commits the pull request lacks', () => {
   const listed = EVERY_STEP.filter(needsListing).map(step => step.kind)
   expect([...new Set(listed)].sort()).toEqual(['ask-merge', 'merge', 'merged'])
+})
+
+test('only the steps that ask for or wait on an outside review need reviewer-working', () => {
+  const labelled = EVERY_STEP.filter(needsWorkingLabel).map(step => step.kind)
+  expect([...new Set(labelled)].sort()).toEqual(['awaiting-review', 'request-review', 'review-not-arrived', 'review-not-picked-up'])
 })
 
 test('a listing a snapshot holds reaches its step, and a missing or malformed one reads as could not be listed', () => {

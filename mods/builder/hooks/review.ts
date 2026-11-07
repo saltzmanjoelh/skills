@@ -270,9 +270,12 @@ export type Ruling = { path: string; line: number | null; text: string }
 export const THREADS_QUERY = 'query($owner: String!, $name: String!, $number: Int!, $endCursor: String) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { reviewThreads(first: 100, after: $endCursor) { pageInfo { hasNextPage endCursor } nodes { path line originalLine comments(first: 100) { totalCount nodes { author { login } body } } } } } } }'
 
 // The filter that prints each thread of each page as one compact JSON object
-// per line, so the pages need no joining, with how many comments the thread
-// holds beside the comments that were read.
-export const THREADS_JQ = '.data.repository.pullRequest.reviewThreads.nodes[] | {path, line, originalLine, total: .comments.totalCount, comments: [.comments.nodes[] | {login: .author.login, body}]}'
+// per line, so the pages need no joining. It keeps only the comments whose
+// body, with leading whitespace trimmed, starts with `Ruling:`, so a busy pull
+// request's other comments never reach the helper's limit on output. Beside
+// them it prints how many comments the thread holds and how many were read,
+// so a thread with comments beyond the first 100 is still seen as partial.
+export const THREADS_JQ = '.data.repository.pullRequest.reviewThreads.nodes[] | {path, line, originalLine, total: .comments.totalCount, read: (.comments.nodes | length), comments: [.comments.nodes[] | select(.body | test("^\\\\s*Ruling:")) | {login: .author.login, body}]}'
 
 // The comments in the threads that record a ruling: those whose author is
 // `login`, the session's own, compared without regard to case, and whose first
@@ -305,14 +308,16 @@ export function rulingsOf(out: string, login: string): Ruling[] | null {
 type ThreadRead = { path: string; line: number | null; comments: { login: string | null; body: string }[] }
 
 // One thread as the filter prints it, or null when it is not one or when it
-// holds more comments than were read. An outdated thread has no line, and its
-// original line stands in for it.
+// holds more comments than were read. The comments it lists are only those
+// the filter kept, so the check compares the number read, not the number
+// kept, with the total. An outdated thread has no line, and its original line
+// stands in for it.
 function threadIn(raw: unknown): ThreadRead | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
   const t = raw as Record<string, unknown>
   const isLine = (n: unknown): n is number | null => n === null || n === undefined || (typeof n === 'number' && Number.isInteger(n))
   if (typeof t.path !== 'string' || !isLine(t.line) || !isLine(t.originalLine)) return null
-  if (typeof t.total !== 'number' || !Array.isArray(t.comments)) return null
+  if (typeof t.total !== 'number' || typeof t.read !== 'number' || !Array.isArray(t.comments)) return null
   const comments: ThreadRead['comments'] = []
   for (const c of t.comments) {
     if (typeof c !== 'object' || c === null) return null
@@ -320,7 +325,7 @@ function threadIn(raw: unknown): ThreadRead | null {
     if ((login !== null && typeof login !== 'string') || typeof body !== 'string') return null
     comments.push({ login, body })
   }
-  if (comments.length < t.total) return null
+  if (t.read < t.total) return null
   return { path: t.path, line: t.line ?? t.originalLine ?? null, comments }
 }
 

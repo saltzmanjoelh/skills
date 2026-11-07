@@ -152,7 +152,7 @@ function fakeGitHub(on: On) {
   const world = {
     pr: openPullRequest(), calls: [] as string[], removalsToFail: 0, labelsMissing: new Set<string>(), labelCreatesToFail: 0, head: C,
     requestEvents: [] as { login: string; at: string }[], requestTimesFail: false,
-    threads: [] as { path: string; line: number | null; originalLine: number | null; total: number; comments: { login: string | null; body: string }[] }[], threadsFail: false,
+    threads: [] as { path: string; line: number | null; originalLine: number | null; total: number; read: number; comments: { login: string | null; body: string }[] }[], threadsFail: false,
     hold: null as Promise<void> | null, cutDiff: false, otherNumber: 0, readsToFail: 0,
     gitDirFails: false, postsToFail: 0, onPost: null as (() => void) | null,
     runs: [] as { id: number; run_attempt: number; name: string; workflow_id?: number; event?: string; run_number?: number; status?: string; conclusion?: string | null }[], runsReadsToFail: 0,
@@ -17626,7 +17626,9 @@ test('the package lists a ruling read from the review threads, and says when the
   const world = fakeGitHub(on)
   const files = fakeFiles(on)
   await watch($)
-  world.threads = [{ path: 'a.ts', line: 3, originalLine: 3, total: 2, comments: [
+  // The filter keeps only the comments that start with Ruling:, so the thread
+  // read three comments and lists two of them.
+  world.threads = [{ path: 'a.ts', line: 3, originalLine: 3, total: 3, read: 3, comments: [
     { login: 'reviewer', body: 'Ruling: a reviewer cannot record one.' },
     { login: 'owner', body: 'Ruling: the counsel decided, 5 of 7, that the rejection stands.' },
   ] }]

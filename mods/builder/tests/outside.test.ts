@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { ARRIVAL_MS, changesBetween, fingerprintOf, isLogin, othersIn, othersOf, outsideIn, outsideOf, overdueOf, PICK_UP_MS, PR_FIELDS, requestTimesOf, snapshotIn, snapshotOf, STATE_LABELS, WORKFLOW_LABELS, WORKING_LABEL, type GhPullRequest } from '../hooks/github'
+import { ARRIVAL_MS, changesBetween, fingerprintOf, isLogin, othersIn, othersOf, outsideIn, outsideOf, overdueOf, overdueWhileApproved, PICK_UP_MS, PR_FIELDS, requestTimesOf, snapshotIn, snapshotOf, STATE_LABELS, WORKFLOW_LABELS, WORKING_LABEL, type GhPullRequest } from '../hooks/github'
 import { pollFor, POLL_MS, waitingOn } from '../hooks/state'
 import { chooseStep, labelFor, reviewersOf, stepLines, type Step } from '../hooks/step'
 import type { BaseFacts, HeadRun, Snapshot } from '../types'
@@ -550,6 +550,13 @@ test('crossing the ten-minute limit and then the two-hour limit each change the 
   expect(changesBetween(working, arrival)).toEqual(['The review of ann has not arrived two hours after it was requested.'])
 })
 
+test('a reviewer leaving a time limit\'s list, with none joining one, is named as fewer reviews past a limit', () => {
+  const pickUp = requestedFor(PICK_UP_MS)
+  const working = requestedFor(PICK_UP_MS, [WORKING_LABEL])
+  expect(changesBetween(pickUp, working)).toContain('Fewer requested reviews are past a time limit than at the last look.')
+  expect(changesBetween(working, working)).not.toContain('Fewer requested reviews are past a time limit than at the last look.')
+})
+
 test('a limit changes the fingerprint only while both verdicts approve', () => {
   const pending = (after: number) => snapshotOf('o/r', pullRequest({ reviews: [], reviewRequests: [{ __typename: 'User', login: 'ann' }] }), ME, [], {
     headRuns: [passedRun], facts: FACTS, lookedAt: REQUESTED_MS + after,
@@ -563,6 +570,12 @@ test('the overdue reviewers: ten minutes without reviewer-working to pick up, tw
   expect(overdueOf(requestedFor(PICK_UP_MS, [WORKING_LABEL]))).toEqual({ arrival: [], pickUp: [] })
   expect(overdueOf(requestedFor(ARRIVAL_MS, [WORKING_LABEL]))).toEqual({ arrival: ['ann'], pickUp: [] })
   expect(overdueOf(requestedFor(ARRIVAL_MS))).toEqual({ arrival: ['ann'], pickUp: ['ann'] })
+})
+
+test('the overdue reviewers count only while both verdicts approve at the head', () => {
+  const approved = requestedFor(ARRIVAL_MS)
+  expect(overdueWhileApproved(approved)).toEqual({ arrival: ['ann'], pickUp: ['ann'] })
+  expect(overdueWhileApproved({ ...approved, verdicts: null })).toEqual({ arrival: [], pickUp: [] })
 })
 
 test('a request time that could not be read, or a snapshot with no time of its look, is never overdue', () => {

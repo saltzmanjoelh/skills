@@ -587,6 +587,17 @@ export function overdueOf(s: Pick<Snapshot, 'outside' | 'labels' | 'lookedAt'>):
   return overdue
 }
 
+// The requested reviewers past each limit, counted only while both verdicts
+// approve at the head, which is where the step chooser names a step for them.
+// Before that, and while either verdict requests changes, both lists are
+// empty. The fingerprint and the change sentences both read the lists through
+// it, so a sentence is written exactly when that part of the fingerprint
+// moves.
+export function overdueWhileApproved(s: Pick<Snapshot, 'verdicts' | 'outside' | 'labels' | 'lookedAt'>): Overdue {
+  if (s.verdicts === null || isChangesRequested(s.verdicts)) return { arrival: [], pickUp: [] }
+  return overdueOf(s)
+}
+
 // Every state an outside reviewer can be in, in the order OutsideState lists
 // them. The line after the list stops the type check when the list and
 // OutsideState differ in either direction.
@@ -751,12 +762,10 @@ export function fingerprintOf(s: Omit<Snapshot, 'fingerprint'>): string {
   // news, and crossing the two-hour limit is news again even when the person
   // said to keep waiting at ten minutes. The request time itself stays out, so
   // a reviewer asked again starts no turn until a limit passes again.
-  if (s.verdicts !== null && !isChangesRequested(s.verdicts)) {
-    const overdue = overdueOf(s)
-    if (overdue.arrival.length > 0 || overdue.pickUp.length > 0) {
-      const logins = (list: readonly string[]) => list.map(login => login.toLowerCase()).join(',')
-      parts.push(`overdue:${logins(overdue.arrival)}/${logins(overdue.pickUp)}`)
-    }
+  const overdue = overdueWhileApproved(s)
+  if (overdue.arrival.length > 0 || overdue.pickUp.length > 0) {
+    const logins = (list: readonly string[]) => list.map(login => login.toLowerCase()).join(',')
+    parts.push(`overdue:${logins(overdue.arrival)}/${logins(overdue.pickUp)}`)
   }
   return parts.join('|')
 }
@@ -945,14 +954,12 @@ function outsideSentences(before: readonly OutsideReviewer[], after: readonly Ou
 }
 
 // One sentence per reviewer who is past a time limit now and was not before,
-// read under the same guard as the fingerprint, so a sentence is written
-// exactly when that part of the fingerprint moves. When the lists only
+// read through overdueWhileApproved, as the fingerprint reads them. When the lists only
 // shrank, as when reviewer-working went on after the ten-minute limit, one
 // sentence says so.
 function overdueSentences(before: Snapshot, after: Snapshot): string[] {
-  const of = (s: Snapshot): Overdue => s.verdicts !== null && !isChangesRequested(s.verdicts) ? overdueOf(s) : { arrival: [], pickUp: [] }
-  const was = of(before)
-  const now = of(after)
+  const was = overdueWhileApproved(before)
+  const now = overdueWhileApproved(after)
   const isNew = (list: readonly string[], login: string) => !list.some(l => l.toLowerCase() === login.toLowerCase())
   const sentences = [
     ...now.arrival.filter(login => isNew(was.arrival, login)).map(login => `The review of ${login} has not arrived two hours after it was requested.`),
