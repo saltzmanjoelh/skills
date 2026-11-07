@@ -17520,6 +17520,31 @@ test('the request step creates reviewer-working when the repository lacks it, an
   expect(countOf(world, WORKING_CREATE)).toBe(1)
 })
 
+test('a label deleted after the request is created again at the next request, once a step needed no label in between', async ($, on) => {
+  const clock = mock.clock(on)
+  memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  atRequestStep(world)
+  await watch($)
+  await clock.settle()
+  expect(countOf(world, WORKING_READ)).toBe(1)
+  expect(countOf(world, WORKING_CREATE)).toBe(0)
+
+  // A new head needs a review round, which needs no label, and someone
+  // deletes the label meanwhile.
+  world.pr = openPullRequest()
+  world.labelsMissing.add('reviewer-working')
+  await clock.advance(10 * 60_000)
+  expect(countOf(world, WORKING_READ)).toBe(1)
+
+  atRequestStep(world)
+  await clock.advance(10 * 60_000)
+  expect(countOf(world, WORKING_READ)).toBe(2)
+  expect(countOf(world, WORKING_CREATE)).toBe(1)
+  expect(world.labelsMissing.has('reviewer-working')).toBe(false)
+})
+
 test('a step that waits on no outside review neither reads nor creates reviewer-working', async ($, on) => {
   const clock = mock.clock(on)
   memoryStore(on)

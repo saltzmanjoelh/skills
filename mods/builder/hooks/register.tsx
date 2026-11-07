@@ -3544,8 +3544,11 @@ function requestStateLabel($: $) {
 }
 
 // The repositories this copy of the module knows to have reviewer-working, so
-// a look at a repository that has it reads nothing more. A reload forgets
-// them, which costs one read of the label at the next such look.
+// a look at a repository that has it reads nothing more while the step stays
+// on an outside review. A repository is forgotten at the first look whose step
+// needs no label, so each new request checks the label once again, and a label
+// someone deleted in between is created again. A reload forgets them too,
+// which costs one read of the label at the next such look.
 const reposWithWorkingLabel = new Set<string>()
 
 // Makes sure the watched repository has reviewer-working while the stored
@@ -3559,8 +3562,11 @@ async function ensureWorkingLabel($: $) {
   const r = await read($, run)
   const s = snapshotIn(await read($, pr))
   if (r === null || s === null || s.repo !== r.repo || s.number !== r.number) return
+  if (!needsWorkingLabel(chooseStep(s, false))) {
+    reposWithWorkingLabel.delete(r.repo)
+    return
+  }
   if (reposWithWorkingLabel.has(r.repo) || !isPlainRepo(r.repo)) return
-  if (!needsWorkingLabel(chooseStep(s, false))) return
   const label = await gh($, r.cwd, ['api', `repos/${r.repo}/labels/${WORKING_LABEL}`])
   if (label !== null) {
     reposWithWorkingLabel.add(r.repo)
