@@ -9,7 +9,7 @@ import { checkoutSentence, otherRepositorySentence, worktreeWithBranch, type Che
 // announced; it is renamed here because `told` below is the snapshot last
 // handed to the session.
 import { afterCompaction, afterFailure, checkoutIn, compactionFacts, compactionsIn, isDue, measureIn, measureOf, owing, told as afterReloadTold, withFacts, type UsageRead } from './context'
-import { afterAskAgain, afterTally, askAgainAnswer, briefAnswer, briefFactsOf, briefRefusal, briefText, counselAnswer, decisionLine, destinationOf, endedDecisionLines, FOLLOW_UP_OPTIONS, followUpAnswer, followUpAskAgainAnswer, followUpsInput, followUpsRefusal, followUpStepOf, followUpVotesOf, keepCounsel, leftOutSentence, MAX_BRIEF_OPTIONS, MAX_FOLLOW_UPS, MIN_OPTIONS, neverStartedCandidatesOf, neverStartedOf, type PullRequestRef, refusalOf, reviewParagraph, stepOf, type UnreadableVote, votesOf } from './counsel'
+import { afterAskAgain, afterTally, askAgainAnswer, briefAnswer, briefFactsOf, briefRefusal, briefText, containmentRefusal, counselAnswer, decisionLine, destinationOf, endedDecisionLines, FOLLOW_UP_OPTIONS, followUpAnswer, followUpAskAgainAnswer, followUpsInput, followUpsRefusal, followUpStepOf, followUpVotesOf, keepCounsel, leftOutSentence, MAX_BRIEF_OPTIONS, MAX_FOLLOW_UPS, MIN_OPTIONS, neverStartedCandidatesOf, neverStartedOf, type PullRequestRef, reviewParagraph, stepOf, type UnreadableVote, votesOf } from './counsel'
 import { bothApprove, carriedHeadRuns, carriedRequestTimes, carriedRuns, changesBetween, DECISION_LABEL, headRunsOf, headVerdictsOf, isChangesRequested, isCiMonitorEvent, isSameState, JOBS_JQ, needsJobs, outsideIn, PR_FIELDS, pullRequestStateIn, realWorkOf, REQUEST_TIMES_QUERY, requestedUsersOf, requestTimesOf, roundInProgress, RUNS_JQ, sessionVerdictsOf, snapshotIn, snapshotOf, unfinishedOf, UNREAD_FACTS, verdictsOf, WORKING_LABEL, type BaseFacts, type GhPullRequest, type HeadRun, type Snapshot, type SnapshotExtras, type StateLabel, type Unpushed, type Verdict } from './github'
 import { isLinkedStale, LINKED_PREFIX, linkedCheckout, linkedKey, recordedLinked } from './linked'
 import { ignoredLine, readIssueLink } from './links'
@@ -3300,7 +3300,7 @@ async function serveCounsel($: $, input: CounselInput): Promise<string> {
   const { unwritten, refused } = await unwrittenPaths($, dir, paths)
   // unwrittenPaths gives back the refused paths as they were named, and the
   // first of them decides the message.
-  if (refused.length > 0) return refusalOf(refused[0]!).message
+  if (refused.length > 0) return containmentRefusal(refused[0]!).message
 
   const briefs = await counselDir($, dir)
   if (briefs === null) return couldNotSit('git could not find the checkout\'s git folder for the brief.')

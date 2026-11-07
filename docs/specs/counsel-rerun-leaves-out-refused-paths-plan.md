@@ -12,7 +12,7 @@ that moment, so a restart, a resumed or cleared session, a hot reload and two
 copies running at once add no edge case beyond the race on tallying one
 question that exists today.
 
-1. A pure `refusalOf(path)` in `mods/builder/hooks/counsel.ts` returns
+1. A pure `containmentRefusal(path)` in `mods/builder/hooks/counsel.ts` returns
    `{ reason, message }`. Each branch builds the message from one local reason
    string, so the two cannot disagree. It imports `isWindowsShaped` and
    `hasDotAndSpacePart` from `./review`, which `counsel.ts` already imports
@@ -20,7 +20,7 @@ question that exists today.
    deleted.
 2. `unwrittenPaths` in `register.tsx` returns `{ unwritten, refused }`, where
    `refused` holds every refused path in the order the question named them.
-   `serveCounsel` refuses with `refusalOf(refused[0]!).message`, which is
+   `serveCounsel` refuses with `containmentRefusal(refused[0]!).message`, which is
    byte for byte today's message.
 3. `briefText(q, unwritten, refused = [])` passes `refused` to
    `backgroundLines`. That function leaves the refused paths out of the files
@@ -48,7 +48,7 @@ question that exists today.
   rerun with all good paths that expects no new section and no new sentence,
   because the spec says the existing rerun test passes unchanged.
 - From the robust and extensible plans: unit tests of the order in
-  `refusalOf`, including that the dots-and-spaces reason is never used for a
+  `containmentRefusal`, including that the dots-and-spaces reason is never used for a
   path that starts with `/` or has an exact `..` part.
 - From the judge: the unchanged-text unit test compares against a fixed
   expected string, because comparing the default with an explicit empty list
@@ -60,10 +60,11 @@ question that exists today.
   pulling a pure check out of `placeOf`. It changes a path check that
   `documentPath` also uses, which the Non-goals rule out, and paths are only
   stored when the folder was known.
-- Removing repeated refused paths, and ignoring left-out entries that are not
-  among the question's paths. Both guard against callers that do not exist,
-  and the first would make the new section treat a repeated path differently
-  from the files list.
+- Removing repeated refused paths from the new section, and ignoring
+  left-out entries that are not among the question's paths. The counsel tool
+  does accept a path named twice, but the section lists it twice just as the
+  files list always has, so only the tally's sentence names each path once.
+  The second guards against a caller that does not exist.
 - Returning a kind of refusal and keeping `outsideRefusal` with its own
   templates. That classifies a path twice and risks wording the reason twice,
   against behaviour 2.
@@ -76,11 +77,11 @@ question that exists today.
 ## Step sequence
 
 1. Add the optional `refused` parameter to `briefText` and `backgroundLines`
-   with no behaviour behind it, and export stubs of `refusalOf` and
+   with no behaviour behind it, and export stubs of `containmentRefusal` and
    `leftOutSentence`, so the new tests type-check and fail as tests.
 2. Write the tests below and run `claude plugin test .` from `mods/builder`
    to see each new one fail.
-3. Implement `refusalOf`, `leftOutSentence` and the brief's filtering and
+3. Implement `containmentRefusal`, `leftOutSentence` and the brief's filtering and
    section in `counsel.ts`.
 4. Change `unwrittenPaths`, `serveCounsel` and `serveTally` in
    `register.tsx`, delete `outsideRefusal`, and update their comments.
@@ -113,7 +114,7 @@ question that exists today.
   follow-ups question; a brief with refused paths of all three kinds has the
   section with each reason and no rename advice; a brief whose paths are all
   refused says none are left while one with no paths says none named;
-  `refusalOf` keeps today's order and each message holds its reason;
+  `containmentRefusal` keeps today's order and each message holds its reason;
   `leftOutSentence` is empty for no paths and names one or two paths.
 - The existing counsel refusal tests and "a rerun rewrites the brief as round
   two with the proposed option added" pass unchanged.

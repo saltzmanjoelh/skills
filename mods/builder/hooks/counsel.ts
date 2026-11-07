@@ -145,7 +145,7 @@ export function briefFactsOf(q: CounselQuestion): BriefFacts {
 // Every other refused path, including a link that resolves outside the
 // checkout, leads outside the checkout. It is meant only for a path the
 // containment rule refused.
-export function refusalOf(path: string): { reason: string; message: string } {
+export function containmentRefusal(path: string): { reason: string; message: string } {
   if (isWindowsShaped(path)) {
     const reason = 'written in a Windows form'
     return { reason, message: `Refused: ${path} is ${reason}; name paths relative to the checkout, written with forward slashes.` }
@@ -161,10 +161,11 @@ export function refusalOf(path: string): { reason: string; message: string } {
 
 // The sentence a rerun's answer starts with when its round-2 brief left out
 // paths that the containment rule now refuses, or nothing when it left out
-// none.
+// none. A path the question named more than once is named once.
 export function leftOutSentence(paths: readonly string[]): string {
-  if (paths.length === 0) return ''
-  return `The round-2 brief leaves out ${listed(paths)}, which the containment rule now refuses, and lists ${paths.length === 1 ? 'it' : 'them'} under "Paths left out".\n`
+  const named = [...new Set(paths)]
+  if (named.length === 0) return ''
+  return `The round-2 brief leaves out ${listed(named)}, which the containment rule now refuses, and lists ${named.length === 1 ? 'it' : 'them'} under "Paths left out".\n`
 }
 
 // The background and the files, as every brief lists them. A path in
@@ -177,7 +178,7 @@ function backgroundLines(q: BriefFacts, unwritten: readonly string[], refused: r
   if (q.paths.length === 0) lines.push('None named.')
   else if (kept.length === 0) lines.push('None left; every path the question named is listed under Paths left out.')
   for (const path of kept) lines.push(unwritten.includes(path) ? `- ${path} (not written yet)` : `- ${path}`)
-  if (refused.length > 0) lines.push('', '## Paths left out', '', ...refused.map(path => `- ${path}: ${refusalOf(path).reason}`))
+  if (refused.length > 0) lines.push('', '## Paths left out', '', ...refused.map(path => `- ${path}: ${containmentRefusal(path).reason}`))
   return lines
 }
 

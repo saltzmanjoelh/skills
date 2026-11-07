@@ -1,9 +1,9 @@
 import { expect, test } from 'claude-code/testing'
 
 import {
-  abstainerReason, afterAskAgain, afterTally, askAgainAnswer, askOrder, briefAnswer, briefFactsOf, briefRefusal, briefText, COUNSEL_KEPT, counselAnswer, decisionLine, destinationOf, endedDecisionLines,
+  abstainerReason, afterAskAgain, afterTally, askAgainAnswer, askOrder, briefAnswer, briefFactsOf, briefRefusal, briefText, containmentRefusal, COUNSEL_KEPT, counselAnswer, decisionLine, destinationOf, endedDecisionLines,
   FOLLOW_UP_OPTIONS, FOLLOW_UP_PATTERNS, FOLLOW_UP_WORDS, followUpAnswer, followUpAskAgainAnswer, followUpOutcomes, followUpsInput, followUpsRefusal, followUpStepOf, followUpTally, followUpVotesOf, optionsAllowed,
-  keepCounsel, leftOutSentence, MAX_FOLLOW_UPS, MAX_OPTIONS, neededOf, neverStartedCandidatesOf, neverStartedOf, noOptionCount, QUOTE_CHARS, quoteVote, READABLE_FOLLOW_UP_VOTE, READABLE_VOTE, readVote, refusalOf, reviewParagraph, stepOf, tally, turnoutOf,
+  keepCounsel, leftOutSentence, MAX_FOLLOW_UPS, MAX_OPTIONS, neededOf, neverStartedCandidatesOf, neverStartedOf, noOptionCount, QUOTE_CHARS, quoteVote, READABLE_FOLLOW_UP_VOTE, READABLE_VOTE, readVote, reviewParagraph, stepOf, tally, turnoutOf,
   votesOf, type WatchedState, WITHHELD_REASON, WITHHELD_VOTE,
 } from '../hooks/counsel'
 import { CHEAP_FIX_SUBJECT } from '../hooks/review'
@@ -184,7 +184,7 @@ test('a brief whose every path is refused says none are left, and one that named
   expect(none).not.toContain('None left')
 })
 
-test('refusalOf picks the reason in a fixed order and builds the counsel tool\'s message from that reason', () => {
+test('containmentRefusal picks the reason in a fixed order and builds the counsel tool\'s message from that reason', () => {
   const WINDOWS = 'written in a Windows form'
   const DOTS = 'has a part made only of dots and spaces, which Windows may read as ..'
   const OUTSIDE = 'leads outside the checkout'
@@ -194,16 +194,17 @@ test('refusalOf picks the reason in a fixed order and builds the counsel tool\'s
     ['../x', OUTSIDE], ['/a/.. /b', OUTSIDE], ['../.. /x', OUTSIDE], ['docs/../.. /x', OUTSIDE], ['docs/arch.md', OUTSIDE],
   ]
   for (const [path, reason] of cases) {
-    const refusal = refusalOf(path)
+    const refusal = containmentRefusal(path)
     expect(refusal.reason).toBe(reason)
     expect(refusal.message).toContain(`Refused: ${path} `)
     expect(refusal.message).toContain(reason)
   }
 })
 
-test('leftOutSentence says nothing when no path is left out and names every left-out path otherwise', () => {
+test('leftOutSentence says nothing when no path is left out and names every left-out path once otherwise', () => {
   expect(leftOutSentence([])).toBe('')
   expect(leftOutSentence(['docs/.. /x.md'])).toBe('The round-2 brief leaves out docs/.. /x.md, which the containment rule now refuses, and lists it under "Paths left out".\n')
+  expect(leftOutSentence(['docs/.. /x.md', 'docs/.. /x.md'])).toBe('The round-2 brief leaves out docs/.. /x.md, which the containment rule now refuses, and lists it under "Paths left out".\n')
   expect(leftOutSentence(['docs/.. /x.md', 'C:\\y'])).toBe('The round-2 brief leaves out docs/.. /x.md and C:\\y, which the containment rule now refuses, and lists them under "Paths left out".\n')
 })
 
