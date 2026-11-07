@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import { snapshotOf } from '../hooks/github'
 import {
   afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite,
-  backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, ERROR_CHARS, errorLineOf, firstPromptOf, FOREMAN_NUDGE_TEXTS, generationIn, HUNG_AFTER_MS, hungAtOf, isBackgroundOnly, isCleanupSkill, isFolderless,
+  backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, configFolderOf, ERROR_CHARS, errorLineOf, firstPromptOf, FOREMAN_NUDGE_TEXTS, generationIn, HUNG_AFTER_MS, hungAtOf, isBackgroundOnly, isCleanupSkill, isFolderless,
   isForemanNudge, isProbablyHung, issueOf, keptTicketIn, keptTicketOf, memoOfKeptTicket, newMemo, oldestTaskOf, parentIn, recordOf, shownOrWithheld, startOf, startsBackgrounded, startsIn, startsPruned, startsSeen, startsWithout, STATE_RULES, stateOf,
   STATUS_CHANGED_TEXT, statusMemoIn, TASK_CHARS, taskKeyOf, taskKeyOfId, ticketIn, WITHHELD, type StatusFacts,
 } from '../hooks/status'
@@ -166,6 +166,15 @@ test('the configuration folder is CLAUDE_CONFIG_DIR when set, else .claude under
   expect(configDirOf('C:\\Users\\me\\.claude\\', undefined, undefined)).toBe('C:\\Users\\me\\.claude')
   expect(configDirOf(undefined, 'C:\\Users\\me', undefined)).toBe('C:\\Users\\me/.claude')
   expect(configDirOf('C:config', '/home/me', undefined)).toBeNull()
+})
+
+test('when there is no configuration folder, the answer says which of the four reasons it is', () => {
+  expect(configFolderOf('relative/config', '/home/me', undefined)).toEqual({ why: 'relative', configDir: 'relative/config' })
+  expect(configFolderOf('/', '/home/me', undefined)).toEqual({ why: 'no folder', configDir: '/' })
+  expect(configFolderOf(undefined, undefined, undefined)).toEqual({ why: 'unset' })
+  expect(configFolderOf('', '', '')).toEqual({ why: 'unset' })
+  expect(configFolderOf(undefined, 'home', 'profile')).toEqual({ why: 'no absolute home' })
+  expect(configFolderOf(undefined, 'home', '/u')).toEqual({ folder: '/u/.claude' })
 })
 
 test('the shared absolute-path check accepts a leading slash or a drive letter with either slash, and nothing else', () => {

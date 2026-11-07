@@ -24,8 +24,8 @@
 import type { EngineInterface } from 'claude-code'
 import { DRIVE } from './links'
 import { isFullSha, SECRET_SHAPES } from './review'
-import { configDirOf } from './status'
-import { isAbsolute, isPlainRepo, listed, printable } from './text'
+import { configFolderOf, type ConfigFolder } from './status'
+import { isPlainRepo, listed, printable } from './text'
 
 // What the update needs from the engine: commands, the file calls that find
 // and resolve the links, and the store for the record of each update.
@@ -393,28 +393,24 @@ function shownProblems(problems: Problem[]): Problem[] {
   return [...problems.slice(0, PROBLEMS_SHOWN), { short: what, sentence: `Also, ${what}, and they are not listed here.` }]
 }
 
-// Why no configuration folder was found, which configDirOf in status.ts
-// answers only with null. It treats an empty value as unset, and a
-// CLAUDE_CONFIG_DIR made only of slashes trims to nothing, so that one is
-// said to name no folder rather than to be relative.
-function noConfigReason(input: LinkedInput): string {
+// The sentence for why no configuration folder was found, from the reason
+// that configFolderOf in status.ts gives.
+function noConfigReason(found: Exclude<ConfigFolder, { folder: string }>): string {
   const none = "Claude Code's configuration folder could not be found"
-  const isUnset = (value: string | undefined) => value === undefined || value === ''
-  if (!isUnset(input.configDir)) {
-    const value = shown(input.configDir!)
-    return isAbsolute(input.configDir!)
-      ? `CLAUDE_CONFIG_DIR is set to ${value}, which names no folder once its trailing slashes are dropped, so ${none}`
-      : `CLAUDE_CONFIG_DIR is set to ${value}, which is not an absolute path, so ${none}`
+  switch (found.why) {
+    case 'relative': return `CLAUDE_CONFIG_DIR is set to ${shown(found.configDir)}, which is not an absolute path, so ${none}`
+    case 'no folder': return `CLAUDE_CONFIG_DIR is set to ${shown(found.configDir)}, which names no folder once its trailing slashes are dropped, so ${none}`
+    case 'unset': return `${none}, since CLAUDE_CONFIG_DIR, HOME and USERPROFILE are all unset or empty`
+    case 'no absolute home': return `CLAUDE_CONFIG_DIR is unset or empty, and neither HOME nor USERPROFILE is set to an absolute path, so ${none}`
   }
-  if (isUnset(input.home) && isUnset(input.userProfile)) return `${none}, since CLAUDE_CONFIG_DIR, HOME and USERPROFILE are all unset or empty`
-  return `CLAUDE_CONFIG_DIR is unset or empty, and neither HOME nor USERPROFILE is set to an absolute path, so ${none}`
 }
 
 async function updateAll($: LinkedIo, input: LinkedInput): Promise<string[]> {
   const { repo, base, merge } = input
   // The folder Claude Code loads user skills, agents and commands from.
-  const config = configDirOf(input.configDir, input.home, input.userProfile)
-  if (config === null) return [leftAloneAll(noConfigReason(input))]
+  const configFolder = configFolderOf(input.configDir, input.home, input.userProfile)
+  if (!('folder' in configFolder)) return [leftAloneAll(noConfigReason(configFolder))]
+  const config = configFolder.folder
   if (!isPlainRepo(repo) || !isPlainBranch(base) || !isFullSha(merge)) {
     return [leftAloneAll('the repository, the base branch or the merge commit that GitHub gave is not safe to pass to git')]
   }
