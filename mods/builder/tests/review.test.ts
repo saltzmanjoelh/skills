@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { verdictsOf } from '../hooks/github'
-import { CHEAP_FIX_SUBJECT, changedKinds, codeReviewLine, commitRecordsOf, DECIDED_HEADINGS, DECIDED_ITEM_CHARS, decidedItems, decidedSection, DEFAULT_SPEC_DIR, factIn, hasDotAndSpacePart, INSTRUCTION_PATHSPECS, instructionFileImportsMarkdown, instructionFileIsLink, isFullSha, isUpForCheck, isWindowsShaped, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pathKind, pluginRootsOf, recordItems, reviewedHeadOf, secretIn, specDirOf, STREAK_STOP, trendOf, trendSection, trendStopLine, underRoot, verdictHeadOf, verdictsLine } from '../hooks/review'
+import { CHEAP_FIX_SUBJECT, changedKinds, codeReviewLine, commitRecordsOf, DECIDED_HEADINGS, DECIDED_ITEM_CHARS, decidedItems, decidedSection, DEFAULT_SPEC_DIR, factIn, hasDotAndSpacePart, INSTRUCTION_PATHSPECS, instructionFileImportsMarkdown, instructionFileIsLink, isFullSha, isUpForCheck, isWindowsShaped, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pathKind, pluginRootsOf, recordItems, reviewedHeadOf, rulingsOf, secretIn, specDirOf, STREAK_STOP, THREADS_JQ, trendOf, trendSection, trendStopLine, underRoot, verdictHeadOf, verdictsLine } from '../hooks/review'
 
 const facts = {
   repo: 'o/r',
@@ -938,4 +938,101 @@ test('a later package up for the check after approval says so', () => {
   const text = packageText({ issue: 'x' }, { ...facts, earlier: [review('a', 'APPROVE', 'APPROVE')], since: sha('a'), check: true })
   expect(text).toContain('This head is up for the check after approval')
   expect(packageText({ issue: 'x' }, { ...facts, earlier: [review('a', 'APPROVE', 'APPROVE')], since: sha('a') })).not.toContain('check after approval')
+})
+
+// The rulings recorded in the pull request's review threads (see
+// docs/specs/pr-comments-ends-every-comment.md). Each thread is one line of
+// the read's output, as the jq filter prints it.
+
+// The filter keeps only the comments that may record a ruling, so `read`, the
+// number of comments the read fetched, defaults to how many are kept, and
+// `total`, the number the thread holds, to `read`.
+type ThreadLine = { path: string; line?: number | null; originalLine?: number | null; total?: number; read?: number; comments: { login: string | null; body: string }[] }
+
+function threadsOutput(threads: ThreadLine[]): string {
+  return threads.map(t => {
+    const read = t.read ?? t.comments.length
+    return JSON.stringify({ path: t.path, line: t.line ?? null, originalLine: t.originalLine ?? null, total: t.total ?? read, read, comments: t.comments })
+  }).join('\n')
+}
+
+const RULING = 'Ruling: the counsel decided, 5 of 7, that the rejection stands.\n\nThe test shows the cache is cleared on every write.'
+
+test('a ruling by the session\'s login is listed with the file and line of its thread', () => {
+  const out = threadsOutput([{ path: 'hooks/cache.ts', line: 12, comments: [{ login: 'reviewer', body: 'The cache goes stale.' }, { login: 'Owner', body: RULING }] }])
+  expect(rulingsOf(out, 'owner')).toEqual([{ path: 'hooks/cache.ts', line: 12, text: RULING }])
+})
+
+test('a Ruling: comment written by any other login is never listed', () => {
+  const out = threadsOutput([{ path: 'a.ts', line: 1, comments: [{ login: 'reviewer', body: RULING }, { login: null, body: RULING }] }])
+  expect(rulingsOf(out, 'owner')).toEqual([])
+})
+
+test('a comment whose first line does not begin with Ruling: is not listed, and leading spaces are ignored', () => {
+  const out = threadsOutput([{ path: 'a.ts', line: 3, comments: [
+    { login: 'owner', body: 'I disagree.\nRuling: this is not on the first line.' },
+    { login: 'owner', body: 'ruling: written in lower case.' },
+    { login: 'owner', body: '   Ruling: the person decided that the comment is fixed.' },
+  ] }])
+  expect(rulingsOf(out, 'owner')).toEqual([{ path: 'a.ts', line: 3, text: '   Ruling: the person decided that the comment is fixed.' }])
+})
+
+test('an outdated thread names its original line, and a resolved thread is read like any other', () => {
+  const out = threadsOutput([{ path: 'a.ts', line: null, originalLine: 40, comments: [{ login: 'owner', body: RULING }] }])
+  expect(rulingsOf(out, 'owner')).toEqual([{ path: 'a.ts', line: 40, text: RULING }])
+})
+
+test('output that cannot be parsed, or a thread with more comments than were read, counts as a failed read', () => {
+  expect(rulingsOf('not json', 'owner')).toBeNull()
+  expect(rulingsOf('{"path":7}', 'owner')).toBeNull()
+  expect(rulingsOf(threadsOutput([{ path: 'a.ts', line: 1, total: 101, comments: [{ login: 'owner', body: RULING }] }]), 'owner')).toBeNull()
+  expect(rulingsOf('', 'owner')).toEqual([])
+})
+
+test('a thread whose comments were all read is whole, however few of them the filter kept', () => {
+  const kept = [{ login: 'owner', body: RULING }]
+  expect(rulingsOf(threadsOutput([{ path: 'a.ts', line: 1, total: 100, read: 100, comments: kept }]), 'owner')).toEqual([{ path: 'a.ts', line: 1, text: RULING }])
+  expect(rulingsOf(threadsOutput([{ path: 'a.ts', line: 1, total: 101, read: 100, comments: kept }]), 'owner')).toBeNull()
+  expect(rulingsOf(JSON.stringify({ path: 'a.ts', line: 1, originalLine: null, total: 1, comments: kept }), 'owner')).toBeNull()
+})
+
+test('the thread filter keeps only comments that start with Ruling: and counts every comment it read', () => {
+  expect(THREADS_JQ).toContain('read: (.comments.nodes | length)')
+  expect(THREADS_JQ).toContain('select(.body | test("^\\\\s*Ruling:"))')
+  expect(THREADS_JQ).not.toContain('comments: [.comments.nodes[] | {login: .author.login, body}]')
+})
+
+test('ruling numbers run on from the commit and review items', () => {
+  const commits = [commit('a', 'Fix\n\nDropped:\n- The cache can go stale.\n')]
+  const earlier = [{ sha: sha('a'), body: 'VERDICTS aaaaaaaa spec=APPROVE adversarial=APPROVE\n\nOutside the spec:\n- Surviving a restart.' }]
+  const items = decidedItems(commits, earlier, [{ path: 'hooks/cache.ts', line: 12, text: RULING }, { path: 'b.ts', line: null, text: 'Ruling: the person decided.' }])
+  expect(items).toEqual([
+    { number: 1, source: 'commit aaaaaaaa', text: 'The cache can go stale.' },
+    { number: 2, source: 'review at aaaaaaaa', text: 'Surviving a restart.' },
+    { number: 3, source: 'thread at hooks/cache.ts:12', text: 'Ruling: the counsel decided, 5 of 7, that the rejection stands. The test shows the cache is cleared on every write.' },
+    { number: 4, source: 'thread at b.ts', text: 'Ruling: the person decided.' },
+  ])
+})
+
+test('a long ruling holding Markdown is capped and printed on one line', () => {
+  const long = `Ruling: the counsel decided.\n\n## Not a heading\n\n- not an item\n${'x'.repeat(500)}`
+  const [item] = decidedItems([], [], [{ path: 'a.ts', line: 1, text: long }])
+  expect(item?.text.length).toBe(DECIDED_ITEM_CHARS)
+  expect(item?.text).not.toContain('\n')
+  expect(item?.text.startsWith('Ruling: the counsel decided. ## Not a heading - not an item x')).toBe(true)
+})
+
+test('a failed read of the threads gives a line of its own instead of None yet.', () => {
+  const empty = decidedSection([], true)
+  expect(empty).toContain('The pull request\'s review threads could not be read, so any ruling recorded in them is missing from this list.')
+  expect(empty).not.toContain('None yet.')
+  const listed = decidedSection([{ number: 1, source: 'commit aaaaaaaa', text: 'The cache can go stale.' }], true)
+  expect(listed).toContain('could not be read')
+  expect(listed).toContain('- D1 (commit aaaaaaaa): The cache can go stale.')
+  expect(decidedSection([])).not.toContain('could not be read')
+})
+
+test('the package says when the threads could not be read', () => {
+  expect(packageText({ issue: 'x' }, { ...facts, threadsUnread: true })).toContain('review threads could not be read')
+  expect(packageText({ issue: 'x' }, facts)).toContain('None yet.')
 })

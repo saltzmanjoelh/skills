@@ -140,8 +140,19 @@ function fakeGitHub(on: On) {
   // keyed by the whole command, before anything else answers.
   // `fastForwardHold`, when set, keeps the next fast-forward waiting until it
   // resolves, and `onFastForward`, when set, runs as a fast-forward answers.
+  // `labelsMissing` names the labels the repository lacks: adding one fails,
+  // the read `gh api repos/o/r/labels/<name>` of one exits with an error, as
+  // GitHub's not found does, and `gh label create` of one creates it, unless
+  // `labelCreatesToFail` makes that many creates fail first.
+  // `requestEvents` are the review-request events the GraphQL read of the
+  // timeline answers, oldest first, and `requestTimesFail` makes that read
+  // exit with an error. `threads` are the review threads the GraphQL read of
+  // the threads prints, one line each as its jq filter prints them, none by
+  // default, and `threadsFail` makes that read exit with an error.
   const world = {
-    pr: openPullRequest(), calls: [] as string[], removalsToFail: 0, labelMissing: false, head: C,
+    pr: openPullRequest(), calls: [] as string[], removalsToFail: 0, labelsMissing: new Set<string>(), labelCreatesToFail: 0, head: C,
+    requestEvents: [] as { login: string; at: string }[], requestTimesFail: false,
+    threads: [] as { path: string; line: number | null; originalLine: number | null; total: number; read: number; comments: { login: string | null; body: string }[] }[], threadsFail: false,
     hold: null as Promise<void> | null, cutDiff: false, otherNumber: 0, readsToFail: 0,
     gitDirFails: false, postsToFail: 0, onPost: null as (() => void) | null,
     runs: [] as { id: number; run_attempt: number; name: string; workflow_id?: number; event?: string; run_number?: number; status?: string; conclusion?: string | null }[], runsReadsToFail: 0,
@@ -304,6 +315,17 @@ function fakeGitHub(on: On) {
       }
       return out(world.stateRead === 'text' ? 'state: OPEN\n' : `${answer}\n`)
     }
+    if (argv.startsWith('gh api graphql ') && argv.includes('timelineItems')) {
+      if (world.requestTimesFail) return { value: { exitCode: 1, stdout: '', stderr: 'network', isStdoutTruncated: false, isStderrTruncated: false } }
+      const nodes = world.requestEvents.map(e => ({ createdAt: e.at, requestedReviewer: { login: e.login } }))
+      return out(JSON.stringify({ data: { repository: { pullRequest: { timelineItems: { nodes } } } } }))
+    }
+    if (argv.startsWith('gh api graphql ') && argv.includes('reviewThreads')) {
+      if (world.threadsFail) return { value: { exitCode: 1, stdout: '', stderr: 'network', isStdoutTruncated: false, isStderrTruncated: false } }
+      return out(world.threads.map(t => `${JSON.stringify(t)}\n`).join(''))
+    }
+    const labelRead = /^gh api repos\/o\/r\/labels\/(\S+)$/.exec(argv)
+    if (labelRead !== null) return world.labelsMissing.has(labelRead[1]!) ? exit(1) : out(JSON.stringify({ name: labelRead[1] }))
     if (argv.startsWith('gh repo view')) return out(`${(cwd === undefined ? undefined : world.reposIn[cwd]) ?? 'o/r'}\n`)
     if (argv.startsWith('gh api user') && world.loginThrows) throw new Error('the process could not be started')
     if (argv.startsWith('gh api user')) return out('owner\n')
@@ -334,15 +356,19 @@ function fakeGitHub(on: On) {
       world.removalsToFail -= 1
       return { value: { exitCode: 1, stdout: '', stderr: 'network', isStdoutTruncated: false, isStderrTruncated: false } }
     }
+    if (argv.startsWith('gh label create') && world.labelCreatesToFail > 0) {
+      world.labelCreatesToFail -= 1
+      return exit(1)
+    }
     if (argv.startsWith('gh label create')) {
-      world.labelMissing = false
+      world.labelsMissing.delete(e.argv[3] ?? '')
       return out('')
     }
     if (argv.startsWith('gh pr edit') && argv.includes('--add-label') && world.editsToFail > 0) {
       world.editsToFail -= 1
       return { value: { exitCode: 1, stdout: '', stderr: 'network', isStdoutTruncated: false, isStderrTruncated: false } }
     }
-    if (argv.includes('--add-label') && world.labelMissing) {
+    if (argv.includes('--add-label') && world.labelsMissing.has(e.argv[e.argv.indexOf('--add-label') + 1] ?? '')) {
       return { value: { exitCode: 1, stdout: '', stderr: 'label not found', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     if (argv.startsWith('gh pr edit')) {
@@ -868,7 +894,7 @@ test('a label the repository lacks is created, without --force, and then added',
   // The state label the watch sets is settled first, so the missing label is
   // the question's.
   await clock.settle()
-  world.labelMissing = true
+  world.labelsMissing.add('needs-decision')
   await loose($)({ tool: 'AskUserQuestion', questions: [{ question: 'Which name?' }] })
   await clock.settle()
 
@@ -15967,7 +15993,7 @@ test('a state label the repository lacks is created, and the edit is tried again
   const stored = memoryStore(on)
   engine(on)
   const world = fakeGitHub(on)
-  world.labelMissing = true
+  world.labelsMissing.add('in-review')
   await watch($)
   await clock.settle()
   const created = world.calls.indexOf('gh label create in-review --repo o/r')
@@ -15989,7 +16015,7 @@ test('at the step that requests the outside review, a missing waiting-on-reviewe
   engine(on)
   const world = fakeGitHub(on)
   atRequestStep(world)
-  world.labelMissing = true
+  world.labelsMissing.add('waiting-on-reviewer')
   await watch($)
   await clock.settle()
   const created = world.calls.indexOf('gh label create waiting-on-reviewer --repo o/r')
@@ -16016,8 +16042,9 @@ test('a ready-to-merge from before, while an outside review is requested, is rel
   expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'waiting-on-reviewer', at: clock.now() })
   // Nothing else acts on the pull request: no review request, no label
   // created, no merge, no comment or review, and no write through gh api,
-  // which the mod makes only with -f or -F fields.
-  const acting = world.calls.filter(call => /^gh (pr (edit|merge|comment|review|ready)|label create)|^gh api .* -[fF] /.test(call))
+  // which the mod makes only with -f or -F fields. The GraphQL reads carry
+  // their query in such fields too, and they read only.
+  const acting = world.calls.filter(call => /^gh (pr (edit|merge|comment|review|ready)|label create)|^gh api (?!graphql ).* -[fF] /.test(call))
   expect(acting).toEqual(['gh pr edit 7 --repo o/r --add-label waiting-on-reviewer --remove-label ready-to-merge'])
 
   await clock.advance(30 * 60_000)
@@ -16030,7 +16057,7 @@ test('when the edit fails after creating waiting-on-reviewer, nothing is recorde
   engine(on)
   const world = fakeGitHub(on)
   atRequestStep(world)
-  world.labelMissing = true
+  world.labelsMissing.add('waiting-on-reviewer')
   // The add fails, the label is created, and the add after the create fails
   // too, which is how a failed create looks from outside the label edit.
   world.editsToFail = 2
@@ -17913,4 +17940,278 @@ test('an update with forty broken links beside a checkout it updated still state
   expect(answer).toContain('30 more links')
   const lines = (stored.get(LINKED_KEY) as { lines: string[] }).lines
   expect(lines.length).toBeLessThanOrEqual(30)
+})
+
+// The time limits on a requested outside review, and the label a reviewer
+// puts on when it picks a request up (see
+// docs/specs/pr-comments-ends-every-comment.md).
+
+// A pull request where both verdicts approve and ann's review is requested,
+// so the step waits on her review.
+function atAwaitingStep(world: ReturnType<typeof fakeGitHub>) {
+  world.pr = openPullRequest({ statusCheckRollup: [], reviews: [...codeReviewedAt(C)], reviewRequests: [{ __typename: 'User', login: 'ann' }] })
+  world.baseClaude = 'Checks: none\n'
+}
+
+const WORKING_READ = 'gh api repos/o/r/labels/reviewer-working'
+const WORKING_CREATE = 'gh label create reviewer-working --repo o/r'
+const countOf = (world: { calls: string[] }, call: string) => world.calls.filter(c => c === call).length
+const timelineReads = (world: { calls: string[] }) => world.calls.filter(call => call.startsWith('gh api graphql ') && call.includes('timelineItems'))
+const labelNames = (world: ReturnType<typeof fakeGitHub>) => (world.pr.labels ?? []).map(label => label.name)
+
+test('the request step creates reviewer-working when the repository lacks it, and reads it no more once it exists', async ($, on) => {
+  const clock = mock.clock(on)
+  memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  atRequestStep(world)
+  world.labelsMissing.add('reviewer-working')
+  await watch($)
+  await clock.settle()
+  expect(countOf(world, WORKING_READ)).toBe(1)
+  expect(countOf(world, WORKING_CREATE)).toBe(1)
+  expect(world.labelsMissing.has('reviewer-working')).toBe(false)
+
+  await clock.advance(30 * 60_000)
+  expect(countOf(world, WORKING_READ)).toBe(1)
+  expect(countOf(world, WORKING_CREATE)).toBe(1)
+})
+
+test('a label deleted after the request is created again at the next request, once a step needed no label in between', async ($, on) => {
+  const clock = mock.clock(on)
+  memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  atRequestStep(world)
+  await watch($)
+  await clock.settle()
+  expect(countOf(world, WORKING_READ)).toBe(1)
+  expect(countOf(world, WORKING_CREATE)).toBe(0)
+
+  // A new head needs a review round, which needs no label, and someone
+  // deletes the label meanwhile.
+  world.pr = openPullRequest()
+  world.labelsMissing.add('reviewer-working')
+  await clock.advance(10 * 60_000)
+  expect(countOf(world, WORKING_READ)).toBe(1)
+
+  atRequestStep(world)
+  await clock.advance(10 * 60_000)
+  expect(countOf(world, WORKING_READ)).toBe(2)
+  expect(countOf(world, WORKING_CREATE)).toBe(1)
+  expect(world.labelsMissing.has('reviewer-working')).toBe(false)
+})
+
+test('a label deleted while a review is awaited is created again when the review is asked for again', async ($, on) => {
+  const clock = mock.clock(on)
+  memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  atAwaitingStep(world)
+  world.requestEvents = [{ login: 'ann', at: new Date(clock.now() - 60_000).toISOString() }]
+  await watch($)
+  await clock.settle()
+  expect(countOf(world, WORKING_READ)).toBe(1)
+
+  // Someone deletes the label, and a look with the same request reads nothing.
+  world.labelsMissing.add('reviewer-working')
+  await clock.advance(10 * 60_000)
+  expect(countOf(world, WORKING_READ)).toBe(1)
+
+  // The session asks ann again, which GitHub records as a new request.
+  world.requestEvents = [...world.requestEvents, { login: 'ann', at: new Date(clock.now()).toISOString() }]
+  await clock.advance(10 * 60_000)
+  expect(countOf(world, WORKING_READ)).toBe(2)
+  expect(countOf(world, WORKING_CREATE)).toBe(1)
+  expect(world.labelsMissing.has('reviewer-working')).toBe(false)
+})
+
+test('a step that waits on no outside review neither reads nor creates reviewer-working', async ($, on) => {
+  const clock = mock.clock(on)
+  memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  world.labelsMissing.add('reviewer-working')
+  await watch($)
+  await clock.settle()
+  await clock.advance(30 * 60_000)
+  expect(countOf(world, WORKING_READ)).toBe(0)
+  expect(countOf(world, WORKING_CREATE)).toBe(0)
+})
+
+test('a failed create of reviewer-working is tried again at the next look', async ($, on) => {
+  const clock = mock.clock(on)
+  memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  atRequestStep(world)
+  world.labelsMissing.add('reviewer-working')
+  world.labelCreatesToFail = 1
+  await watch($)
+  await clock.settle()
+  expect(countOf(world, WORKING_CREATE)).toBe(1)
+  expect(world.labelsMissing.has('reviewer-working')).toBe(true)
+
+  await clock.advance(10 * 60_000)
+  expect(countOf(world, WORKING_CREATE)).toBe(2)
+  expect(world.labelsMissing.has('reviewer-working')).toBe(false)
+})
+
+test('a failed removal of reviewer-working saves no record, and the next look takes it off', async ($, on) => {
+  const clock = mock.clock(on)
+  const stored = memoryStore(on, [[STATE_LABEL_KEY, { label: 'waiting-on-reviewer', at: clock.now() }]])
+  engine(on)
+  const world = fakeGitHub(on)
+  // Ann approved, so the step is the merge, which gives ready-to-merge, and
+  // her label is still on.
+  const approval = { author: { login: 'ann' }, state: 'APPROVED', body: '', commit: { oid: C }, submittedAt: '2026-11-05T10:00:00Z', authorAssociation: 'COLLABORATOR' }
+  world.pr = openPullRequest({ statusCheckRollup: [], reviews: [...codeReviewedAt(C), approval], labels: [{ name: 'waiting-on-reviewer' }, { name: 'reviewer-working' }] })
+  world.baseClaude = 'Checks: none\nReviewer: ann\n'
+  world.removalsToFail = 2
+  await watch($)
+  await clock.settle()
+  const edit = 'gh pr edit 7 --repo o/r --add-label ready-to-merge --remove-label waiting-on-reviewer,reviewer-working'
+  expect(labelEdits(world)).toEqual([edit, edit])
+  expect(labelNames(world)).toEqual(['waiting-on-reviewer', 'reviewer-working'])
+  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'waiting-on-reviewer', at: clock.now() })
+
+  await clock.advance(30 * 60_000)
+  expect(labelNames(world)).toEqual(['ready-to-merge'])
+  expectFinishedRecord(stored, 'ready-to-merge')
+})
+
+test('setting waiting-on-reviewer leaves reviewer-working on', async ($, on) => {
+  const clock = mock.clock(on)
+  const stored = memoryStore(on, [[STATE_LABEL_KEY, { label: 'in-review', at: clock.now() }]])
+  engine(on)
+  const world = fakeGitHub(on)
+  atAwaitingStep(world)
+  world.pr.labels = [{ name: 'in-review' }, { name: 'reviewer-working' }]
+  world.requestEvents = [{ login: 'ann', at: new Date(clock.now() - 60_000).toISOString() }]
+  await watch($)
+  await clock.settle()
+  expect(labelEdits(world)).toEqual(['gh pr edit 7 --repo o/r --add-label waiting-on-reviewer --remove-label in-review'])
+  expect(labelNames(world)).toEqual(['reviewer-working', 'waiting-on-reviewer'])
+  expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ label: 'waiting-on-reviewer' })
+})
+
+test('a request time that could not be read sets no stuck, and once it is read the limit that passed sets it', async ($, on) => {
+  const clock = mock.clock(on)
+  memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  atAwaitingStep(world)
+  world.requestEvents = [{ login: 'ann', at: new Date(clock.now() - 3 * 60 * 60_000).toISOString() }]
+  world.requestTimesFail = true
+  await watch($)
+  await clock.settle()
+  expect(timelineReads(world).length).toBeGreaterThan(0)
+  expect(labelNames(world)).toEqual(['waiting-on-reviewer'])
+
+  world.requestTimesFail = false
+  await clock.advance(10 * 60_000)
+  expect(labelNames(world)).toEqual(['stuck'])
+})
+
+// A read of the request times that fails after a limit passed keeps the time
+// an earlier look read, so the pull request stays stuck and the labels are
+// not edited back and forth.
+test('a request time read that fails after a limit passed keeps stuck and edits no label', async ($, on) => {
+  const clock = mock.clock(on)
+  memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  atAwaitingStep(world)
+  world.requestEvents = [{ login: 'ann', at: new Date(clock.now() - 3 * 60 * 60_000).toISOString() }]
+  await watch($)
+  await clock.settle()
+  expect(labelNames(world)).toEqual(['stuck'])
+  const edits = labelEdits(world).length
+
+  world.requestTimesFail = true
+  await clock.advance(10 * 60_000)
+  expect(timelineReads(world).length).toBeGreaterThan(1)
+  expect(labelNames(world)).toEqual(['stuck'])
+  expect(labelEdits(world).length).toBe(edits)
+})
+
+test('a review requested from nobody reads no request times', async ($, on) => {
+  const clock = mock.clock(on)
+  memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr = approvedWithoutChecks()
+  world.baseClaude = 'Checks: none\n'
+  await watch($)
+  await clock.settle()
+  expect(timelineReads(world)).toEqual([])
+})
+
+// The request times are used only once both verdicts approve at the head, so
+// a look before that reads none, and the first look after the approval reads
+// them.
+test('a look with another user requested reads no request times until both verdicts approve at the head', async ($, on) => {
+  const clock = mock.clock(on)
+  memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const ann = [{ __typename: 'User', login: 'ann' }]
+  world.pr = openPullRequest({ statusCheckRollup: [], reviews: [], reviewRequests: ann })
+  world.baseClaude = 'Checks: none\n'
+  await watch($)
+  await clock.settle()
+  expect(timelineReads(world)).toEqual([])
+
+  world.pr = openPullRequest({ statusCheckRollup: [], reviews: [verdictReview(C, 'APPROVE', 'REQUEST_CHANGES')], reviewRequests: ann })
+  await clock.advance(10 * 60_000)
+  expect(timelineReads(world)).toEqual([])
+
+  world.pr = openPullRequest({ statusCheckRollup: [], reviews: [...codeReviewedAt(C)], reviewRequests: ann })
+  await clock.advance(10 * 60_000)
+  expect(timelineReads(world).length).toBeGreaterThan(0)
+})
+
+// Only a request for a user other than the session's own login can carry a
+// time limit, so a request for a team or for the session's own login reads no
+// request times, while another user's request does.
+test('a team request and a request for the session\'s own login read no request times, and another user\'s request does', async ($, on) => {
+  const clock = mock.clock(on)
+  memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  world.pr = openPullRequest({ statusCheckRollup: [], reviews: [...codeReviewedAt(C)], reviewRequests: [{ __typename: 'Team' }, { __typename: 'User', login: 'Owner' }] })
+  world.baseClaude = 'Checks: none\n'
+  await watch($)
+  await clock.settle()
+  expect(timelineReads(world)).toEqual([])
+
+  world.pr = openPullRequest({ statusCheckRollup: [], reviews: [...codeReviewedAt(C)], reviewRequests: [{ __typename: 'Team' }, { __typename: 'User', login: 'Owner' }, { __typename: 'User', login: 'ann' }] })
+  await clock.advance(10 * 60_000)
+  expect(timelineReads(world).length).toBeGreaterThan(0)
+})
+
+test('the package lists a ruling read from the review threads, and says when the threads could not be read', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  const files = fakeFiles(on)
+  await watch($)
+  // The filter keeps only the comments that start with Ruling:, so the thread
+  // read three comments and lists two of them.
+  world.threads = [{ path: 'a.ts', line: 3, originalLine: 3, total: 3, read: 3, comments: [
+    { login: 'reviewer', body: 'Ruling: a reviewer cannot record one.' },
+    { login: 'owner', body: 'Ruling: the counsel decided, 5 of 7, that the rejection stands.' },
+  ] }]
+  await packageAnswer($)
+  const decided = (text: string) => text.slice(text.indexOf('## Already decided'), text.indexOf('## Areas fixed so far'))
+  const first = decided(files.get(`${PACKAGE_DIR}/package.md`) ?? '')
+  expect(first).toContain('- D1 (thread at a.ts:3): Ruling: the counsel decided, 5 of 7, that the rejection stands.')
+  expect(first).not.toContain('a reviewer cannot record one')
+
+  world.threadsFail = true
+  await packageAnswer($)
+  const second = decided(files.get(`${PACKAGE_DIR}/package.md`) ?? '')
+  expect(second).toContain('The pull request\'s review threads could not be read')
+  expect(second).not.toContain('None yet.')
 })

@@ -10,19 +10,19 @@ import { checkoutSentence, otherRepositorySentence, worktreeWithBranch, type Che
 // handed to the session.
 import { afterCompaction, afterFailure, checkoutIn, compactionFacts, compactionsIn, isDue, measureIn, measureOf, owing, told as afterReloadTold, withFacts, type UsageRead } from './context'
 import { afterAskAgain, afterTally, askAgainAnswer, briefAnswer, briefFactsOf, briefRefusal, briefText, counselAnswer, decisionLine, destinationOf, endedDecisionLines, FOLLOW_UP_OPTIONS, followUpAnswer, followUpAskAgainAnswer, followUpsInput, followUpsRefusal, followUpStepOf, followUpVotesOf, keepCounsel, MAX_BRIEF_OPTIONS, MAX_FOLLOW_UPS, MIN_OPTIONS, neverStartedCandidatesOf, neverStartedOf, type PullRequestRef, reviewParagraph, stepOf, type UnreadableVote, votesOf } from './counsel'
-import { carriedHeadRuns, carriedRuns, changesBetween, DECISION_LABEL, headRunsOf, isChangesRequested, isCiMonitorEvent, isSameState, JOBS_JQ, needsJobs, PR_FIELDS, pullRequestStateIn, realWorkOf, roundInProgress, RUNS_JQ, snapshotIn, snapshotOf, unfinishedOf, verdictsOf, type BaseFacts, type GhPullRequest, type HeadRun, type Snapshot, type SnapshotExtras, type StateLabel, type Unpushed, type Verdict } from './github'
+import { bothApprove, carriedHeadRuns, carriedRequestTimes, carriedRuns, changesBetween, DECISION_LABEL, headRunsOf, headVerdictsOf, isChangesRequested, isCiMonitorEvent, isSameState, JOBS_JQ, needsJobs, outsideIn, PR_FIELDS, pullRequestStateIn, realWorkOf, REQUEST_TIMES_QUERY, requestedUsersOf, requestTimesOf, roundInProgress, RUNS_JQ, sessionVerdictsOf, snapshotIn, snapshotOf, unfinishedOf, UNREAD_FACTS, verdictsOf, WORKING_LABEL, type BaseFacts, type GhPullRequest, type HeadRun, type Snapshot, type SnapshotExtras, type StateLabel, type Unpushed, type Verdict } from './github'
 import { isLinkedStale, LINKED_PREFIX, linkedCheckout, linkedKey, recordedLinked } from './linked'
 import { ignoredLine, readIssueLink } from './links'
 import { afterComparison, afterLoad, dueComparisons, isStale, LOADED_PATHS, loadBegunAs, loadBegunIn, loadedIn, type Found } from './loaded'
 import { AGENT_PANE, agentPaneTree, bandTree, isDrawable, messagesReadOf, NAMED_AFTER_MS, PANE, paneTree, secondRow, type Elements, type MessagesRead, type View } from './pane'
 import { ADVERSARIAL_REVIEWER, afterReport, afterSeen, endedOf, FOCUSED_REVIEWERS, focusedReviewersFor, plannedOf, progressIn, reportAnswer, reportOf, stageLabel, STAGES, type ReportInput, type StageId } from './progress'
 import { changePrompt, ciEventContext, GITHUB_NAMES_LINE, resumePrompt, stateLines, stuckPrompt } from './prompts'
-import { changedKinds, codeReviewLine, commitRecordsOf, decidedItems, factIn, hasDotAndSpacePart, INSTRUCTION_PATHSPECS, instructionFileIsLink, isFullSha, isUpForCheck, isWindowsShaped, LATER_CONTEXT_LINES, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pluginRootsOf, reviewedHeadOf, secretIn, specDirOf, trendOf, trendStopLine, underRoot, verdictHeadOf, verdictsLine, type CodeReviewRecord, type CommitRecord, type EarlierRound, type FileKind, type PackageInput } from './review'
+import { changedKinds, codeReviewLine, commitRecordsOf, decidedItems, factIn, hasDotAndSpacePart, INSTRUCTION_PATHSPECS, instructionFileIsLink, isFullSha, isUpForCheck, isWindowsShaped, LATER_CONTEXT_LINES, MARKDOWN_IMPORT_PATTERN, markdownImportFound, marketplacePathsOf, marketplaceRootsOf, packageText, pluginRootsOf, reviewedHeadOf, rulingsOf, secretIn, specDirOf, THREADS_JQ, THREADS_QUERY, trendOf, trendStopLine, underRoot, verdictHeadOf, verdictsLine, type CodeReviewRecord, type CommitRecord, type EarlierRound, type FileKind, type PackageInput } from './review'
 import { AGENTS_KEPT, backgroundOf, backgroundTaskIdOf, endedCards, endedTaskOf, exhaustedWindows, holdIn, isMerge, isPersonPrompt, isPushOrMerge, isRunning, keepQuestions, labelOf, mergeAgents, mergePatternOf, nextStuckEvery, pollFor, quietIn, READ_ONLY_AGENTS, RESUME_FALLBACK_MS, resumeAt, REVIEWER_TOOLS, statusOf, stepDelay, stuckEveryIn, STUCK_FIRST_MS, summaryOf, TIMER_STEP_MS, UNNAMED_TOOLS, type ListedAgent } from './state'
 import { afterCallReturn, afterCleanupSkill, afterCounselAsk, afterFailedCall, afterLoopEnd, afterPermissionRequest, afterPersonPrompt, afterQuestionEnd, afterTurnEnd, afterTurnStart, afterWrite, backgroundWaitOf, buildPathOf, comparedTextOf, configDirOf, errorLineOf, firstPromptOf, generationIn, isCleanupSkill, isFolderless, isForemanNudge, keptTicketIn, keptTicketOf, memoOfKeptTicket, newMemo, parentIn, recordOf, startsBackgrounded, startsPruned, startsIn, startsSeen, startsWithout, STATUS_CHANGED_TEXT, stateOf, statusMemoIn, taskKeyOfId, ticketIn, watchedSnapshotOf, type KeptTicket, type Starts, type StatusFacts } from './status'
 import { afterSend, emptySends, sendOutcomeOf, sendsIn, sendsKey, sendsNewest, SENDS_KEPT_MS, SENDS_PREFIX, type SendOutcome, type SendSettled, type SendsRecord } from './sends'
-import { baseFactsOf, chooseStep, isJudgementKept, labelActionOf, labelFor, labelRecordIn, needsListing, otherStateLabelsOf, reviewerFactOf, SHORT_HASH, stepFor, UNPUSHED_KEPT, UNREAD_FACTS, type LabelRecord, type StuckJudgement, type UserClaude } from './step'
-import { isAbsolute, timeOfDay } from './text'
+import { baseFactsOf, chooseStep, isJudgementKept, labelActionOf, labelFor, labelRecordIn, labelsRemovedWith, needsListing, needsWorkingLabel, otherStateLabelsOf, reviewerFactOf, SHORT_HASH, stepFor, UNPUSHED_KEPT, type LabelRecord, type StuckJudgement, type UserClaude } from './step'
+import { isAbsolute, isPlainRepo, timeOfDay } from './text'
 import { afterPackage, afterPr, afterReview, afterStage, afterState, emptyTiming, timingIn, type PullRequestSeen } from './timing'
 import { afterCost, afterStep, emptyUsage, usageIn } from './usage'
 
@@ -352,6 +352,13 @@ async function gh($: $, dir: string | null, args: string[]): Promise<string | nu
 // relisted). The step is chosen with no question open, which is safe: Merged
 // comes before the question, and a question step renders no listing.
 //
+// The look also stores when it happened, by the mod's clock, and, when both
+// of the session's verdicts approve at the head and the pull request has a
+// review request for a user other than the session's own login, when each
+// reviewer's review was last requested, read beside the runs
+// and the facts (see readRequestTimes). The step chooser measures a requested
+// review's wait from the two, so it stays a pure function of the snapshot.
+//
 // At a look that chooses the Merged step, the look also runs the update of
 // the linked checkout for the pull request's merge commit, read by the same
 // `gh pr view`, and stores its outcome on the snapshot beside the listing (see
@@ -364,11 +371,16 @@ async function fetchSnapshot($: $, r: SnapshotTarget): Promise<Snapshot | null> 
   if (out === null) return null
   const live = JSON.parse(out) as GhPullRequest
   const base = plainBranchOf(live.baseRefName)
-  const [headRuns, facts] = await Promise.all([readHeadRuns($, r, live.headRefOid), readBaseFacts($, baseFolderOf(r), base)])
-  const extras: SnapshotExtras = { facts }
+  const [headRuns, facts, requestTimes, lookedAt] = await Promise.all([
+    readHeadRuns($, r, live.headRefOid),
+    readBaseFacts($, baseFolderOf(r), base),
+    readRequestTimes($, r, live),
+    $.clock.now(),
+  ])
+  const extras: SnapshotExtras = { facts, lookedAt }
   const s = headRuns !== null
-    ? snapshotOf(r.repo, live, r.login, unfinishedOf(headRuns), { ...extras, headRuns })
-    : await carriedSnapshot($, r, live, extras)
+    ? snapshotOf(r.repo, live, r.login, unfinishedOf(headRuns), { ...extras, headRuns }, requestTimes)
+    : await carriedSnapshot($, r, live, extras, requestTimes)
   if (!needsListing(chooseStep(s, false))) return s
   // The fingerprint is a fixed list of fields that leaves the listing and the
   // branch out, so the one snapshotOf made still holds.
@@ -424,13 +436,50 @@ async function relisted($: $, r: SnapshotTarget, s: Snapshot): Promise<Snapshot>
 }
 
 // A snapshot whose runs read failed, keeping the runs the stored snapshot had.
-async function carriedSnapshot($: $, r: SnapshotTarget, live: GhPullRequest, extras: SnapshotExtras): Promise<Snapshot> {
+async function carriedSnapshot($: $, r: SnapshotTarget, live: GhPullRequest, extras: SnapshotExtras, requestTimes: ReadonlyMap<string, string>): Promise<Snapshot> {
   const stored = await read($, pr)
   return snapshotOf(r.repo, live, r.login, carriedRuns(stored, r.repo, live.number, live.headRefOid), {
     ...extras,
     headRuns: carriedHeadRuns(stored, r.repo, live.number, live.headRefOid),
     runsCarriedOver: true,
-  })
+  }, requestTimes)
+}
+
+// When each reviewer's review was last requested, read with one GraphQL query
+// for the newest review-request events in the pull request's timeline (see
+// requestTimesOf). It reads only when a time limit can apply: the session's
+// newest verdicts at the head both approve, which is the only time the step
+// chooser and the fingerprint use the times, and the pull request has a
+// review request for a user other than the session's own login, decided by
+// the rule outsideOf uses (see requestedUsersOf). Every other look costs no
+// extra call, and the first look after both verdicts approve reads the times.
+// The verdicts are worked out from the same read of the pull request that
+// snapshotOf works them out from, so the two never differ. A repository that
+// is not a plain owner and name, a failed read and output that cannot be
+// parsed all keep the times the stored snapshot holds for the same head (see
+// carriedRequestTimes), so a pull request already past a limit stays stuck,
+// and a reviewer whose time no look has read gets no limit at that look. The
+// next look reads again. It never throws, because gh answers null on any
+// failure and a store that cannot be read keeps no times.
+async function readRequestTimes($: $, r: SnapshotTarget, live: GhPullRequest): Promise<Map<string, string>> {
+  if (!bothApprove(headVerdictsOf(sessionVerdictsOf(live, r.login), live.headRefOid))) return new Map()
+  if (requestedUsersOf(live.reviewRequests, r.login).size === 0) return new Map()
+  const out = await pullRequestGraphql($, r.cwd, r.repo, live.number, REQUEST_TIMES_QUERY)
+  const times = requestTimesOf(out)
+  if (times !== null) return times
+  const stored = await read($, pr).catch(() => null)
+  return carriedRequestTimes(stored, r.repo, live.number, live.headRefOid)
+}
+
+// Runs one GraphQL query about a pull request, giving it the repository's
+// owner and name and the pull request's number as the variables `$owner`,
+// `$name` and `$number`, with any further arguments for gh after them. It
+// answers null for a repository that is not a plain owner and name, without
+// calling gh, and otherwise gh's output, which is null on any failure.
+async function pullRequestGraphql($: $, cwd: string | null, repo: string, number: number, query: string, extraArgs: readonly string[] = []): Promise<string | null> {
+  if (!isPlainRepo(repo)) return null
+  const [owner, name] = repo.split('/') as [string, string]
+  return gh($, cwd, ['api', 'graphql', '-f', `query=${query}`, '-f', `owner=${owner}`, '-f', `name=${name}`, '-F', `number=${number}`, ...extraArgs])
 }
 
 // The commits the worktree of the pull request's head branch holds that the
@@ -2958,6 +3007,15 @@ function reviewerLines(shape: PackageShape): string[] {
   return [`Up for the check after approval: launch only ${ADVERSARIAL_REVIEWER}.`, `If the check leaves a blocking finding, run the first half with: ${named}.`]
 }
 
+// The rulings the session recorded in the pull request's review threads, read
+// with one paginated GraphQL query, or null when the repository is not a plain
+// owner and name, the read failed or cut off, or its output is not whole (see
+// rulingsOf).
+async function readRulings($: $, r: BuilderRun) {
+  const out = await pullRequestGraphql($, r.cwd, r.repo, r.number, THREADS_QUERY, ['--paginate', '--jq', THREADS_JQ])
+  return out === null ? null : rulingsOf(out, r.login)
+}
+
 async function servePackage($: $, input: PackageInput): Promise<string> {
   const r = await read($, run)
   if (r === null) return 'No pull request is watched; call the watch tool first.'
@@ -2990,12 +3048,16 @@ async function servePackage($: $, input: PackageInput): Promise<string> {
   // decided and the areas fixed so far are read from them. A package without
   // them would tell the reviewers that nothing was decided, so a failed read
   // refuses the package as a failed diff does.
-  const [stat, diff, commits, messages, dir] = await Promise.all([
+  // The review threads are read beside them, for the rulings the session
+  // recorded there. A failed read does not refuse the package: the package
+  // says the threads could not be read, so it never looks like an empty list.
+  const [stat, diff, commits, messages, dir, rulings] = await Promise.all([
     git($, checkoutDir, ['diff', '--stat', range]),
     git($, checkoutDir, ['diff', range]),
     git($, checkoutDir, ['log', '--reverse', '--name-status', '--format=%h %s', `origin/${live.baseRefName}..HEAD`]),
     git($, checkoutDir, ['log', '--reverse', '--format=%H%x1f%B%x1e', `origin/${live.baseRefName}..HEAD`]),
     packageDir($, checkoutDir, live.headRefOid),
+    readRulings($, r),
   ])
   if (stat === null || diff === null || commits === null || messages === null || dir === null) {
     return 'git could not produce the whole diff against the base or the commit messages (it failed, or its output was over 4 MiB and cut off), so no package was written.'
@@ -3020,7 +3082,8 @@ async function servePackage($: $, input: PackageInput): Promise<string> {
     round,
     ...(await projectDocuments($, checkoutDir)),
     earlier,
-    decided: decidedItems(records, earlier),
+    decided: decidedItems(records, earlier, rulings ?? []),
+    ...(rulings === null ? { threadsUnread: true } : {}),
     trend,
     ...(shape.kind === 'later' ? { since: shape.since, check: shape.check } : {}),
     ...(shape.kind === 'first' && shape.fallback !== undefined ? { fallback: shape.fallback } : {}),
@@ -3488,10 +3551,58 @@ const inRecordQueue = oneAtATime({ passesErrors: true })
 function requestStateLabel($: $) {
   if (isStateLabelQueued) return
   isStateLabelQueued = true
-  void inLabelQueue(() => {
+  void inLabelQueue(async () => {
     isStateLabelQueued = false
-    return settleStateLabel($, { trustsSnapshotLabels: true })
+    const outcome = await settleStateLabel($, { trustsSnapshotLabels: true })
+    await ensureWorkingLabel($)
+    return outcome
   })
+}
+
+// The repositories this copy of the module knows to have reviewer-working,
+// each with the review requests it last checked the label for (see
+// requestsKeyOf), so a look at a repository that has it reads nothing more
+// while those requests stand. A request made again, a reviewer added or
+// removed, or a step that needs no label in between checks the label once
+// more, and a label someone deleted meanwhile is created again. A reload
+// forgets them too, which costs one read of the label at the next such look.
+const reposWithWorkingLabel = new Map<string, string>()
+
+// The outside reviewers the snapshot holds who are requested or lack a
+// request, with the time of each request where the look read one, as one
+// text. Asking a reviewer again gives a new request time, so it changes.
+function requestsKeyOf(s: Snapshot): string {
+  return outsideIn(s.outside)
+    .filter(r => r.state === 'requested' || r.state === 'unrequested')
+    .map(r => `${r.login.toLowerCase()}:${r.state}@${r.requestedAt ?? ''}`)
+    .sort()
+    .join(',')
+}
+
+// Makes sure the watched repository has reviewer-working while the stored
+// snapshot's step asks for an outside review or waits on one. It reads the one
+// label, and creates it without --force when the read fails, which leaves an
+// existing label's colour and description alone. The repository is remembered
+// only once the label is known to exist, so a failed create is tried again at
+// the next look. It runs in the label queue after the state label job, and its
+// failures are only waited out, never passed on.
+async function ensureWorkingLabel($: $) {
+  const r = await read($, run)
+  const s = snapshotIn(await read($, pr))
+  if (r === null || s === null || s.repo !== r.repo || s.number !== r.number) return
+  if (!needsWorkingLabel(chooseStep(s, false))) {
+    reposWithWorkingLabel.delete(r.repo)
+    return
+  }
+  const requests = requestsKeyOf(s)
+  if (reposWithWorkingLabel.get(r.repo) === requests || !isPlainRepo(r.repo)) return
+  const label = await gh($, r.cwd, ['api', `repos/${r.repo}/labels/${WORKING_LABEL}`])
+  if (label !== null) {
+    reposWithWorkingLabel.set(r.repo, requests)
+    return
+  }
+  const created = await gh($, r.cwd, ['label', 'create', WORKING_LABEL, '--repo', r.repo])
+  if (created !== null) reposWithWorkingLabel.set(r.repo, requests)
 }
 
 // What a state label job did, which the set_stuck tool answers from. Each
@@ -3576,7 +3687,7 @@ async function settleStateLabel($: $, { expected, trustsSnapshotLabels }: { expe
     if (!(await addLabel($, r, derived, action.remove))) return 'failed'
     // From here the new label is on, so the judgement has ended on the pull
     // request even when what follows fails and the next look ends it again.
-    if (!(await removeOtherStateLabels($, r, derived))) return 'ended'
+    if (!(await removeLabelsBeside($, r, derived))) return 'ended'
   }
   if (action.kind === 'record' && action.remove.length > 0 && !(await removeLabels($, r, action.remove))) return 'ended'
   try {
@@ -3648,17 +3759,19 @@ async function saveLabelRecord($: $, key: string, replaced: StateLabel | undefin
 }
 
 // Reads the labels again after the edit that added `added`, and removes in
-// one more edit every other state label the read sees. A second session on
-// the same pull request, or a person, can put one on between the first read
-// and the edit, and once the record is saved no later look reads the labels
-// again. True when the read shows nothing to remove or the removal
-// succeeded, and false when either failed, so the record is not saved and
-// the next look tries again. The labels removed are on the pull request, so
-// they exist in the repository.
-async function removeOtherStateLabels($: $, r: BuilderRun, added: StateLabel): Promise<boolean> {
+// one more edit every other state label the read sees, with reviewer-working
+// unless `added` is waiting-on-reviewer (see labelsRemovedWith). `added` is
+// the label that follows from the step, since only the write path calls this.
+// A second session on the same pull request, or a person, can put one on
+// between the first read and the edit, and once the record is saved no later
+// look reads the labels again. True when the read shows nothing to remove or
+// the removal succeeded, and false when either failed, so the record is not
+// saved and the next look tries again. The labels removed are on the pull
+// request, so they exist in the repository.
+async function removeLabelsBeside($: $, r: BuilderRun, added: StateLabel): Promise<boolean> {
   const live = await liveLabelNames($, r)
   if (live === null) return false
-  const others = otherStateLabelsOf(added, live)
+  const others = labelsRemovedWith(added, added, live)
   if (others.length === 0) return true
   return removeLabels($, r, others)
 }

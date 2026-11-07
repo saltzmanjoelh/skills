@@ -191,7 +191,7 @@ test('the fingerprint is unchanged without a /code-review marker, changes when o
 
 test('the workflow\'s own labels leave the fingerprint unchanged and any other label moves it', () => {
   const bare = snapshotOf('o/r', pullRequest({ labels: [] }), ME)
-  for (const name of ['in-review', 'waiting-on-author', 'waiting-on-reviewer', 'ready-to-merge', 'stuck', 'needs-decision']) {
+  for (const name of ['in-review', 'waiting-on-author', 'waiting-on-reviewer', 'ready-to-merge', 'stuck', 'needs-decision', 'reviewer-working']) {
     const labelled = snapshotOf('o/r', pullRequest({ labels: [{ name }] }), ME)
     expect(labelled.fingerprint).toBe(bare.fingerprint)
     // The snapshot itself keeps the label, for the poll interval and the pane.
@@ -203,7 +203,7 @@ test('the workflow\'s own labels leave the fingerprint unchanged and any other l
   // A real change that comes with a workflow label is named without the label.
   const moved = snapshotOf('o/r', pullRequest({ headRefOid: A, labels: [{ name: 'in-review' }] }), ME)
   expect(changesBetween(bare, moved)).toEqual([`The head moved from ${C.slice(0, 8)} to ${A.slice(0, 8)}.`])
-  expect([...WORKFLOW_LABELS].sort()).toEqual(['in-review', 'needs-decision', 'ready-to-merge', 'stuck', 'waiting-on-author', 'waiting-on-reviewer'])
+  expect([...WORKFLOW_LABELS].sort()).toEqual(['in-review', 'needs-decision', 'ready-to-merge', 'reviewer-working', 'stuck', 'waiting-on-author', 'waiting-on-reviewer'])
 })
 
 test('waiting-on-reviewer is a state label, between waiting-on-author and ready-to-merge', () => {

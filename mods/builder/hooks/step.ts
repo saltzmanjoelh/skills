@@ -12,12 +12,10 @@
 // what to do, and the mod never does it.
 
 import type { BaseFacts, OutsideState, Snapshot, Unpushed } from '../types'
-import { ciOf, countingRuns, failedCheckNames, failedRunsOf, headRunsIn, isChangesRequested, isLogin, isUnfinished, othersIn, outsideIn, roundInProgress, STATE_LABELS, type StateLabel } from './github'
+import { ciOf, countingRuns, failedCheckNames, failedRunsOf, headRunsIn, isChangesRequested, isLogin, isUnfinished, othersIn, outsideIn, factsOf, limitsPassedIn, overdueOf, STATE_LABELS, UNREAD_FACTS, WORKING_LABEL, type Limit, type StateLabel } from './github'
 import { LINKED_KEPT } from './linked'
 import { factIn, isFullSha } from './review'
 import { isPlainRepo, listed, printable } from './text'
-
-export type Limit = { which: 'pushes' | 'rounds'; count: number; max: number }
 
 // The merge steps and the Merged step carry `unpushed`, the commits the head
 // branch's worktree holds that the head lacks, as the look listed them. The
@@ -54,6 +52,11 @@ export type Step =
   | { kind: 'outside-feedback'; number: number; reviewers: string[]; others?: string[] }
   | { kind: 'request-review'; number: number; reviewers: string[]; others?: string[] }
   | { kind: 'awaiting-review'; reviewers: string[]; others?: string[] }
+  // The two steps for a requested review past a time limit, which come
+  // before the waiting step, the arrival step first. `reviewers` holds the
+  // reviewers past that limit (see overdueOf).
+  | { kind: 'review-not-picked-up'; number: number; reviewers: string[]; others?: string[] }
+  | { kind: 'review-not-arrived'; number: number; reviewers: string[]; others?: string[] }
   // The five outcomes of the step where both verdicts approve at the head.
   // The first holds every later one while the CLAUDE.md in the user's
   // configuration folder exists but could not be read and the base branch's
@@ -78,12 +81,6 @@ export type RunRef = { id: number; attempt: number }
 
 // The merge command a project gets when its CLAUDE.md names none.
 export const DEFAULT_MERGE_COMMAND = 'gh pr merge <n> --merge --match-head-commit <sha>'
-
-// The facts a base branch's CLAUDE.md that could not be read gives, and a
-// snapshot an older build stored, which has none. `Checks:` leans to
-// expected, so a project that needs checks is never merged as if it had
-// none, and the merge command is read by the session from the base itself.
-export const UNREAD_FACTS: BaseFacts = { maxPushes: 8, maxRounds: 5, checks: 'expected', merge: 'unread', isClaudeRead: false }
 
 // The facts in the text of a base branch's CLAUDE.md. A limit that is
 // missing or not a whole number takes its default. A file without a
@@ -166,23 +163,6 @@ function limitIn(claude: string, label: string, fallback: number): number {
   return value !== null && /^\d+$/.test(value) ? Number(value) : fallback
 }
 
-// The facts a snapshot holds, or the unread ones when it holds none or does
-// not say the file was read, as for any other damaged field.
-function factsOf(s: Snapshot): BaseFacts {
-  const f = s.facts as Partial<BaseFacts> | undefined
-  if (typeof f !== 'object' || f === null) return UNREAD_FACTS
-  const merge = f.merge === 'default' || f.merge === 'custom' ? f.merge : 'unread'
-  if (f.isClaudeRead !== true) return UNREAD_FACTS
-  const isCount = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0
-  return {
-    maxPushes: isCount(f.maxPushes) ? f.maxPushes : UNREAD_FACTS.maxPushes,
-    maxRounds: isCount(f.maxRounds) ? f.maxRounds : UNREAD_FACTS.maxRounds,
-    checks: f.checks === 'none' ? 'none' : 'expected',
-    merge,
-    isClaudeRead: true,
-  }
-}
-
 // The repository when it is a plain owner and name, which is safe to put in
 // a text, and null otherwise.
 function plainRepoOf(repo: unknown): string | null {
@@ -198,10 +178,7 @@ export function chooseStep(s: Snapshot, isAsking: boolean): Step {
   if (s.state === 'CLOSED') return { kind: 'closed' }
   if (isAsking) return { kind: 'question' }
   const facts = factsOf(s)
-  const limits: Limit[] = []
-  if (s.pushesSinceVerdict > facts.maxPushes) limits.push({ which: 'pushes', count: s.pushesSinceVerdict, max: facts.maxPushes })
-  const round = roundInProgress(s)
-  if (round > facts.maxRounds) limits.push({ which: 'rounds', count: round, max: facts.maxRounds })
+  const limits = limitsPassedIn(s)
   if (limits.length > 0) return { kind: 'over-limit', limits }
   if (s.mergeable === 'CONFLICTING') return { kind: 'conflicting' }
   const headRuns = headRunsIn(s)
@@ -232,8 +209,21 @@ export function chooseStep(s: Snapshot, isAsking: boolean): Step {
   if (feedback.length > 0) return { kind: 'outside-feedback', number: s.number, reviewers: feedback, ...withOthers }
   const unrequested = inState('unrequested')
   if (unrequested.length > 0) return { kind: 'request-review', number: s.number, reviewers: unrequested, ...withOthers }
+  // A requested review past its time limit names a step that gives stuck, so
+  // the person decides whether to ask again. The limits are measured against
+  // the time of the look that made the snapshot, so the chooser needs no
+  // clock, and a request time that could not be read sets no limit.
+  // overdueAtLimitStep in github.ts repeats by hand the conditions checked
+  // above, apart from the open question, so that the fingerprint counts an
+  // overdue reviewer only where this block is reached. A change to those
+  // conditions changes it too.
   const requested = inState('requested')
-  if (requested.length > 0) return { kind: 'awaiting-review', reviewers: requested, ...withOthers }
+  if (requested.length > 0) {
+    const overdue = overdueOf(s)
+    if (overdue.arrival.length > 0) return { kind: 'review-not-arrived', number: s.number, reviewers: overdue.arrival, ...withOthers }
+    if (overdue.pickUp.length > 0) return { kind: 'review-not-picked-up', number: s.number, reviewers: overdue.pickUp, ...withOthers }
+    return { kind: 'awaiting-review', reviewers: requested, ...withOthers }
+  }
   // Both verdicts approve, and every outside reviewer the look knows of has
   // approved. While the user's own CLAUDE.md could not be read and the base
   // branch's names no reviewer, a reviewer only that file names may be
@@ -262,6 +252,12 @@ export function chooseStep(s: Snapshot, isAsking: boolean): Step {
 // Closed step never pushes or cleans up, so it lists nothing.
 export function needsListing(step: Step): step is Extract<Step, { kind: 'merge' | 'ask-merge' | 'merged' }> {
   return step.kind === 'merge' || step.kind === 'ask-merge' || step.kind === 'merged'
+}
+
+// Whether a step asks for an outside review or waits on one, where the
+// repository must have reviewer-working so the reviewer can put it on.
+export function needsWorkingLabel(step: Step): step is Extract<Step, { kind: 'request-review' | 'awaiting-review' | 'review-not-picked-up' | 'review-not-arrived' }> {
+  return step.kind === 'request-review' || step.kind === 'awaiting-review' || step.kind === 'review-not-picked-up' || step.kind === 'review-not-arrived'
 }
 
 // How many short hashes a listing keeps, and how long each one is.
@@ -317,7 +313,9 @@ export function linkedIn(raw: unknown): Linked {
 // failed read, and it would also move the poll to the merge interval. The
 // step for a user CLAUDE.md that could not be read gives none for the same
 // reason, so the label the pull request carries stays. Merged and An open
-// question change nothing either.
+// question change nothing either. The two steps for a requested review past a
+// time limit give stuck, because the person decides there whether to ask for
+// the review again.
 export function labelFor(step: Step): StateLabel | null {
   switch (step.kind) {
     case 'review':
@@ -333,7 +331,9 @@ export function labelFor(step: Step): StateLabel | null {
     case 'merge':
     case 'ask-merge': return 'ready-to-merge'
     case 'over-limit':
-    case 'closed': return 'stuck'
+    case 'closed':
+    case 'review-not-picked-up':
+    case 'review-not-arrived': return 'stuck'
     case 'merged':
     case 'question':
     case 'user-claude-unread':
@@ -359,11 +359,15 @@ export function labelFor(step: Step): StateLabel | null {
 // included among the labels that come off. Only labels the live read saw are
 // removed, because a label on the pull request exists in the repository, so
 // removing it cannot fail for lack of the label.
+// The labels an action may remove are the state labels and reviewer-working,
+// which comes off with them under the rule of labelsRemovedWith.
+export type RemovableLabel = StateLabel | typeof WORKING_LABEL
+
 export type LabelAction =
   | { kind: 'none' }
-  | { kind: 'record'; remove: StateLabel[] }
-  | { kind: 'write'; remove: StateLabel[] }
-  | { kind: 'keep'; add: boolean; remove: StateLabel[] }
+  | { kind: 'record'; remove: RemovableLabel[] }
+  | { kind: 'write'; remove: RemovableLabel[] }
+  | { kind: 'keep'; add: boolean; remove: RemovableLabel[] }
 
 // Whether a judgement made under `judged` is kept while the step gives
 // `derived`: the step gives the judged label, or gives no label at all. The
@@ -375,17 +379,33 @@ export function isJudgementKept(derived: StateLabel | null, judged: StateLabel |
 
 export function labelActionOf(derived: StateLabel | null, record: StateLabel | null, liveLabels: readonly string[], judged: StateLabel | null = null): LabelAction {
   if (isJudgementKept(derived, judged)) {
-    return { kind: 'keep', add: !liveLabels.includes('stuck'), remove: otherStateLabelsOf('stuck', liveLabels) }
+    return { kind: 'keep', add: !liveLabels.includes('stuck'), remove: labelsRemovedWith(derived, 'stuck', liveLabels) }
   }
   if (derived === null) return { kind: 'none' }
-  if (judged === null && record === null && liveLabels.includes('stuck')) return { kind: 'record', remove: otherStateLabelsOf('stuck', liveLabels) }
+  if (judged === null && record === null && liveLabels.includes('stuck')) return { kind: 'record', remove: labelsRemovedWith(derived, 'stuck', liveLabels) }
   if (judged === null && derived === record) return { kind: 'none' }
-  return { kind: 'write', remove: otherStateLabelsOf(derived, liveLabels) }
+  return { kind: 'write', remove: labelsRemovedWith(derived, derived, liveLabels) }
 }
 
 // The state labels among `liveLabels` other than `kept`.
 export function otherStateLabelsOf(kept: StateLabel, liveLabels: readonly string[]): StateLabel[] {
   return STATE_LABELS.filter(label => label !== kept && liveLabels.includes(label))
+}
+
+// The labels to take off beside `kept`: the other state labels among
+// `liveLabels`, and reviewer-working when the live read saw it and
+// `stepLabel`, the label that follows from the step, is a state label other
+// than waiting-on-reviewer. The rule rests on the step's label rather than on
+// `kept`, because a kept or recorded `stuck` goes on while the step can still
+// give waiting-on-reviewer, and a reviewer working on the request must keep
+// its label then. A step that gives no label, as while a question is open,
+// sets no state label of its own, so the label stays too. A label is removed
+// only when the live read saw it, because removing a label the repository
+// lacks fails the whole edit.
+export function labelsRemovedWith(stepLabel: StateLabel | null, kept: StateLabel, liveLabels: readonly string[]): RemovableLabel[] {
+  const others: RemovableLabel[] = otherStateLabelsOf(kept, liveLabels)
+  const isWorkingKept = stepLabel === null || stepLabel === 'waiting-on-reviewer'
+  return !isWorkingKept && liveLabels.includes(WORKING_LABEL) ? [...others, WORKING_LABEL] : others
 }
 
 // The record of the state label the mod last recorded for a pull request, as
@@ -522,6 +542,8 @@ function nameOf(step: Step): string {
     case 'outside-feedback': return 'Both verdicts approve at this head, and an outside review has feedback to address'
     case 'request-review': return 'Both verdicts approve at this head, request the outside review'
     case 'awaiting-review': return 'Both verdicts approve at this head, waiting on the outside review'
+    case 'review-not-picked-up': return 'Both verdicts approve at this head, but the outside review was not picked up within ten minutes'
+    case 'review-not-arrived': return 'Both verdicts approve at this head, but the outside review has not arrived within two hours'
     case 'user-claude-unread': return 'Both verdicts approve at this head, but the user\'s own CLAUDE.md could not be read'
     case 'runs-unread': return 'Both verdicts approve at this head, but the workflow runs could not be read'
     case 'waiting': return 'Both verdicts approve at this head, waiting on checks'
@@ -556,6 +578,8 @@ function textOf(step: Step): string[] {
       ...othersLines(step.others),
       `Say "waiting on the review of ${step.reviewers.join(', ')}" and end the turn. The mod starts a turn when a review arrives or a request changes.`,
     ]
+    case 'review-not-picked-up':
+    case 'review-not-arrived': return overdueText(step)
     case 'user-claude-unread': return [
       'Both verdicts approve at this head, but the CLAUDE.md in the user\'s Claude configuration folder exists and could not be read at the mod\'s last look, so the reviewers its `Reviewer:` line may name are unknown.',
       'Merge nothing, and end the turn. The mod looks again at its next poll, and starts a turn once the file can be read.',
@@ -701,6 +725,26 @@ function outsideFeedbackText(step: Extract<Step, { kind: 'outside-feedback' }>):
   ]
 }
 
+// The text of the two steps for a requested review past a time limit. Only
+// the number and logins that passed isLogin are put into it.
+function overdueText(step: Extract<Step, { kind: 'review-not-picked-up' | 'review-not-arrived' }>): string[] {
+  const who = listed(step.reviewers)
+  const logins = step.reviewers.join(',')
+  const isOne = step.reviewers.length === 1
+  const why = step.kind === 'review-not-picked-up'
+    ? `${who} ${isOne ? 'has' : 'have'} not picked up the review request ten minutes after it was made: the review is still requested, and the pull request does not carry \`${WORKING_LABEL}\`, which an automated reviewer puts on when it picks a request up`
+    : `the review of ${who} has not arrived two hours after it was requested, whether or not the pull request carries \`${WORKING_LABEL}\``
+  const waited = step.kind === 'review-not-picked-up'
+    ? 'When the person has already said to keep waiting on this request, say "waiting on the review of ' + step.reviewers.join(', ') + '" and end the turn.'
+    : 'When the person has already said to keep waiting on this request after the two-hour limit passed, say "waiting on the review of ' + step.reviewers.join(', ') + '" and end the turn. An answer to keep waiting given at the ten-minute limit does not cover this one.'
+  return [
+    `Both verdicts approve at this head, but ${why} (see ${see('Outside reviewers')}). The mod sets \`stuck\` for this step; set no label by hand. The merge waits until every outside reviewer approves.`,
+    ...othersLines(step.others),
+    waited,
+    `Otherwise ask the person in one question whether to ask for the review again or to leave it to them on GitHub. To ask again, run \`gh pr edit ${step.number} --remove-reviewer ${logins}\` and then \`gh pr edit ${step.number} --add-reviewer ${logins}\`, which GitHub records as a new request, so both limits count afresh from it, then call \`mcp__builder__watch\` once and follow the step it names. When they leave it to them, end the turn.`,
+  ]
+}
+
 const CHANGES_REQUESTED = [
   `Fix the newest verdict's blocking findings, except those outside the spec and those the owner's answer dropped, in a commit that carries the fix lines (see ${see('A review round')}), push, and ${AFTER_PUSH}. The push also carries the cheap fixes that the second half committed, and the next round reviews them.`,
   `If it has no blocking finding left to fix, which should not happen (see ${seePoint('point 3 of the second half of "A review round" in /implement')}), set \`stuck\` with \`mcp__builder__set_stuck\` and ask the person rather than wait for a change that will not come.`,
@@ -746,6 +790,7 @@ function mergeLines(step: Extract<Step, { kind: 'merge' | 'ask-merge' }>): strin
     'Before merging:',
     '- If the branch changes any of the `Merge command:`, `Checks:`, `Max pushes per round:`, `Max rounds:`, `Reviewer:` or `Base branch:` lines of CLAUDE.md, ask the person before merging, because those lines govern the merge and are read from the base branch.',
     `- Fetch the base with \`git fetch origin <base>\`, where <base> is the pull request's \`baseRefName\`, and read \`git show origin/<base>:CLAUDE.md\` again, because the mod read that file from the local copy of the base branch, which can be out of date. If the fetch fails, do not merge: say why and end the turn.${baseChecks(step)} If the fetched file has a \`Reviewer:\` line that names a login, other than \`none\` and the session's own, who has not approved the pull request, because they have no review of it or their newest review of it is not an approval, merge nothing and end the turn: the mod's look could not read that file and so missed that reviewer, who may never have been asked for a review, and its next look that reads the file names them.`,
+    '- If a question the session asked a reviewer in a review thread is still waiting for an answer, ask the person about it before merging, and do not merge while it is open unless the person says to.',
     `- ${unpushedLine(step.unpushed)} When the worktree holds commits the pull request lacks, or they could not be listed, do not merge: do what ${see('Commits the pull request lacks')} says, and after a push ${AFTER_PUSH}.`,
     '- On a frontend pull request, one whose body holds the marker `' + SCREENSHOTS_MARKER + '` inside a `## Screenshots` section and whose fetched base branch\'s CLAUDE.md does not say `Frontend paths: none`, with the word `none` alone after the label, in any case, first read the section ' + seeFrontend('Screenshots on a frontend pull request') + ', in the /implement skill\'s folder, again, and bring the marked section up to date as that section says, because a session that stopped between a push and that rewrite would otherwise merge image links to old commits. A pull request whose body holds no `## Screenshots` section with that marker skips this bullet, whatever other `## Screenshots` section it has.',
     `- Read the pull request again with \`gh pr view ${number} --json headRefOid,statusCheckRollup,reviews,reviewRequests\`, and every workflow run at the head with ${runsReadOf(step.repo, head)}. If the head moved from ${head}, call \`mcp__builder__watch\` and follow the step it names. If a check is no longer passed, call \`mcp__builder__watch\` and follow the step it names. If any reviewer other than the session is now requested as a user, or any login that the \`Reviewer:\` fact names, other than the session's own, has not approved the pull request, because they have no review of it or their newest review of it is not an approval, or any reviewer other than the session's own login whose newest review is not an approval carries the association \`OWNER\`, \`MEMBER\` or \`COLLABORATOR\`, merge nothing: call \`mcp__builder__watch\` and follow the step it names. The \`Reviewer:\` fact is the fetched base branch's \`Reviewer:\` line when that file has one, and the user's own \`Reviewer:\` line only when it has none. A line that says \`none\` names nobody, so \`Reviewer: none\` in the base branch turns the user's line off, and the branch's own CLAUDE.md never counts here. The session's own verdict reviews, which are comment reviews, never hold the merge under any of these rules.`,
