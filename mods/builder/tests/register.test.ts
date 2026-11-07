@@ -16021,7 +16021,7 @@ test('the set_stuck tool records the judgement, puts stuck on in place of the st
     'gh pr edit 7 --repo o/r --add-label stuck --remove-label in-review',
   ])
   expect(world.pr.labels).toEqual([{ name: 'stuck' }])
-  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'in-review', at: recordedAt, judgement: { label: 'in-review', at: clock.now() } })
+  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'in-review', at: recordedAt, judgement: { label: 'in-review', at: clock.now(), fromStep: true } })
 
   await clock.advance(30 * 60_000)
   expect(labelEdits(world).length).toBe(2)
@@ -16048,14 +16048,14 @@ test('the tool called after the step\'s label changed but before the queued job 
   await clock.settle()
   const answer = setStuck($)
   await clock.settle()
-  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'in-review', at: recordedAt, judgement: { label: 'waiting-on-author', at: clock.now() } })
+  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'in-review', at: recordedAt, judgement: { label: 'waiting-on-author', at: clock.now(), fromStep: true } })
   release()
   const ran = await answer
   await clock.settle()
   expect(String(ran.result)).toContain('stuck is on o/r#7')
   expect(world.pr.labels).toEqual([{ name: 'stuck' }])
   expect(labelEdits(world).filter(edit => edit.includes('waiting-on-author'))).toEqual([])
-  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'in-review', at: recordedAt, judgement: { label: 'waiting-on-author', at: clock.now() } })
+  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'in-review', at: recordedAt, judgement: { label: 'waiting-on-author', at: clock.now(), fromStep: true } })
 
   // The step goes back to the record's own label, which is not the judged
   // one, so the judgement ends: in-review is written and stuck comes off.
@@ -16260,7 +16260,9 @@ test('with no label from the step and a record, the judgement is made under the 
   const stored = memoryStore(on, [[STATE_LABEL_KEY, { label: 'in-review', at: 0 }]])
   engine(on)
   const world = fakeGitHub(on)
-  world.pr = openPullRequest({ reviews: [verdictReview(C, 'APPROVE', 'APPROVE')], labels: [{ name: 'in-review' }] })
+  // The /code-review pass is recorded, so with the runs unread the step gives
+  // no label, and the judgement is made under the recorded label, unmarked.
+  world.pr = openPullRequest({ reviews: [...codeReviewedAt(C)], labels: [{ name: 'in-review' }] })
   world.runsReadsToFail = 100
   await watch($)
   await clock.settle()
@@ -16504,7 +16506,7 @@ test('a second call under the same label replaces only the judgement\'s time', a
   await clock.advance(60_000)
   const ran = await setStuck($)
   expect(String(ran.result)).toContain('stuck is on o/r#7')
-  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'in-review', at: recordedAt, judgement: { label: 'in-review', at: clock.now() } })
+  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'in-review', at: recordedAt, judgement: { label: 'in-review', at: clock.now(), fromStep: true } })
   expect(labelEdits(world).length).toBe(edits)
 })
 
@@ -16642,13 +16644,14 @@ test('a judgement made under the label a job is replacing, while the job waits b
   await clock.advance(30 * 60_000)
   const answer = setStuck($)
   await clock.settle()
-  expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ label: 'in-review', judgement: { label: 'in-review', at: clock.now() } })
+  expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ label: 'in-review', judgement: { label: 'in-review', at: clock.now(), fromStep: true } })
   const judgedAt = clock.now()
 
   release()
   await answer
   await clock.settle()
   expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ label: 'waiting-on-author', judgement: { label: 'waiting-on-author', at: judgedAt } })
+  expect((stored.get(STATE_LABEL_KEY) as { judgement?: object }).judgement).not.toHaveProperty('fromStep')
   expect(world.pr.labels).toEqual([{ name: 'stuck' }])
 
   // The runs can be read again, and the step gives waiting-on-author, so
@@ -16658,6 +16661,66 @@ test('a judgement made under the label a job is replacing, while the job waits b
   await clock.advance(30 * 60_000)
   expect(world.pr.labels).toEqual([{ name: 'stuck' }])
   expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ judgement: { label: 'waiting-on-author' } })
+})
+
+test('a marked judgement made under the record label, while a job that started from a marked judgement under another label waits before its save, is carried unchanged', async ($, on) => {
+  const clock = mock.clock(on)
+  // The record a race leaves behind: a marked judgement made under
+  // ready-to-merge, kept by a job that saved no record of that label, so the
+  // record's own label is still in-review.
+  const stored = memoryStore(on, [[STATE_LABEL_KEY, { label: 'in-review', at: 0, judgement: { label: 'ready-to-merge', at: 0, fromStep: true } }]])
+  engine(on)
+  const world = fakeGitHub(on)
+  // The runs cannot be read, so the step gives no label, and the first look
+  // keeps the judgement and stuck.
+  world.pr = openPullRequest({ reviews: [...codeReviewedAt(C)], labels: [{ name: 'stuck' }] })
+  world.runsReadsToFail = 100
+  await watch($)
+  await clock.settle()
+  expect(world.pr.labels).toEqual([{ name: 'stuck' }])
+  expect(stored.get(STATE_LABEL_KEY)).toEqual({ label: 'in-review', at: 0, judgement: { label: 'ready-to-merge', at: 0, fromStep: true } })
+
+  // The runs can be read again and changes are requested, so the step gives
+  // waiting-on-author, a third label. The job the watch queues ends the
+  // judgement: it writes waiting-on-author and then waits on the read of the
+  // labels after that edit, before its save.
+  let release = () => {}
+  world.runsReadsToFail = 0
+  world.labelAnswers = [JSON.stringify(['stuck'])]
+  world.labelsHold = new Promise(resolve => { release = resolve })
+  world.pr = changesRequested(world.pr.labels)
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await clock.settle()
+  expect(world.pr.labels).toEqual([{ name: 'waiting-on-author' }])
+
+  // The change request is gone, so a poll's look stores a newer snapshot
+  // whose step gives in-review, the record label the job is replacing, and
+  // the tool judges under it. The label came from the step, so the
+  // judgement is marked.
+  world.pr = openPullRequest({ labels: world.pr.labels })
+  await clock.advance(30 * 60_000)
+  const answer = setStuck($)
+  await clock.settle()
+  const judgedAt = clock.now()
+  expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ label: 'in-review', judgement: { label: 'in-review', at: judgedAt, fromStep: true } })
+
+  // The job saves its record of waiting-on-author. It started from a marked
+  // judgement under ready-to-merge, not under in-review, so the newer
+  // judgement cannot be a copy of it and is carried unchanged, with its
+  // marker, and the jobs after it keep stuck on because the step gives
+  // in-review, the judged label.
+  release()
+  const ran = await answer
+  await clock.settle()
+  expect(String(ran.result)).toContain('stuck is on o/r#7')
+  expect(world.pr.labels).toEqual([{ name: 'stuck' }])
+  expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ label: 'waiting-on-author' })
+  expect((stored.get(STATE_LABEL_KEY) as { judgement?: unknown }).judgement).toEqual({ label: 'in-review', at: judgedAt, fromStep: true })
+
+  // The step still gives in-review at the next look, so stuck stays on.
+  await clock.advance(30 * 60_000)
+  expect(world.pr.labels).toEqual([{ name: 'stuck' }])
+  expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ judgement: { label: 'in-review', at: judgedAt, fromStep: true } })
 })
 
 test('a judgement made under the record label a job is replacing, when the record held no judgement, moves to the new label and keeps stuck', async ($, on) => {
@@ -16695,6 +16758,7 @@ test('a judgement made under the record label a job is replacing, when the recor
   await answer
   await clock.settle()
   expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ label: 'waiting-on-author', judgement: { label: 'waiting-on-author', at: judgedAt } })
+  expect((stored.get(STATE_LABEL_KEY) as { judgement?: object }).judgement).not.toHaveProperty('fromStep')
   expect(world.pr.labels).toEqual([{ name: 'stuck' }])
 
   // The runs can be read again, and the step gives waiting-on-author, so
@@ -16797,6 +16861,109 @@ test('a judgement made under the record label a job is replacing with stuck is c
   expect(world.pr.labels).toEqual([{ name: 'stuck' }])
   expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ label: 'stuck' })
   expect(stored.get(STATE_LABEL_KEY)).not.toHaveProperty('judgement')
+})
+
+test('a judgement made from a newer snapshot whose step gives the label a stale job is replacing is carried unchanged, so stuck stays on', async ($, on) => {
+  const clock = mock.clock(on)
+  const stored = memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  await watch($)
+  await clock.settle()
+  expect(world.pr.labels).toEqual([{ name: 'in-review' }])
+
+  // The step's label changes to waiting-on-author, so the job the watch
+  // queues writes it and then waits on the read of the labels after that
+  // edit, before its save.
+  let release = () => {}
+  world.labelAnswers = [JSON.stringify(['in-review'])]
+  world.labelsHold = new Promise(resolve => { release = resolve })
+  world.pr = changesRequested(world.pr.labels)
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await clock.settle()
+  expect(world.pr.labels).toEqual([{ name: 'waiting-on-author' }])
+
+  // The change request is gone, so a poll's look stores a newer snapshot
+  // whose step gives in-review again, the label the job is replacing, and
+  // the tool judges under it. The label came from the step, so the
+  // judgement is marked.
+  world.pr = openPullRequest({ labels: world.pr.labels })
+  await clock.advance(30 * 60_000)
+  const answer = setStuck($)
+  await clock.settle()
+  const judgedAt = clock.now()
+  expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ label: 'in-review', judgement: { label: 'in-review', at: judgedAt, fromStep: true } })
+
+  // The stale job saves its record of waiting-on-author. The judgement was
+  // made from the newer snapshot, so it is carried unchanged, and the jobs
+  // after it keep stuck on because the step gives in-review, the judged
+  // label.
+  release()
+  const ran = await answer
+  await clock.settle()
+  expect(String(ran.result)).toContain('stuck is on o/r#7')
+  expect(world.pr.labels).toEqual([{ name: 'stuck' }])
+  expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ label: 'waiting-on-author' })
+  expect((stored.get(STATE_LABEL_KEY) as { judgement?: unknown }).judgement).toEqual({ label: 'in-review', at: judgedAt, fromStep: true })
+
+  await clock.advance(30 * 60_000)
+  expect(world.pr.labels).toEqual([{ name: 'stuck' }])
+})
+
+test('a judgement made again from a stored marked one while the runs cannot be read keeps the marker and survives a stale job', async ($, on) => {
+  const clock = mock.clock(on)
+  const stored = memoryStore(on)
+  engine(on)
+  const world = fakeGitHub(on)
+  await watch($)
+  await clock.settle()
+
+  // The same race as above: a job replacing in-review with waiting-on-author
+  // waits before its save, and a poll's look stores a newer snapshot whose
+  // step gives in-review again.
+  let release = () => {}
+  world.labelAnswers = [JSON.stringify(['in-review'])]
+  world.labelsHold = new Promise(resolve => { release = resolve })
+  world.pr = changesRequested(world.pr.labels)
+  await loose($)({ tool: 'mcp__builder__watch', number: 7 })
+  await clock.settle()
+  world.pr = openPullRequest({ labels: world.pr.labels })
+  await clock.advance(30 * 60_000)
+
+  // The marked judgement a first call of the tool saved from that snapshot.
+  // It is written straight into the store, because the engine runs the
+  // session's next tool call only once this one has answered, and this one
+  // would wait behind the held job. It stands for a first call that a reload
+  // cut off before its answer, after its save.
+  stored.set(STATE_LABEL_KEY, { label: 'in-review', at: 0, judgement: { label: 'in-review', at: clock.now(), fromStep: true } })
+
+  // The runs cannot be read, so a poll's look stores a step that gives no
+  // label, and the tool judges again under the stored judgement's label. Its
+  // label still came from a step, so the new judgement keeps the marker.
+  world.runsReadsToFail = 100
+  world.pr = openPullRequest({ reviews: [...codeReviewedAt(C)], labels: world.pr.labels })
+  await clock.advance(30 * 60_000)
+  const answer = setStuck($)
+  await clock.settle()
+  const judgedAt = clock.now()
+  expect((stored.get(STATE_LABEL_KEY) as { judgement?: unknown }).judgement).toEqual({ label: 'in-review', at: judgedAt, fromStep: true })
+
+  // The stale job, which started without a judgement, carries it unchanged.
+  release()
+  const ran = await answer
+  await clock.settle()
+  expect(String(ran.result)).toContain('stuck is on o/r#7')
+  expect(world.pr.labels).toEqual([{ name: 'stuck' }])
+  expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ label: 'waiting-on-author' })
+  expect((stored.get(STATE_LABEL_KEY) as { judgement?: unknown }).judgement).toEqual({ label: 'in-review', at: judgedAt, fromStep: true })
+
+  // The runs can be read again, and the step gives in-review, the judged
+  // label, so stuck stays on.
+  world.runsReadsToFail = 0
+  world.pr = openPullRequest({ labels: world.pr.labels })
+  await clock.advance(30 * 60_000)
+  expect(world.pr.labels).toEqual([{ name: 'stuck' }])
+  expect(stored.get(STATE_LABEL_KEY)).toMatchObject({ judgement: { label: 'in-review', at: judgedAt, fromStep: true } })
 })
 
 test('a session start prunes label records older than they are kept, and records of another shape', async ($, on) => {

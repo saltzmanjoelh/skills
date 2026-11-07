@@ -3581,19 +3581,34 @@ async function settleStateLabel($: $, { expected, trustsSnapshotLabels }: { expe
 // it while the job ran, so it is carried into the new record rather than
 // lost, by these rules:
 //
-// - When the newer judgement's label is `replaced` or the label of `before`,
-//   the tool may have made it while the step gave no label, under the label
-//   the job has just replaced. It is carried under the new record's label,
-//   because carried under the old label it would end at the next look where
-//   the step gives the new label, while the session is still asking the
-//   person. When the new label is `stuck` itself, a judgement is never made
-//   under `stuck`, so the judgement is carried unchanged instead. Dropping it
-//   would be wrong, because the tool may have made it from a newer snapshot
-//   whose step gives that label again, and the next look would then take
-//   `stuck` off while the session is still asking the person.
+// - When the newer judgement's label is `replaced` or the label of `before`
+//   and the judgement carries the marker `fromStep: true`, the step of a
+//   newer snapshot than the one the job started from gave its label, so it
+//   is carried unchanged, with its marker. Moved onto the new label, it would
+//   end at the next look, whose step still gives the judged label, and that
+//   look would take `stuck` off while the session is still asking the
+//   person. The exception is a `before` that also carries the marker and has
+//   the same label: the newer judgement may then be a copy of `before`, made
+//   again while the step gave no label, so it is moved as an unmarked one
+//   is. A fresh judgement from a newer snapshot under that same label is
+//   then moved too, and the next look ends it; telling the two apart would
+//   need the marker to record which snapshot it came from.
+// - When the newer judgement's label is `replaced` or the label of `before`
+//   and it carries no marker, or it is such a copy, the tool made it while
+//   the step gave no label, under the label the job has just replaced. It is
+//   carried under the new record's label, without a marker, because carried
+//   under the old label it would end at the next look where the step gives
+//   the new label, while the session is still asking the person.
+// - In either case, when the new label is `stuck` itself, a judgement is
+//   never made under `stuck`, so the judgement is carried unchanged instead,
+//   with its marker or without it. Dropping it would be wrong, because the
+//   tool may have made it from a newer snapshot whose step gives that label
+//   again, and the next look would then take `stuck` off while the session
+//   is still asking the person.
 // - A newer judgement under any other label was made from a newer snapshot,
-//   whose step gives that label, so it is carried unchanged, even onto a
-//   record of `stuck`, because the next look keeps stuck only while it holds.
+//   whose step gives that label, so it is carried unchanged, with its marker
+//   or without it, even onto a record of `stuck`, because the next look keeps
+//   stuck only while it holds.
 //
 // The read or the write throws when the store refuses it.
 async function saveLabelRecord($: $, key: string, replaced: StateLabel | undefined, before: StuckJudgement | undefined, next: LabelRecord) {
@@ -3606,6 +3621,11 @@ async function saveLabelRecord($: $, key: string, replaced: StateLabel | undefin
     }
     const isUnderReplacedLabel = stored.label === replaced || stored.label === before?.label
     if (!isUnderReplacedLabel || next.label === 'stuck') {
+      await $.store.set(key, { ...next, judgement: stored })
+      return
+    }
+    const isMaybeCopyOfStart = before?.fromStep === true && stored.label === before.label
+    if (stored.fromStep === true && !isMaybeCopyOfStart) {
       await $.store.set(key, { ...next, judgement: stored })
       return
     }
@@ -3640,8 +3660,14 @@ async function removeOtherStateLabels($: $, r: BuilderRun, added: StateLabel): P
 // made under the label the step gives, or, when the step gives none, under
 // the label of the judgement already recorded, or else the recorded label,
 // and it is saved before any edit, so a job that runs meanwhile, or after a
-// reload cut this call off, keeps `stuck`. Only a store that refuses the read
-// or the write of the record is answered as an error.
+// reload cut this call off, keeps `stuck`. The judgement carries the marker
+// `fromStep: true` when the step gives its label, and when the step gives no
+// label and the judgement already recorded carries the marker, because its
+// label then still came from a step. A judgement made under the recorded
+// label, with no judgement recorded, carries no marker. The marker keeps a
+// state label job that started from an older snapshot from moving the
+// judgement onto its new label; see saveLabelRecord. Only a store that
+// refuses the read or the write of the record is answered as an error.
 async function serveSetStuck($: $): Promise<ToolCallResult> {
   const r = await read($, run)
   if (r === null) return { result: 'builder: refused: nothing is watched, so there is no pull request to set stuck on. Call mcp__builder__watch first.' }
@@ -3667,7 +3693,11 @@ async function serveSetStuck($: $): Promise<ToolCallResult> {
       const label = derived ?? record?.judgement?.label ?? record?.label ?? null
       if (label === null || label === 'stuck') return label
       const at = await $.clock.now()
-      await $.store.set(key, { label: record?.label ?? label, at: record?.at ?? at, judgement: { label, at } })
+      // The judgement is marked when its label came from a step: from the
+      // step read now, or from the stored judgement whose own label did.
+      const isFromStep = derived !== null || record?.judgement?.fromStep === true
+      const judgement: StuckJudgement = isFromStep ? { label, at, fromStep: true } : { label, at }
+      await $.store.set(key, { label: record?.label ?? label, at: record?.at ?? at, judgement })
       return label
     }) as StateLabel | null
   } catch {
