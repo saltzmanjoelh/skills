@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { ARRIVAL_MS, changesBetween, fingerprintOf, isLogin, othersIn, othersOf, outsideIn, outsideOf, overdueOf, overdueWhileApproved, PICK_UP_MS, PR_FIELDS, requestedUsersOf, requestTimesOf, carriedRequestTimes, snapshotIn, snapshotOf, STATE_LABELS, WORKFLOW_LABELS, WORKING_LABEL, type GhPullRequest } from '../hooks/github'
+import { ARRIVAL_MS, changesBetween, fingerprintOf, isLogin, othersIn, othersOf, outsideIn, outsideOf, overdueAtLimitStep, overdueOf, PICK_UP_MS, PR_FIELDS, requestedUsersOf, requestTimesOf, carriedRequestTimes, snapshotIn, snapshotOf, STATE_LABELS, WORKFLOW_LABELS, WORKING_LABEL, type GhPullRequest } from '../hooks/github'
 import { pollFor, POLL_MS, waitingOn } from '../hooks/state'
 import { chooseStep, labelFor, reviewersOf, stepLines, type Step } from '../hooks/step'
 import type { BaseFacts, HeadRun, Snapshot } from '../types'
@@ -613,10 +613,34 @@ test('a reviewer past two hours is in the arrival list only, so reviewer-working
   expect(changesBetween(labelled, unlabelled)).toEqual(['The pull request changed in a way the lines below show.'])
 })
 
-test('the overdue reviewers count only while both verdicts approve at the head', () => {
+// chooseStep names the /code-review pass, a conflict, a failed check and an
+// outside reviewer's feedback before the limit steps, so a reviewer past a
+// limit counts only where a limit step can be named, and crossing a limit
+// while another step applies leaves the fingerprint as it was.
+test('the overdue reviewers count only where the step chooser can name a limit step', () => {
   const approved = requestedFor(ARRIVAL_MS)
-  expect(overdueWhileApproved(approved)).toEqual({ arrival: ['ann'], pickUp: [] })
-  expect(overdueWhileApproved({ ...approved, verdicts: null })).toEqual({ arrival: [], pickUp: [] })
+  const none = { arrival: [], pickUp: [] }
+  const unreviewed = (snapshot: Snapshot): Snapshot => {
+    const { codeReviewed: _, ...rest } = snapshot
+    return rest
+  }
+  expect(chooseStep(approved, false).kind).toBe('review-not-arrived')
+  expect(overdueAtLimitStep(approved)).toEqual({ arrival: ['ann'], pickUp: [] })
+  const elsewhere: Snapshot[] = [
+    { ...approved, verdicts: null },
+    unreviewed(approved),
+    { ...approved, mergeable: 'CONFLICTING' as const },
+    { ...approved, checks: [{ name: 'build', state: 'failed' as const }] },
+    { ...approved, outside: [{ login: 'bob', state: 'feedback' as const }, ...(approved.outside ?? [])] },
+  ]
+  for (const s of elsewhere) {
+    expect(chooseStep(s, false).kind).not.toBe('review-not-arrived')
+    expect(overdueAtLimitStep(s)).toEqual(none)
+  }
+  const beforeLimit = unreviewed(requestedFor(PICK_UP_MS - 1))
+  const afterLimit = unreviewed(requestedFor(ARRIVAL_MS))
+  expect(chooseStep(afterLimit, false).kind).toBe('code-review')
+  expect(fingerprintOf(afterLimit)).toBe(fingerprintOf(beforeLimit))
 })
 
 test('a request time that could not be read, or a snapshot with no time of its look, is never overdue', () => {

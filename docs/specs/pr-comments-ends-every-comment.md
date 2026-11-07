@@ -173,8 +173,13 @@ GitHub records as a new request, so both limits count afresh from it.
 - When the session asks for an outside review, the mod creates the label if the
   repository lacks it, as it does for the state labels, so the reviewer can put
   it on.
-- Like the other workflow labels, it changes nothing in the pull request's
-  fingerprint, so putting it on or taking it off starts no turn.
+- Like the other workflow labels, it is not itself part of the pull request's
+  fingerprint, so putting it on or taking it off starts no turn, with one
+  exception: once ten minutes have passed since the request, while the mod can
+  name the ten-minute step, the label moves a reviewer into or out of that
+  step, and that change starts a turn. Crossing a time limit while the mod
+  names another step, such as the `/code-review` pass, starts no turn; the
+  look at which a limit step first applies does.
 
 ### 8. The session reports each thread's ending
 
@@ -259,7 +264,10 @@ on purpose, what it waits on.
   earlier look read, so the pull request stays `stuck`. Both new steps give
   `stuck`.
 - Unit tests for `reviewer-working`: it is a workflow label and not a state
-  label, it leaves the fingerprint unchanged, setting `waiting-on-reviewer`
+  label, it leaves the fingerprint unchanged before the ten-minute limit,
+  after that limit it moves a reviewer into or out of the ten-minute step, and
+  a limit crossed while another step applies leaves the fingerprint
+  unchanged, setting `waiting-on-reviewer`
   keeps it, and setting any other state label removes it.
 - A unit test that the request step creates `reviewer-working` when the
   repository lacks it.

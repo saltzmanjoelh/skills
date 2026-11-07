@@ -430,10 +430,13 @@ The mod never removes it while the label that follows from the step is
 `reviewer-working` off, so a reviewer that forgets to remove it cannot leave
 it behind. When the session asks for an outside review, the mod creates the
 label if the repository lacks it, as it does for the state labels, so the
-reviewer can put it on. Like the other workflow labels, it changes nothing in
-the pull request's fingerprint, the summary of its state that the mod
-compares between looks, so putting it on or taking it off starts no turn. The
-session never puts it on or takes it off.
+reviewer can put it on. Like the other workflow labels, it is not itself part
+of the pull request's fingerprint, the summary of its state that the mod
+compares between looks, so putting it on or taking it off starts no turn, with
+one exception: once ten minutes have passed since the request, while the mod
+can name the ten-minute step, the label moves a reviewer into or out of that
+step, and that change starts a turn. The session never puts it on or takes it
+off.
 
 ### Outside reviewers
 
@@ -547,9 +550,11 @@ the mod cannot reliably tell the two apart. The mod cannot tell who put
 `reviewer-working` on, so when two outside reviewers are requested, the label
 counts as picked up for both, and the two-hour limit still applies to each. A
 reviewer who posts a review leaves the Requested state, so no limit applies to
-them any more. When the mod cannot read the request time, it applies no limit
-at that look and tries again at the next one; it never names either step on a
-time it could not read. The mod looks every five minutes while a review is
+them any more. When the mod cannot read the request times, it keeps the time
+an earlier look read for that reviewer at the same head and applies the limits
+from it, so a pull request already past a limit stays `stuck`. A reviewer
+whose request time no look has read gets no limit at that look, so the mod
+never names either step on a time it never read. The mod looks every five minutes while a review is
 requested, so either step can come up to five minutes after its limit passes.
 
 On either step, the step's text names the reviewer and the limit that passed.

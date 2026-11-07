@@ -637,14 +637,23 @@ export function overdueOf(s: Pick<Snapshot, 'outside' | 'labels' | 'lookedAt'>):
   return overdue
 }
 
-// The requested reviewers past each limit, counted only while both verdicts
-// approve at the head, which is where the step chooser names a step for them.
-// Before that, and while either verdict requests changes, both lists are
-// empty. The fingerprint and the change sentences both read the lists through
-// it, so a sentence is written exactly when that part of the fingerprint
-// moves.
-export function overdueWhileApproved(s: Pick<Snapshot, 'verdicts' | 'outside' | 'labels' | 'lookedAt'>): Overdue {
-  if (!bothApprove(s.verdicts)) return { arrival: [], pickUp: [] }
+// The requested reviewers past each limit, counted only where the step
+// chooser can reach the two limit steps: both verdicts approve at the head,
+// the /code-review pass is recorded there, the pull request does not
+// conflict, no check or run at the head failed, and no outside reviewer has
+// feedback or lacks a request, since chooseStep names each of those steps
+// first. Anywhere else both lists are empty, so crossing a limit while another
+// step applies starts no turn, and the look at which a limit step first
+// applies is handed over as a change. The pushes and rounds limits are left
+// out, because they are read from the base facts the step module parses, and
+// a pull request over either is already stuck. The fingerprint and the change
+// sentences both read the lists through it, so a sentence is written exactly
+// when that part of the fingerprint moves.
+export function overdueAtLimitStep(s: Pick<Snapshot, 'verdicts' | 'outside' | 'labels' | 'lookedAt' | 'codeReviewed' | 'mergeable' | 'checks' | 'headRuns'>): Overdue {
+  const none: Overdue = { arrival: [], pickUp: [] }
+  if (!bothApprove(s.verdicts) || s.codeReviewed !== true || s.mergeable === 'CONFLICTING') return none
+  if (failedCheckNames(s.checks).length > 0 || failedRunsOf(headRunsIn(s) ?? []).length > 0) return none
+  if (outsideIn(s.outside).some(r => r.state === 'feedback' || r.state === 'unrequested')) return none
   return overdueOf(s)
 }
 
@@ -806,13 +815,13 @@ export function fingerprintOf(s: Omit<Snapshot, 'fingerprint'>): string {
   // theirs arriving, or a newer one, is news.
   const others = othersIn(s.others)
   if (others.length > 0) parts.push(`others:${others.map(r => `${r.login.toLowerCase()}@${r.at ?? ''}`).join(',')}`)
-  // The requested reviewers past a time limit, added only while both
-  // verdicts approve at the head, where the step chooser names a step for
-  // them, and only when there are any. So crossing the ten-minute limit is
+  // The requested reviewers past a time limit, added only where the step
+  // chooser can name a limit step for them (see overdueAtLimitStep), and only
+  // when there are any. So crossing the ten-minute limit is
   // news, and crossing the two-hour limit is news again even when the person
   // said to keep waiting at ten minutes. The request time itself stays out, so
   // a reviewer asked again starts no turn until a limit passes again.
-  const overdue = overdueWhileApproved(s)
+  const overdue = overdueAtLimitStep(s)
   if (overdue.arrival.length > 0 || overdue.pickUp.length > 0) {
     const logins = (list: readonly string[]) => list.map(login => login.toLowerCase()).join(',')
     parts.push(`overdue:${logins(overdue.arrival)}/${logins(overdue.pickUp)}`)
@@ -1004,12 +1013,12 @@ function outsideSentences(before: readonly OutsideReviewer[], after: readonly Ou
 }
 
 // One sentence per reviewer who is past a time limit now and was not before,
-// read through overdueWhileApproved, as the fingerprint reads them. When the lists only
+// read through overdueAtLimitStep, as the fingerprint reads them. When the lists only
 // shrank, as when reviewer-working went on after the ten-minute limit, one
 // sentence says so.
 function overdueSentences(before: Snapshot, after: Snapshot): string[] {
-  const was = overdueWhileApproved(before)
-  const now = overdueWhileApproved(after)
+  const was = overdueAtLimitStep(before)
+  const now = overdueAtLimitStep(after)
   const isNew = (list: readonly string[], login: string) => !list.some(l => l.toLowerCase() === login.toLowerCase())
   const sentences = [
     ...now.arrival.filter(login => isNew(was.arrival, login)).map(login => `The review of ${login} has not arrived two hours after it was requested.`),
