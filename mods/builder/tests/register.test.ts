@@ -2259,6 +2259,44 @@ test('a document path in CLAUDE.md that leaves the checkout is not named in the 
   expect(text).toContain('- Gotchas document: none in this project')
 })
 
+// Every backslash in these tests is written doubled, so the value holds one
+// backslash for each pair. The fake file system holds files at the literal
+// backslash paths, so a check that let such a path through would name it.
+test('a document path in CLAUDE.md written in a Windows form is not named in the package', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  const files = fakeFiles(on)
+  files.set('/repo/CLAUDE.md', 'Architecture document: ..\\..\\.env\nGotchas document: C:\\x\n')
+  files.set('/repo/..\\..\\.env', 'secret')
+  files.set('/repo/C:\\x', 'secret')
+  await watch($)
+
+  await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
+  const text = files.get('/repo/.git/builder/cccccccc/package.md') ?? ''
+
+  expect(text).toContain('- Architecture document: none in this project')
+  expect(text).toContain('- Gotchas document: none in this project')
+})
+
+test('a document path written with forward slashes is still named, while the same path written with a backslash is not', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  const files = fakeFiles(on)
+  files.set('/repo/CLAUDE.md', 'Architecture document: docs/arch.md\nGotchas document: docs\\arch.md\n')
+  files.set('/repo/docs\\arch.md', 'x')
+  await watch($)
+
+  await loose($)({ tool: 'mcp__builder__package', issue: 'Do it.' })
+  const text = files.get('/repo/.git/builder/cccccccc/package.md') ?? ''
+
+  expect(text).toContain('- Architecture document: docs/arch.md')
+  expect(text).toContain('- Gotchas document: none in this project')
+})
+
 test('a quiet session keeps its record fresh, so another session starting two weeks on does not prune it', async ($, on) => {
   // The 30-second redraw is refused here: fifteen days of it is some forty
   // thousand timer periods, and it plays no part in keeping the record seen.
@@ -3178,7 +3216,58 @@ test('the counsel tool refuses a path outside the checkout and writes no brief',
 
   const ran = await loose($)({ ...brief, paths: ['../../.env'] })
 
-  expect(String(ran.result)).toContain('Refused')
+  expect(String(ran.result)).toContain('Refused: ../../.env leads outside the checkout; name paths inside it, relative to it.')
+  expect(String(ran.result)).not.toContain('Windows')
+  expect([...files.keys()].some(path => path.includes('/counsel/'))).toBe(false)
+})
+
+// Every backslash below is written doubled, so the value holds one backslash
+// for each pair.
+test('the counsel tool refuses a path written in a Windows form, asks for forward slashes, and writes no brief', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  const files = fakeFiles(on)
+  await startOnly($)
+
+  for (const windows of ['..\\..\\.env', 'C:\\x', '\\\\server\\x']) {
+    const ran = await loose($)({ ...brief, paths: [windows] })
+
+    expect(String(ran.result)).toContain(`Refused: ${windows} is written in a Windows form; name paths relative to the checkout, written with forward slashes.`)
+    expect(String(ran.result)).not.toContain('leads outside')
+  }
+  expect([...files.keys()].some(path => path.includes('/counsel/'))).toBe(false)
+})
+
+test('the first refused counsel path decides the message, so a climbing path before a Windows one gets the message for leaving the checkout', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  const files = fakeFiles(on)
+  await startOnly($)
+
+  const ran = await loose($)({ ...brief, paths: ['../x', 'C:\\y'] })
+
+  expect(String(ran.result)).toContain('Refused: ../x leads outside the checkout; name paths inside it, relative to it.')
+  expect(String(ran.result)).not.toContain('Windows')
+  expect([...files.keys()].some(path => path.includes('/counsel/'))).toBe(false)
+})
+
+test('a counsel path committed as a link to a file outside the checkout gets the message for leaving the checkout', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  engine(on)
+  fakeGitHub(on)
+  const files = fakeFiles(on)
+  files.links.set('/repo/docs/arch.md', '/home/someone/.secrets')
+  await startOnly($)
+
+  const ran = await loose($)({ ...brief, paths: ['docs/arch.md'] })
+
+  expect(String(ran.result)).toContain('Refused: docs/arch.md leads outside the checkout; name paths inside it, relative to it.')
+  expect(String(ran.result)).not.toContain('Windows')
   expect([...files.keys()].some(path => path.includes('/counsel/'))).toBe(false)
 })
 
